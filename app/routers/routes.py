@@ -1,12 +1,16 @@
-"""내부·외부·관리자·MCP API 라우터의 최상위 경계.
-
-상세 URL과 요청/응답 필드는 별도 명세가 확정될 때 하위 라우터에 등록한다.
-"""
+"""FastAPI MVP 시스템 및 내부 API 라우터 조립 기능."""
 
 from fastapi import APIRouter
 
-system_router = APIRouter(prefix="/system", tags=["system"])
-internal_router = APIRouter(prefix="/internal", tags=["internal"])
-external_router = APIRouter(prefix="/external", tags=["external"])
-admin_router = APIRouter(prefix="/admin", tags=["admin"])
-mcp_router = APIRouter(prefix="/mcp", tags=["mcp"])
+from app.routers.service.routes import router as service_router
+from app.routers.service_worker.routes import router as service_worker_router
+from app.routers.system import router as system_router
+
+
+def build_api_router(api_prefix: str) -> APIRouter:
+    """시스템 API와 Service·Worker 내부 API를 하나의 Router로 조립한다."""
+    router = APIRouter()
+    router.include_router(system_router)
+    router.include_router(service_router, prefix=api_prefix)
+    router.include_router(service_worker_router, prefix=api_prefix)
+    return router

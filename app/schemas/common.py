@@ -39,3 +39,6 @@ class ErrorResponseSchema(BaseModel):
     message: str = Field(description="사용자에게 전달할 안전한 오류 메시지")
     request_id: str | None = Field(default=None, description="오류가 발생한 요청 ID")
     retryable: bool = Field(default=False, description="동일 요청의 재시도 가능 여부")
+    details: list[dict[str, object]] = Field(
+        default_factory=list, description="검증 실패 등 세부 오류 목록"
+    )

@@ -10,6 +10,7 @@ LangGraph 기반 에이전트를 FastAPI로 제공하는 API 서버 프로젝트
 
 - [전체 기능 명세](docs/agent-api-feature-spec.md)
 - [MVP 개발 범위](docs/agent-api-mvp-scope.md)
+- [FastAPI MVP API 설계](docs/fastapi-mvp-api.md)
 - [프로젝트 구조와 기능 파일 매핑](docs/project-structure.md)
 
 ## 실행

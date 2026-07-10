@@ -11,6 +11,7 @@ app/
   main.py         # FastAPI 앱 생성, 라우터 등록, 미들웨어 설정
   routers/        # 도메인별 API 경계와 api.py 공개 facade
   schemas/        # Pydantic 요청/응답 모델
+  services/       # FastAPI 요청을 처리하는 애플리케이션 서비스
   dependencies.py # 공통 의존성 (인증, 에이전트 인스턴스 주입 등)
   config.py       # 환경변수 로딩 및 설정 관리
 ```

@@ -1,14 +1,14 @@
-"""FastAPI 라우터에서 사용할 공통 의존성 계약.
-
-DB, Queue, Provider와 Agent 그래프 인스턴스의 주입 경계를 정의한다.
-"""
+"""FastAPI 라우터에서 사용하는 애플리케이션 의존성 컨테이너."""
 
 from dataclasses import dataclass
 
+from fastapi import Depends, Request
+
 from app.config import Settings
+from app.services.mvp import AgentApiMvpService
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class AppContainer:
     """API 요청 처리에 필요한 애플리케이션 컴포넌트 모음."""
 
@@ -19,8 +19,33 @@ class AppContainer:
     event_bus: object | None = None
     llm_provider: object | None = None
     embedding_provider: object | None = None
+    mvp_service: AgentApiMvpService | None = None
+    ready: bool = False
+
+    async def startup(self) -> None:
+        """요청을 받을 수 있도록 컨테이너 상태를 준비 완료로 변경한다."""
+        self.mvp_service = self.mvp_service or AgentApiMvpService()
+        self.ready = True
+
+    async def shutdown(self) -> None:
+        """새 요청 처리를 중단하도록 컨테이너 상태를 종료로 변경한다."""
+        self.ready = False
 
 
-def get_container() -> AppContainer:
-    """현재 애플리케이션 컨테이너를 FastAPI 의존성으로 제공한다."""
-    raise NotImplementedError("애플리케이션 의존성 주입 구현이 필요합니다.")
+def create_container(settings: Settings) -> AppContainer:
+    """설정으로부터 기본 MVP 애플리케이션 컨테이너를 생성한다."""
+    return AppContainer(settings=settings, mvp_service=AgentApiMvpService())
+
+
+def get_container(request: Request) -> AppContainer:
+    """현재 FastAPI 애플리케이션에 연결된 컨테이너를 반환한다."""
+    return request.app.state.container
+
+
+def get_mvp_service(
+    container: AppContainer = Depends(get_container),
+) -> AgentApiMvpService:
+    """MVP API 요청 처리에 사용할 애플리케이션 서비스를 반환한다."""
+    if container.mvp_service is None:
+        raise RuntimeError("MVP 서비스가 초기화되지 않았습니다.")
+    return container.mvp_service
