@@ -1,8 +1,14 @@
-"""[COL-001] rss Global Source Connector 스캐폴드."""
+"""기능 구현 모듈.
 
-from infrastructure.sources.connectors.base import SourceDocument, SourceQuery
+COL-001 기능의 실제 구현 위치를 제공한다.
+"""
+
+from shared.contracts import FeatureRequest, FeatureResult
 
 
-async def collect_rss(query: SourceQuery) -> list[SourceDocument]:
-    """[COL-001] 등록된 RSS Feed에서 신규 콘텐츠를 수집한다."""
-    raise NotImplementedError("[COL-001] Source Connector 구현이 필요합니다.")
+async def col_001(request: FeatureRequest) -> FeatureResult:
+    """[COL-001] RSS 수집.
+
+    등록된 RSS Feed에서 신규 콘텐츠를 수집한다.
+    """
+    raise NotImplementedError("[COL-001] 기능 구현이 필요합니다.")

@@ -1,9 +1,15 @@
-"""[WORKER-003] bambi_generation Worker 스캐폴드."""
+"""기능 구현 모듈.
 
-from infrastructure.messaging.base import JobMessage
+WORKER-003 기능의 실제 구현 위치를 제공한다.
+"""
+
+from shared.contracts import FeatureRequest, FeatureResult
 
 
-# MVP: WORKER-003 Worker 범위에서 구현합니다.
-async def run_bambi_generation_worker(job: JobMessage) -> None:
-    """[WORKER-003] 개인 Wiki와 Global Source를 바탕으로 개인화 콘텐츠를 생성한다."""
-    raise NotImplementedError("[WORKER-003] Worker 구현이 필요합니다.")
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
+async def worker_003(request: FeatureRequest) -> FeatureResult:
+    """[WORKER-003] Bambi Generation Worker.
+
+    개인화 콘텐츠를 생성한다.
+    """
+    raise NotImplementedError("[WORKER-003] 기능 구현이 필요합니다.")

@@ -1,9 +1,15 @@
-"""[COL-002] naver Global Source Connector 스캐폴드."""
+"""기능 구현 모듈.
 
-from infrastructure.sources.connectors.base import SourceDocument, SourceQuery
+COL-002 기능의 실제 구현 위치를 제공한다.
+"""
+
+from shared.contracts import FeatureRequest, FeatureResult
 
 
-# MVP: COL-002 외부 데이터 자동 수집 범위에서 구현합니다.
-async def collect_naver(query: SourceQuery) -> list[SourceDocument]:
-    """[COL-002] 설정된 키워드로 Naver API 데이터를 수집한다."""
-    raise NotImplementedError("[COL-002] Source Connector 구현이 필요합니다.")
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
+async def col_002(request: FeatureRequest) -> FeatureResult:
+    """[COL-002] Naver API 수집.
+
+    설정된 키워드로 Naver API 데이터를 수집한다.
+    """
+    raise NotImplementedError("[COL-002] 기능 구현이 필요합니다.")

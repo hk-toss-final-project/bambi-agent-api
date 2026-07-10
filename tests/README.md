@@ -35,6 +35,7 @@ tests/
 
 - **LLM 호출 금지**: LLM 클라이언트는 conftest의 mock 픽스처로 대체합니다. 네트워크가 끊긴 환경에서도 전체 테스트가 통과해야 합니다.
 - **단위별 테스트**: 기능을 구현하면 같은 작업 단위 안에서 테스트를 함께 작성합니다. (루트 `AGENTS.md` 2번 규칙)
+- **구현 모듈 미러링**: `features.py` facade가 아니라 실제 구현 파일의 경로를 따라 테스트 파일을 배치합니다. 예: `domain/personal_wiki/documents/commands.py`는 `tests/domain/personal_wiki/documents/test_commands.py`에서 검증합니다.
 - **API 테스트**: 엔드포인트는 FastAPI의 `TestClient`로 요청/응답을 검증합니다. 정상 응답뿐 아니라 검증 실패(422), 에러 응답도 확인합니다.
 - **경계 케이스 포함**: 빈 입력, 긴 입력, 잘못된 타입 등 실패 경로를 함께 테스트합니다.
 - **테스트도 코드 규칙을 따릅니다**: 파일 상단 한국어 주석, 테스트 함수에 무엇을 검증하는지 한국어 docstring을 작성합니다.

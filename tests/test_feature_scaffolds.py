@@ -69,6 +69,45 @@ def discover_feature_functions() -> dict[
     return discovered
 
 
+def discover_facade_exports() -> dict[str, Path]:
+    """모든 features.py facade가 다시 노출하는 기능 함수 이름을 찾는다."""
+    exported: dict[str, Path] = {}
+    for path in ROOT.rglob("features.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            for alias in node.names:
+                if not FUNCTION_PATTERN.match(alias.name):
+                    continue
+                feature_id = alias.name.upper().replace("_", "-")
+                if feature_id in exported:
+                    raise AssertionError(f"중복 facade export: {feature_id}")
+                exported[feature_id] = path
+    return exported
+
+
+def discover_facade_all_names() -> set[str]:
+    """모든 features.py의 __all__에 등록된 공개 함수 이름을 찾는다."""
+    names: set[str] = set()
+    for path in ROOT.rglob("features.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            if not any(
+                isinstance(target, ast.Name) and target.id == "__all__"
+                for target in node.targets
+            ):
+                continue
+            if not isinstance(node.value, (ast.List, ast.Tuple)):
+                raise AssertionError(f"정적 __all__ 목록이 아님: {path}")
+            for item in node.value.elts:
+                if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                    names.add(item.value)
+    return names
+
+
 def is_not_implemented_stub(node: ast.AsyncFunctionDef) -> bool:
     """함수 본문이 NotImplementedError만 발생시키는 스텁인지 확인한다."""
     statement = node.body[-1]
@@ -85,6 +124,27 @@ def test_every_runtime_feature_has_exactly_one_scaffold() -> None:
     expected = read_runtime_feature_ids()
     actual = set(discover_feature_functions())
     assert actual == expected
+
+
+def test_features_facades_export_every_runtime_feature() -> None:
+    """모든 기능 함수가 정확히 하나의 features.py facade에서 공개되는지 검증한다."""
+    expected = read_runtime_feature_ids()
+    assert set(discover_facade_exports()) == expected
+    assert discover_facade_all_names() == {
+        feature_id.lower().replace("-", "_") for feature_id in expected
+    }
+
+
+def test_features_facades_contain_no_implementation() -> None:
+    """features.py가 함수 구현 없이 import facade 역할만 하는지 검증한다."""
+    for path in ROOT.rglob("features.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        implemented = [
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+        assert implemented == [], f"facade에 함수 구현 존재: {path} ({implemented})"
 
 
 def test_mvp_comments_match_dedicated_scope() -> None:

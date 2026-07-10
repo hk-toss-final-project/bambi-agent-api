@@ -1,9 +1,15 @@
-"""[COL-003] gdelt Global Source Connector 스캐폴드."""
+"""기능 구현 모듈.
 
-from infrastructure.sources.connectors.base import SourceDocument, SourceQuery
+COL-003 기능의 실제 구현 위치를 제공한다.
+"""
+
+from shared.contracts import FeatureRequest, FeatureResult
 
 
-# MVP: COL-003 외부 데이터 자동 수집 범위에서 구현합니다.
-async def collect_gdelt(query: SourceQuery) -> list[SourceDocument]:
-    """[COL-003] GDELT에서 글로벌 뉴스와 이벤트 데이터를 수집한다."""
-    raise NotImplementedError("[COL-003] Source Connector 구현이 필요합니다.")
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
+async def col_003(request: FeatureRequest) -> FeatureResult:
+    """[COL-003] GDELT 수집.
+
+    글로벌 뉴스와 이벤트 데이터를 수집한다.
+    """
+    raise NotImplementedError("[COL-003] 기능 구현이 필요합니다.")

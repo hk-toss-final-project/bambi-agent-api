@@ -1,8 +1,14 @@
-"""[COL-009] github Global Source Connector 스캐폴드."""
+"""기능 구현 모듈.
 
-from infrastructure.sources.connectors.base import SourceDocument, SourceQuery
+COL-009 기능의 실제 구현 위치를 제공한다.
+"""
+
+from shared.contracts import FeatureRequest, FeatureResult
 
 
-async def collect_github(query: SourceQuery) -> list[SourceDocument]:
-    """[COL-009] GitHub Repository, Release, Issue와 README를 수집한다."""
-    raise NotImplementedError("[COL-009] Source Connector 구현이 필요합니다.")
+async def col_009(request: FeatureRequest) -> FeatureResult:
+    """[COL-009] GitHub 수집.
+
+    Repository, Release, Issue, README 등을 수집한다.
+    """
+    raise NotImplementedError("[COL-009] 기능 구현이 필요합니다.")

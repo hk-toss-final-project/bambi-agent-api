@@ -1,8 +1,14 @@
-"""[WORKER-005] summary Worker 스캐폴드."""
+"""기능 구현 모듈.
 
-from infrastructure.messaging.base import JobMessage
+WORKER-005 기능의 실제 구현 위치를 제공한다.
+"""
+
+from shared.contracts import FeatureRequest, FeatureResult
 
 
-async def run_summary_worker(job: JobMessage) -> None:
-    """[WORKER-005] 문서와 콘텐츠의 요약 작업을 수행한다."""
-    raise NotImplementedError("[WORKER-005] Worker 구현이 필요합니다.")
+async def worker_005(request: FeatureRequest) -> FeatureResult:
+    """[WORKER-005] Summary Worker.
+
+    요약 작업을 수행한다.
+    """
+    raise NotImplementedError("[WORKER-005] 기능 구현이 필요합니다.")
