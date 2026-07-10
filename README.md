@@ -11,6 +11,7 @@ LangGraph 기반 에이전트를 FastAPI로 제공하는 API 서버 프로젝트
 - [전체 기능 명세](docs/agent-api-feature-spec.md)
 - [MVP 개발 범위](docs/agent-api-mvp-scope.md)
 - [FastAPI MVP API 설계](docs/fastapi-mvp-api.md)
+- [Agent DB 설계](docs/agent-db-design.md)
 - [프로젝트 구조와 기능 파일 매핑](docs/project-structure.md)
 
 ## 실행
@@ -18,6 +19,8 @@ LangGraph 기반 에이전트를 FastAPI로 제공하는 API 서버 프로젝트
 ```bash
 uv run uvicorn app.main:app --reload
 ```
+
+로컬 PostgreSQL과 pgvector는 [database/README.md](database/README.md)의 안내에 따라 Docker Compose로 실행합니다.
 
 현재 라우터와 기능 함수는 구조만 정의되어 있으며, 실제 기능 호출은 구현되지 않았습니다.
 

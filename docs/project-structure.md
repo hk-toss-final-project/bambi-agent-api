@@ -10,6 +10,7 @@
 - 전용 MVP 범위 문서가 구현 우선순위의 기준입니다. 해당 47개 함수 바로 위에 `# MVP:` 주석을 붙였습니다.
 - 전체 명세 44~46절의 MVP·2차·3차 항목은 기존 기능을 묶은 로드맵이므로 실행 함수를 중복 생성하지 않았습니다.
 - API Request/Response 상세 필드가 확정되면 `app/schemas/`에 도메인별 Pydantic 모델을 추가하고, `app/routers/`의 라우터에서 기능 함수를 호출합니다.
+- Agent DB의 물리 스키마와 운영 기준은 `docs/agent-db-design.md`, 실행 가능한 SQL은 `database/`에서 관리합니다.
 
 ## 최상위 구조
 
@@ -19,13 +20,15 @@ bambi-agent-api/
 ├── agent/                  # LangGraph 상태, 그래프, 노드, Tool, Prompt, Agent 기능
 ├── domain/                 # 사용자 컨텍스트, 개인 Wiki, 콘텐츠, Job, 발행 도메인
 ├── infrastructure/         # Provider, DB, Vector, Queue, Event, Source, Object Storage
+├── database/               # PostgreSQL Migration과 실제 DB 계약 검사
 ├── workers/                # 작업 유형별 비동기 Worker 진입점
 ├── scheduler/              # 정기 작업 등록과 실행 진입점
 ├── mcp_server/             # MVP 이후 MCP Server와 Tool 경계
 ├── shared/                 # 공통 함수 계약과 비기능 정책
 ├── tests/                  # 명세-스캐폴드 정합성과 앱 조립 테스트
 ├── bench/                  # 실제 LLM 기능 구현 후 추가할 품질 벤치마크
-└── docs/                   # 전체 기능 명세, MVP 범위, 구조 문서
+├── docs/                   # 전체 기능 명세, MVP 범위, 구조·DB 설계 문서
+└── compose.yaml            # 로컬 PostgreSQL 17 + pgvector 실행 구성
 ```
 
 ## 기능 구현 패턴

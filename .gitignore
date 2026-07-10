@@ -7,8 +7,12 @@ dist/
 build/
 out/
 *.log
+.venv/
 __pycache__/
 *.pyc
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
 .idea/
 .vscode/
 coverage/
