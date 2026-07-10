@@ -9,7 +9,7 @@ Bambi Agent API의 HTTP 서버 계층을 담는 디렉터리입니다.
 ```
 app/
   main.py         # FastAPI 앱 생성, 라우터 등록, 미들웨어 설정
-  routers/        # 도메인별 API 경계와 features.py 공개 facade
+  routers/        # 도메인별 API 경계와 api.py 공개 facade
   schemas/        # Pydantic 요청/응답 모델
   dependencies.py # 공통 의존성 (인증, 에이전트 인스턴스 주입 등)
   config.py       # 환경변수 로딩 및 설정 관리
@@ -29,5 +29,5 @@ uv run uvicorn app.main:app --reload
 - 라우터 함수는 얇게 유지합니다. 비즈니스 로직은 `agent/` 또는 서비스 계층에 두고, 라우터는 검증·호출·응답 변환만 담당합니다.
 - 외부 호출(에이전트 실행 포함)의 실패를 전제로 처리하고, 클라이언트에는 의미 있는 에러 메시지와 적절한 HTTP 상태 코드를 반환합니다. 내부 스택트레이스를 응답에 노출하지 않습니다.
 - 환경변수 접근은 `config.py`를 통해서만 합니다. 코드 곳곳에서 `os.getenv`를 직접 호출하지 않습니다.
-- 각 기능 영역의 `features.py`에는 구현을 두지 않고, 역할별 구현 모듈의 함수를 import해 공개합니다.
+- 각 기능 영역의 `api.py`에는 구현을 두지 않고, `features/` 아래 역할별 구현 모듈의 함수를 import해 공개합니다.
 - 모든 함수에 한국어 docstring, 모든 파일 상단에 한국어 파일 주석을 작성합니다.

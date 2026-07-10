@@ -69,10 +69,30 @@ def discover_feature_functions() -> dict[
     return discovered
 
 
+def discover_api_facades() -> list[Path]:
+    """features 구현 패키지 밖에 있는 공개 api.py facade를 찾는다."""
+    source_roots = (
+        ROOT / "app",
+        ROOT / "agent",
+        ROOT / "domain",
+        ROOT / "infrastructure",
+        ROOT / "workers",
+        ROOT / "scheduler",
+        ROOT / "mcp_server",
+        ROOT / "shared",
+    )
+    return [
+        path
+        for source_root in source_roots
+        for path in source_root.rglob("api.py")
+        if "features" not in path.relative_to(ROOT).parts
+    ]
+
+
 def discover_facade_exports() -> dict[str, Path]:
-    """모든 features.py facade가 다시 노출하는 기능 함수 이름을 찾는다."""
+    """모든 api.py facade가 다시 노출하는 기능 함수 이름을 찾는다."""
     exported: dict[str, Path] = {}
-    for path in ROOT.rglob("features.py"):
+    for path in discover_api_facades():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in tree.body:
             if not isinstance(node, ast.ImportFrom):
@@ -88,9 +108,9 @@ def discover_facade_exports() -> dict[str, Path]:
 
 
 def discover_facade_all_names() -> set[str]:
-    """모든 features.py의 __all__에 등록된 공개 함수 이름을 찾는다."""
+    """모든 api.py의 __all__에 등록된 공개 함수 이름을 찾는다."""
     names: set[str] = set()
-    for path in ROOT.rglob("features.py"):
+    for path in discover_api_facades():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in tree.body:
             if not isinstance(node, ast.Assign):
@@ -126,18 +146,19 @@ def test_every_runtime_feature_has_exactly_one_scaffold() -> None:
     assert actual == expected
 
 
-def test_features_facades_export_every_runtime_feature() -> None:
-    """모든 기능 함수가 정확히 하나의 features.py facade에서 공개되는지 검증한다."""
+def test_api_facades_export_every_runtime_feature() -> None:
+    """모든 기능 함수가 정확히 하나의 api.py facade에서 공개되는지 검증한다."""
     expected = read_runtime_feature_ids()
+    assert len(discover_api_facades()) == 43
     assert set(discover_facade_exports()) == expected
     assert discover_facade_all_names() == {
         feature_id.lower().replace("-", "_") for feature_id in expected
     }
 
 
-def test_features_facades_contain_no_implementation() -> None:
-    """features.py가 함수 구현 없이 import facade 역할만 하는지 검증한다."""
-    for path in ROOT.rglob("features.py"):
+def test_api_facades_contain_no_implementation() -> None:
+    """api.py가 함수 구현 없이 import facade 역할만 하는지 검증한다."""
+    for path in discover_api_facades():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         implemented = [
             node.name
@@ -145,6 +166,36 @@ def test_features_facades_contain_no_implementation() -> None:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         ]
         assert implemented == [], f"facade에 함수 구현 존재: {path} ({implemented})"
+
+
+def test_feature_functions_live_under_features_packages() -> None:
+    """모든 기능 함수가 각 기능 영역의 features 패키지 아래에 있는지 검증한다."""
+    for feature_id, (path, _, _) in discover_feature_functions().items():
+        assert "features" in path.relative_to(ROOT).parts, (
+            f"features 패키지 밖의 기능 함수: {feature_id} ({path})"
+        )
+
+
+def test_feature_modules_do_not_import_their_api_facade() -> None:
+    """구현 모듈이 공개 api.py를 역참조해 순환 의존성을 만들지 않는지 검증한다."""
+    checked_paths = {path for path, _, _ in discover_feature_functions().values()}
+    for path in checked_paths:
+        relative_parts = path.relative_to(ROOT).parts
+        features_index = relative_parts.index("features")
+        api_module = ".".join((*relative_parts[:features_index], "api"))
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:
+            relative_api_import = (
+                isinstance(node, ast.ImportFrom)
+                and node.module == "api"
+                and node.level
+            )
+            absolute_api_import = isinstance(node, ast.ImportFrom) and node.module == api_module
+            direct_api_import = isinstance(node, ast.Import) and any(
+                alias.name == api_module for alias in node.names
+            )
+            if relative_api_import or absolute_api_import or direct_api_import:
+                raise AssertionError(f"구현 모듈의 facade 역참조: {path}")
 
 
 def test_mvp_comments_match_dedicated_scope() -> None:
