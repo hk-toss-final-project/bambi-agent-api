@@ -78,4 +78,4 @@ sequenceDiagram
 
 ## MVP 저장소 제한
 
-현재 `AgentApiMvpService`는 API 계약과 상태 전이를 먼저 검증하기 위한 메모리 저장소입니다. 프로세스 재시작 시 컨텍스트, Job, Snapshot과 ACK가 사라지며 다중 인스턴스 간 상태를 공유하지 않습니다. Agent DB와 Queue Adapter가 구현되면 동일한 서비스 경계를 유지한 채 영속 구현으로 교체해야 합니다.
+현재 사용자 컨텍스트와 Job은 API 계약과 상태 전이를 먼저 검증하기 위한 메모리 저장소를 사용합니다. 프로세스 재시작 시 해당 데이터가 사라지며 다중 인스턴스 간 상태를 공유하지 않습니다. Publish Snapshot 조회와 ACK는 `AGENT_DATABASE_URL`이 설정되면 PostgreSQL 저장소를 사용하고, 설정되지 않으면 테스트용 인메모리 저장소를 사용합니다. 나머지 Agent DB와 Queue Adapter가 구현되면 동일한 서비스 경계를 유지한 채 영속 구현으로 교체해야 합니다.

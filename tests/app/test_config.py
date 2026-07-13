@@ -2,7 +2,11 @@
 
 from pytest import MonkeyPatch
 
-from app.config import load_settings
+from app.config import Settings, load_settings
+from app.dependencies import create_container
+from infrastructure.persistence.postgres_publish_snapshots import (
+    PostgresPublishSnapshotRepository,
+)
 
 
 def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
@@ -23,3 +27,15 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     assert settings.docs_enabled is False
     assert settings.openai_api_key is not None
     assert settings.openai_api_key.get_secret_value() == "test-secret"
+
+
+def test_create_container_uses_postgres_for_publish_snapshots() -> None:
+    """DB URL이 있으면 Publish Snapshot 저장소를 PostgreSQL로 구성하는지 검증한다."""
+    settings = Settings(
+        agent_database_url="postgresql://agent:password@localhost:5432/agent"
+    )
+
+    container = create_container(settings)
+
+    assert isinstance(container.database, PostgresPublishSnapshotRepository)
+    assert container.mvp_service is not None

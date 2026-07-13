@@ -1,7 +1,7 @@
-"""FastAPI MVP 엔드포인트를 지원하는 메모리 기반 애플리케이션 서비스.
+"""FastAPI MVP 엔드포인트를 지원하는 애플리케이션 서비스.
 
-DB와 Queue Adapter가 구현되기 전에도 API 계약과 멱등성, 상태 전이를 검증할 수
-있도록 프로세스 수명 동안 최소 상태를 보관한다.
+Queue Adapter가 구현되기 전에도 API 계약과 멱등성, 상태 전이를 검증할 수
+있도록 최소 상태를 보관하고 Publish Snapshot 저장소 경계를 조정한다.
 """
 
 from asyncio import Lock
@@ -22,6 +22,13 @@ from app.schemas.mvp import (
     UserContextResponse,
     UserContextUpsertRequest,
 )
+from app.services.publish_snapshots import (
+    InMemoryPublishSnapshotRepository,
+    PublishSnapshotMismatchError,
+    PublishSnapshotNotFoundError,
+    PublishSnapshotRepository,
+    StalePublishSnapshotError,
+)
 
 
 def utc_now() -> datetime:
@@ -30,17 +37,21 @@ def utc_now() -> datetime:
 
 
 class AgentApiMvpService:
-    """MVP API 계약을 실행하고 메모리에서 상태를 관리한다."""
+    """MVP API 계약을 실행하고 기능별 상태 저장소를 조정한다."""
 
-    def __init__(self) -> None:
-        """사용자 컨텍스트, Job, Snapshot과 ACK 저장소를 초기화한다."""
+    def __init__(
+        self,
+        publish_snapshot_repository: PublishSnapshotRepository | None = None,
+    ) -> None:
+        """사용자 컨텍스트, Job과 Publish Snapshot 저장소를 초기화한다."""
         self._contexts: dict[str, UserContextResponse] = {}
         self._jobs: dict[str, JobStatusResponse] = {}
         self._job_results: dict[str, JobResultResponse] = {}
         self._job_payloads: dict[str, dict[str, object]] = {}
         self._job_keys: dict[tuple[str, str, str], str] = {}
-        self._snapshots: dict[str, PublishSnapshotResponse] = {}
-        self._acks: dict[str, PublishAckResponse] = {}
+        self._publish_snapshots = (
+            publish_snapshot_repository or InMemoryPublishSnapshotRepository()
+        )
         self._lock = Lock()
 
     async def upsert_user_context(
@@ -161,21 +172,20 @@ class AgentApiMvpService:
 
     async def save_publish_snapshot(self, snapshot: PublishSnapshotResponse) -> None:
         """Bambi Worker가 생성한 최신 발행 Snapshot을 저장한다."""
-        async with self._lock:
-            current = self._snapshots.get(snapshot.content_id)
-            if current and snapshot.version <= current.version:
-                raise AgentApiError(
-                    status.HTTP_409_CONFLICT,
-                    ErrorDetail(
-                        code="STALE_SNAPSHOT_VERSION",
-                        message="현재보다 새로운 Snapshot 버전이 필요합니다.",
-                    ),
-                )
-            self._snapshots[snapshot.content_id] = snapshot
+        try:
+            await self._publish_snapshots.save(snapshot)
+        except StalePublishSnapshotError as exc:
+            raise AgentApiError(
+                status.HTTP_409_CONFLICT,
+                ErrorDetail(
+                    code="STALE_SNAPSHOT_VERSION",
+                    message="현재보다 새로운 Snapshot 버전이 필요합니다.",
+                ),
+            ) from exc
 
     async def get_publish_snapshot(self, content_id: str) -> PublishSnapshotResponse:
         """Service Worker가 저장할 최신 발행 Snapshot을 반환한다."""
-        if snapshot := self._snapshots.get(content_id):
+        if snapshot := await self._publish_snapshots.get_latest(content_id):
             return snapshot
         raise AgentApiError(
             status.HTTP_404_NOT_FOUND,
@@ -189,24 +199,29 @@ class AgentApiMvpService:
         self, content_id: str, payload: PublishAckRequest
     ) -> PublishAckResponse:
         """Snapshot 버전과 Hash를 확인한 뒤 Service Worker의 발행 ACK를 기록한다."""
-        async with self._lock:
-            snapshot = await self.get_publish_snapshot(content_id)
-            if (
-                payload.version != snapshot.version
-                or payload.snapshot_hash != snapshot.snapshot_hash
-            ):
-                raise AgentApiError(
-                    status.HTTP_409_CONFLICT,
-                    ErrorDetail(
-                        code="PUBLISH_SNAPSHOT_MISMATCH",
-                        message="ACK의 Snapshot 버전 또는 Hash가 일치하지 않습니다.",
-                    ),
-                )
-            response = PublishAckResponse(
-                content_id=content_id,
-                version=payload.version,
-                status=payload.status,
-                acknowledged_at=utc_now(),
+        try:
+            acknowledged_at = await self._publish_snapshots.acknowledge(
+                content_id, payload
             )
-            self._acks[content_id] = response
-            return response
+        except PublishSnapshotNotFoundError as exc:
+            raise AgentApiError(
+                status.HTTP_404_NOT_FOUND,
+                ErrorDetail(
+                    code="PUBLISH_SNAPSHOT_NOT_FOUND",
+                    message="발행 Snapshot을 찾을 수 없습니다.",
+                ),
+            ) from exc
+        except PublishSnapshotMismatchError as exc:
+            raise AgentApiError(
+                status.HTTP_409_CONFLICT,
+                ErrorDetail(
+                    code="PUBLISH_SNAPSHOT_MISMATCH",
+                    message="ACK의 Snapshot 버전 또는 Hash가 일치하지 않습니다.",
+                ),
+            ) from exc
+        return PublishAckResponse(
+            content_id=content_id,
+            version=payload.version,
+            status=payload.status,
+            acknowledged_at=acknowledged_at,
+        )
