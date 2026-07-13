@@ -98,12 +98,14 @@ domain/personal_wiki/documents/
 
 ## MVP 구현 흐름
 
-1. `app/routers/service/api.py`의 Service API 요청을 Job으로 변환합니다.
+1. `app/routers/service/api.py`의 Service API 요청과 Scheduler 대상자를 멱등한 Job으로 변환합니다.
 2. `workers/features/personal_wiki_builder.py`가 개인 Wiki 문서·Chunk·Embedding·관심사를 구성합니다.
 3. `workers/features/global_source_collector.py`가 Naver, GDELT, NewsAPI Connector를 실행하고 정규화·중복 제거합니다.
-4. `workers/features/bambi_generation.py`가 개인 Wiki와 Global Source 검색 결과로 콘텐츠를 생성합니다.
-5. 생성 후보와 Citation을 저장하고 Content Ready 이벤트를 발행합니다.
-6. Service Worker가 Publish Snapshot을 조회·저장한 뒤 ACK를 전달합니다.
+4. Worker Runtime이 실행 가능한 Job을 `FOR UPDATE SKIP LOCKED`로 Batch Claim하고 작업별 동시성을 제한합니다.
+5. `workers/features/bambi_generation.py`가 개인 Wiki와 Global Source 검색 결과로 각 콘텐츠를 독립 생성합니다.
+6. 생성 후보와 Citation, Ready Publish Snapshot을 저장하고 Content Ready 이벤트를 발행합니다.
+7. Service Worker가 Lease 기반 Publish Snapshot Batch를 Claim해 service-db에 항목별 멱등 Upsert합니다.
+8. Service Worker가 성공·재시도·최종 실패를 부분 성공 Batch ACK로 전달하고, Agent API가 항목별 상태와 이력을 갱신합니다.
 
 ## 스캐폴드 검증
 

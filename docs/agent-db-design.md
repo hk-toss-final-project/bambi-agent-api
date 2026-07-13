@@ -30,7 +30,7 @@ PostgreSQL 17을 선택한 이유는 로컬과 Cloud SQL의 Major Version을 맞
 - `agent-api`, `agent-worker`, `agent-scheduler`만 `agent-db`에 접근합니다.
 - Agent 계층은 `service-db`에 직접 접근하지 않습니다.
 - 사용자 원본 변경은 Service API 호출이나 Integration Event로 전달합니다.
-- 생성 후보는 `CONTENT_READY` Event와 Publish Snapshot으로 Service Worker에 전달하며, Service Worker만 `service-db`에 발행합니다.
+- 생성 후보는 `CONTENT_READY` Event와 Lease 기반 Publish Snapshot Batch Claim으로 Service Worker에 전달하며, Service Worker만 `service-db`에 발행합니다.
 
 ```mermaid
 flowchart LR
@@ -42,9 +42,9 @@ flowchart LR
     worker --> agentDb
     worker -->|"Outbox → CONTENT_READY"| eventBus["Integration Event Bus"]
     eventBus --> serviceWorker["service-worker"]
-    serviceWorker -->|"Publish Snapshot 조회"| agentApi
+    serviceWorker -->|"Publish Snapshot Batch Claim"| agentApi
     serviceWorker --> serviceDb[("service-db")]
-    serviceWorker -->|"ACK"| agentApi
+    serviceWorker -->|"부분 성공 Batch ACK"| agentApi
     worker -. "직접 접근 금지" .-> serviceDb
 ```
 
@@ -104,7 +104,7 @@ erDiagram
 | DB-029 | Usage Log 저장 | `usage_logs` |
 | DB-030 | Audit Log 저장 | `audit_logs` |
 
-`publish_snapshots`와 `publish_attempts`는 PUB-001~010 및 SW-004/009의 Version, Hash, ACK 이력을 담당합니다.
+`publish_snapshots`와 `publish_attempts`는 PUB-001~010 및 SW-004/009의 Version, Hash, Batch Claim Lease와 ACK 이력을 담당합니다.
 
 ## 5. 주요 모델링 규칙
 
@@ -162,6 +162,39 @@ COMMIT;
 - `event_outbox`: Agent DB 변경과 Event 생성을 같은 Transaction에서 Commit합니다.
 - `event_inbox`: Consumer별 `event_id` Unique 제약으로 중복 처리를 차단합니다.
 - 반복 실패는 `dead_letter` 상태로 분리하고 원본 Payload와 오류를 보존합니다.
+
+### Agent Job Batch Claim
+
+- Scheduler는 생성 대상자를 작은 묶음으로 순회하되 `schedule window + user_id + content_type`을 포함한 멱등성 키로 사용자별 Job을 독립 등록합니다.
+- Worker는 하나의 짧은 Transaction에서 실행 가능한 Job을 `priority, scheduled_at, created_at` 순으로 조회하고 `FOR UPDATE SKIP LOCKED LIMIT :batch_size`로 Batch Claim합니다.
+- Claim 시 `status = running`, `locked_by`, `locked_at`, `lease_expires_at`을 함께 갱신합니다. `lease_expires_at`은 기존 `0001_initial.sql`을 수정하지 않고 다음 순번 Migration에서 `agent_jobs`에 추가합니다.
+- DB Transaction은 Claim 직후 종료하고 검색·LLM 호출·콘텐츠 생성은 Transaction 밖에서 실행합니다. 장시간 Transaction으로 Connection과 Row Lock을 점유하지 않습니다.
+- Claim Batch 크기와 실제 Job·LLM 호출 동시성은 독립 설정입니다. 예를 들어 여러 Job을 미리 점유하더라도 Provider Rate Limit과 비용 Budget에 맞춰 더 작은 동시성으로 실행합니다.
+- Worker Heartbeat가 Lease를 갱신하며, 프로세스 종료나 Heartbeat 유실로 Lease가 만료된 Job은 재시도 정책에 따라 다시 `queued`로 전환합니다.
+- 각 Job은 독립적인 `agent_job_attempts` Row와 결과 Transaction을 가지며 한 Job의 실패가 같은 Batch의 다른 Job을 Rollback하지 않습니다.
+
+### Publish Snapshot Batch Claim과 ACK
+
+MVP의 실시간·대량 발행 경로는 Agent API가 agent-db를 직접 노출하지 않고 Service Worker에 전체 Snapshot Payload를 Batch로 전달하는 Pull 계약을 사용합니다.
+
+- Service Worker는 `POST /internal/v1/publish-snapshot-batches/claim`으로 처리 가능한 Snapshot을 Claim합니다.
+- Agent API는 `status = ready`이고 `next_attempt_at IS NULL OR next_attempt_at <= now()`인 Row와, `status = claimed`이지만 Lease가 만료된 Row를 `created_at, id` 순으로 `FOR UPDATE SKIP LOCKED` 선택합니다.
+- 선택된 Row는 하나의 `batch_id`를 공유하고 `status = claimed`, `claimed_by`, `lease_expires_at`을 원자적으로 기록합니다.
+- Service Worker는 각 항목을 `content_id + version`으로 service-db에 독립적으로 멱등 Upsert하고 Commit이 끝난 결과만 Batch ACK에 포함합니다.
+- `published` ACK는 Snapshot을 `published`로 전환합니다. 재시도 가능한 실패는 Exponential Backoff를 적용한 `next_attempt_at`과 함께 `ready`로 되돌리고, 재시도 불가능하거나 최대 횟수를 넘긴 실패는 `failed`로 전환합니다.
+- ACK되지 않은 항목과 처리 중 Worker가 종료된 항목은 Lease 만료 후 다시 Claim할 수 있습니다. 동일 `batch_id + snapshot_id` ACK는 이전 결과를 반환하고 이력을 중복 생성하지 않습니다.
+- `CONTENT_READY` Event는 Service Worker의 Poll을 즉시 깨우는 신호이며, 주기적인 Batch Poll은 이벤트 유실·장애 복구·Backfill 경로로 계속 유지합니다.
+- 기존 단건 Snapshot 조회와 ACK는 수동 복구 및 개별 재발행 경로로 유지합니다.
+
+다음 순번 Migration은 기존 적용 Migration을 수정하지 않고 최소한 아래 변경을 추가합니다.
+
+| Table | 변경 |
+|---|---|
+| `agent_jobs` | `lease_expires_at timestamptz` 추가 및 Claim 가능 Job 조회 Index 추가 |
+| `publish_snapshots` | 상태에 `claimed` 추가, `claim_id uuid`, `claimed_by text`, `lease_expires_at timestamptz`, `attempt_count integer`, `next_attempt_at timestamptz` 추가 |
+| `publish_attempts` | `claim_id uuid`, `claimed_by text`, `lease_expires_at timestamptz`, `retryable boolean` 추가 및 `snapshot_id + claim_id` 멱등성 제약 추가 |
+
+`publish_snapshots`의 Batch Claim Index는 `status`, `next_attempt_at`, `created_at`, `id` 순서를 기본으로 하고 실제 Query Plan을 측정해 조정합니다. 단건·Batch ACK는 Snapshot 상태 변경과 `publish_attempts` 추가를 같은 Transaction에서 Commit합니다.
 
 ## 6. 로컬 Docker
 
@@ -227,6 +260,8 @@ Cloud Run Instance가 수평 확장되면 각 Instance의 Pool이 합산됩니�
 2. Async PostgreSQL Driver와 Connection Pool을 `infrastructure/persistence/`에 구현합니다.
 3. `AppContainer.database`에 Unit of Work를 주입하고 현재 인메모리 `AgentApiMvpService`를 Repository 기반으로 교체합니다.
 4. Context, Job, Source Event, Publish Snapshot 순으로 MVP Repository를 구현합니다.
-5. Worker에서 Wiki Document → Chunk → Embedding 저장과 Hybrid Search를 구현합니다.
-6. Outbox Publisher와 Service Worker ACK를 연결합니다.
-7. 실제 데이터로 Query Plan, HNSW Recall, Connection 수와 비용을 측정해 GCP 용량을 확정합니다.
+5. 다음 순번 Migration에 Agent Job Lease와 Publish Snapshot Batch Claim 필드·Index를 추가합니다.
+6. Agent Worker의 `SKIP LOCKED` Job Batch Claim, Heartbeat, 동시성 제한과 개별 결과 Transaction을 구현합니다.
+7. Publish Snapshot Batch Claim·부분 성공 ACK와 Service Worker의 멱등 Upsert를 연결합니다.
+8. Outbox Publisher를 연결해 `CONTENT_READY` Event를 Batch Poll Wake-up 신호로 사용합니다.
+9. 실제 데이터로 Query Plan, Batch 크기, LLM 동시성, HNSW Recall, Connection 수와 비용을 측정해 GCP 용량을 확정합니다.

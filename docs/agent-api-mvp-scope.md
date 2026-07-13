@@ -9,6 +9,7 @@
 - Naver API, NewsAPI, GDELT 데이터를 정기적으로 수집한다.
 - 개인 Wiki와 최신 수집 데이터를 결합해 밤비 콘텐츠를 생성한다.
 - 생성 결과를 service-api 및 service-worker가 사용할 수 있도록 제공한다.
+- Scheduler와 Worker가 생성 Job을 Batch로 처리하고, Service Worker가 준비된 Publish Snapshot을 Batch로 가져가 service-db에 반영한다.
 
 ## 1. Service API 연동
 
@@ -81,11 +82,24 @@
 |---|---|---|
 | WORKER-001 | Global Source Collector Worker | 외부 데이터를 수집하고 Global Source Pool에 저장한다. |
 | WORKER-002 | Personal Wiki Builder Worker | 사용자 선택 데이터를 개인 Wiki로 구성한다. |
-| WORKER-003 | Bambi Generation Worker | 개인화 콘텐츠를 생성한다. |
+| WORKER-003 | Bambi Generation Worker | 생성 Job Batch를 점유하고 제한된 동시성으로 개인화 콘텐츠를 생성한다. |
 | SW-001 | Content Ready 이벤트 수신 | 발행 가능한 콘텐츠 이벤트를 소비한다. |
-| SW-004 | Publish Snapshot 조회 | Agent API에서 서비스 저장용 콘텐츠를 조회한다. |
-| SW-007 | service-db 콘텐츠 Upsert | 콘텐츠 발행본을 service-db에 저장하거나 갱신한다. |
-| SW-009 | 발행 완료 ACK | service-db 반영 완료를 Agent API에 알린다. |
+| SW-004 | Publish Snapshot 조회 | Agent API에서 단건 Snapshot을 조회하거나 준비된 Snapshot Batch를 Claim한다. |
+| SW-007 | service-db 콘텐츠 Upsert | Batch의 각 콘텐츠 발행본을 멱등하게 저장하거나 갱신한다. |
+| SW-009 | 발행 완료 ACK | 단건 또는 Batch의 항목별 service-db 반영 결과를 Agent API에 알린다. |
+
+### MVP Batch 처리 계약
+
+- Agent Scheduler는 대상 사용자를 분할해 `schedule window + user_id + content_type` 기반의 멱등성 키로 생성 Job을 등록한다.
+- Agent Worker는 한 트랜잭션에서 실행 가능한 Job 여러 건을 `FOR UPDATE SKIP LOCKED`로 Claim하고, DB Transaction 밖에서 제한된 동시성으로 각 Job을 독립 실행한다.
+- Batch Claim 크기와 실제 LLM 호출 동시성은 별도 설정으로 관리한다. 한 Batch를 하나의 LLM 요청으로 합치지 않는다.
+- 각 Job은 독립적으로 완료·재시도·실패 처리하며, 생성 후보·Publish Snapshot·Outbox Event를 같은 저장 경계에서 기록한다.
+- Spring 계층에서는 HTTP 요청을 처리하는 service-api가 아니라 별도 Service Worker/Scheduler가 Agent API의 Publish Snapshot Batch를 Claim한다. 같은 배포 바이너리를 사용하더라도 실행 역할과 분산 Lock을 분리한다.
+- Publish Snapshot Batch 응답은 추가 단건 조회 없이 service-db에 반영할 수 있도록 전체 Snapshot Payload를 포함한다.
+- Service Worker는 `content_id + version`으로 service-db에 멱등 Upsert한 뒤, 성공과 실패를 항목별로 모아 부분 성공 Batch ACK한다. 전체 Batch를 하나의 service-db Transaction으로 묶지 않는다.
+- ACK되지 않은 항목은 Lease 만료 후 다시 Claim할 수 있고, 재시도 가능 실패는 Backoff 후 `ready`로 돌아가며 최종 실패는 `failed`로 격리한다.
+- `CONTENT_READY` 이벤트는 Batch Poll을 즉시 깨우는 신호로 사용하고, 주기적인 Batch Poll을 이벤트 유실과 Backfill의 복구 경로로 유지한다.
+- 기존 단건 Snapshot 조회·ACK는 관리자 수동 복구, 장애 조사와 개별 재발행을 위해 유지한다.
 
 ## MVP 제외 범위
 

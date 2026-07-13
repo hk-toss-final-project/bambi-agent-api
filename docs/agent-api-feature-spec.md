@@ -488,19 +488,19 @@
 
 | ID | 기능 | 설명 |
 |---|---|---|
-| WC-001 | Queue Job Consume | Queue에서 처리할 작업을 가져온다. |
-| WC-002 | Job Claim | 하나의 Worker가 작업을 점유한다. |
-| WC-003 | Worker Heartbeat | Worker의 생존 상태를 기록한다. |
+| WC-001 | Queue Job Consume | 설정된 Batch 크기만큼 실행 가능한 작업을 가져온다. |
+| WC-002 | Job Claim | 여러 Worker가 중복 실행하지 않도록 작업 Batch를 Lease와 함께 점유한다. |
+| WC-003 | Worker Heartbeat | Worker의 생존 상태와 처리 중인 Claim Lease를 갱신한다. |
 | WC-004 | Worker 상태 조회 | Worker별 실행 상태와 처리량을 조회한다. |
 | WC-005 | 작업 진행률 기록 | 장시간 작업의 처리 단계를 기록한다. |
-| WC-006 | Retry 정책 | 재시도 가능한 오류에 재처리 정책을 적용한다. |
+| WC-006 | Retry 정책 | 재시도 가능한 개별 작업을 Backoff 후 Queue로 되돌린다. |
 | WC-007 | Exponential Backoff | 재시도 간격을 점진적으로 증가시킨다. |
 | WC-008 | Dead Letter Queue | 반복 실패 작업을 격리한다. |
 | WC-009 | Idempotency 처리 | 중복 작업 실행에도 동일 결과를 보장한다. |
 | WC-010 | 작업 중복 방지 | 동일 Resource에 대한 동시 작업을 방지한다. |
 | WC-011 | 작업 Timeout | 지정된 시간 이상 실행되는 작업을 종료한다. |
 | WC-012 | 작업 취소 | 취소 요청이 들어온 작업을 중단한다. |
-| WC-013 | Concurrency 제어 | 작업 유형별 동시 실행 수를 제한한다. |
+| WC-013 | Concurrency 제어 | Batch Claim 크기와 실제 작업·LLM 호출 동시 실행 수를 독립적으로 제한한다. |
 | WC-014 | 외부 API Rate Limit | 외부 Source와 Provider의 호출 제한을 준수한다. |
 | WC-015 | Graceful Shutdown | 진행 중 작업을 정리하고 안전하게 종료한다. |
 | WC-016 | Worker 로그 | 작업 실행과 오류 정보를 기록한다. |
@@ -520,7 +520,7 @@
 | SCH-008 | arXiv 수집 스케줄 | arXiv 수집 작업을 정기 등록한다. |
 | SCH-009 | 사용자 Wiki 재구성 스케줄 | 변경이 누적된 사용자의 Wiki를 재구성한다. |
 | SCH-010 | 사용자 관심사 재계산 | 개인 Wiki 변경에 따라 관심사 프로필을 재계산한다. |
-| SCH-011 | 콘텐츠 생성 스케줄 | 일간·주간 개인화 콘텐츠 생성 작업을 등록한다. |
+| SCH-011 | 콘텐츠 생성 스케줄 | 일간·주간 생성 대상자를 분할해 멱등한 개인화 콘텐츠 Job Batch를 등록한다. |
 | SCH-012 | 추천 갱신 스케줄 | 사용자별 추천 후보 갱신 작업을 등록한다. |
 | SCH-013 | Embedding 재색인 | Embedding 모델 변경에 따른 재색인을 등록한다. |
 | SCH-014 | 로그 정리 스케줄 | 보존 기간이 지난 로그를 정리한다. |
@@ -585,16 +585,16 @@
 | SW-001 | Content Ready 이벤트 수신 | 발행 가능한 콘텐츠 이벤트를 소비한다. |
 | SW-002 | Recommendation Ready 이벤트 수신 | 추천 결과 이벤트를 소비한다. |
 | SW-003 | Image Asset Ready 이벤트 수신 | 이미지 생성 완료 이벤트를 소비한다. |
-| SW-004 | Publish Snapshot 조회 | Agent API에서 서비스 저장용 콘텐츠를 조회한다. |
+| SW-004 | Publish Snapshot 조회 | Agent API에서 단건 Snapshot을 조회하거나 준비된 Snapshot Batch를 Claim한다. |
 | SW-005 | 발행 가능 상태 검증 | 콘텐츠가 실제 발행 가능한 상태인지 확인한다. |
 | SW-006 | 콘텐츠 Version 검증 | 오래된 콘텐츠 버전이 반영되지 않도록 확인한다. |
 | SW-007 | service-db 콘텐츠 Upsert | 콘텐츠 발행본을 service-db에 저장하거나 갱신한다. |
 | SW-008 | service-db 피드 Upsert | 발행 콘텐츠를 사용자 피드에 반영한다. |
-| SW-009 | 발행 완료 ACK | service-db 반영 완료를 Agent API에 알린다. |
-| SW-010 | 발행 실패 전달 | 발행 실패 사유를 Agent API에 전달한다. |
-| SW-011 | 이벤트 중복 처리 방지 | 동일 이벤트가 여러 번 반영되지 않도록 한다. |
+| SW-009 | 발행 완료 ACK | 단건 또는 Batch의 항목별 service-db 반영 결과를 Agent API에 알린다. |
+| SW-010 | 발행 실패 전달 | 항목별 발행 실패 사유와 재시도 가능 여부를 Agent API에 전달한다. |
+| SW-011 | 이벤트 중복 처리 방지 | 동일 이벤트·Batch Claim·ACK가 여러 번 반영되지 않도록 한다. |
 | SW-012 | 오래된 이벤트 무시 | 최신 버전보다 오래된 이벤트를 무시한다. |
-| SW-013 | 콘텐츠 무결성 검증 | Snapshot의 Hash와 버전을 확인한다. |
+| SW-013 | 콘텐츠 무결성 검증 | 단건 및 Batch의 각 Snapshot Hash와 버전을 확인한다. |
 
 ## 33. 발행 콘텐츠 관리
 
@@ -603,13 +603,13 @@
 | PUB-001 | 발행용 Snapshot 생성 | service-db에 저장할 콘텐츠 형식을 생성한다. |
 | PUB-002 | 생성 콘텐츠 조회 | Agent DB의 생성 결과를 조회한다. |
 | PUB-003 | 생성 콘텐츠 Version 조회 | 특정 버전의 생성 결과를 조회한다. |
-| PUB-004 | 발행 상태 관리 | 발행 대기, 발행 완료, 실패 상태를 관리한다. |
-| PUB-005 | 발행 완료 처리 | Service Worker의 완료 응답을 반영한다. |
-| PUB-006 | 발행 실패 처리 | 발행 실패 사유와 재시도 상태를 기록한다. |
+| PUB-004 | 발행 상태 관리 | Snapshot의 Ready, Claimed, Published, Failed 상태와 Claim Lease를 관리한다. |
+| PUB-005 | 발행 완료 처리 | Service Worker의 단건·Batch 완료 응답을 항목별로 반영한다. |
+| PUB-006 | 발행 실패 처리 | 항목별 실패 사유, 재시도 여부와 다음 실행 시각을 기록한다. |
 | PUB-007 | 재발행 처리 | 새로운 콘텐츠 버전을 다시 발행한다. |
 | PUB-008 | 콘텐츠 Archive | 더 이상 노출하지 않는 콘텐츠를 보관 상태로 변경한다. |
 | PUB-009 | 콘텐츠 Superseded | 새 버전으로 대체된 콘텐츠 상태를 관리한다. |
-| PUB-010 | 발행 이력 관리 | 버전별 발행과 실패 이력을 기록한다. |
+| PUB-010 | 발행 이력 관리 | 버전과 Batch Claim별 발행 시도·완료·실패 이력을 기록한다. |
 
 ## 34. 관리자 기능
 
@@ -864,8 +864,8 @@
 | MVP-015 | 무료 및 유료 생성 정책 | 플랜별 기본 생성 차등화를 구현한다. |
 | MVP-016 | 콘텐츠 품질 평가 | 기본 품질 기준과 재생성을 구현한다. |
 | MVP-017 | Content Ready 이벤트 | 생성 결과 완료 이벤트를 구현한다. |
-| MVP-018 | Service Worker 발행 연동 | Publish Snapshot과 service-db 반영 흐름을 구현한다. |
-| MVP-019 | Agent Job 관리 | Job 생성, 상태, 재시도를 구현한다. |
+| MVP-018 | Service Worker 발행 연동 | Publish Snapshot Batch Claim, 부분 성공 ACK와 service-db 반영 흐름을 구현한다. |
+| MVP-019 | Agent Job 관리 | Job Batch Claim, Lease, 상태와 재시도를 구현한다. |
 | MVP-020 | Retry 및 Dead Letter | 실패 작업 처리 기반을 구현한다. |
 | MVP-021 | Prompt 관리 | Prompt Template과 버전 관리를 구현한다. |
 | MVP-022 | Model Config 관리 | 작업별 모델 설정 관리를 구현한다. |
