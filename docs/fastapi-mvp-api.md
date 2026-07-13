@@ -208,4 +208,4 @@ sequenceDiagram
 
 ## MVP 저장소 제한
 
-현재 사용자 컨텍스트와 Job은 API 계약과 상태 전이를 먼저 검증하기 위한 메모리 저장소를 사용합니다. 프로세스 재시작 시 해당 데이터가 사라지며 다중 인스턴스 간 상태를 공유하지 않습니다. 단건 Publish Snapshot 조회와 ACK는 `AGENT_DATABASE_URL`이 설정되면 PostgreSQL 저장소를 사용하고, 설정되지 않으면 테스트용 인메모리 저장소를 사용합니다. Batch Claim·Lease·부분 성공 ACK는 이 문서에 확정된 MVP 구현 대상이며 다음 순번 DB Migration과 API 구현이 필요합니다. 나머지 Agent DB와 Queue Adapter도 동일한 서비스 경계를 유지한 채 영속 구현으로 교체해야 합니다.
+현재 사용자 컨텍스트와 Job은 API 계약과 상태 전이를 먼저 검증하기 위한 메모리 저장소를 사용합니다. 프로세스 재시작 시 해당 데이터가 사라지며 다중 인스턴스 간 상태를 공유하지 않습니다. 단건 및 Batch Publish Snapshot 조회·Claim·ACK는 `AGENT_DATABASE_URL`이 설정되면 PostgreSQL 저장소를 사용하고, 설정되지 않으면 테스트용 인메모리 저장소를 사용합니다. 나머지 Agent DB와 Queue Adapter도 동일한 서비스 경계를 유지한 채 영속 구현으로 교체해야 합니다.

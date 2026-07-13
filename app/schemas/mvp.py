@@ -36,6 +36,14 @@ class PublishStatus(StrEnum):
     FAILED = "failed"
 
 
+class PublishBatchResultStatus(StrEnum):
+    """Batch ACK 처리 후 Agent API가 확정한 항목별 결과."""
+
+    PUBLISHED = "published"
+    RETRY_SCHEDULED = "retry_scheduled"
+    FAILED = "failed"
+
+
 class HealthResponse(ImmutableSchema):
     """Liveness와 Readiness 상태 응답."""
 
@@ -187,6 +195,150 @@ class PublishSnapshotResponse(ImmutableSchema):
         default_factory=list, description="본문과 연결된 출처 목록"
     )
     created_at: datetime = Field(description="Snapshot 생성 시각")
+
+
+class PublishBatchClaimRequest(ImmutableSchema):
+    """Service Worker가 처리할 Publish Snapshot Batch를 점유하는 요청."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "worker_id": "service-worker-01",
+                    "limit": 50,
+                    "lease_seconds": 120,
+                }
+            ]
+        }
+    )
+
+    worker_id: str = Field(
+        min_length=1,
+        max_length=128,
+        description="Batch를 처리할 Service Worker Instance 식별자",
+    )
+    limit: int = Field(
+        default=50,
+        ge=1,
+        le=100,
+        description="한 번에 Claim할 최대 Snapshot 수",
+    )
+    lease_seconds: int = Field(
+        default=120,
+        ge=30,
+        le=600,
+        description="다른 Worker의 중복 Claim을 막는 Lease 시간(초)",
+    )
+
+
+class PublishBatchClaimResponse(ImmutableSchema):
+    """Service Worker가 점유한 Publish Snapshot Batch와 Lease 정보."""
+
+    batch_id: str | None = Field(
+        default=None, description="Claim된 항목이 있을 때 생성되는 Batch 식별자"
+    )
+    worker_id: str = Field(description="Batch를 Claim한 Worker 식별자")
+    lease_expires_at: datetime | None = Field(
+        default=None, description="Batch Lease 만료 시각"
+    )
+    items: list[PublishSnapshotResponse] = Field(
+        default_factory=list, description="service-db에 바로 반영할 Snapshot 목록"
+    )
+
+
+class PublishBatchAckItemRequest(ImmutableSchema):
+    """Batch에서 처리한 Snapshot 한 건의 발행 결과."""
+
+    content_id: str = Field(
+        min_length=1, max_length=128, description="생성 콘텐츠 식별자"
+    )
+    version: int = Field(ge=1, description="service-db에 반영한 Snapshot 버전")
+    snapshot_hash: str = Field(min_length=1, description="Snapshot 무결성 Hash")
+    status: PublishStatus = Field(description="service-db 반영 결과")
+    retryable: bool | None = Field(
+        default=None, description="실패 항목을 다시 처리할 수 있는지 여부"
+    )
+    failure_reason: str | None = Field(
+        default=None, max_length=2000, description="비밀정보를 제외한 발행 실패 사유"
+    )
+
+    @model_validator(mode="after")
+    def validate_failure(self) -> "PublishBatchAckItemRequest":
+        """실패 ACK에 재시도 여부와 실패 사유가 포함되었는지 검증한다."""
+        if self.status is PublishStatus.FAILED:
+            if self.retryable is None:
+                raise ValueError("발행 실패 시 retryable이 필요합니다.")
+            if not self.failure_reason:
+                raise ValueError("발행 실패 시 failure_reason이 필요합니다.")
+        return self
+
+
+class PublishBatchAckRequest(ImmutableSchema):
+    """Service Worker가 전달하는 Publish Snapshot Batch 처리 결과."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "worker_id": "service-worker-01",
+                    "items": [
+                        {
+                            "content_id": "mock-content-001",
+                            "version": 1,
+                            "snapshot_hash": "d3b07384d113edec49eaa6238ad5ff00d3b07384d113edec49eaa6238ad5ff00",
+                            "status": "published",
+                        },
+                        {
+                            "content_id": "mock-content-002",
+                            "version": 1,
+                            "snapshot_hash": "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
+                            "status": "failed",
+                            "retryable": True,
+                            "failure_reason": "service-db timeout",
+                        },
+                    ],
+                }
+            ]
+        }
+    )
+
+    worker_id: str = Field(
+        min_length=1,
+        max_length=128,
+        description="Claim 요청과 동일한 Service Worker 식별자",
+    )
+    items: list[PublishBatchAckItemRequest] = Field(
+        min_length=1, max_length=100, description="처리가 끝난 항목별 ACK 목록"
+    )
+
+    @model_validator(mode="after")
+    def validate_unique_items(self) -> "PublishBatchAckRequest":
+        """같은 콘텐츠 버전이 한 요청에 중복 포함되지 않도록 검증한다."""
+        keys = [(item.content_id, item.version) for item in self.items]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Batch ACK 항목의 content_id와 version은 중복될 수 없습니다.")
+        return self
+
+
+class PublishBatchAckItemResponse(ImmutableSchema):
+    """Agent API가 확정한 Batch ACK 항목별 처리 결과."""
+
+    content_id: str = Field(description="생성 콘텐츠 식별자")
+    version: int = Field(description="처리한 Snapshot 버전")
+    result: PublishBatchResultStatus = Field(description="Agent API 반영 결과")
+
+
+class PublishBatchAckResponse(ImmutableSchema):
+    """Publish Snapshot Batch의 부분 성공 ACK 결과."""
+
+    batch_id: str = Field(description="ACK 대상 Batch 식별자")
+    published_count: int = Field(ge=0, description="발행 완료 항목 수")
+    retry_scheduled_count: int = Field(ge=0, description="재시도 예약 항목 수")
+    failed_count: int = Field(ge=0, description="최종 실패 항목 수")
+    results: list[PublishBatchAckItemResponse] = Field(
+        description="요청 순서를 유지한 항목별 처리 결과"
+    )
+    acknowledged_at: datetime = Field(description="Batch ACK 반영 시각")
 
 
 class PublishAckRequest(ImmutableSchema):

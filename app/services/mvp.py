@@ -18,12 +18,19 @@ from app.schemas.mvp import (
     JobStatusResponse,
     PublishAckRequest,
     PublishAckResponse,
+    PublishBatchAckRequest,
+    PublishBatchAckResponse,
+    PublishBatchClaimRequest,
+    PublishBatchClaimResponse,
     PublishSnapshotResponse,
     UserContextResponse,
     UserContextUpsertRequest,
 )
 from app.services.publish_snapshots import (
     InMemoryPublishSnapshotRepository,
+    PublishBatchLeaseExpiredError,
+    PublishBatchNotFoundError,
+    PublishBatchOwnershipMismatchError,
     PublishSnapshotMismatchError,
     PublishSnapshotNotFoundError,
     PublishSnapshotRepository,
@@ -225,3 +232,49 @@ class AgentApiMvpService:
             status=payload.status,
             acknowledged_at=acknowledged_at,
         )
+
+    async def claim_publish_snapshot_batch(
+        self, payload: PublishBatchClaimRequest
+    ) -> PublishBatchClaimResponse:
+        """Service Worker가 처리할 Publish Snapshot Batch를 Lease와 함께 반환한다."""
+        return await self._publish_snapshots.claim_batch(payload)
+
+    async def acknowledge_publish_snapshot_batch(
+        self, batch_id: str, payload: PublishBatchAckRequest
+    ) -> PublishBatchAckResponse:
+        """Service Worker의 항목별 Batch 발행 결과를 저장소에 반영한다."""
+        try:
+            return await self._publish_snapshots.acknowledge_batch(batch_id, payload)
+        except PublishBatchNotFoundError as exc:
+            raise AgentApiError(
+                status.HTTP_404_NOT_FOUND,
+                ErrorDetail(
+                    code="PUBLISH_BATCH_NOT_FOUND",
+                    message="Publish Snapshot Batch를 찾을 수 없습니다.",
+                ),
+            ) from exc
+        except PublishBatchOwnershipMismatchError as exc:
+            raise AgentApiError(
+                status.HTTP_409_CONFLICT,
+                ErrorDetail(
+                    code="PUBLISH_BATCH_OWNERSHIP_MISMATCH",
+                    message="Batch를 Claim한 Worker와 ACK Worker가 다릅니다.",
+                ),
+            ) from exc
+        except PublishBatchLeaseExpiredError as exc:
+            raise AgentApiError(
+                status.HTTP_409_CONFLICT,
+                ErrorDetail(
+                    code="PUBLISH_BATCH_LEASE_EXPIRED",
+                    message="Batch Lease가 만료되어 ACK를 반영할 수 없습니다.",
+                    retryable=True,
+                ),
+            ) from exc
+        except PublishSnapshotMismatchError as exc:
+            raise AgentApiError(
+                status.HTTP_409_CONFLICT,
+                ErrorDetail(
+                    code="PUBLISH_SNAPSHOT_MISMATCH",
+                    message="ACK 항목의 Snapshot 버전 또는 Hash가 일치하지 않습니다.",
+                ),
+            ) from exc

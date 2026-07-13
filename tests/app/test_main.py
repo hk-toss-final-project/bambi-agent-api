@@ -89,5 +89,18 @@ def test_openapi_contains_fastapi_mvp_operations(client: TestClient) -> None:
         "svc_013",
         "svc_014",
         "sw_004",
+        "sw_004_batch_claim",
         "sw_009",
+        "sw_009_batch_ack",
     } <= operation_ids
+
+
+def test_openapi_contains_publish_batch_examples(client: TestClient) -> None:
+    """Swagger가 Batch Claim과 ACK 요청 예시를 제공하는지 검증한다."""
+    schema = client.get("/openapi.json").json()
+    claim_schema = schema["components"]["schemas"]["PublishBatchClaimRequest"]
+    ack_schema = schema["components"]["schemas"]["PublishBatchAckRequest"]
+
+    assert claim_schema["examples"][0]["worker_id"] == "service-worker-01"
+    assert claim_schema["examples"][0]["limit"] == 50
+    assert ack_schema["examples"][0]["items"][0]["status"] == "published"

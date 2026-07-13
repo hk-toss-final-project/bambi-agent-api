@@ -5,11 +5,17 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parents[2]
 MIGRATION_PATH = PROJECT_ROOT / "database" / "migrations" / "0001_initial.sql"
+BATCH_MIGRATION_PATH = (
+    PROJECT_ROOT / "database" / "migrations" / "0002_publish_snapshot_batches.sql"
+)
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
 DESIGN_PATH = PROJECT_ROOT / "docs" / "agent-db-design.md"
 COMPOSE_PATH = PROJECT_ROOT / "compose.yaml"
 SEED_PATH = PROJECT_ROOT / "database" / "seeds" / "0001_dev_publish_snapshots.sql"
+BATCH_SEED_PATH = (
+    PROJECT_ROOT / "database" / "seeds" / "0002_dev_publish_snapshot_batch.sql"
+)
 
 
 def _read(path: Path) -> str:
@@ -99,7 +105,9 @@ def test_compose_requires_secret_and_initializes_schema() -> None:
     assert "AGENT_DB_PASSWORD:?" in compose
     assert "127.0.0.1:${AGENT_DB_PORT:-5432}:5432" in compose
     assert "/docker-entrypoint-initdb.d/0001_initial.sql:ro" in compose
+    assert "/docker-entrypoint-initdb.d/0002_publish_snapshot_batches.sql:ro" in compose
     assert "/docker-entrypoint-initdb.d/9001_dev_publish_snapshots.sql:ro" in compose
+    assert "/docker-entrypoint-initdb.d/9002_dev_publish_snapshot_batch.sql:ro" in compose
     assert "pg_isready" in compose
 
 
@@ -123,6 +131,35 @@ def test_dev_seed_builds_service_worker_snapshot_dependency_chain() -> None:
     assert "mock-content-001" in seed
     assert "ON CONFLICT" in seed
     assert '"citation_id"' in seed
+
+
+def test_batch_migration_defines_claim_lease_and_retry_contract() -> None:
+    """두 번째 Migration이 Batch Claim과 멱등 ACK에 필요한 필드를 추가하는지 검증한다."""
+    migration = _read(BATCH_MIGRATION_PATH)
+
+    assert "ADD COLUMN lease_expires_at timestamptz" in migration
+    assert "ADD COLUMN claim_id uuid" in migration
+    assert "ADD COLUMN claimed_by text" in migration
+    assert "ADD COLUMN attempt_count integer" in migration
+    assert "ADD COLUMN next_attempt_at timestamptz" in migration
+    assert "CHECK (status IN ('ready', 'claimed', 'published'" in migration
+    assert "uq_publish_attempts_snapshot_claim" in migration
+    assert "ix_publish_snapshots_claimable" in migration
+    assert "VALUES (2, 'Publish Snapshot batch claim and lease')" in migration
+
+
+def test_batch_seed_provides_three_resettable_mock_snapshots() -> None:
+    """Batch Seed가 세 콘텐츠를 준비하고 반복 적용 시 Claim 상태를 초기화하는지 검증한다."""
+    seed = _read(BATCH_SEED_PATH)
+
+    assert "mock-content-002" in seed
+    assert "mock-content-003" in seed
+    assert "mock-user-002" in seed
+    assert "mock-user-003" in seed
+    assert "DELETE FROM agent.publish_attempts" in seed
+    assert "attempt_count = 0" in seed
+    assert "claim_id = NULL" in seed
+    assert "status = 'ready'" in seed
 
 
 def test_database_schema_contract_is_available() -> None:

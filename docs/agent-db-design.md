@@ -167,7 +167,7 @@ COMMIT;
 
 - Scheduler는 생성 대상자를 작은 묶음으로 순회하되 `schedule window + user_id + content_type`을 포함한 멱등성 키로 사용자별 Job을 독립 등록합니다.
 - Worker는 하나의 짧은 Transaction에서 실행 가능한 Job을 `priority, scheduled_at, created_at` 순으로 조회하고 `FOR UPDATE SKIP LOCKED LIMIT :batch_size`로 Batch Claim합니다.
-- Claim 시 `status = running`, `locked_by`, `locked_at`, `lease_expires_at`을 함께 갱신합니다. `lease_expires_at`은 기존 `0001_initial.sql`을 수정하지 않고 다음 순번 Migration에서 `agent_jobs`에 추가합니다.
+- Claim 시 `status = running`, `locked_by`, `locked_at`, `lease_expires_at`을 함께 갱신합니다. `lease_expires_at`은 기존 `0001_initial.sql`을 수정하지 않고 `0002_publish_snapshot_batches.sql`에서 `agent_jobs`에 추가합니다.
 - DB Transaction은 Claim 직후 종료하고 검색·LLM 호출·콘텐츠 생성은 Transaction 밖에서 실행합니다. 장시간 Transaction으로 Connection과 Row Lock을 점유하지 않습니다.
 - Claim Batch 크기와 실제 Job·LLM 호출 동시성은 독립 설정입니다. 예를 들어 여러 Job을 미리 점유하더라도 Provider Rate Limit과 비용 Budget에 맞춰 더 작은 동시성으로 실행합니다.
 - Worker Heartbeat가 Lease를 갱신하며, 프로세스 종료나 Heartbeat 유실로 Lease가 만료된 Job은 재시도 정책에 따라 다시 `queued`로 전환합니다.
@@ -186,7 +186,7 @@ MVP의 실시간·대량 발행 경로는 Agent API가 agent-db를 직접 노출
 - `CONTENT_READY` Event는 Service Worker의 Poll을 즉시 깨우는 신호이며, 주기적인 Batch Poll은 이벤트 유실·장애 복구·Backfill 경로로 계속 유지합니다.
 - 기존 단건 Snapshot 조회와 ACK는 수동 복구 및 개별 재발행 경로로 유지합니다.
 
-다음 순번 Migration은 기존 적용 Migration을 수정하지 않고 최소한 아래 변경을 추가합니다.
+`0002_publish_snapshot_batches.sql`은 기존 적용 Migration을 수정하지 않고 아래 변경을 추가합니다.
 
 | Table | 변경 |
 |---|---|

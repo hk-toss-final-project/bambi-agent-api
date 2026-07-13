@@ -1,6 +1,6 @@
 # Agent DB 로컬 실행
 
-`agent-db`는 PostgreSQL 17과 pgvector를 사용합니다. Docker Compose는 최초 데이터 볼륨 생성 시 `migrations/0001_initial.sql`을 적용하고, Service Worker API 연동용 `seeds/0001_dev_publish_snapshots.sql`을 이어서 적용합니다.
+`agent-db`는 PostgreSQL 17과 pgvector를 사용합니다. Docker Compose는 최초 데이터 볼륨 생성 시 `migrations/0001_initial.sql`과 `migrations/0002_publish_snapshot_batches.sql`을 순서대로 적용하고, Service Worker API 연동용 개발 Seed 두 개를 이어서 적용합니다.
 
 ## 시작
 
@@ -22,12 +22,26 @@ PostgreSQL에 연결합니다. 로컬 Seed의 고정 식별자로 실제 API를 
 curl http://127.0.0.1:8000/internal/v1/publish-snapshots/mock-content-001
 ```
 
+Swagger UI의 `service-worker` 태그에서도 Batch Claim과 ACK를 바로 실행할 수 있습니다.
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+Batch Claim은 Seed로 준비된 3건의 전체 Snapshot Payload를 생성 시각 순으로 반환합니다.
+
+```bash
+curl -X POST http://127.0.0.1:8000/internal/v1/publish-snapshot-batches/claim \
+  -H 'Content-Type: application/json' \
+  -d '{"worker_id":"service-worker-local","limit":3,"lease_seconds":120}'
+```
+
 Seed Snapshot의 고정 계약은 다음과 같습니다.
 
 | 필드 | 값 |
 |---|---|
-| `user_id` | `mock-user-001` |
-| `content_id` | `mock-content-001` |
+| `user_id` | `mock-user-001` ~ `mock-user-003` |
+| `content_id` | `mock-content-001` ~ `mock-content-003` |
 | `version` | `1` |
 | `status` | `ready` |
 
@@ -66,12 +80,20 @@ Scheduler나 시스템 관리 작업은 별도 권한을 가진 Worker 계정에
 
 ## 초기화
 
-개발 Seed도 Docker Entry Point와 동일하게 빈 Volume에서만 자동 실행됩니다. 기존
-볼륨에 Seed를 다시 적용할 때는 다음 명령을 사용합니다. 이 명령은 목업 Snapshot을
-`ready` 상태로 되돌리므로 로컬 연동 데이터를 초기화해도 될 때만 실행합니다.
+Migration과 개발 Seed는 Docker Entry Point에서 빈 Volume에만 자동 실행됩니다. 기존
+볼륨에는 `0002` Migration을 먼저 한 번 적용합니다.
+
+```bash
+docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/migrations/0002_publish_snapshot_batches.sql
+```
+
+목업 데이터를 다시 적용할 때는 다음 두 Seed를 순서대로 실행합니다. 두 번째 Seed는
+기존 발행 시도 이력을 지우고 세 Snapshot을 `ready` 상태로 되돌리므로 로컬 연동
+데이터를 초기화해도 될 때만 실행합니다.
 
 ```bash
 docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/seeds/0001_dev_publish_snapshots.sql
+docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/seeds/0002_dev_publish_snapshot_batch.sql
 ```
 
 개발 데이터를 모두 삭제해도 되는 경우에만 아래 명령으로 볼륨을 제거한 뒤 다시 시작합니다.

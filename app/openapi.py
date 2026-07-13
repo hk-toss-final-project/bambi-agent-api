@@ -22,7 +22,10 @@ OPENAPI_TAGS = [
     },
     {
         "name": "service-worker",
-        "description": "Service Worker가 발행 Snapshot을 조회하고 처리 결과를 전달할 때 사용합니다.",
+        "description": (
+            "Service Worker가 발행 Snapshot을 단건·Batch로 조회하고 "
+            "처리 결과를 전달할 때 사용합니다."
+        ),
     },
 ]
 
