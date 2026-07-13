@@ -9,6 +9,7 @@ SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
 DESIGN_PATH = PROJECT_ROOT / "docs" / "agent-db-design.md"
 COMPOSE_PATH = PROJECT_ROOT / "compose.yaml"
+SEED_PATH = PROJECT_ROOT / "database" / "seeds" / "0001_dev_publish_snapshots.sql"
 
 
 def _read(path: Path) -> str:
@@ -98,7 +99,30 @@ def test_compose_requires_secret_and_initializes_schema() -> None:
     assert "AGENT_DB_PASSWORD:?" in compose
     assert "127.0.0.1:${AGENT_DB_PORT:-5432}:5432" in compose
     assert "/docker-entrypoint-initdb.d/0001_initial.sql:ro" in compose
+    assert "/docker-entrypoint-initdb.d/9001_dev_publish_snapshots.sql:ro" in compose
     assert "pg_isready" in compose
+
+
+def test_dev_seed_builds_service_worker_snapshot_dependency_chain() -> None:
+    """개발 Seed가 Snapshot 외래키 원천과 고정 연동 데이터를 순서대로 생성하는지 검증한다."""
+    seed = _read(SEED_PATH)
+    required_inserts = [
+        "INSERT INTO agent.user_context_snapshots",
+        "INSERT INTO agent.agent_jobs",
+        "INSERT INTO agent.generation_requests",
+        "INSERT INTO agent.generation_runs",
+        "INSERT INTO agent.generated_content_candidates",
+        "INSERT INTO agent.citations",
+        "INSERT INTO agent.publish_snapshots",
+    ]
+
+    positions = [seed.index(statement) for statement in required_inserts]
+
+    assert positions == sorted(positions)
+    assert "mock-user-001" in seed
+    assert "mock-content-001" in seed
+    assert "ON CONFLICT" in seed
+    assert '"citation_id"' in seed
 
 
 def test_database_schema_contract_is_available() -> None:

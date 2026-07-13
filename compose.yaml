@@ -21,6 +21,7 @@ services:
     volumes:
       - agent-db-data:/var/lib/postgresql/data
       - ./database/migrations/0001_initial.sql:/docker-entrypoint-initdb.d/0001_initial.sql:ro
+      - ./database/seeds/0001_dev_publish_snapshots.sql:/docker-entrypoint-initdb.d/9001_dev_publish_snapshots.sql:ro
 
 volumes:
   agent-db-data:
