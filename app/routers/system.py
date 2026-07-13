@@ -9,13 +9,23 @@ from app.schemas.mvp import HealthResponse, VersionResponse
 router = APIRouter(prefix="/system", tags=["system"])
 
 
-@router.get("/live", response_model=HealthResponse, operation_id="sys_009")
+@router.get(
+    "/live",
+    response_model=HealthResponse,
+    operation_id="sys_009",
+    summary="프로세스 생존 상태 조회",
+)
 async def liveness() -> HealthResponse:
     """[SYS-009] Agent API 프로세스가 요청에 응답할 수 있는지 확인한다."""
     return HealthResponse(status="ok")
 
 
-@router.get("/ready", response_model=HealthResponse, operation_id="sys_010")
+@router.get(
+    "/ready",
+    response_model=HealthResponse,
+    operation_id="sys_010",
+    summary="서비스 준비 상태 조회",
+)
 async def readiness(
     container: AppContainer = Depends(get_container),
 ) -> HealthResponse:
@@ -36,7 +46,12 @@ async def readiness(
     return HealthResponse(status="ready", checks=checks)
 
 
-@router.get("/version", response_model=VersionResponse, operation_id="sys_011")
+@router.get(
+    "/version",
+    response_model=VersionResponse,
+    operation_id="sys_011",
+    summary="애플리케이션 버전 조회",
+)
 async def version(container: AppContainer = Depends(get_container)) -> VersionResponse:
     """[SYS-011] Agent API 버전과 실행 환경을 반환한다."""
     settings = container.settings

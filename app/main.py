@@ -12,6 +12,12 @@ from app.config import Settings, load_settings
 from app.dependencies import AppContainer, create_container
 from app.exceptions import register_exception_handlers
 from app.middleware.tracing import RequestTracingMiddleware
+from app.openapi import (
+    OPENAPI_DESCRIPTION,
+    OPENAPI_TAGS,
+    SWAGGER_UI_PARAMETERS,
+    register_swagger_ui,
+)
 from app.routers.routes import build_api_router
 
 
@@ -39,16 +45,21 @@ def create_app(
     resolved_settings = settings or load_settings()
     application = FastAPI(
         title=resolved_settings.app_name,
+        description=OPENAPI_DESCRIPTION,
         version=resolved_settings.app_version,
         lifespan=lifespan,
-        docs_url="/docs" if resolved_settings.docs_enabled else None,
+        docs_url=None,
         redoc_url="/redoc" if resolved_settings.docs_enabled else None,
         openapi_url="/openapi.json" if resolved_settings.docs_enabled else None,
+        openapi_tags=OPENAPI_TAGS,
+        swagger_ui_parameters=SWAGGER_UI_PARAMETERS,
     )
     application.state.container = container or create_container(resolved_settings)
     application.add_middleware(RequestTracingMiddleware)
     register_exception_handlers(application)
     register_routers(application, resolved_settings)
+    if resolved_settings.docs_enabled:
+        register_swagger_ui(application)
     return application
 
 

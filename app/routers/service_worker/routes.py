@@ -19,6 +19,7 @@ router = APIRouter(tags=["service-worker"])
     "/publish-snapshots/{content_id}",
     response_model=PublishSnapshotResponse,
     operation_id="sw_004",
+    summary="최신 Publish Snapshot 조회",
 )
 async def get_publish_snapshot(
     content_id: Annotated[str, Path(min_length=1, max_length=128)],
@@ -32,6 +33,7 @@ async def get_publish_snapshot(
     "/publish-snapshots/{content_id}/ack",
     response_model=PublishAckResponse,
     operation_id="sw_009",
+    summary="발행 처리 결과 ACK",
 )
 async def acknowledge_publish(
     content_id: Annotated[str, Path(min_length=1, max_length=128)],

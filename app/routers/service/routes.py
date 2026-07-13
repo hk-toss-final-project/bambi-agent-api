@@ -31,6 +31,7 @@ def _request_id(request: Request) -> str:
     "/users/{user_id}/context",
     response_model=UserContextResponse,
     operation_id="svc_001",
+    summary="사용자 컨텍스트 반영",
 )
 async def upsert_user_context(
     user_id: UserId,
@@ -47,6 +48,7 @@ async def upsert_user_context(
     response_model=AcceptedJobResponse,
     status_code=status.HTTP_202_ACCEPTED,
     operation_id="svc_002",
+    summary="웹 클리핑 처리 요청",
 )
 async def request_web_clipping(
     user_id: UserId,
@@ -70,6 +72,7 @@ async def request_web_clipping(
     response_model=AcceptedJobResponse,
     status_code=status.HTTP_202_ACCEPTED,
     operation_id="svc_003",
+    summary="URL Wiki 원천 처리 요청",
 )
 async def request_url_wiki_source(
     user_id: UserId,
@@ -93,6 +96,7 @@ async def request_url_wiki_source(
     response_model=AcceptedJobResponse,
     status_code=status.HTTP_202_ACCEPTED,
     operation_id="svc_004",
+    summary="생성 콘텐츠 위키마킹 요청",
 )
 async def request_content_mark(
     user_id: UserId,
@@ -116,6 +120,7 @@ async def request_content_mark(
     response_model=AcceptedJobResponse,
     status_code=status.HTTP_202_ACCEPTED,
     operation_id="svc_008",
+    summary="개인화 콘텐츠 생성 요청",
 )
 async def request_generation(
     user_id: UserId,
@@ -138,6 +143,7 @@ async def request_generation(
     "/jobs/{job_id}",
     response_model=JobStatusResponse,
     operation_id="svc_013",
+    summary="Agent Job 상태 조회",
 )
 async def get_job_status(
     job_id: Annotated[str, Path(min_length=1, max_length=128)],
@@ -151,6 +157,7 @@ async def get_job_status(
     "/jobs/{job_id}/result",
     response_model=JobResultResponse,
     operation_id="svc_014",
+    summary="Agent Job 결과 조회",
 )
 async def get_job_result(
     job_id: Annotated[str, Path(min_length=1, max_length=128)],
