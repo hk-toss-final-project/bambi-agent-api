@@ -11,6 +11,8 @@ BATCH_MIGRATION_PATH = (
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
 DESIGN_PATH = PROJECT_ROOT / "docs" / "agent-db-design.md"
+TABLE_CATALOG_PATH = PROJECT_ROOT / "docs" / "agent-db-table-catalog.md"
+COLUMN_DICTIONARY_PATH = PROJECT_ROOT / "docs" / "agent-db-column-dictionary.md"
 COMPOSE_PATH = PROJECT_ROOT / "compose.yaml"
 SEED_PATH = PROJECT_ROOT / "database" / "seeds" / "0001_dev_publish_snapshots.sql"
 BATCH_SEED_PATH = (
@@ -95,6 +97,63 @@ def test_design_maps_every_agent_db_feature_id() -> None:
     documented_ids = set(re.findall(r"DB-\d{3}", design))
 
     assert expected_ids <= documented_ids
+
+
+def test_table_catalog_documents_every_migration_table() -> None:
+    """테이블 카탈로그가 Migration의 모든 Table을 정확히 한 번씩 문서화하는지 검증한다."""
+    migration = _read(MIGRATION_PATH)
+    catalog = _read(TABLE_CATALOG_PATH)
+    created_tables = set(re.findall(r"CREATE TABLE agent\.([a-z_]+)", migration))
+    catalog_rows = re.findall(r"^\| ([a-z][a-z_]*) \|", catalog, re.MULTILINE)
+
+    assert len(catalog_rows) == len(set(catalog_rows))
+    assert set(catalog_rows) == created_tables
+
+
+def test_column_dictionary_documents_every_migration_column() -> None:
+    """컬럼 사전이 두 Migration의 모든 Table과 Column을 정확히 문서화하는지 검증한다."""
+    migration = _read(MIGRATION_PATH)
+    batch_migration = _read(BATCH_MIGRATION_PATH)
+    expected: dict[str, set[str]] = {}
+
+    for match in re.finditer(
+        r"CREATE TABLE agent\.([a-z_]+) \((.*?)\n\);",
+        migration,
+        re.DOTALL,
+    ):
+        table_name, table_body = match.groups()
+        expected[table_name] = set(
+            re.findall(r"^    ([a-z_]+)\s+[a-z]", table_body, re.MULTILINE)
+        )
+
+    for match in re.finditer(
+        r"ALTER TABLE agent\.([a-z_]+)(.*?);",
+        batch_migration,
+        re.DOTALL,
+    ):
+        table_name, alter_body = match.groups()
+        expected.setdefault(table_name, set()).update(
+            re.findall(r"ADD COLUMN ([a-z_]+)", alter_body)
+        )
+
+    dictionary = _read(COLUMN_DICTIONARY_PATH)
+    sections = list(
+        re.finditer(
+            r"^### ([a-z_]+)\n(.*?)(?=^### |^## |\Z)",
+            dictionary,
+            re.MULTILINE | re.DOTALL,
+        )
+    )
+    documented: dict[str, set[str]] = {}
+
+    for match in sections:
+        table_name, section_body = match.groups()
+        columns = re.findall(r"^\| ([a-z_]+) \|", section_body, re.MULTILINE)
+        assert len(columns) == len(set(columns)), f"중복 컬럼 문서: {table_name}"
+        documented[table_name] = set(columns)
+
+    assert len(sections) == len(documented)
+    assert documented == expected
 
 
 def test_compose_requires_secret_and_initializes_schema() -> None:

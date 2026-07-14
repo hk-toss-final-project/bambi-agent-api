@@ -63,6 +63,8 @@ Swagger UI는 최초 접속 시 시스템 테마를 따르며, 우측 상단 버
 - [MVP 개발 범위](docs/agent-api-mvp-scope.md)
 - [FastAPI MVP API 설계](docs/fastapi-mvp-api.md)
 - [Agent DB 설계](docs/agent-db-design.md)
+- [Agent DB 테이블 카탈로그](docs/agent-db-table-catalog.md)
+- [Agent DB 컬럼 사전](docs/agent-db-column-dictionary.md)
 - [프로젝트 구조와 기능 파일 매핑](docs/project-structure.md)
 
 ## 시작하기

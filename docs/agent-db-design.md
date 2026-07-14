@@ -1,5 +1,10 @@
 # Agent DB PostgreSQL 설계
 
+테이블 38개의 영역·성격·관계·RLS·런타임 연결 상태는
+[Agent DB 테이블 카탈로그](agent-db-table-catalog.md)에서 확인합니다.
+각 컬럼의 타입·필수 여부·기본값·의미는
+[Agent DB 컬럼 사전](agent-db-column-dictionary.md)에서 확인합니다.
+
 이 문서는 Bambi Agent API가 소유하는 `agent-db`의 데이터 경계, PostgreSQL 스키마, 로컬 Docker 구성과 GCP 배포 기준을 정의합니다. 기준 자료는 공유된 [최종 아키텍처 draw.io 문서](https://drive.google.com/file/d/1ZiZlTIQxpaYKiAtoWMzPwfUuwpW9bI7Z/view?usp=sharing), `agent-api-feature-spec.md`, `agent-api-mvp-scope.md`, `fastapi-mvp-api.md`입니다.
 
 ## 1. 설계 결정
