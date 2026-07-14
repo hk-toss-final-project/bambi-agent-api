@@ -1,6 +1,6 @@
 """RSS 수집·정제·날짜 필터·중복 제거(feeds) 검증. 실제 네트워크는 호출하지 않는다."""
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from agent.assistant import feeds
 
@@ -19,6 +19,22 @@ def test_build_news_feed_url_encodes_keyword() -> None:
     url = feeds.build_news_feed_url("전고체 배터리")
     assert "news.google.com/rss/search" in url
     assert "%EC" in url or "+" in url  # 한글이 인코딩됨
+
+
+def test_build_news_feed_url_adds_after_before_operators() -> None:
+    """after/before를 주면 Google News 날짜 검색 연산자가 쿼리에 포함된다."""
+    url = feeds.build_news_feed_url(
+        "아이폰", after=date(2026, 7, 13), before=date(2026, 7, 14)
+    )
+    assert "after%3A2026-07-13" in url
+    assert "before%3A2026-07-14" in url
+
+
+def test_build_news_feed_url_omits_operators_when_not_given() -> None:
+    """after/before를 주지 않으면 날짜 연산자가 붙지 않는다."""
+    url = feeds.build_news_feed_url("아이폰")
+    assert "after%3A" not in url
+    assert "before%3A" not in url
 
 
 def test_canonical_url_strips_query_and_fragment() -> None:
@@ -79,6 +95,26 @@ def test_latest_articles_keeps_only_yesterday_by_default(monkeypatch) -> None:
 
     titles = [a["title"] for a in articles]
     assert titles == ["어제 기사"]
+
+
+def test_latest_articles_narrows_query_with_date_operators(monkeypatch) -> None:
+    """yesterday_only=True면 서버 쪽 요청 자체를 어제 하루로 좁힌다."""
+    captured_urls: list[str] = []
+
+    def fake_fetch(feed_url: str) -> list[dict[str, object]]:
+        captured_urls.append(feed_url)
+        return [
+            {"title": "어제 기사", "link": "https://a.com/y", "summary": "", "published": "", "published_ts": _ts(_YESTERDAY)},
+        ]
+
+    monkeypatch.setattr(feeds, "fetch_feed_entries", fake_fetch)
+    monkeypatch.setattr(feeds, "jina_read", lambda url: None)
+
+    feeds.latest_articles("키워드", limit=5, reference_now=_NOW)
+
+    assert len(captured_urls) == 1
+    assert "after%3A2026-07-13" in captured_urls[0]
+    assert "before%3A2026-07-14" in captured_urls[0]
 
 
 def test_latest_articles_can_disable_date_filter(monkeypatch) -> None:

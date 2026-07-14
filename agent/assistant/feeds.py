@@ -12,7 +12,7 @@ RSS는 YouTube와 달리 정확한 발행 시각(published_parsed)을 제공하�
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from urllib.parse import quote_plus, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
@@ -24,9 +24,28 @@ _SNIPPET_CHARS = 280
 _ARTICLE_TIMEZONE = ZoneInfo("Asia/Seoul")
 
 
-def build_news_feed_url(keyword: str, language: str = "ko", country: str = "KR") -> str:
-    """키워드로 Google News RSS 검색 피드 URL을 만든다."""
-    query = quote_plus(keyword)
+def build_news_feed_url(
+    keyword: str,
+    language: str = "ko",
+    country: str = "KR",
+    *,
+    after: date | None = None,
+    before: date | None = None,
+) -> str:
+    """키워드로 Google News RSS 검색 피드 URL을 만든다.
+
+    after/before를 주면 Google News의 날짜 검색 연산자(after:/before:)를 쿼리에
+    붙여 서버 단에서부터 기간을 좁힌다. 검색 결과는 최대 약 100건으로 제한되므로,
+    이렇게 기간을 좁혀야 특정 날짜(예: 어제)의 기사가 오늘 발행된 기사에 밀려
+    아예 빠지는 상황을 막을 수 있다. 다만 Google이 이 연산자를 완벽히 정확하게
+    지키지는 않으므로, 정확한 판별은 여전히 클라이언트 측 filter_to_date로 한다.
+    """
+    date_filters = ""
+    if after is not None:
+        date_filters += f" after:{after.isoformat()}"
+    if before is not None:
+        date_filters += f" before:{before.isoformat()}"
+    query = quote_plus(f"{keyword}{date_filters}")
     ceid = f"{country}:{language}"
     return (
         f"https://news.google.com/rss/search?q={query}"
@@ -155,12 +174,15 @@ def latest_articles(
     Returns:
         {title, url, published, snippet} 딕셔너리 리스트
     """
-    entries = fetch_feed_entries(build_news_feed_url(keyword))
-
     if yesterday_only:
         now = reference_now or datetime.now(_ARTICLE_TIMEZONE)
         yesterday = (now.astimezone(_ARTICLE_TIMEZONE) - timedelta(days=1)).date()
-        entries = filter_to_date(entries, yesterday)
+        # 서버 단에서부터 기간을 좁혀, 인기 검색어에서 오늘 기사에 밀려 어제
+        # 기사가 검색 결과(최대 약 100건)에서 아예 빠지는 상황을 줄인다.
+        feed_url = build_news_feed_url(keyword, after=yesterday, before=yesterday + timedelta(days=1))
+        entries = filter_to_date(fetch_feed_entries(feed_url), yesterday)
+    else:
+        entries = fetch_feed_entries(build_news_feed_url(keyword))
 
     unique = deduplicate(entries)[:limit]
 
