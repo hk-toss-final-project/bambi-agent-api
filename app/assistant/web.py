@@ -137,9 +137,9 @@ def _render_reddit(items: list[dict[str, object]]) -> str:
 
 
 def _render_articles(items: list[dict[str, object]]) -> str:
-    """최신 기사 URL 카드를 HTML로 렌더링한다."""
+    """어제 발행된 기사 URL 카드를 HTML로 렌더링한다."""
     if not items:
-        return "<p class='note'>최신 기사를 찾지 못했습니다.</p>"
+        return "<p class='note'>어제 발행된 기사를 찾지 못했습니다.</p>"
     cards = []
     for item in items:
         title = html.escape(str(item.get("title") or ""))
@@ -176,7 +176,7 @@ async def assistant_search(user_id: str = Form(...), keyword: str = Form(...)) -
 {_render_youtube(result.get("youtube", []), result["user_id"], result["keyword"])}
 <h2>👽 관련 Reddit 게시글 요약</h2>
 {_render_reddit(result.get("reddit", []))}
-<h2>📰 최신 기사 (중복 제거)</h2>
+<h2>📰 어제 기사 (중복 제거)</h2>
 {_render_articles(result.get("articles", []))}
 """
 

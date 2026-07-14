@@ -1,6 +1,17 @@
-"""RSS 수집·정제·중복 제거(feeds) 검증. 실제 네트워크는 호출하지 않는다."""
+"""RSS 수집·정제·날짜 필터·중복 제거(feeds) 검증. 실제 네트워크는 호출하지 않는다."""
+
+from datetime import datetime, timedelta
 
 from agent.assistant import feeds
+
+_NOW = datetime(2026, 7, 14, 9, 0, tzinfo=feeds._ARTICLE_TIMEZONE)
+_YESTERDAY = _NOW - timedelta(days=1)
+_TWO_DAYS_AGO = _NOW - timedelta(days=2)
+
+
+def _ts(dt: datetime) -> int:
+    """테스트용 datetime을 published_ts(UTC epoch 초)로 변환한다."""
+    return int(dt.timestamp())
 
 
 def test_build_news_feed_url_encodes_keyword() -> None:
@@ -13,6 +24,18 @@ def test_build_news_feed_url_encodes_keyword() -> None:
 def test_canonical_url_strips_query_and_fragment() -> None:
     """query와 fragment를 제거하고 host를 소문자화한다."""
     assert feeds.canonical_url("https://A.com/news/1?utm=x#top") == "https://a.com/news/1"
+
+
+def test_filter_to_date_keeps_only_matching_calendar_day() -> None:
+    """지정한 날짜(한국 시간 기준)에 발행된 항목만 남긴다."""
+    entries = [
+        {"title": "어제 아침", "published_ts": _ts(_YESTERDAY.replace(hour=1))},
+        {"title": "어제 밤", "published_ts": _ts(_YESTERDAY.replace(hour=23))},
+        {"title": "그저께", "published_ts": _ts(_TWO_DAYS_AGO)},
+        {"title": "발행시각모름", "published_ts": 0},
+    ]
+    kept = [e["title"] for e in feeds.filter_to_date(entries, _YESTERDAY.date())]
+    assert kept == ["어제 아침", "어제 밤"]
 
 
 def test_deduplicate_keeps_latest_and_removes_duplicate_url() -> None:
@@ -39,13 +62,62 @@ def test_deduplicate_removes_duplicate_titles() -> None:
     assert len(result) == 1
 
 
+def test_latest_articles_keeps_only_yesterday_by_default(monkeypatch) -> None:
+    """기본값(yesterday_only=True)은 어제 발행된 기사만 남기고 그 외는 제외한다."""
+
+    def fake_fetch(feed_url: str) -> list[dict[str, object]]:
+        return [
+            {"title": "오늘 기사", "link": "https://a.com/today", "summary": "오늘", "published": "", "published_ts": _ts(_NOW)},
+            {"title": "어제 기사", "link": "https://a.com/yesterday", "summary": "어제", "published": "", "published_ts": _ts(_YESTERDAY)},
+            {"title": "그저께 기사", "link": "https://a.com/old", "summary": "그저께", "published": "", "published_ts": _ts(_TWO_DAYS_AGO)},
+        ]
+
+    monkeypatch.setattr(feeds, "fetch_feed_entries", fake_fetch)
+    monkeypatch.setattr(feeds, "jina_read", lambda url: None)
+
+    articles = feeds.latest_articles("키워드", limit=5, reference_now=_NOW)
+
+    titles = [a["title"] for a in articles]
+    assert titles == ["어제 기사"]
+
+
+def test_latest_articles_can_disable_date_filter(monkeypatch) -> None:
+    """yesterday_only=False면 날짜와 무관하게 최신순으로 가져온다."""
+
+    def fake_fetch(feed_url: str) -> list[dict[str, object]]:
+        return [
+            {"title": "오늘 기사", "link": "https://a.com/today", "summary": "", "published": "", "published_ts": _ts(_NOW)},
+            {"title": "그저께 기사", "link": "https://a.com/old", "summary": "", "published": "", "published_ts": _ts(_TWO_DAYS_AGO)},
+        ]
+
+    monkeypatch.setattr(feeds, "fetch_feed_entries", fake_fetch)
+    monkeypatch.setattr(feeds, "jina_read", lambda url: None)
+
+    articles = feeds.latest_articles("키워드", limit=5, yesterday_only=False, reference_now=_NOW)
+
+    titles = [a["title"] for a in articles]
+    assert titles == ["오늘 기사", "그저께 기사"]
+
+
 def test_latest_articles_uses_jina_for_top_items(monkeypatch) -> None:
     """상위 jina_top개는 Jina 본문을, 나머지는 RSS 요약을 요지로 쓴다."""
 
     def fake_fetch(feed_url: str) -> list[dict[str, object]]:
         return [
-            {"title": "글1", "link": "https://a.com/1", "summary": "<p>RSS 요약1</p>", "published": "", "published_ts": 300},
-            {"title": "글2", "link": "https://a.com/2", "summary": "RSS 요약2", "published": "", "published_ts": 200},
+            {
+                "title": "글1",
+                "link": "https://a.com/1",
+                "summary": "<p>RSS 요약1</p>",
+                "published": "",
+                "published_ts": _ts(_YESTERDAY.replace(hour=9)),
+            },
+            {
+                "title": "글2",
+                "link": "https://a.com/2",
+                "summary": "RSS 요약2",
+                "published": "",
+                "published_ts": _ts(_YESTERDAY.replace(hour=8)),
+            },
         ]
 
     jina_calls: list[str] = []
@@ -57,7 +129,7 @@ def test_latest_articles_uses_jina_for_top_items(monkeypatch) -> None:
     monkeypatch.setattr(feeds, "fetch_feed_entries", fake_fetch)
     monkeypatch.setattr(feeds, "jina_read", fake_jina)
 
-    articles = feeds.latest_articles("키워드", limit=5, jina_top=1)
+    articles = feeds.latest_articles("키워드", limit=5, jina_top=1, reference_now=_NOW)
 
     assert len(articles) == 2
     assert articles[0]["snippet"] == "Jina 정제 본문"  # 상위 1개는 Jina 사용

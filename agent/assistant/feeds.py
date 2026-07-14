@@ -4,15 +4,24 @@
 제목으로 중복을 제거한 뒤, 상위 항목은 Jina Reader(r.jina.ai)로 본문을 정제해
 짧은 요지를 만든다. 네트워크 경계 함수(피드 조회, Jina 조회)를 분리해 테스트에서
 대체할 수 있게 한다.
+
+RSS는 YouTube와 달리 정확한 발행 시각(published_parsed)을 제공하므로, "어제 날짜"를
+근사가 아니라 달력상 정확한 하루로 판별할 수 있다. 뉴스 검색이 한국어(hl=ko, gl=KR)
+기준이므로 판별 기준 시간대는 한국 시간(Asia/Seoul)으로 고정한다.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from urllib.parse import quote_plus, urlsplit, urlunsplit
+from zoneinfo import ZoneInfo
 
 # Jina Reader 조회 타임아웃(초)과 요지로 사용할 최대 문자 수.
 _JINA_TIMEOUT = 12.0
 _SNIPPET_CHARS = 280
+
+# "어제 기사" 판별 기준 시간대.
+_ARTICLE_TIMEZONE = ZoneInfo("Asia/Seoul")
 
 
 def build_news_feed_url(keyword: str, language: str = "ko", country: str = "KR") -> str:
@@ -83,6 +92,24 @@ def deduplicate(entries: list[dict[str, object]]) -> list[dict[str, object]]:
     return unique
 
 
+def _published_date(published_ts: int):
+    """published_ts(UTC 초 단위 타임스탬프)를 판별 기준 시간대의 날짜로 변환한다.
+
+    타임스탬프를 알 수 없으면(0) None을 반환한다.
+    """
+    if not published_ts:
+        return None
+    return datetime.fromtimestamp(published_ts, tz=UTC).astimezone(_ARTICLE_TIMEZONE).date()
+
+
+def filter_to_date(entries: list[dict[str, object]], target_date) -> list[dict[str, object]]:
+    """발행일이 지정한 날짜와 정확히 일치하는 항목만 남긴다.
+
+    발행 시각을 알 수 없는 항목은 그 날짜인지 확신할 수 없으므로 제외한다.
+    """
+    return [entry for entry in entries if _published_date(entry.get("published_ts", 0)) == target_date]
+
+
 def jina_read(url: str) -> str | None:
     """Jina Reader로 URL 본문을 정제한 텍스트를 가져온다. 실패 시 None."""
     import httpx
@@ -108,19 +135,33 @@ def _make_snippet(entry: dict[str, object], use_jina: bool) -> str:
 
 
 def latest_articles(
-    keyword: str, limit: int = 6, jina_top: int = 4
+    keyword: str,
+    limit: int = 6,
+    jina_top: int = 4,
+    *,
+    yesterday_only: bool = True,
+    reference_now: datetime | None = None,
 ) -> list[dict[str, object]]:
-    """키워드로 최신·중복 제거된 기사 URL 목록을 반환한다.
+    """키워드로 어제 날짜 기사만(기본값) 중복 제거해 반환한다.
 
     Args:
         keyword: 검색어
         limit: 반환할 최대 기사 수
         jina_top: 상위 몇 개까지 Jina Reader로 본문 요지를 만들지
+        yesterday_only: True면 한국 시간 기준 어제 발행된 기사만 남긴다.
+            발행 시각을 알 수 없는 기사는 이 필터에서 제외된다.
+        reference_now: "지금" 기준 시각(테스트용). 생략하면 실제 현재 시각을 쓴다.
 
     Returns:
         {title, url, published, snippet} 딕셔너리 리스트
     """
     entries = fetch_feed_entries(build_news_feed_url(keyword))
+
+    if yesterday_only:
+        now = reference_now or datetime.now(_ARTICLE_TIMEZONE)
+        yesterday = (now.astimezone(_ARTICLE_TIMEZONE) - timedelta(days=1)).date()
+        entries = filter_to_date(entries, yesterday)
+
     unique = deduplicate(entries)[:limit]
 
     articles: list[dict[str, object]] = []
