@@ -6,16 +6,27 @@ feedparser로 파싱한다. RSS는 비공식 JSON API보다 얻을 수 있는 �
 댓글 수 없음, 댓글 본문도 안정적으로 제공되지 않음) 게시글 제목과 본문(또는 외부
 링크 설명) 중심으로 요약한다.
 
-RSS도 짧은 시간에 반복 요청하면 429(rate limit)가 발생하므로 요청 사이에 지연을
-둔다.
+Reddit의 RSS는 비인증 요청에 매우 빡빡한 레이트리밋을 건다(요청 1번이면
+`x-ratelimit-remaining`이 곧바로 0이 되고, 수십 초 뒤에야 리셋된다). 이를 다루기
+위해 두 가지를 둔다:
+
+1. 429를 받으면 응답의 `x-ratelimit-reset`(초)만큼 기다렸다가 한 번 재시도한다.
+2. 같은 키워드 검색 결과를 짧은 시간(캐시 TTL) 재사용해, 반복 검색이 매번 새
+   요청을 만들지 않게 한다.
+
+재시도까지 실패하면 예외를 그대로 던진다 — 실패를 "결과 없음"으로 조용히 숨기지
+않는다.
 """
 
 from __future__ import annotations
 
+import calendar
 import re
 import time
+from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 
+from agent.assistant import feeds
 from agent.assistant.summarize import summarize_text
 
 _SEARCH_RSS_URL = "https://www.reddit.com/search.rss"
@@ -23,6 +34,17 @@ _SEARCH_RSS_URL = "https://www.reddit.com/search.rss"
 _HEADERS = {"User-Agent": "bambi-keyword-assistant/0.1 (keyword digest)"}
 # 게시글 사이 요청 지연(초). 반복 요청으로 인한 429 재발을 막기 위한 완화책이다.
 _REQUEST_DELAY_SECONDS = 2.0
+
+# 429 응답을 받았을 때 재시도 전 대기 시간. x-ratelimit-reset 헤더가 있으면 그
+# 값을 쓰고, 없으면 기본값을 쓴다. 사용자 요청이 너무 오래 걸리지 않도록 상한을 둔다.
+_DEFAULT_RETRY_WAIT_SECONDS = 5.0
+_MAX_RETRY_WAIT_SECONDS = 30.0
+
+# 같은 키워드 검색 결과를 재사용하는 시간(초). Reddit의 레이트리밋 리셋 주기보다
+# 넉넉히 길게 잡아, 재검색이 새 요청을 만들지 않게 한다.
+_CACHE_TTL_SECONDS = 90.0
+_search_cache: dict[str, tuple[float, list[dict[str, object]]]] = {}
+
 _SUBREDDIT_PATTERN = re.compile(r"to\s*<a[^>]*>\s*r/([^\s<]+)")
 _HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
 
@@ -32,32 +54,21 @@ def _strip_html(text: str) -> str:
     return " ".join(_HTML_TAG_PATTERN.sub(" ", text).split())
 
 
-def search_posts(keyword: str, limit: int = 4) -> list[dict[str, object]]:
-    """키워드로 Reddit 게시글을 검색해 메타데이터 목록을 반환한다.
+def _cache_key(keyword: str, limit: int, filter_tag: str) -> str:
+    """키워드를 대소문자·공백 차이 없이 캐시 조회할 수 있게 정규화한다."""
+    return f"{' '.join(keyword.strip().lower().split())}::{limit}::{filter_tag}"
 
-    Args:
-        keyword: 검색어
-        limit: 가져올 게시글 수
 
-    Returns:
-        {id, title, url, subreddit, body} 딕셔너리 리스트
-    """
-    import feedparser
-
-    query = quote_plus(keyword)
-    feed_url = f"{_SEARCH_RSS_URL}?q={query}&limit={limit}&sort=relevance"
-    parsed = feedparser.parse(feed_url, request_headers=_HEADERS)
-
-    status = parsed.get("status")
-    if status is not None and status >= 400:
-        raise RuntimeError(f"Reddit search.rss 요청 실패 (status={status}). 잠시 후 다시 시도하세요.")
-
+def _parse_posts(entries, limit: int) -> list[dict[str, object]]:
+    """feedparser 엔트리 목록을 게시글 딕셔너리 목록으로 변환한다."""
     posts: list[dict[str, object]] = []
-    for entry in parsed.entries[:limit]:
+    for entry in entries[:limit]:
         summary_html = str(entry.get("summary", ""))
         subreddit_match = _SUBREDDIT_PATTERN.search(summary_html)
         content = entry.get("content")
         body_html = str(content[0].get("value", "")) if content else summary_html
+        published_struct = entry.get("published_parsed")
+        published_ts = calendar.timegm(published_struct) if published_struct else 0
 
         posts.append(
             {
@@ -66,9 +77,90 @@ def search_posts(keyword: str, limit: int = 4) -> list[dict[str, object]]:
                 "url": entry.get("link"),
                 "subreddit": subreddit_match.group(1) if subreddit_match else None,
                 "body": _strip_html(body_html),
+                "published": entry.get("published", ""),
+                "published_ts": published_ts,
             }
         )
     return posts
+
+
+def _fetch_feed(feed_url: str):
+    """RSS 피드를 조회한다. 429를 받으면 리셋 시간만큼 기다린 뒤 한 번 재시도한다."""
+    import feedparser
+
+    parsed = feedparser.parse(feed_url, request_headers=_HEADERS)
+    status = parsed.get("status")
+    if status is None or status < 400:
+        return parsed
+
+    reset_header = parsed.get("headers", {}).get("x-ratelimit-reset")
+    try:
+        wait_seconds = min(float(reset_header), _MAX_RETRY_WAIT_SECONDS)
+    except (TypeError, ValueError):
+        wait_seconds = _DEFAULT_RETRY_WAIT_SECONDS
+    time.sleep(wait_seconds)
+
+    parsed = feedparser.parse(feed_url, request_headers=_HEADERS)
+    status = parsed.get("status")
+    if status is not None and status >= 400:
+        raise RuntimeError(
+            f"Reddit search.rss 요청 실패 (status={status}). 잠시 후 다시 시도하세요."
+        )
+    return parsed
+
+
+def search_posts(
+    keyword: str,
+    limit: int = 4,
+    *,
+    yesterday_only: bool = True,
+    reference_now: datetime | None = None,
+) -> list[dict[str, object]]:
+    """키워드로 Reddit 게시글을 검색해 메타데이터 목록을 반환한다.
+
+    기본값(yesterday_only=True)은 뉴스 기사와 같은 기준(한국 시간 달력상 어제)에
+    발행된 게시글만 남긴다. 발행 시각이 없는 항목(서브레딧 추천 등)은 제외한다.
+    어제 게시글을 찾으려면 최신순(sort=new)으로 넉넉한 풀을 받아와 클라이언트에서
+    날짜로 거른다. 짧은 시간 내 같은 검색은 캐시된 결과를 그대로 반환한다.
+
+    Args:
+        keyword: 검색어
+        limit: 가져올 게시글 수
+        yesterday_only: True면 한국 시간 기준 어제 작성된 게시글만 남긴다.
+        reference_now: "지금" 기준 시각(테스트용). 생략하면 실제 현재 시각을 쓴다.
+
+    Returns:
+        {id, title, url, subreddit, body, published, published_ts} 딕셔너리 리스트
+    """
+    if yesterday_only:
+        now = reference_now or datetime.now(feeds._ARTICLE_TIMEZONE)
+        target_date = (now.astimezone(feeds._ARTICLE_TIMEZONE) - timedelta(days=1)).date()
+        filter_tag = f"y:{target_date.isoformat()}"
+        sort = "new"
+        # 날짜로 걸러내면 대부분 탈락하므로 피드가 주는 최대치(약 25건)를 받아온다.
+        fetch_limit = 25
+    else:
+        target_date = None
+        filter_tag = "all"
+        sort = "relevance"
+        fetch_limit = limit
+
+    cache_key = _cache_key(keyword, limit, filter_tag)
+    cached = _search_cache.get(cache_key)
+    if cached is not None and cached[0] > time.time():
+        return list(cached[1])
+
+    query = quote_plus(keyword)
+    feed_url = f"{_SEARCH_RSS_URL}?q={query}&limit={fetch_limit}&sort={sort}"
+    parsed = _fetch_feed(feed_url)
+
+    posts = _parse_posts(parsed.entries, fetch_limit)
+    if target_date is not None:
+        posts = feeds.filter_to_date(posts, target_date)
+    posts = posts[:limit]
+
+    _search_cache[cache_key] = (time.time() + _CACHE_TTL_SECONDS, posts)
+    return list(posts)
 
 
 def summarize_post(post: dict[str, object], model: str = "gpt-4.1-mini") -> dict[str, object]:
@@ -93,6 +185,7 @@ def summarize_post(post: dict[str, object], model: str = "gpt-4.1-mini") -> dict
         "title": post.get("title"),
         "url": post.get("url"),
         "subreddit": post.get("subreddit"),
+        "published": post.get("published"),
         "summary": summary,
         "note": note,
     }

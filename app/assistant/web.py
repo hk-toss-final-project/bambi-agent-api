@@ -115,21 +115,23 @@ def _render_youtube(items: list[dict[str, object]], user_id: str, keyword: str) 
 
 
 def _render_reddit(items: list[dict[str, object]]) -> str:
-    """Reddit 게시글 요약 카드를 HTML로 렌더링한다."""
+    """어제 작성된 Reddit 게시글 요약 카드를 HTML로 렌더링한다."""
     if not items:
-        return "<p class='note'>관련 게시글을 찾지 못했습니다.</p>"
+        return "<p class='note'>어제 작성된 게시글을 찾지 못했습니다.</p>"
     cards = []
     for item in items:
         title = html.escape(str(item.get("title") or ""))
         url = html.escape(str(item.get("url") or ""))
         subreddit = html.escape(str(item.get("subreddit") or ""))
+        published = html.escape(str(item.get("published") or ""))
+        meta = " · ".join(part for part in [f"r/{subreddit}" if subreddit else "", published] if part)
         if item.get("summary"):
             body = f"<div class='summary'>{html.escape(str(item['summary']))}</div>"
         else:
             body = f"<div class='note'>{html.escape(str(item.get('note') or '요약 없음'))}</div>"
         cards.append(
             f"<div class='card'><a href='{url}' target='_blank'>{title}</a>"
-            f"<div class='meta'>r/{subreddit}</div>{body}</div>"
+            f"<div class='meta'>{meta}</div>{body}</div>"
         )
     return "\n".join(cards)
 
@@ -172,7 +174,7 @@ async def assistant_search(user_id: str = Form(...), keyword: str = Form(...)) -
 {errors_html}
 <h2>▶️ 관련 YouTube 요약</h2>
 {_render_youtube(result.get("youtube", []), result["user_id"], result["keyword"])}
-<h2>👽 관련 Reddit 게시글 요약</h2>
+<h2>👽 어제 Reddit 게시글 요약</h2>
 {_render_reddit(result.get("reddit", []))}
 <h2>📰 어제 기사 (중복 제거)</h2>
 {_render_articles(result.get("articles", []))}
