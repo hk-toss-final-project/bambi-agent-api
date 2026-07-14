@@ -17,3 +17,6 @@ __pycache__/
 .vscode/
 coverage/
 .next/
+
+# 키워드 비서 로컬 시청 이력(사용자 데이터, 커밋하지 않음)
+data/watch_history.json
