@@ -123,15 +123,13 @@ def _render_reddit(items: list[dict[str, object]]) -> str:
         title = html.escape(str(item.get("title") or ""))
         url = html.escape(str(item.get("url") or ""))
         subreddit = html.escape(str(item.get("subreddit") or ""))
-        score = html.escape(str(item.get("score") if item.get("score") is not None else ""))
-        num_comments = html.escape(str(item.get("num_comments") if item.get("num_comments") is not None else ""))
         if item.get("summary"):
             body = f"<div class='summary'>{html.escape(str(item['summary']))}</div>"
         else:
             body = f"<div class='note'>{html.escape(str(item.get('note') or '요약 없음'))}</div>"
         cards.append(
             f"<div class='card'><a href='{url}' target='_blank'>{title}</a>"
-            f"<div class='meta'>r/{subreddit} · 👍 {score} · 💬 {num_comments}</div>{body}</div>"
+            f"<div class='meta'>r/{subreddit}</div>{body}</div>"
         )
     return "\n".join(cards)
 
