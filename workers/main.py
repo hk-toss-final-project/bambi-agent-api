@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import selectors
 import socket
+import sys
 
 from app.config import load_settings
 from workers.api import run_personal_wiki_batch
@@ -49,7 +51,13 @@ async def _run() -> list[dict[str, object]]:
 
 def main() -> None:
     """Personal Wiki Worker Batch를 실행하고 JSON 결과를 표준 출력한다."""
-    results = asyncio.run(_run())
+    # psycopg async 모드는 Windows 기본 ProactorEventLoop를 지원하지 않는다.
+    loop_factory = (
+        (lambda: asyncio.SelectorEventLoop(selectors.SelectSelector()))
+        if sys.platform == "win32"
+        else None
+    )
+    results = asyncio.run(_run(), loop_factory=loop_factory)
     print(json.dumps(results, ensure_ascii=False, indent=2))
 
 
