@@ -1,6 +1,6 @@
 # Agent DB PostgreSQL 설계
 
-테이블 38개의 영역·성격·관계·RLS·런타임 연결 상태는
+테이블 41개의 영역·성격·관계·RLS·런타임 연결 상태는
 [Agent DB 테이블 카탈로그](agent-db-table-catalog.md)에서 확인합니다.
 각 컬럼의 타입·필수 여부·기본값·의미는
 [Agent DB 컬럼 사전](agent-db-column-dictionary.md)에서 확인합니다.
@@ -19,7 +19,7 @@
 | 개인 지식 격리 | `namespace_key = user/{user_id}`, RLS와 애플리케이션 사용자 조건을 함께 적용 |
 | Global 지식 | `namespace_key = global`, 사용자는 읽을 수 있고 시스템 Scope만 쓸 수 있음 |
 | 검색 | pgvector Cosine HNSW + PostgreSQL FTS + `pg_trgm` Hybrid Search |
-| 원문·Asset | DB에는 메타데이터와 GCS URI만 저장하고 대용량 Binary는 저장하지 않음 |
+| 원문·Asset | 웹 클리핑 Markdown은 DB에 보존하고 대용량 HTML·PDF·Binary는 GCS URI만 저장 |
 | 이벤트 | Transactional Outbox와 Consumer Inbox로 멱등성 경계 제공 |
 | 로컬 | Docker Compose의 PostgreSQL 17 + pgvector |
 | GCP | Cloud SQL for PostgreSQL 17, Private IP, Cloud Run/Worker와 동일 Region |
@@ -30,8 +30,8 @@ PostgreSQL 17을 선택한 이유는 로컬과 Cloud SQL의 Major Version을 맞
 
 공유 아키텍처의 가장 중요한 원칙은 `service-db`와 `agent-db`의 물리적·논리적 분리입니다.
 
-- `service-db` 소유: 사용자 원본, Bookmark, 확정된 Card/Feed, Like/Comment/Follow, 권한과 관리자 감사 정보
-- `agent-db` 소유: AI 최소 사용자 컨텍스트, Wiki/Chunk/Embedding, 관심사 추론, Prompt/Model/Retrieval 설정, Agent Job, 생성 후보, Citation, 사용량과 Agent 감사 로그
+- `service-db` 소유: Bookmark, 확정된 Card/Feed, Like/Comment/Follow, 권한과 관리자 감사 정보
+- `agent-db` 소유: Agent에 제출된 클리핑 원본, AI 최소 사용자 컨텍스트, 생성된 Wiki/Chunk/Embedding, 관심사 추론, Prompt/Model/Retrieval 설정, Agent Job, 생성 후보, Citation, 사용량과 Agent 감사 로그
 - `agent-api`, `agent-worker`, `agent-scheduler`만 `agent-db`에 접근합니다.
 - Agent 계층은 `service-db`에 직접 접근하지 않습니다.
 - 사용자 원본 변경은 Service API 호출이나 Integration Event로 전달합니다.
@@ -62,7 +62,9 @@ erDiagram
     USER_CONTEXT_SNAPSHOTS ||--o{ GENERATION_REQUESTS : "context version"
     AGENT_JOBS ||--o| GENERATION_REQUESTS : "executes"
     AGENT_JOBS ||--o{ AGENT_JOB_ATTEMPTS : "retries"
-    WIKI_SOURCE_EVENTS ||--o{ WIKI_DOCUMENTS : "creates"
+    WIKI_SOURCE_EVENTS ||--o{ USER_SOURCE_DOCUMENT_VERSIONS : "ingests"
+    USER_SOURCE_DOCUMENTS ||--o{ USER_SOURCE_DOCUMENT_VERSIONS : "versions"
+    USER_SOURCE_DOCUMENT_VERSIONS }o--o{ WIKI_DOCUMENT_VERSIONS : "source of"
     WIKI_DOCUMENTS ||--o{ WIKI_DOCUMENT_VERSIONS : "versions"
     WIKI_DOCUMENT_VERSIONS ||--o{ WIKI_CHUNKS : "chunks"
     WIKI_CHUNKS ||--o{ WIKI_EMBEDDINGS : "embeds"
@@ -79,8 +81,8 @@ erDiagram
 | 기능 ID | 책임 | Table |
 |---|---|---|
 | DB-001 | 사용자 컨텍스트 저장 | `user_context_snapshots` |
-| DB-002 | Wiki Source Event 저장 | `wiki_source_events` |
-| DB-003 | 개인 Wiki 문서 저장 | `wiki_documents`, `wiki_document_versions` |
+| DB-002 | Wiki Source Event·사용자 원본 저장 | `wiki_source_events`, `user_source_documents`, `user_source_document_versions` |
+| DB-003 | 개인 LLM Wiki 문서 저장과 원본 추적 | `wiki_documents`, `wiki_document_versions`, `wiki_document_sources` |
 | DB-004 | 개인 Wiki Chunk 저장 | `wiki_chunks` |
 | DB-005 | 개인 Wiki Embedding 저장 | `wiki_embeddings` |
 | DB-006 | 개인 Wiki Version 저장 | `wiki_versions` |
@@ -123,29 +125,29 @@ erDiagram
 
 ### Personal과 Global 지식
 
-`wiki_documents`, `wiki_document_versions`, `wiki_chunks`, `wiki_embeddings`는 같은 구조를 재사용하되 `namespace_key`로 검색 범위를 분리합니다.
+Agent가 만든 `wiki_documents`, `wiki_document_versions`, `wiki_chunks`, `wiki_embeddings`는 같은 구조를 재사용하되 `namespace_key`로 검색 범위를 분리합니다. 사용자가 제출한 원본은 `user_source_documents` 계열에만 저장합니다.
 
 - 개인 Wiki: `knowledge_scope = personal`, `namespace_key = user/{user_id}`
 - Global Source: `knowledge_scope = global`, `namespace_key = global`
 - 자동 수집 Global 문서는 사용자의 선택 없이 Personal Namespace로 이동하지 않습니다.
-- Personal 문서 삭제 시 Version → Chunk → Embedding 순서가 Foreign Key Cascade로 정리됩니다.
+- Personal LLM Wiki 문서 삭제 시 Version → 출처 연결·Chunk → Embedding 순서가 Foreign Key Cascade로 정리됩니다. 사용자 원본은 별도 삭제 요청 전까지 영향을 받지 않습니다.
 
 ### 웹 클리핑 Markdown
 
-웹 클리퍼가 전달하는 YAML Frontmatter와 Markdown 본문은 Personal Wiki 문서 Version으로 보존합니다. HTML 원문을 다시 저장하지 않으며, LLM 요약·Chunk·Embedding 생성 후에도 Markdown은 사용자가 저장한 기준 원문으로 유지합니다.
+웹 클리퍼가 전달하는 YAML Frontmatter와 Markdown 본문은 `user_source_document_versions`에 원본으로 보존합니다. HTML 원문을 다시 저장하지 않으며, LLM Wiki·Chunk·Embedding 생성 후에도 Markdown은 사용자가 저장한 기준 원문으로 유지합니다.
 
 | 클리퍼 필드 | 저장 위치 |
 |---|---|
-| `title` | `wiki_document_versions.title` |
-| `source` | `wiki_documents.canonical_url` |
-| `author` | `wiki_document_versions.author` |
-| `published` | `wiki_document_versions.published_at` |
-| `created` | `wiki_document_versions.clipped_on` |
-| `description` | `wiki_document_versions.description` |
-| `tags` | `wiki_document_versions.tags` |
-| Markdown 본문 | `wiki_document_versions.normalized_content` |
+| `title` | `user_source_document_versions.title` |
+| `source` | `user_source_documents.canonical_url` |
+| `author` | `user_source_document_versions.author` |
+| `published` | `user_source_document_versions.published_at` |
+| `created` | `user_source_document_versions.clipped_on` |
+| `description` | `user_source_document_versions.description` |
+| `tags` | `user_source_document_versions.tags` |
+| Markdown 본문 | `user_source_document_versions.raw_content` |
 
-`wiki_source_events`는 클리핑 요청의 멱등성, 처리 상태와 최소 수신 Metadata만 보관합니다. `0003_web_clipping_markdown.sql`은 기존 문서 Version에 Frontmatter 컬럼과 `content_format`을 추가하며, 기존 정규화 본문은 `markdown`, 외부 Object만 있는 Version은 `external_object`로 Backfill합니다.
+`wiki_source_events`는 클리핑 요청의 멱등성, 처리 상태와 최소 수신 Metadata만 보관합니다. Worker는 원본 Version ID로 Job을 처리해 `wiki_documents`와 `wiki_document_versions`를 새로 만들고 `wiki_document_sources`에 출처를 연결합니다. `0004_separate_user_sources_from_llm_wiki.sql`은 0003에서 Wiki Version으로 저장했던 기존 개인 클리핑을 원본 테이블로 이관하고, Wiki Version에서 Frontmatter 전용 컬럼을 제거합니다.
 
 ### Hybrid Search와 Vector
 
@@ -272,7 +274,7 @@ Cloud Run Instance가 수평 확장되면 각 Instance의 Pool이 합산됩니�
 
 - `usage_logs`, `audit_logs`, `agent_job_attempts`, `global_collection_runs`는 증가량을 관찰해 월 단위 Partition 전환을 결정합니다.
 - 정확한 보존 기간은 개인정보 및 운영 정책 확정 후 Migration과 Cleanup Scheduler로 적용합니다. 설계 단계에서 임의의 법적 보존 기간을 고정하지 않습니다.
-- 사용자 삭제는 Context → Personal Wiki → Chunk/Embedding → Interest → 생성 후보/Asset 순서의 삭제 Job으로 처리하고 Audit에는 원문 대신 처리 결과만 남깁니다.
+- 사용자 삭제는 Context → 사용자 원본 → Personal Wiki → Chunk/Embedding → Interest → 생성 후보/Asset 순서의 삭제 Job으로 처리하고 Audit에는 원문 대신 처리 결과만 남깁니다.
 - 대용량 HTML, PDF, API 원문, LLM 전체 Trace와 이미지 Binary는 GCS에 저장하며 DB에는 URI, Checksum, 크기, 보존 Metadata만 둡니다.
 - HNSW Index 생성과 대규모 재임베딩은 API Traffic과 분리된 운영 Job에서 수행합니다.
 

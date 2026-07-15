@@ -23,8 +23,10 @@ services:
       - ./database/migrations/0001_initial.sql:/docker-entrypoint-initdb.d/0001_initial.sql:ro
       - ./database/migrations/0002_publish_snapshot_batches.sql:/docker-entrypoint-initdb.d/0002_publish_snapshot_batches.sql:ro
       - ./database/migrations/0003_web_clipping_markdown.sql:/docker-entrypoint-initdb.d/0003_web_clipping_markdown.sql:ro
+      - ./database/migrations/0004_separate_user_sources_from_llm_wiki.sql:/docker-entrypoint-initdb.d/0004_separate_user_sources_from_llm_wiki.sql:ro
       - ./database/seeds/0001_dev_publish_snapshots.sql:/docker-entrypoint-initdb.d/9001_dev_publish_snapshots.sql:ro
       - ./database/seeds/0002_dev_publish_snapshot_batch.sql:/docker-entrypoint-initdb.d/9002_dev_publish_snapshot_batch.sql:ro
+      - ./database/seeds/0003_dev_web_clippings.sql:/docker-entrypoint-initdb.d/9003_dev_web_clippings.sql:ro
 
 volumes:
   agent-db-data:

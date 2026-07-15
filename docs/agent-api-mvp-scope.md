@@ -32,11 +32,11 @@
 | WSE-001 | 웹 클리핑 이벤트 수신 | title, source, author, published, created, description, tags와 Markdown 본문을 수신한다. |
 | WSE-011 | 이벤트 중복 처리 방지 | 사용자와 source_event_id 조합으로 동일 클리핑의 중복 저장·Job 생성을 막는다. |
 | WSE-013 | 이벤트 처리 상태 관리 | 클리핑의 received, processing, completed, failed 상태를 Worker 처리와 동기화한다. |
-| PWIKI-006 | 개인 Wiki 문서 버전 관리 | 같은 URL의 내용이 바뀌면 기존 문서를 덮어쓰지 않고 Version을 추가한다. |
-| PWIKI-007 | Wiki 문서 출처 추적 | Source Event, 원본 URL과 문서 Version의 관계를 보존한다. |
-| PWIKI-011 | Wiki 문서 정규화 | Frontmatter와 Markdown 본문을 공통 Wiki 문서 구조로 변환한다. |
-| DB-002 | Wiki Source Event 저장 | 클리핑 요청과 처리 상태를 wiki_source_events에 영속 저장한다. |
-| DB-003 | 개인 Wiki 문서 저장 | Markdown 원문과 Frontmatter를 wiki_documents와 wiki_document_versions에 영속 저장한다. |
+| PWIKI-006 | 개인 Wiki 문서 버전 관리 | 원본 변경 이력과 생성된 Wiki 변경 이력을 각각 Version으로 관리한다. |
+| PWIKI-007 | Wiki 문서 출처 추적 | 생성된 Wiki Version과 참고한 원본 Version의 관계를 보존한다. |
+| PWIKI-011 | Wiki 문서 정규화 | Frontmatter와 Markdown 원본을 읽어 LLM Wiki 문서 구조로 변환한다. |
+| DB-002 | Wiki Source Event·원본 저장 | 요청 상태는 wiki_source_events에, Frontmatter와 Markdown은 user_source_documents 계열에 영속 저장한다. |
+| DB-003 | 개인 LLM Wiki 문서 저장 | Worker가 만든 Wiki를 wiki_documents·wiki_document_versions에 저장하고 wiki_document_sources로 원본을 연결한다. |
 
 클리핑 API는 DB Transaction이 Commit된 뒤에만 202 Accepted를 반환합니다. Agent API가
 Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 저장한 상태로 성공을
@@ -112,17 +112,17 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 
 | ID | 기능 | 설명 |
 |---|---|---|
-| WBA-001 | Incremental Wiki Build | 새로 저장된 클리핑 문서 Version만 증분 처리한다. |
+| WBA-001 | Incremental Wiki Build | 새로 저장된 사용자 원본 Version만 증분 처리한다. |
 | WBA-003 | Wiki 문서 정규화 | 저장된 Markdown과 Metadata를 Chunking 가능한 공통 구조로 정리한다. |
 | JOB-001 | Agent Job 생성 | 클리핑 저장 Transaction에서 Personal Wiki Build Job을 함께 생성한다. |
 | JOB-002 | Agent Job 조회 | API와 Worker가 클리핑 Job 상태와 진행률을 조회한다. |
 | JOB-006 | Agent Job 진행률 관리 | 정규화, Chunking, Embedding, 관심사 갱신 단계를 기록한다. |
-| JOB-007 | Agent Job 결과 연결 | 완료 Job에 document_id와 document_version_id를 연결한다. |
+| JOB-007 | Agent Job 결과 연결 | 입력에는 source_document_id·source_document_version_id를, 완료 결과에는 생성된 document_id·document_version_id를 연결한다. |
 | JOB-010 | Agent Job Idempotency | 동일 클리핑 요청이 Worker Job을 중복 생성하지 않도록 한다. |
 | WC-001 | Queue Job Consume | Worker가 실행 가능한 Personal Wiki Job Batch를 가져온다. |
 | WC-002 | Job Claim | FOR UPDATE SKIP LOCKED와 Lease로 Job Batch를 점유한다. |
 | WC-006 | Retry 정책 | 재시도 가능한 Chunking·Embedding 실패를 Backoff 후 다시 처리한다. |
-| WC-009 | Idempotency 처리 | 같은 document_version_id를 다시 처리해도 파생 Row가 중복되지 않게 한다. |
+| WC-009 | Idempotency 처리 | 같은 source_document_version_id를 다시 처리해도 Wiki·출처·파생 Row가 중복되지 않게 한다. |
 | WC-013 | Concurrency 제어 | Claim 크기와 Embedding 동시 실행 수를 별도로 제한한다. |
 | DB-004 | 개인 Wiki Chunk 저장 | wiki_chunks에 문서 Version별 Chunk를 영속 저장한다. |
 | DB-005 | 개인 Wiki Embedding 저장 | wiki_embeddings에 Chunk별 Vector를 영속 저장한다. |
@@ -131,11 +131,11 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 ### 웹 클리핑 Worker 완료 계약
 
 - Extension은 service-api의 사용자 인증 경계를 거치고, service-api가 Agent API의 내부 클리핑 경로를 호출합니다.
-- Agent API는 source_event_id 멱등성을 확인한 뒤 Source Event, Wiki 문서·Version, Personal Wiki Build Job을 한 Transaction으로 저장합니다.
-- Markdown 원문 저장은 LLM 호출 없이 수행하며 title과 본문은 각각 wiki_document_versions.title, normalized_content에 보존합니다.
-- Worker는 Job Batch를 Lease와 함께 Claim하고 document_version_id를 기준으로 정규화, Chunk 저장, Embedding 생성·저장과 관심사 재계산을 수행합니다.
-- Worker 재시도 중에도 Markdown 원문과 Frontmatter는 삭제하지 않습니다. 파생 Chunk와 Embedding만 멱등하게 다시 생성할 수 있습니다.
-- 성공 시 Source Event와 Job을 completed로 바꾸고 document_id, document_version_id, chunk_count를 결과에 기록합니다.
+- Agent API는 source_event_id 멱등성을 확인한 뒤 Source Event, 사용자 원본 문서·Version, Personal Wiki Build Job을 한 Transaction으로 저장합니다.
+- Markdown 원문 저장은 LLM 호출 없이 수행하며 title과 본문은 각각 user_source_document_versions.title, raw_content에 보존합니다.
+- Worker는 Job Batch를 Lease와 함께 Claim하고 source_document_version_id를 기준으로 LLM Wiki 문서·Version과 wiki_document_sources 출처 관계를 생성한 뒤 Chunk, Embedding과 관심사를 갱신합니다.
+- Worker 재시도 중에도 Markdown 원문과 Frontmatter는 삭제하지 않습니다. 생성 Wiki·출처 관계·Chunk·Embedding만 멱등하게 다시 생성할 수 있습니다.
+- 성공 시 Source Event와 Job을 completed로 바꾸고 source_document_id, source_document_version_id, document_id, document_version_id, chunk_count를 결과에 기록합니다.
 - 최종 실패 시 Source Event와 Job의 오류를 기록하되 저장된 Markdown 원문은 사용자가 삭제할 때까지 유지합니다.
 
 ### MVP Batch 처리 계약

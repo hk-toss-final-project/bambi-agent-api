@@ -1,7 +1,8 @@
 # Agent DB 컬럼 사전
 
-> 기준: 2026-07-15. 38개 테이블, 452개 컬럼을 0001_initial.sql,
-> 0002_publish_snapshot_batches.sql, 0003_web_clipping_markdown.sql 기준으로 정리했습니다.
+> 기준: 2026-07-15. 41개 테이블, 481개 컬럼을 0001_initial.sql,
+> 0002_publish_snapshot_batches.sql, 0003_web_clipping_markdown.sql,
+> 0004_separate_user_sources_from_llm_wiki.sql 기준으로 정리했습니다.
 
 이 문서는 Agent DB의 모든 테이블과 컬럼을 물리 Schema 수준에서 설명합니다.
 테이블의 영역·성격·관계·RLS·런타임 연결 상태는
@@ -188,9 +189,55 @@ Job의 각 Worker 실행 시도를 독립적인 불변 이력으로 기록합니
 
 ## 4. 지식 문서와 검색
 
+### user_source_documents
+
+사용자가 저장한 클리핑·URL 원본의 안정적인 식별자와 최신 Version을 관리합니다.
+
+| 컬럼 | 타입 | 필수·기본값 | 설명 |
+|---|---|---|---|
+| id | uuid | 자동, PK | 사용자 원본 문서 내부 식별자 |
+| user_id | text | 필수 | 원본을 소유한 사용자 식별자 |
+| namespace_key | text | 필수 | 반드시 user/{user_id}인 격리 Namespace |
+| source_type | text | 필수 | web_clipping, url, content_mark, content_save, memo, edit, conversation |
+| canonical_url | text | 선택 | 클리핑·URL 원천 주소와 중복 판정 기준 |
+| status | text | 자동, active | active, deleted, archived, superseded |
+| current_version | integer | 자동, 1 | 현재 대표하는 user_source_document_versions 버전 번호 |
+| content_hash | text | 필수 | Namespace 내 원본 중복 판정용 64자 Hash |
+| metadata | jsonb | 자동, 빈 Object | 문서 Head 수준의 확장 Metadata |
+| created_at | timestamptz | 자동 | 원본 문서 최초 생성 시각 |
+| updated_at | timestamptz | 자동 | Head·상태가 마지막으로 변경된 시각 |
+| deleted_at | timestamptz | 선택 | 원본이 Soft Delete된 시각 |
+
+### user_source_document_versions
+
+웹 클리핑 Frontmatter와 Markdown 본문 등 사용자가 제공한 원본을 버전별 보존합니다.
+
+| 컬럼 | 타입 | 필수·기본값 | 설명 |
+|---|---|---|---|
+| id | uuid | 자동, PK | 사용자 원본 Version 내부 식별자 |
+| source_document_id | uuid | 필수, FK | 소속 user_source_documents 식별자 |
+| namespace_key | text | 필수 | 부모 원본 문서와 동일한 사용자 Namespace |
+| source_event_id | uuid | 선택, FK | 이 Version을 수신한 wiki_source_events 식별자 |
+| version | integer | 필수 | 원본 문서 안에서 1부터 증가하는 버전 번호 |
+| title | text | 필수 | 클리퍼 Frontmatter의 title |
+| author | text | 선택 | 클리퍼 Frontmatter의 author |
+| published_at | timestamptz | 선택 | 외부 Source에 게시된 시각 |
+| clipped_on | date | 선택 | 클리퍼 Frontmatter의 created 날짜 |
+| description | text | 선택 | 클리퍼 Frontmatter의 description 원문 |
+| tags | text[] | 자동, 빈 Array | 클리퍼 Frontmatter의 tags |
+| raw_content | text | 선택 | 사용자가 저장한 Markdown·Text·HTML 원문 문자열 |
+| content_format | text | 자동, markdown | markdown, plain_text, html, pdf, external_object |
+| content_hash | text | 필수 | 이 원본 Version 내용의 64자 무결성 Hash |
+| object_uri | text | 선택 | DB 밖에 보존한 대용량 HTML·PDF·원본 Payload URI |
+| source_metadata | jsonb | 자동, 빈 Object | 클리퍼 형식, 파일명, Provider ID 등 수신 Metadata |
+| created_at | timestamptz | 자동 | 원본 Version 생성 시각 |
+
+raw_content와 object_uri 중 적어도 하나는 반드시 존재합니다. 웹 클리핑은 원문
+Markdown을 raw_content에 저장하며, LLM Wiki 생성 뒤에도 자동 삭제하지 않습니다.
+
 ### wiki_documents
 
-Personal Wiki와 Global Source 문서의 안정적인 식별자, Scope와 최신 버전을 관리합니다.
+Agent가 생성한 Personal LLM Wiki와 정규화된 Global 문서의 식별자와 최신 버전을 관리합니다.
 
 | 컬럼 | 타입 | 필수·기본값 | 설명 |
 |---|---|---|---|
@@ -205,14 +252,14 @@ Personal Wiki와 Global Source 문서의 안정적인 식별자, Scope와 최신
 | status | text | 자동, active | active, deleted, archived, superseded |
 | current_version | integer | 자동, 1 | 현재 대표하는 wiki_document_versions 버전 번호 |
 | content_hash | text | 필수 | Namespace 내 내용 중복 판정용 64자 Hash |
-| metadata | jsonb | 자동, 빈 Object | Source, 작성자, 발행 시각 등 문서 공통 Metadata |
+| metadata | jsonb | 자동, 빈 Object | 생성 정책, 언어와 문서 공통 Metadata |
 | created_at | timestamptz | 자동 | 문서 최초 생성 시각 |
 | updated_at | timestamptz | 자동 | 마지막 Head·상태 변경 시각 |
 | deleted_at | timestamptz | 선택 | 검색 대상에서 제거된 시각 |
 
 ### wiki_document_versions
 
-문서의 제목, 요약, 정규화 본문과 원문 Object 참조를 버전별 보존합니다.
+Agent가 생성한 문서의 제목, 요약, 정규화 본문과 생성 정보를 버전별 보존합니다.
 
 | 컬럼 | 타입 | 필수·기본값 | 설명 |
 |---|---|---|---|
@@ -222,23 +269,28 @@ Personal Wiki와 Global Source 문서의 안정적인 식별자, Scope와 최신
 | version | integer | 필수 | 문서 안에서 1부터 증가하는 버전 번호 |
 | title | text | 필수 | 정규화된 문서 제목 |
 | summary | text | 선택 | 검색 Preview와 LLM Context용 요약 |
-| normalized_content | text | 선택 | 정규화된 본문, Markdown 또는 일반 Text 저장 위치 |
+| normalized_content | text | 선택 | LLM이 구성한 Wiki 본문 또는 정규화된 Global 본문 |
 | content_hash | text | 필수 | 이 Version 본문의 64자 무결성 Hash |
 | object_uri | text | 선택 | DB 밖에 저장한 HTML, PDF, 원본 Payload의 URI |
-| source_metadata | jsonb | 자동, 빈 Object | Provider 원본 ID 등 정식 컬럼으로 분리하지 않은 Version Metadata |
+| source_metadata | jsonb | 자동, 빈 Object | 생성 정책 또는 Global Provider 등 Version Metadata |
 | created_by_job_id | uuid | 선택, FK | 이 Version을 생성한 agent_jobs 식별자 |
 | created_at | timestamptz | 자동 | Version 생성 시각 |
-| author | text | 선택 | 웹 클리핑 Frontmatter의 author |
-| published_at | timestamptz | 선택 | 원문이 외부 Source에 게시된 시각 |
-| clipped_on | date | 선택 | 웹 클리핑 Frontmatter의 created 날짜 |
-| description | text | 선택 | 웹 클리핑 Frontmatter의 description 원문 |
-| tags | text[] | 자동, 빈 Array | 웹 클리핑 Frontmatter의 tags |
-| content_format | text | 자동, markdown | markdown, plain_text, external_object |
 
-normalized_content와 object_uri 중 적어도 하나는 반드시 존재합니다. 웹 클리핑의
-source는 부모 wiki_documents.canonical_url에, title과 Markdown 본문은 각각 title과
-normalized_content에 저장합니다. 0003 이전의 정규화 본문은 markdown, 외부 Object만
-있는 Version은 external_object로 Backfill됩니다.
+normalized_content와 object_uri 중 적어도 하나는 반드시 존재합니다. 사용자 원본
+Frontmatter와 Markdown은 이 테이블이 아니라 user_source_document_versions에 있습니다.
+
+### wiki_document_sources
+
+생성된 LLM Wiki Version이 참고한 사용자 원본 Version을 다대다로 연결합니다.
+
+| 컬럼 | 타입 | 필수·기본값 | 설명 |
+|---|---|---|---|
+| wiki_document_version_id | uuid | 필수, FK, 복합 PK | 생성된 wiki_document_versions 식별자 |
+| source_document_version_id | uuid | 필수, FK, 복합 PK | 참고한 user_source_document_versions 식별자 |
+| namespace_key | text | 필수 | Wiki와 원본 양쪽에 동일하게 적용되는 사용자 Namespace |
+| relation_type | text | 자동, source | source, citation, inspiration |
+| relevance_score | numeric(8,6) | 선택 | Wiki와 원본의 관련도, 0~1 |
+| created_at | timestamptz | 자동 | 출처 관계 생성 시각 |
 
 ### wiki_chunks
 
@@ -247,7 +299,7 @@ normalized_content에 저장합니다. 0003 이전의 정규화 본문은 markdo
 | 컬럼 | 타입 | 필수·기본값 | 설명 |
 |---|---|---|---|
 | id | uuid | 자동, PK | Chunk 내부 식별자 |
-| document_version_id | uuid | 필수, FK | 원본 wiki_document_versions 식별자 |
+| document_version_id | uuid | 필수, FK | Chunking한 LLM Wiki Version 식별자 |
 | namespace_key | text | 필수 | 부모 Version과 동일한 검색 격리 Namespace |
 | chunk_index | integer | 필수 | 문서 Version 안에서 0부터 증가하는 Chunk 순서 |
 | content | text | 필수 | 검색과 Model 입력에 사용할 Chunk 본문 |
@@ -786,4 +838,5 @@ Agent DB에 적용된 Migration Version을 기록합니다.
 - [초기 Migration](../database/migrations/0001_initial.sql): 기본 Schema 정의
 - [발행 Batch Migration](../database/migrations/0002_publish_snapshot_batches.sql): Claim과 Lease 확장
 - [웹 클리핑 Markdown Migration](../database/migrations/0003_web_clipping_markdown.sql): Frontmatter와 본문 형식 확장
+- [사용자 원본·LLM Wiki 분리 Migration](../database/migrations/0004_separate_user_sources_from_llm_wiki.sql): 원본 테이블과 출처 관계 추가
 - [Database 실행 안내](../database/README.md): Local DB 기동과 Migration 적용 방법

@@ -1,6 +1,8 @@
 """Agent DB Migration, Docker와 설계 문서의 정적 계약을 검증한다."""
 
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parents[2]
@@ -10,6 +12,18 @@ BATCH_MIGRATION_PATH = (
 )
 WEB_CLIPPING_MIGRATION_PATH = (
     PROJECT_ROOT / "database" / "migrations" / "0003_web_clipping_markdown.sql"
+)
+SOURCE_SEPARATION_MIGRATION_PATH = (
+    PROJECT_ROOT
+    / "database"
+    / "migrations"
+    / "0004_separate_user_sources_from_llm_wiki.sql"
+)
+MIGRATION_PATHS = (
+    MIGRATION_PATH,
+    BATCH_MIGRATION_PATH,
+    WEB_CLIPPING_MIGRATION_PATH,
+    SOURCE_SEPARATION_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
@@ -21,6 +35,13 @@ SEED_PATH = PROJECT_ROOT / "database" / "seeds" / "0001_dev_publish_snapshots.sq
 BATCH_SEED_PATH = (
     PROJECT_ROOT / "database" / "seeds" / "0002_dev_publish_snapshot_batch.sql"
 )
+CLIPPING_SEED_PATH = (
+    PROJECT_ROOT / "database" / "seeds" / "0003_dev_web_clippings.sql"
+)
+CLIPPING_SEED_GENERATOR_PATH = (
+    PROJECT_ROOT / "scripts" / "generate_web_clipping_seed.py"
+)
+CLIPPING_DUMMY_PATH = PROJECT_ROOT / "dummy" / "clippings"
 
 
 def _read(path: Path) -> str:
@@ -30,13 +51,16 @@ def _read(path: Path) -> str:
 
 def test_migration_contains_all_agent_db_feature_tables() -> None:
     """DB-001부터 DB-030까지 담당할 핵심 Table이 Migration에 존재하는지 검증한다."""
-    migration = _read(MIGRATION_PATH)
+    migration = "\n".join(_read(path) for path in MIGRATION_PATHS)
     table_names = set(re.findall(r"CREATE TABLE agent\.([a-z_]+)", migration))
     required_tables = {
         "user_context_snapshots",
         "wiki_source_events",
+        "user_source_documents",
+        "user_source_document_versions",
         "wiki_documents",
         "wiki_document_versions",
+        "wiki_document_sources",
         "wiki_chunks",
         "wiki_embeddings",
         "wiki_versions",
@@ -104,7 +128,7 @@ def test_design_maps_every_agent_db_feature_id() -> None:
 
 def test_table_catalog_documents_every_migration_table() -> None:
     """테이블 카탈로그가 Migration의 모든 Table을 정확히 한 번씩 문서화하는지 검증한다."""
-    migration = _read(MIGRATION_PATH)
+    migration = "\n".join(_read(path) for path in MIGRATION_PATHS)
     catalog = _read(TABLE_CATALOG_PATH)
     created_tables = set(re.findall(r"CREATE TABLE agent\.([a-z_]+)", migration))
     catalog_rows = re.findall(r"^\| ([a-z][a-z_]*) \|", catalog, re.MULTILINE)
@@ -115,29 +139,31 @@ def test_table_catalog_documents_every_migration_table() -> None:
 
 def test_column_dictionary_documents_every_migration_column() -> None:
     """컬럼 사전이 모든 Migration의 Table과 Column을 정확히 문서화하는지 검증한다."""
-    migration = _read(MIGRATION_PATH)
     expected: dict[str, set[str]] = {}
 
-    for match in re.finditer(
-        r"CREATE TABLE agent\.([a-z_]+) \((.*?)\n\);",
-        migration,
-        re.DOTALL,
-    ):
-        table_name, table_body = match.groups()
-        expected[table_name] = set(
-            re.findall(r"^    ([a-z_]+)\s+[a-z]", table_body, re.MULTILINE)
-        )
+    for migration_path in MIGRATION_PATHS:
+        migration = _read(migration_path)
+        for match in re.finditer(
+            r"CREATE TABLE agent\.([a-z_]+) \((.*?)\n\);",
+            migration,
+            re.DOTALL,
+        ):
+            table_name, table_body = match.groups()
+            expected[table_name] = set(
+                re.findall(r"^    ([a-z_]+)\s+[a-z]", table_body, re.MULTILINE)
+            )
 
-    for migration_path in (BATCH_MIGRATION_PATH, WEB_CLIPPING_MIGRATION_PATH):
-        additional_migration = _read(migration_path)
         for match in re.finditer(
             r"ALTER TABLE agent\.([a-z_]+)(.*?);",
-            additional_migration,
+            migration,
             re.DOTALL,
         ):
             table_name, alter_body = match.groups()
             expected.setdefault(table_name, set()).update(
                 re.findall(r"ADD COLUMN ([a-z_]+)", alter_body)
+            )
+            expected[table_name].difference_update(
+                re.findall(r"DROP COLUMN ([a-z_]+)", alter_body)
             )
 
     dictionary = _read(COLUMN_DICTIONARY_PATH)
@@ -170,8 +196,13 @@ def test_compose_requires_secret_and_initializes_schema() -> None:
     assert "/docker-entrypoint-initdb.d/0001_initial.sql:ro" in compose
     assert "/docker-entrypoint-initdb.d/0002_publish_snapshot_batches.sql:ro" in compose
     assert "/docker-entrypoint-initdb.d/0003_web_clipping_markdown.sql:ro" in compose
+    assert (
+        "/docker-entrypoint-initdb.d/0004_separate_user_sources_from_llm_wiki.sql:ro"
+        in compose
+    )
     assert "/docker-entrypoint-initdb.d/9001_dev_publish_snapshots.sql:ro" in compose
     assert "/docker-entrypoint-initdb.d/9002_dev_publish_snapshot_batch.sql:ro" in compose
+    assert "/docker-entrypoint-initdb.d/9003_dev_web_clippings.sql:ro" in compose
     assert "pg_isready" in compose
 
 
@@ -231,6 +262,26 @@ def test_web_clipping_migration_defines_markdown_frontmatter_contract() -> None:
     assert "VALUES (3, 'Store web clipping Markdown fields')" in migration
 
 
+def test_source_separation_migration_moves_raw_data_out_of_llm_wiki() -> None:
+    """네 번째 Migration이 사용자 원본과 생성된 LLM Wiki의 경계를 분리하는지 검증한다."""
+    migration = _read(SOURCE_SEPARATION_MIGRATION_PATH)
+
+    assert "CREATE TABLE agent.user_source_documents" in migration
+    assert "CREATE TABLE agent.user_source_document_versions" in migration
+    assert "CREATE TABLE agent.wiki_document_sources" in migration
+    assert "raw_content text" in migration
+    assert "INSERT INTO agent.user_source_documents" in migration
+    assert "INSERT INTO agent.user_source_document_versions" in migration
+    assert "'source_document_id', job.payload ->> 'document_id'" in migration
+    assert "UPDATE agent.wiki_source_events AS event" in migration
+    assert "'source_document_version_id', event.payload ->> 'document_version_id'" in migration
+    assert "DELETE FROM agent.wiki_documents" in migration
+    assert "DROP COLUMN author" in migration
+    assert "DROP COLUMN content_format" in migration
+    assert "ALTER TABLE agent.user_source_documents ENABLE ROW LEVEL SECURITY" in migration
+    assert "VALUES (4, 'Separate user source documents from generated LLM Wiki')" in migration
+
+
 def test_batch_seed_provides_three_resettable_mock_snapshots() -> None:
     """Batch Seed가 세 콘텐츠를 준비하고 반복 적용 시 Claim 상태를 초기화하는지 검증한다."""
     seed = _read(BATCH_SEED_PATH)
@@ -243,6 +294,52 @@ def test_batch_seed_provides_three_resettable_mock_snapshots() -> None:
     assert "attempt_count = 0" in seed
     assert "claim_id = NULL" in seed
     assert "status = 'ready'" in seed
+
+
+def test_web_clipping_seed_is_generated_from_every_dummy_markdown() -> None:
+    """생성된 Seed가 dummy/clippings의 모든 Markdown과 동기화됐는지 검증한다."""
+    result = subprocess.run(
+        [sys.executable, str(CLIPPING_SEED_GENERATOR_PATH), "--check"],
+        cwd=PROJECT_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    seed = _read(CLIPPING_SEED_PATH)
+    clipping_paths = sorted(CLIPPING_DUMMY_PATH.glob("*.md"))
+
+    assert result.returncode == 0, result.stderr
+    assert clipping_paths
+    for clipping_path in clipping_paths:
+        relative_path = clipping_path.relative_to(PROJECT_ROOT).as_posix()
+        assert relative_path in seed
+
+
+def test_web_clipping_seed_builds_resettable_worker_dependency_chain() -> None:
+    """클리핑 Seed가 사용자·Job·Event·원본문서·Version을 순서대로 준비하는지 검증한다."""
+    seed = _read(CLIPPING_SEED_PATH)
+    required_inserts = [
+        "INSERT INTO agent.user_context_snapshots",
+        "INSERT INTO agent.agent_jobs",
+        "INSERT INTO agent.wiki_source_events",
+        "INSERT INTO agent.user_source_documents",
+        "INSERT INTO agent.user_source_document_versions",
+    ]
+    positions = [seed.index(statement) for statement in required_inserts]
+
+    assert positions == sorted(positions)
+    assert "mock-clipping-user" in seed
+    assert "personal_wiki_build" in seed
+    assert "'queued'" in seed
+    assert "'received'" in seed
+    assert "'markdown'" in seed
+    assert '"source_document_id"' in seed
+    assert '"source_document_version_id"' in seed
+    assert "INSERT INTO agent.wiki_documents (" not in seed
+    assert "INSERT INTO agent.wiki_document_versions (" not in seed
+    assert "DELETE FROM agent.agent_job_attempts" in seed
+    assert "DELETE FROM agent.wiki_documents AS document" in seed
+    assert "ON CONFLICT (id) DO UPDATE" in seed
 
 
 def test_database_schema_contract_is_available() -> None:
@@ -262,5 +359,7 @@ def test_database_rls_contract_is_available() -> None:
     assert "user scope expected 1 row" in rls_check
     assert "user scope expected global and own Wiki rows" in rls_check
     assert "user scope deleted % global Wiki rows" in rls_check
+    assert "user scope expected 1 source row" in rls_check
+    assert "user scope deleted % other-user source rows" in rls_check
     assert "system scope expected 2 rows" in rls_check
     assert "ROLLBACK" in rls_check

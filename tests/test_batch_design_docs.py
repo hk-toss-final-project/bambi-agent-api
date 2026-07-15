@@ -96,7 +96,9 @@ def test_fastapi_spec_defines_clipping_storage_and_worker_contract() -> None:
     assert '"description"' in fastapi_spec
     assert '"tags"' in fastapi_spec
     assert '"content"' in fastapi_spec
-    assert "wiki_document_versions.normalized_content" in fastapi_spec
+    assert "user_source_document_versions.raw_content" in fastapi_spec
+    assert "source_document_version_id" in fastapi_spec
+    assert "wiki_document_sources" in fastapi_spec
     assert "Source Event, Markdown 원문과 Job이 모두 영속 저장" in fastapi_spec
     assert "### Personal Wiki Builder Worker" in fastapi_spec
     assert "FOR UPDATE SKIP LOCKED" in fastapi_spec

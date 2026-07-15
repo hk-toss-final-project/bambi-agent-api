@@ -7,8 +7,11 @@ DECLARE
     required_tables text[] := ARRAY[
         'user_context_snapshots',
         'wiki_source_events',
+        'user_source_documents',
+        'user_source_document_versions',
         'wiki_documents',
         'wiki_document_versions',
+        'wiki_document_sources',
         'wiki_chunks',
         'wiki_embeddings',
         'wiki_versions',
@@ -66,12 +69,22 @@ BEGIN
             SELECT 1
             FROM information_schema.columns AS schema_column
             WHERE schema_column.table_schema = 'agent'
-              AND schema_column.table_name = 'wiki_document_versions'
+              AND schema_column.table_name = 'user_source_document_versions'
               AND schema_column.column_name = required_column_name
         ) THEN
-            RAISE EXCEPTION 'required web clipping column agent.wiki_document_versions.% is missing', required_column_name;
+            RAISE EXCEPTION 'required web clipping column agent.user_source_document_versions.% is missing', required_column_name;
         END IF;
     END LOOP;
+
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns AS schema_column
+        WHERE schema_column.table_schema = 'agent'
+          AND schema_column.table_name = 'wiki_document_versions'
+          AND schema_column.column_name = ANY(required_web_clipping_columns)
+    ) THEN
+        RAISE EXCEPTION 'raw web clipping columns remain in agent.wiki_document_versions';
+    END IF;
 
     IF NOT EXISTS (
         SELECT 1
@@ -90,7 +103,10 @@ BEGIN
         WHERE namespace.nspname = 'agent'
           AND relation.relname IN (
               'user_context_snapshots',
+              'user_source_documents',
+              'user_source_document_versions',
               'wiki_documents',
+              'wiki_document_sources',
               'wiki_chunks',
               'wiki_embeddings',
               'generated_content_candidates'

@@ -1,6 +1,6 @@
 # Agent DB 로컬 실행
 
-`agent-db`는 PostgreSQL 17과 pgvector를 사용합니다. Docker Compose는 최초 데이터 볼륨 생성 시 `migrations/0001_initial.sql`, `migrations/0002_publish_snapshot_batches.sql`, `migrations/0003_web_clipping_markdown.sql`을 순서대로 적용하고, Service Worker API 연동용 개발 Seed 두 개를 이어서 적용합니다.
+`agent-db`는 PostgreSQL 17과 pgvector를 사용합니다. Docker Compose는 최초 데이터 볼륨 생성 시 `migrations/0001_initial.sql`부터 `migrations/0004_separate_user_sources_from_llm_wiki.sql`까지 순서대로 적용하고, Publish Snapshot Seed 두 개와 웹 클리핑 Seed를 이어서 적용합니다.
 
 ## 시작
 
@@ -45,6 +45,18 @@ Seed Snapshot의 고정 계약은 다음과 같습니다.
 | `version` | `1` |
 | `status` | `ready` |
 
+`dummy/clippings`의 Obsidian Web Clipper Markdown은 `mock-clipping-user`의 사용자
+원본과 처리 대기 Job으로 저장됩니다. `wiki_documents`에는 Worker가 생성한 LLM Wiki만
+들어가므로 Seed 직후에는 이 사용자의 Wiki 문서가 없습니다.
+
+```sql
+SELECT version.title, version.clipped_on, source.canonical_url, version.raw_content
+FROM agent.user_source_document_versions AS version
+JOIN agent.user_source_documents AS source ON source.id = version.source_document_id
+WHERE source.user_id = 'mock-clipping-user'
+ORDER BY version.clipped_on DESC, version.title;
+```
+
 발행 ACK는 조회 응답의 `version`과 `snapshot_hash`를 그대로 전달합니다.
 
 ```bash
@@ -86,20 +98,31 @@ Migration과 개발 Seed는 Docker Entry Point에서 빈 Volume에만 자동 실
 ```bash
 docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/migrations/0002_publish_snapshot_batches.sql
 docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/migrations/0003_web_clipping_markdown.sql
+docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/migrations/0004_separate_user_sources_from_llm_wiki.sql
 ```
 
-`0003`은 웹 클리퍼의 Markdown Frontmatter를 `wiki_document_versions`의 정식
-컬럼으로 저장합니다. `title`과 Markdown 본문은 기존 `title`,
-`normalized_content`를 사용하고, `source` URL은 부모 `wiki_documents.canonical_url`에
-저장합니다.
+`0004`는 `0003`에서 Wiki Version으로 분류했던 개인 웹 클리핑을
+`user_source_documents`와 `user_source_document_versions`로 이관합니다. 이후
+`wiki_documents`와 `wiki_document_versions`는 Worker가 생성한 LLM Wiki만 저장하고,
+`wiki_document_sources`가 Wiki Version과 원본 Version을 연결합니다.
 
-목업 데이터를 다시 적용할 때는 다음 두 Seed를 순서대로 실행합니다. 두 번째 Seed는
-기존 발행 시도 이력을 지우고 세 Snapshot을 `ready` 상태로 되돌리므로 로컬 연동
-데이터를 초기화해도 될 때만 실행합니다.
+목업 데이터를 다시 적용할 때는 다음 Seed를 순서대로 실행합니다. 두 번째 Seed는
+기존 발행 시도 이력을 지우고 세 Snapshot을 `ready` 상태로 되돌립니다. 세 번째
+Seed는 클리핑 Job과 Source Event를 `queued`, `received`로 되돌리고 해당 원본으로
+생성한 Wiki·Chunk·Embedding과 Job 시도 이력을 삭제하므로 로컬 목업 데이터를 초기화해도
+될 때만 실행합니다.
 
 ```bash
 docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/seeds/0001_dev_publish_snapshots.sql
 docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/seeds/0002_dev_publish_snapshot_batch.sql
+docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/seeds/0003_dev_web_clippings.sql
+```
+
+클리핑 Markdown을 추가하거나 수정한 뒤에는 생성된 SQL을 갱신합니다.
+
+```bash
+uv run python scripts/generate_web_clipping_seed.py
+uv run python scripts/generate_web_clipping_seed.py --check
 ```
 
 개발 데이터를 모두 삭제해도 되는 경우에만 아래 명령으로 볼륨을 제거한 뒤 다시 시작합니다.

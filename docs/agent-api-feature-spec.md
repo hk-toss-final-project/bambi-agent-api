@@ -715,8 +715,8 @@
 | ID | 기능 | 설명 |
 |---|---|---|
 | DB-001 | 사용자 컨텍스트 저장 | Agent가 사용할 최소 사용자 컨텍스트를 저장한다. |
-| DB-002 | Wiki Source Event 저장 | 개인 Wiki 반영의 근거가 되는 이벤트를 저장한다. |
-| DB-003 | 개인 Wiki 문서 저장 | 사용자별 Wiki 문서 Version에 클리핑 Markdown 원문과 Frontmatter를 저장한다. |
+| DB-002 | Wiki Source Event·사용자 원본 저장 | 개인 Wiki 반영 이벤트와 클리핑 Markdown·Frontmatter 원본 Version을 저장한다. |
+| DB-003 | 개인 LLM Wiki 문서 저장 | Worker가 생성한 Wiki 문서 Version과 사용자 원본 출처 관계를 저장한다. |
 | DB-004 | 개인 Wiki Chunk 저장 | 개인 Wiki 검색용 Chunk를 저장한다. |
 | DB-005 | 개인 Wiki Embedding 저장 | 개인 Wiki의 Vector 데이터를 저장한다. |
 | DB-006 | 개인 Wiki Version 저장 | 개인 Wiki 재구성 버전을 저장한다. |
@@ -852,8 +852,8 @@
 | MVP-003 | 사용자 컨텍스트 관리 | Agent용 최소 사용자 컨텍스트를 관리한다. |
 | MVP-004 | 웹 클리핑 처리 | 사용자 웹 클리핑을 수신해 Markdown 원문을 영속 저장하고 Wiki Build Job을 등록한다. |
 | MVP-005 | URL 입력 처리 | 사용자가 입력한 URL을 개인 Wiki에 반영한다. |
-| MVP-006 | 개인 Wiki 문서 구성 | 클리핑 Frontmatter와 Markdown을 Version이 있는 Wiki 문서로 저장한다. |
-| MVP-007 | 개인 Wiki Chunk 및 Embedding | Worker가 저장된 Markdown의 Chunk와 Embedding을 생성·영속 저장한다. |
+| MVP-006 | 개인 Wiki 문서 구성 | Worker가 클리핑 원본을 바탕으로 Version이 있는 LLM Wiki와 출처 관계를 생성한다. |
+| MVP-007 | 개인 Wiki Chunk 및 Embedding | Worker가 생성한 LLM Wiki의 Chunk와 Embedding을 생성·영속 저장한다. |
 | MVP-008 | 개인 Wiki 검색 | Keyword, Vector, Hybrid 검색을 구현한다. |
 | MVP-009 | 관심사 기본 분류 | 개인 Wiki에서 사용자 관심사를 추출한다. |
 | MVP-010 | Personal Wiki Builder | Lease 기반 Worker가 클리핑 Job을 증분 Build하고 상태·재시도를 관리한다. |

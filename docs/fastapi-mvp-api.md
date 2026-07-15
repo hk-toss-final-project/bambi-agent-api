@@ -59,35 +59,35 @@ Extension이 service-api의 사용자 인증을 거쳐 클리핑을 전달하면
 | 필드 | 필수 | 제약 | 저장 위치 |
 |---|---|---|---|
 | `source_event_id` | O | 사용자 안에서 Unique, 1~128자 | `wiki_source_events.source_event_id` |
-| `title` | O | 공백 제외 1~1,000자 | `wiki_document_versions.title` |
-| `source` | O | HTTP 또는 HTTPS URL, 최대 2,048자 | `wiki_documents.canonical_url` |
-| `author` | X | 최대 500자 | `wiki_document_versions.author` |
-| `published` | X | ISO 8601 날짜 또는 날짜·시각 | `wiki_document_versions.published_at` |
-| `created` | O | `YYYY-MM-DD`, 클리퍼가 만든 날짜 | `wiki_document_versions.clipped_on` |
-| `description` | X | 최대 4,000자 | `wiki_document_versions.description` |
-| `tags` | X | 최대 50개, 항목당 1~100자, 기본 빈 Array | `wiki_document_versions.tags` |
-| `content` | O | UTF-8 Markdown, 공백 제외 1자 이상, 요청 전체 최대 2 MiB | `wiki_document_versions.normalized_content` |
+| `title` | O | 공백 제외 1~1,000자 | `user_source_document_versions.title` |
+| `source` | O | HTTP 또는 HTTPS URL, 최대 2,048자 | `user_source_documents.canonical_url` |
+| `author` | X | 최대 500자 | `user_source_document_versions.author` |
+| `published` | X | ISO 8601 날짜 또는 날짜·시각 | `user_source_document_versions.published_at` |
+| `created` | O | `YYYY-MM-DD`, 클리퍼가 만든 날짜 | `user_source_document_versions.clipped_on` |
+| `description` | X | 최대 4,000자 | `user_source_document_versions.description` |
+| `tags` | X | 최대 50개, 항목당 1~100자, 기본 빈 Array | `user_source_document_versions.tags` |
+| `content` | O | UTF-8 Markdown, 공백 제외 1자 이상, 요청 전체 최대 2 MiB | `user_source_document_versions.raw_content` |
 
 - `content_format`은 서버가 `markdown`으로 기록하고 `content_hash`는 Frontmatter를 분리한 Markdown 본문 기준으로 계산합니다.
 - YAML Frontmatter 문자열 전체를 `content`에 중복 저장하지 않습니다. 각 필드를 Parsing한 뒤 정식 컬럼에 저장합니다.
 - `author`, `published`, `description`의 빈 문자열은 NULL로 정규화하고 Tag는 공백 제거·중복 제거 후 저장합니다.
-- 같은 user_id와 source_event_id 요청은 기존 `job_id`, `document_id`, `document_version_id`를 반환하고 새 Row를 만들지 않습니다.
-- 같은 canonical_url의 내용이 변경되면 기존 wiki_documents를 유지하고 wiki_document_versions.version을 증가시킵니다.
-- 같은 Namespace에 동일 content_hash가 이미 있으면 새 문서 Version을 만들지 않고 기존 document_id와 document_version_id를 응답합니다.
+- 같은 user_id와 source_event_id 요청은 기존 `job_id`, `source_document_id`, `source_document_version_id`를 반환하고 새 Row를 만들지 않습니다.
+- 같은 canonical_url의 내용이 변경되면 기존 user_source_documents를 유지하고 user_source_document_versions.version을 증가시킵니다.
+- 같은 Namespace에 동일 content_hash가 이미 있으면 새 원본 Version을 만들지 않고 기존 source_document_id와 source_document_version_id를 응답합니다.
 
 Agent API는 아래 항목을 하나의 짧은 DB Transaction으로 Commit합니다.
 
 1. `wiki_source_events` 수신 Event
-2. `wiki_documents` 문서 Head와 `wiki_document_versions` Markdown 원문 Version
-3. `agent_jobs`의 `personal_wiki_build` Job과 document_version_id Payload
+2. `user_source_documents` 원본 Head와 `user_source_document_versions` Markdown 원본 Version
+3. `agent_jobs`의 `personal_wiki_build` Job과 source_document_version_id Payload
 
 응답 예시:
 
 ```json
 {
   "source_event_id": "clip-019f6482-1b57-7b02-93a9-8cfb7ce604fe",
-  "document_id": "5fe942f4-1df7-43bd-813f-d2e9913ab2aa",
-  "document_version_id": "96e1195f-c549-481b-9510-87d541d17b11",
+  "source_document_id": "5fe942f4-1df7-43bd-813f-d2e9913ab2aa",
+  "source_document_version_id": "96e1195f-c549-481b-9510-87d541d17b11",
   "job_id": "3c7e6728-8410-4fd5-9954-0530a764cc67",
   "status": "queued",
   "accepted_at": "2026-07-15T03:00:00Z"
@@ -104,11 +104,12 @@ Chunking이나 Embedding을 수행하지 않습니다.
 
 1. `queued` 상태의 `personal_wiki_build` Job을 `FOR UPDATE SKIP LOCKED`로 Batch Claim합니다.
 2. `locked_by`, `locked_at`, `lease_expires_at`, `status=running`을 같은 Transaction에서 갱신합니다.
-3. Job Payload의 document_version_id로 저장된 Markdown과 Frontmatter를 조회합니다.
-4. 정규화·중복 확인 후 wiki_chunks를 멱등 Upsert합니다.
-5. Chunk별 Embedding을 생성해 wiki_embeddings에 설정 Version과 함께 멱등 Upsert합니다.
-6. 개인 Wiki Version과 관심사 재계산을 반영합니다.
-7. source_event와 Job을 completed로 전환하고 document_id, document_version_id, chunk_count를 Job 결과에 기록합니다.
+3. Job Payload의 source_document_version_id로 저장된 Markdown과 Frontmatter를 조회합니다.
+4. 정규화·중복 확인과 LLM 구성을 거쳐 wiki_documents·wiki_document_versions를 멱등 Upsert하고 wiki_document_sources로 원본을 연결합니다.
+5. 생성된 Wiki Version을 Chunking하고 wiki_chunks를 멱등 Upsert합니다.
+6. Chunk별 Embedding을 생성해 wiki_embeddings에 설정 Version과 함께 멱등 Upsert합니다.
+7. 개인 Wiki Version과 관심사 재계산을 반영합니다.
+8. source_event와 Job을 completed로 전환하고 원본·Wiki 식별자와 chunk_count를 Job 결과에 기록합니다.
 
 각 Job은 독립 Transaction과 재시도 횟수를 갖습니다. Embedding Provider 장애가 발생해도
 원본 Markdown Version은 유지하며, 재시도는 파생 Chunk·Embedding만 다시 생성합니다.
@@ -255,11 +256,11 @@ sequenceDiagram
 
     Clipper->>ServiceAPI: 인증된 Markdown 클리핑 전송
     ServiceAPI->>AgentAPI: POST /wiki-sources/clippings
-    AgentAPI->>AgentDB: Source Event + 문서 Version + Job Commit
-    AgentAPI-->>ServiceAPI: 202 + document_version_id + job_id
+    AgentAPI->>AgentDB: Source Event + 원본 Version + Job Commit
+    AgentAPI-->>ServiceAPI: 202 + source_document_version_id + job_id
     WikiWorker->>AgentDB: Personal Wiki Job Batch Claim + Lease
     loop Claim한 클리핑 Job별 실행
-        WikiWorker->>AgentDB: Chunk + Embedding + 관심사 + 완료 상태 저장
+        WikiWorker->>AgentDB: LLM Wiki + 출처 + Chunk + Embedding + 관심사 저장
     end
     ServiceAPI->>AgentAPI: 콘텐츠 Generation 요청
     AgentAPI->>AgentDB: Generation Job 생성
@@ -300,8 +301,9 @@ sequenceDiagram
 ## MVP 저장소 계약
 
 웹 클리핑 API와 Personal Wiki Builder Worker는 `AGENT_DATABASE_URL`이 설정된
-PostgreSQL을 필수로 사용합니다. `wiki_source_events`, `wiki_documents`,
-`wiki_document_versions`, `wiki_chunks`, `wiki_embeddings`, `agent_jobs`,
+PostgreSQL을 필수로 사용합니다. `wiki_source_events`, `user_source_documents`,
+`user_source_document_versions`, `wiki_documents`, `wiki_document_versions`,
+`wiki_document_sources`, `wiki_chunks`, `wiki_embeddings`, `agent_jobs`,
 `agent_job_attempts`의 영속 구현과 Worker Claim·Lease가 MVP 범위입니다.
 
 클리핑 Markdown 또는 Job을 인메모리에만 저장하는 경로는 단위 테스트 대역으로만

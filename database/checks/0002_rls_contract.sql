@@ -8,6 +8,7 @@ CREATE ROLE agent_rls_contract_role NOLOGIN;
 GRANT USAGE ON SCHEMA agent TO agent_rls_contract_role;
 GRANT SELECT ON agent.user_context_snapshots TO agent_rls_contract_role;
 GRANT SELECT, DELETE ON agent.wiki_documents TO agent_rls_contract_role;
+GRANT SELECT, DELETE ON agent.user_source_documents TO agent_rls_contract_role;
 
 INSERT INTO agent.user_context_snapshots (
     user_id,
@@ -32,6 +33,17 @@ VALUES
     ('personal', 'user/rls-user-a', 'rls-user-a', 'url', 'https://rls-contract.invalid/user-a', repeat('b', 64)),
     ('personal', 'user/rls-user-b', 'rls-user-b', 'url', 'https://rls-contract.invalid/user-b', repeat('c', 64));
 
+INSERT INTO agent.user_source_documents (
+    user_id,
+    namespace_key,
+    source_type,
+    canonical_url,
+    content_hash
+)
+VALUES
+    ('rls-user-a', 'user/rls-user-a', 'url', 'https://rls-contract.invalid/source-a', repeat('d', 64)),
+    ('rls-user-b', 'user/rls-user-b', 'url', 'https://rls-contract.invalid/source-b', repeat('e', 64));
+
 SET ROLE agent_rls_contract_role;
 SET LOCAL app.user_id = 'rls-user-a';
 SET LOCAL app.access_scope = 'user';
@@ -46,6 +58,29 @@ BEGIN
 
     IF visible_rows <> 1 THEN
         RAISE EXCEPTION 'user scope expected 1 row but saw %', visible_rows;
+    END IF;
+END;
+$$;
+
+DO $$
+DECLARE
+    visible_rows integer;
+    deleted_rows integer;
+BEGIN
+    SELECT count(*) INTO visible_rows
+    FROM agent.user_source_documents
+    WHERE canonical_url LIKE 'https://rls-contract.invalid/source-%';
+
+    IF visible_rows <> 1 THEN
+        RAISE EXCEPTION 'user scope expected 1 source row but saw %', visible_rows;
+    END IF;
+
+    DELETE FROM agent.user_source_documents
+    WHERE canonical_url = 'https://rls-contract.invalid/source-b';
+    GET DIAGNOSTICS deleted_rows = ROW_COUNT;
+
+    IF deleted_rows <> 0 THEN
+        RAISE EXCEPTION 'user scope deleted % other-user source rows', deleted_rows;
     END IF;
 END;
 $$;
@@ -86,6 +121,14 @@ BEGIN
 
     IF visible_rows <> 2 THEN
         RAISE EXCEPTION 'system scope expected 2 rows but saw %', visible_rows;
+    END IF;
+
+    SELECT count(*) INTO visible_rows
+    FROM agent.user_source_documents
+    WHERE canonical_url LIKE 'https://rls-contract.invalid/source-%';
+
+    IF visible_rows <> 2 THEN
+        RAISE EXCEPTION 'system scope expected 2 source rows but saw %', visible_rows;
     END IF;
 END;
 $$;

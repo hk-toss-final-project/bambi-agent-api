@@ -98,8 +98,8 @@ domain/personal_wiki/documents/
 
 ## MVP 구현 흐름
 
-1. Browser Extension의 클리핑은 service-api 인증을 거쳐 Agent API에 전달되고, Source Event·Markdown 문서 Version·Job을 한 DB Transaction으로 저장합니다.
-2. `workers/features/personal_wiki_builder.py`가 저장된 document_version_id를 기준으로 개인 Wiki Chunk·Embedding·관심사를 구성합니다.
+1. Browser Extension의 클리핑은 service-api 인증을 거쳐 Agent API에 전달되고, Source Event·사용자 원본 Markdown Version·Job을 한 DB Transaction으로 저장합니다.
+2. `workers/features/personal_wiki_builder.py`가 저장된 source_document_version_id를 기준으로 LLM Wiki 문서·출처 관계·Chunk·Embedding·관심사를 구성합니다.
 3. `workers/features/global_source_collector.py`가 Naver, GDELT, NewsAPI Connector를 실행하고 정규화·중복 제거합니다.
 4. Worker Runtime이 실행 가능한 Job을 `FOR UPDATE SKIP LOCKED`로 Batch Claim하고 작업별 동시성을 제한합니다.
 5. `workers/features/bambi_generation.py`가 개인 Wiki와 Global Source 검색 결과로 각 콘텐츠를 독립 생성합니다.
