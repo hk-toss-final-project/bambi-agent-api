@@ -20,6 +20,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from agent.assistant import history
+from agent.assistant.report import build_report_context, generate_report
 from agent.assistant.service import assist
 
 assistant_router = APIRouter(tags=["assistant"])
@@ -137,18 +138,16 @@ def _render_reddit(items: list[dict[str, object]]) -> str:
 
 
 def _render_articles(items: list[dict[str, object]]) -> str:
-    """최근 발행된 새 기사 URL 카드를 HTML로 렌더링한다."""
+    """최근 발행된 새 기사 카드를 링크와 요약만으로 렌더링한다."""
     if not items:
         return "<p class='note'>새로운 기사가 없습니다.</p>"
     cards = []
     for item in items:
         title = html.escape(str(item.get("title") or ""))
         url = html.escape(str(item.get("url") or ""))
-        published = html.escape(str(item.get("published") or ""))
         snippet = html.escape(str(item.get("snippet") or ""))
         cards.append(
             f"<div class='card'><a href='{url}' target='_blank'>{title}</a>"
-            f"<div class='meta'>{published}</div>"
             f"<div class='summary'>{snippet}</div></div>"
         )
     return "\n".join(cards)
@@ -186,3 +185,112 @@ async def watch_redirect(user_id: str, keyword: str, video_id: str, url: str, ti
     """영상 클릭을 시청 이력으로 기록한 뒤 실제 YouTube 페이지로 리다이렉트한다."""
     await run_in_threadpool(history.record_watch, user_id, keyword, video_id, title, url)
     return RedirectResponse(url, status_code=302)
+
+
+_REPORT_FORM_HTML = f"""
+<!doctype html>
+<meta charset="utf-8">
+<title>개인화 보고서</title>
+{_PAGE_STYLE}
+<h1>📄 개인화 보고서 생성</h1>
+<p class="banner">키워드로 YouTube·뉴스·Reddit 최신 자료를 모아 하나의 보고서로 요약합니다.
+사용자 설정(언어·플랜)과 개인 Wiki 지식은 연동되면 자동 반영됩니다.</p>
+<form method="post" action="/report/generate">
+  <label for="user_id">이름 / 아이디</label>
+  <input id="user_id" name="user_id" required placeholder="예: minji">
+  <label for="keyword">키워드</label>
+  <input id="keyword" name="keyword" required placeholder="예: 전고체 배터리" autofocus>
+  <button type="submit">보고서 생성</button>
+</form>
+"""
+
+
+def _render_markdown(text: str) -> str:
+    """보고서 Markdown을 가벼운 규칙으로 HTML로 변환한다(제목·불릿·굵게).
+
+    외부 라이브러리 없이 최소한만 처리하고, 그 외는 그대로 표시한다.
+    """
+    import re
+
+    lines = text.splitlines()
+    out: list[str] = []
+    in_list = False
+
+    def close_list() -> None:
+        nonlocal in_list
+        if in_list:
+            out.append("</ul>")
+            in_list = False
+
+    for raw in lines:
+        line = html.escape(raw.rstrip())
+        line = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
+        # [텍스트](URL) 마크다운 링크를 클릭 가능한 <a>로 변환한다.
+        line = re.sub(
+            r"\[([^\]]+)\]\((https?://[^)]+)\)",
+            r'<a href="\2" target="_blank">\1</a>',
+            line,
+        )
+        if line.startswith("### "):
+            close_list()
+            out.append(f"<h3>{line[4:]}</h3>")
+        elif line.startswith("## "):
+            close_list()
+            out.append(f"<h2>{line[3:]}</h2>")
+        elif line.startswith("# "):
+            close_list()
+            out.append(f"<h1>{line[2:]}</h1>")
+        elif re.match(r"^[-*] ", line):
+            if not in_list:
+                out.append("<ul>")
+                in_list = True
+            out.append(f"<li>{line[2:]}</li>")
+        elif line.strip() == "":
+            close_list()
+        else:
+            close_list()
+            out.append(f"<p>{line}</p>")
+    close_list()
+    return "\n".join(out)
+
+
+@assistant_router.get("/report", response_class=HTMLResponse)
+async def report_form() -> str:
+    """보고서 생성 입력 폼 페이지를 반환한다."""
+    return _REPORT_FORM_HTML
+
+
+def _run_report(keyword: str, user_id: str) -> dict[str, object]:
+    """최신 자료를 수집하고 개인화 보고서를 생성한다(블로킹 작업 묶음)."""
+    assist_result = assist(keyword, user_id=user_id)
+    fresh = {
+        "youtube": assist_result.get("youtube", []),
+        "articles": assist_result.get("articles", []),
+        "reddit": assist_result.get("reddit", []),
+    }
+    # TODO: ①user_context_snapshots(DB), ②개인 Wiki 지식(prag_006) 어댑터가 준비되면
+    #       settings·knowledge를 채워 build_report_context에 전달한다.
+    context = build_report_context(keyword, fresh)
+    report_markdown = generate_report(context)
+    return {"result": assist_result, "report": report_markdown}
+
+
+@assistant_router.post("/report/generate", response_class=HTMLResponse)
+async def report_generate(user_id: str = Form(...), keyword: str = Form(...)) -> str:
+    """키워드로 최신 자료를 모아 개인화 보고서를 생성해 보여준다."""
+    outcome = await run_in_threadpool(_run_report, keyword, user_id)
+    result = outcome["result"]
+    errors_html = "".join(
+        f"<div class='err'>{html.escape(str(err))}</div>" for err in result.get("errors", [])
+    )
+
+    return f"""
+<!doctype html>
+<meta charset="utf-8">
+<title>{html.escape(result['keyword'])} 보고서</title>
+{_PAGE_STYLE}
+<h1>📄 “{html.escape(result['keyword'])}” 보고서</h1>
+<p><a href="/report">← 다른 키워드로 보고서 생성</a></p>
+{errors_html}
+<div class="card">{_render_markdown(str(outcome['report']))}</div>
+"""

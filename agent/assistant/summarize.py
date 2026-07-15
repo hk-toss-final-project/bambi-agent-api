@@ -28,6 +28,20 @@ def _get_client(model: str) -> object:
     return _clients[model]
 
 
+def complete(system_prompt: str, user_prompt: str, model: str = "gpt-4.1-mini") -> str:
+    """system·user 프롬프트로 Chat Completion을 호출해 텍스트를 반환한다.
+
+    요약(summarize_text) 외에 보고서 생성 등 임의의 프롬프트를 쓰는 기능이 공통으로
+    사용하는 저수준 LLM 호출 경계다. 테스트에서 이 함수만 대체하면 실제 호출을 막을 수
+    있다.
+    """
+    if not user_prompt.strip():
+        return ""
+    client = _get_client(model)
+    response = client.invoke([("system", system_prompt), ("human", user_prompt)])
+    return str(response.content).strip()
+
+
 def summarize_text(text: str, instruction: str, model: str = "gpt-4.1-mini") -> str:
     """주어진 텍스트를 지시에 맞게 요약한다.
 

@@ -133,16 +133,79 @@ def jina_read(url: str) -> str | None:
     return response.text
 
 
-def _make_snippet(entry: dict[str, object], use_jina: bool) -> str:
-    """Jina 본문(가능하면) 또는 RSS 요약에서 짧은 요지를 만든다."""
-    content = jina_read(str(entry.get("link", ""))) if use_jina else None
-    source_text = content or str(entry.get("summary", ""))
-    # RSS summary에는 HTML 태그가 섞일 수 있어 대략 제거한다.
+def _clean_jina_content(text: str) -> str:
+    """Jina Reader 응답에서 메타데이터 헤더와 마크다운 표기를 제거해 본문만 남긴다.
+
+    Jina 응답은 'Title: ...', 'URL Source: ...', 'Published Time: ...',
+    'Markdown Content:' 헤더로 시작한다. 이 헤더 블록을 걷어내고, 링크·이미지
+    같은 마크다운 표기도 사람이 읽는 텍스트만 남긴다.
+    """
     import re
 
-    text = re.sub(r"<[^>]+>", "", source_text)
+    marker = "Markdown Content:"
+    if marker in text:
+        text = text.split(marker, 1)[1]
+    else:
+        # 헤더만 있고 마커가 잘린 경우, 알려진 헤더 줄들을 개별 제거한다.
+        text = re.sub(r"^(Title|URL Source|Published Time|Image \d+):.*$", "", text, flags=re.MULTILINE)
+
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", text)        # 이미지
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)     # 링크 → 텍스트만
+    text = re.sub(r"[#>*`_~-]+", " ", text)                    # 마크다운 기호
+    text = re.sub(r"https?://\S+", " ", text)                  # 남은 raw URL
+    return text
+
+
+def _make_snippet(entry: dict[str, object], use_jina: bool) -> str:
+    """Jina 본문(가능하면) 또는 RSS 요약에서 짧은 요지를 만든다.
+
+    Jina 본문은 메타데이터 헤더·마크다운을 제거해 사람이 읽는 텍스트만 남긴다.
+    URL은 요지에 넣지 않는다.
+    """
+    import html as html_lib
+    import re
+
+    content = jina_read(str(entry.get("link", ""))) if use_jina else None
+    if content:
+        text = _clean_jina_content(content)
+    else:
+        # RSS summary에는 HTML 태그가 섞일 수 있어 제거한다.
+        text = re.sub(r"<[^>]+>", " ", str(entry.get("summary", "")))
+        text = re.sub(r"https?://\S+", " ", text)
+
+    text = html_lib.unescape(text)          # &nbsp; 등 엔티티 복원
     text = " ".join(text.split())
     return text[:_SNIPPET_CHARS]
+
+
+def _article_full_text(entry: dict[str, object], use_jina: bool) -> str:
+    """LLM 요약 입력용으로 기사 본문 텍스트를 넉넉히 확보한다(요지보다 길게)."""
+    import html as html_lib
+    import re
+
+    content = jina_read(str(entry.get("link", ""))) if use_jina else None
+    if content:
+        text = _clean_jina_content(content)
+    else:
+        text = re.sub(r"<[^>]+>", " ", str(entry.get("summary", "")))
+        text = re.sub(r"https?://\S+", " ", text)
+    text = html_lib.unescape(text)
+    return " ".join(text.split())[:4000]
+
+
+def _summarize_article(title: str, content: str, model: str) -> str:
+    """기사 본문을 메뉴·광고를 무시하고 한 문장으로 요약한다."""
+    from agent.assistant.summarize import summarize_text
+
+    return summarize_text(
+        content,
+        instruction=(
+            f"다음은 '{title}' 뉴스 기사 페이지에서 추출한 텍스트다. "
+            "메뉴·네비게이션·광고·언론사 이름 같은 잡음은 무시하고, "
+            "기사 핵심 내용만 한국어 한두 문장으로 요약하라."
+        ),
+        model=model,
+    )
 
 
 def latest_articles(
@@ -150,6 +213,8 @@ def latest_articles(
     limit: int = 6,
     jina_top: int = 4,
     *,
+    summarize: bool = False,
+    model: str = "gpt-4.1-mini",
     max_age_hours: float = _DEFAULT_MAX_AGE_HOURS,
     exclude_urls: set[str] | None = None,
     reference_now: datetime | None = None,
@@ -184,12 +249,17 @@ def latest_articles(
 
     articles: list[dict[str, object]] = []
     for index, entry in enumerate(unique):
+        if summarize:
+            full_text = _article_full_text(entry, use_jina=index < jina_top)
+            snippet = _summarize_article(str(entry.get("title") or ""), full_text, model) if full_text else ""
+        else:
+            snippet = _make_snippet(entry, use_jina=index < jina_top)
         articles.append(
             {
                 "title": entry.get("title"),
                 "url": entry.get("link"),
                 "published": entry.get("published"),
-                "snippet": _make_snippet(entry, use_jina=index < jina_top),
+                "snippet": snippet,
             }
         )
     return articles

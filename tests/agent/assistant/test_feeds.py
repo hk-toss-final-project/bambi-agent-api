@@ -2,7 +2,18 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from agent.assistant import feeds
+
+
+@pytest.fixture(autouse=True)
+def _mock_llm_summary(monkeypatch):
+    """기사 요약 LLM 호출을 결정적 mock으로 대체해 실제 호출을 막는다."""
+    monkeypatch.setattr(
+        "agent.assistant.summarize.summarize_text",
+        lambda text, instruction, model="gpt-4.1-mini": f"요약<{text[:20]}>",
+    )
 
 _NOW = datetime(2026, 7, 14, 9, 0, tzinfo=UTC)
 _YESTERDAY = _NOW - timedelta(days=1)
@@ -119,25 +130,13 @@ def test_latest_articles_returns_empty_when_no_new_articles(monkeypatch) -> None
     assert articles == []
 
 
-def test_latest_articles_uses_jina_for_top_items(monkeypatch) -> None:
-    """상위 jina_top개는 Jina 본문을, 나머지는 RSS 요약을 요지로 쓴다."""
+def test_latest_articles_raw_snippet_uses_jina_for_top_items(monkeypatch) -> None:
+    """summarize=False면 상위 jina_top개는 Jina 본문을, 나머지는 RSS 요약을 요지로 쓴다."""
 
     def fake_fetch(feed_url: str) -> list[dict[str, object]]:
         return [
-            {
-                "title": "글1",
-                "link": "https://a.com/1",
-                "summary": "<p>RSS 요약1</p>",
-                "published": "",
-                "published_ts": _ts(_YESTERDAY.replace(hour=9)),
-            },
-            {
-                "title": "글2",
-                "link": "https://a.com/2",
-                "summary": "RSS 요약2",
-                "published": "",
-                "published_ts": _ts(_YESTERDAY.replace(hour=8)),
-            },
+            {"title": "글1", "link": "https://a.com/1", "summary": "<p>RSS 요약1</p>", "published": "", "published_ts": _ts(_YESTERDAY.replace(hour=9))},
+            {"title": "글2", "link": "https://a.com/2", "summary": "RSS 요약2", "published": "", "published_ts": _ts(_YESTERDAY.replace(hour=8))},
         ]
 
     jina_calls: list[str] = []
@@ -149,12 +148,30 @@ def test_latest_articles_uses_jina_for_top_items(monkeypatch) -> None:
     monkeypatch.setattr(feeds, "fetch_feed_entries", fake_fetch)
     monkeypatch.setattr(feeds, "jina_read", fake_jina)
 
-    articles = feeds.latest_articles("키워드", limit=5, jina_top=1, reference_now=_NOW)
+    articles = feeds.latest_articles("키워드", limit=5, jina_top=1, summarize=False, reference_now=_NOW)
 
-    assert len(articles) == 2
-    assert articles[0]["snippet"] == "Jina 정제 본문"  # 상위 1개는 Jina 사용
-    assert articles[1]["snippet"] == "RSS 요약2"  # 나머지는 RSS 요약, HTML 태그 제거됨
+    assert articles[0]["snippet"] == "Jina 정제 본문"
+    assert articles[1]["snippet"] == "RSS 요약2"
     assert jina_calls == ["https://a.com/1"]
+
+
+def test_latest_articles_summarizes_when_enabled(monkeypatch) -> None:
+    """summarize=True면 각 기사를 LLM으로 요약해 snippet에 URL·잡음이 없다."""
+
+    def fake_fetch(feed_url: str) -> list[dict[str, object]]:
+        return [
+            {"title": "글1", "link": "https://a.com/1", "summary": "메뉴 잡음", "published": "", "published_ts": _ts(_NOW)},
+        ]
+
+    monkeypatch.setattr(feeds, "fetch_feed_entries", fake_fetch)
+    monkeypatch.setattr(feeds, "jina_read", lambda url: "URL Source: https://a.com/1\nMarkdown Content:\n기사 본문이다")
+
+    articles = feeds.latest_articles("키워드", limit=5, summarize=True, reference_now=_NOW)
+
+    # autouse mock이 '요약<...>' 형태를 돌려준다 → 실제 URL·헤더가 snippet에 없다.
+    assert articles[0]["snippet"].startswith("요약<")
+    assert "http" not in articles[0]["snippet"]
+    assert "URL Source" not in articles[0]["snippet"]
 
 
 def test_make_snippet_strips_html_tags(monkeypatch) -> None:
@@ -164,3 +181,23 @@ def test_make_snippet_strips_html_tags(monkeypatch) -> None:
     snippet = feeds._make_snippet(entry, use_jina=False)
     assert "<" not in snippet
     assert "제목" in snippet and "본문" in snippet
+
+
+def test_make_snippet_cleans_jina_metadata_and_urls(monkeypatch) -> None:
+    """Jina 응답의 메타데이터 헤더와 URL을 제거하고 본문만 남긴다."""
+    jina_raw = (
+        "Title: 코스피 급등\n"
+        "URL Source: https://news.example/1\n"
+        "Published Time: 2026-07-15T00:27:51+00:00\n"
+        "Markdown Content:\n"
+        "# [코스피](https://news.example/1)\n"
+        "코스피가 외국인 매수에 7400선을 돌파했다. 자세히는 https://news.example/1 참고."
+    )
+    monkeypatch.setattr(feeds, "jina_read", lambda url: jina_raw)
+
+    snippet = feeds._make_snippet({"link": "https://news.example/1"}, use_jina=True)
+
+    assert "URL Source" not in snippet
+    assert "Markdown Content" not in snippet
+    assert "http" not in snippet  # URL 제거됨
+    assert "코스피가 외국인 매수에 7400선을 돌파했다" in snippet

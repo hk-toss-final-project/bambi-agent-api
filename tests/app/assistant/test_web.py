@@ -38,3 +38,17 @@ def test_watch_redirect_records_history_and_redirects(monkeypatch) -> None:
         "title": "제목",
         "url": "https://youtu.be/abc123",
     }
+
+
+def test_render_markdown_converts_links_and_bullets() -> None:
+    """마크다운 링크와 불릿을 클릭 가능한 HTML로 변환한다."""
+    from app.assistant.web import _render_markdown
+
+    md = "## 출처\n- [뉴스] [기사 제목](https://news.example/1)"
+    html_out = _render_markdown(md)
+
+    assert '<a href="https://news.example/1" target="_blank">기사 제목</a>' in html_out
+    assert "<h2>출처</h2>" in html_out
+    assert "<li>" in html_out
+    # 원본 마크다운 링크 문법이 그대로 텍스트로 남지 않는다.
+    assert "](https://news.example/1)" not in html_out
