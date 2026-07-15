@@ -8,6 +8,8 @@ from .features.personal_wiki import (
     UserSourceDocumentForAgent,
     PersistedWikiBuild,
     PersistedWikiDocument,
+    RegisteredUrlSource,
+    SavedUserSourceVersion,
     WikiChunkForEmbedding,
     WikiEmbeddingValue,
     chunk_wiki_markdown,
@@ -21,8 +23,11 @@ from .features.personal_wiki import (
     get_wiki_chunks_for_embedding,
     list_existing_wiki_entries,
     list_existing_wiki_relations,
+    mark_url_source_event,
     persist_wiki_build,
     persist_wiki_embeddings,
+    register_user_url_source,
+    save_user_url_document_version,
     set_personal_wiki_scope,
 )
 from .features.global_source import (

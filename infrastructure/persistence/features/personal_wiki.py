@@ -223,6 +223,259 @@ async def set_personal_wiki_scope(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class RegisteredUrlSource:
+    """사용자 입력 URL을 수집 이벤트와 원본 문서로 등록한 결과."""
+
+    source_event_row_id: str
+    source_document_id: str
+    latest_version: int | None
+    latest_content_hash: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SavedUserSourceVersion:
+    """내용 변경으로 새로 저장된 사용자 원본 문서 Version 하나."""
+
+    source_version_id: str
+    version: int
+    content_hash: str
+
+
+async def register_user_url_source(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    url: str,
+    source_event_id: str,
+) -> RegisteredUrlSource:
+    """사용자가 입력한 URL을 수집 이벤트와 원본 문서 Head로 멱등 등록한다.
+
+    URL은 문서의 지속적인 식별 정보이므로 user_source_documents.canonical_url에
+    저장하고, 재수집 시 변할 수 있는 본문 스냅샷은 이후
+    save_user_url_document_version이 user_source_document_versions에 저장한다.
+    같은 user_id + source_event_id 재요청은 새 Row 없이 이벤트를 received로
+    되돌리고, 같은 Namespace + URL 재등록은 기존 문서 Head를 재사용한다.
+
+    Args:
+        user_id: URL을 입력한 사용자 ID
+        url: 입력된 원본 URL
+        source_event_id: Service 계층이 부여한 멱등 이벤트 식별자
+
+    Returns:
+        이벤트 Row ID, 문서 ID와 비교 기준이 될 최신 Version·Hash
+    """
+    namespace_key = f"user/{user_id}"
+    event_cursor = await connection.execute(
+        """
+        INSERT INTO agent.wiki_source_events (
+            user_id,
+            source_event_id,
+            source_type,
+            occurred_at,
+            source_url,
+            payload,
+            status
+        ) VALUES (%s, %s, 'url', clock_timestamp(), %s, %s, 'received')
+        ON CONFLICT (user_id, source_event_id) DO UPDATE SET
+            source_url = EXCLUDED.source_url,
+            status = 'received',
+            error_code = NULL,
+            error_message = NULL,
+            processed_at = NULL,
+            updated_at = clock_timestamp()
+        RETURNING id
+        """,
+        (user_id, source_event_id, url, Jsonb({"url": url})),
+    )
+    event_row = await event_cursor.fetchone()
+
+    document_cursor = await connection.execute(
+        """
+        INSERT INTO agent.user_source_documents (
+            user_id,
+            namespace_key,
+            source_type,
+            canonical_url,
+            content_hash,
+            metadata
+        ) VALUES (%s, %s, 'url', %s, %s, %s)
+        ON CONFLICT (namespace_key, canonical_url)
+        WHERE canonical_url IS NOT NULL AND deleted_at IS NULL
+        DO UPDATE SET updated_at = clock_timestamp()
+        RETURNING id
+        """,
+        (
+            user_id,
+            namespace_key,
+            url,
+            compute_content_hash(url),
+            Jsonb({"registered_by": "user-url-ingestion"}),
+        ),
+    )
+    document_row = await document_cursor.fetchone()
+
+    latest_cursor = await connection.execute(
+        """
+        SELECT version, content_hash
+        FROM agent.user_source_document_versions
+        WHERE source_document_id = %s
+        ORDER BY version DESC
+        LIMIT 1
+        """,
+        (document_row["id"],),
+    )
+    latest = await latest_cursor.fetchone()
+    return RegisteredUrlSource(
+        source_event_row_id=str(event_row["id"]),
+        source_document_id=str(document_row["id"]),
+        latest_version=(int(latest["version"]) if latest else None),
+        latest_content_hash=(latest["content_hash"] if latest else None),
+    )
+
+
+async def save_user_url_document_version(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    source_document_id: str,
+    source_event_row_id: str | None,
+    title: str,
+    raw_content: str,
+    resolved_url: str | None = None,
+    published_at: datetime | None = None,
+    description: str | None = None,
+) -> SavedUserSourceVersion | None:
+    """수집한 본문 스냅샷을 내용이 바뀐 경우에만 새 Version으로 저장한다.
+
+    content_hash가 최신 Version과 같으면 새 Version을 만들지 않고 None을
+    반환한다. 리다이렉트가 반영된 최종 URL은 수집 당시 근거를 남기기 위해
+    source_metadata.resolved_url로 함께 보존한다.
+
+    Args:
+        user_id: 원본 문서 소유 사용자 ID
+        source_document_id: user_source_documents Head ID
+        source_event_row_id: 이 스냅샷을 만든 wiki_source_events Row ID
+        title: 수집된 문서 제목
+        raw_content: 정제된 Markdown 본문
+        resolved_url: 리다이렉트된 최종 URL
+        published_at: 원문 게시 시각
+        description: 원문 요약 설명
+
+    Returns:
+        새로 저장된 Version 정보. 내용이 같아 저장을 생략하면 None
+    """
+    namespace_key = f"user/{user_id}"
+    content_hash = compute_content_hash(raw_content)
+    latest_cursor = await connection.execute(
+        """
+        SELECT version, content_hash
+        FROM agent.user_source_document_versions
+        WHERE source_document_id = %s
+        ORDER BY version DESC
+        LIMIT 1
+        FOR UPDATE
+        """,
+        (source_document_id,),
+    )
+    latest = await latest_cursor.fetchone()
+    if latest is not None and latest["content_hash"] == content_hash:
+        return None
+    next_version = (int(latest["version"]) + 1) if latest else 1
+
+    source_metadata: dict[str, Any] = {"fetcher": "jina-reader"}
+    if resolved_url is not None:
+        source_metadata["resolved_url"] = resolved_url
+    version_cursor = await connection.execute(
+        """
+        INSERT INTO agent.user_source_document_versions (
+            source_document_id,
+            namespace_key,
+            source_event_id,
+            version,
+            title,
+            published_at,
+            clipped_on,
+            description,
+            raw_content,
+            content_format,
+            content_hash,
+            source_metadata
+        ) VALUES (%s, %s, %s, %s, %s, %s, CURRENT_DATE, %s, %s, 'markdown', %s, %s)
+        RETURNING id
+        """,
+        (
+            source_document_id,
+            namespace_key,
+            source_event_row_id,
+            next_version,
+            title,
+            published_at,
+            description,
+            raw_content,
+            content_hash,
+            Jsonb(source_metadata),
+        ),
+    )
+    version_row = await version_cursor.fetchone()
+    await connection.execute(
+        """
+        UPDATE agent.user_source_documents
+        SET
+            current_version = %s,
+            content_hash = %s,
+            updated_at = clock_timestamp()
+        WHERE id = %s
+        """,
+        (next_version, content_hash, source_document_id),
+    )
+    return SavedUserSourceVersion(
+        source_version_id=str(version_row["id"]),
+        version=next_version,
+        content_hash=content_hash,
+    )
+
+
+async def mark_url_source_event(
+    connection: AsyncConnection[DictRow],
+    *,
+    source_event_row_id: str,
+    status: str,
+    error_code: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    """URL 수집 이벤트의 처리 상태를 갱신한다.
+
+    실패한 수집은 문서 Version을 만들지 않고 이 이벤트 Row에 오류 코드와
+    메시지로만 기록한다. completed·failed·ignored는 processed_at을 함께 남긴다.
+
+    Args:
+        source_event_row_id: wiki_source_events Row ID
+        status: processing, completed, failed, ignored 중 하나
+        error_code: 실패 원인 코드
+        error_message: 실패 상세 메시지
+    """
+    if status not in {"processing", "completed", "failed", "ignored"}:
+        raise ValueError(f"허용되지 않는 이벤트 상태입니다: {status}")
+    await connection.execute(
+        """
+        UPDATE agent.wiki_source_events
+        SET
+            status = %s,
+            error_code = %s,
+            error_message = %s,
+            retry_count = retry_count + CASE WHEN %s = 'failed' THEN 1 ELSE 0 END,
+            processed_at = CASE
+                WHEN %s IN ('completed', 'failed', 'ignored') THEN clock_timestamp()
+                ELSE processed_at
+            END,
+            updated_at = clock_timestamp()
+        WHERE id = %s
+        """,
+        (status, error_code, error_message, status, status, source_event_row_id),
+    )
+
+
 async def list_existing_wiki_entries(
     connection: AsyncConnection[DictRow],
     *,

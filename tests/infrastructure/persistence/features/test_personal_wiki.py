@@ -1,15 +1,23 @@
 """infrastructure/persistence/features/personal_wiki.py의 순수 조회 함수를 검증한다."""
 
 import asyncio
+import hashlib
 from datetime import UTC, date, datetime
 from typing import Any
 
+import pytest
+
 from infrastructure.persistence.features.personal_wiki import (
+    RegisteredUrlSource,
+    SavedUserSourceVersion,
     UserSourceDocumentForAgent,
     chunk_wiki_markdown,
     get_user_source_document_version_for_agent,
     list_existing_wiki_entries,
     list_existing_wiki_relations,
+    mark_url_source_event,
+    register_user_url_source,
+    save_user_url_document_version,
 )
 
 
@@ -213,3 +221,197 @@ def test_list_existing_wiki_relations_maps_document_keys() -> None:
     assert result[0].target_document_key == "연결-노트"
     assert result[0].metadata == {"confidence": 0.9}
     assert connection.executed[0][1] == ("user/user-1",)
+
+
+class _SequencedFakeConnection:
+    """execute 호출 순서대로 서로 다른 고정 Row를 반환하는 Test Double."""
+
+    def __init__(self, rows: list[dict[str, Any] | list[dict[str, Any]] | None]) -> None:
+        self._rows = list(rows)
+        self.executed: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def execute(self, query: str, params: tuple[Any, ...]) -> _FakeCursor:
+        """실행 SQL과 Parameter를 기록하고 다음 순서의 Row Cursor를 반환한다."""
+        self.executed.append((query, params))
+        row = self._rows.pop(0) if self._rows else None
+        return _FakeCursor(row)
+
+
+def _sha256(text: str) -> str:
+    """테스트에서 기대 content_hash를 계산한다."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def test_register_user_url_source_registers_event_and_document() -> None:
+    """이벤트·문서 Head를 등록하고 최신 Version 비교 기준을 함께 반환하는지 검증한다."""
+    url = "https://finance.naver.com/sise/sise_index.naver?code=KOSPI"
+    connection = _SequencedFakeConnection(
+        [
+            {"id": "event-row-1"},
+            {"id": "doc-1"},
+            {"version": 2, "content_hash": "b" * 64},
+        ]
+    )
+
+    result = asyncio.run(
+        register_user_url_source(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            url=url,
+            source_event_id="user-url-abc",
+        )
+    )
+
+    assert result == RegisteredUrlSource(
+        source_event_row_id="event-row-1",
+        source_document_id="doc-1",
+        latest_version=2,
+        latest_content_hash="b" * 64,
+    )
+    event_query, event_params = connection.executed[0]
+    assert "agent.wiki_source_events" in event_query
+    assert "ON CONFLICT (user_id, source_event_id)" in event_query
+    assert event_params[:3] == ("user-1", "user-url-abc", url)
+    document_query, document_params = connection.executed[1]
+    assert "agent.user_source_documents" in document_query
+    assert "ON CONFLICT (namespace_key, canonical_url)" in document_query
+    assert document_params[:4] == ("user-1", "user/user-1", url, _sha256(url))
+
+
+def test_register_user_url_source_without_versions_returns_none_baseline() -> None:
+    """저장된 Version이 없으면 비교 기준을 None으로 반환하는지 검증한다."""
+    connection = _SequencedFakeConnection(
+        [{"id": "event-row-1"}, {"id": "doc-1"}, None]
+    )
+
+    result = asyncio.run(
+        register_user_url_source(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            url="https://dart.fss.or.kr/",
+            source_event_id="user-url-dart",
+        )
+    )
+
+    assert result.latest_version is None
+    assert result.latest_content_hash is None
+
+
+def test_save_user_url_document_version_skips_when_hash_unchanged() -> None:
+    """content_hash가 최신 Version과 같으면 새 Version을 만들지 않는지 검증한다."""
+    raw_content = "# 코스피\n\n지수 요약"
+    connection = _SequencedFakeConnection(
+        [{"version": 3, "content_hash": _sha256(raw_content)}]
+    )
+
+    result = asyncio.run(
+        save_user_url_document_version(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            source_document_id="doc-1",
+            source_event_row_id="event-row-1",
+            title="KOSPI",
+            raw_content=raw_content,
+        )
+    )
+
+    assert result is None
+    assert len(connection.executed) == 1
+
+
+def test_save_user_url_document_version_creates_first_version() -> None:
+    """첫 수집이면 version 1을 만들고 문서 Head hash를 갱신하는지 검증한다."""
+    raw_content = "# 코스피\n\n지수 요약"
+    connection = _SequencedFakeConnection([None, {"id": "version-row-1"}, None])
+
+    result = asyncio.run(
+        save_user_url_document_version(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            source_document_id="doc-1",
+            source_event_row_id="event-row-1",
+            title="KOSPI",
+            raw_content=raw_content,
+            resolved_url="https://finance.naver.com/resolved",
+        )
+    )
+
+    assert result == SavedUserSourceVersion(
+        source_version_id="version-row-1",
+        version=1,
+        content_hash=_sha256(raw_content),
+    )
+    insert_query, insert_params = connection.executed[1]
+    assert "agent.user_source_document_versions" in insert_query
+    assert insert_params[0] == "doc-1"
+    assert insert_params[3] == 1
+    assert insert_params[4] == "KOSPI"
+    update_query, update_params = connection.executed[2]
+    assert "UPDATE agent.user_source_documents" in update_query
+    assert update_params == (1, _sha256(raw_content), "doc-1")
+
+
+def test_save_user_url_document_version_increments_version_on_change() -> None:
+    """내용이 바뀌면 최신 Version + 1로 새 스냅샷을 저장하는지 검증한다."""
+    connection = _SequencedFakeConnection(
+        [
+            {"version": 2, "content_hash": "c" * 64},
+            {"id": "version-row-3"},
+            None,
+        ]
+    )
+
+    result = asyncio.run(
+        save_user_url_document_version(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            source_document_id="doc-1",
+            source_event_row_id=None,
+            title="갱신된 제목",
+            raw_content="새 본문",
+        )
+    )
+
+    assert result is not None
+    assert result.version == 3
+
+
+def test_mark_url_source_event_rejects_unknown_status() -> None:
+    """허용되지 않은 이벤트 상태는 ValueError를 발생시키는지 검증한다."""
+    connection = _SequencedFakeConnection([])
+
+    with pytest.raises(ValueError):
+        asyncio.run(
+            mark_url_source_event(
+                connection,  # type: ignore[arg-type]
+                source_event_row_id="event-row-1",
+                status="received",
+            )
+        )
+    assert connection.executed == []
+
+
+def test_mark_url_source_event_records_failure_details() -> None:
+    """실패 상태가 오류 코드·메시지와 함께 이벤트 Row에 기록되는지 검증한다."""
+    connection = _SequencedFakeConnection([None])
+
+    asyncio.run(
+        mark_url_source_event(
+            connection,  # type: ignore[arg-type]
+            source_event_row_id="event-row-1",
+            status="failed",
+            error_code="http_451",
+            error_message="차단된 URL",
+        )
+    )
+
+    query, params = connection.executed[0]
+    assert "UPDATE agent.wiki_source_events" in query
+    assert params == (
+        "failed",
+        "http_451",
+        "차단된 URL",
+        "failed",
+        "failed",
+        "event-row-1",
+    )
