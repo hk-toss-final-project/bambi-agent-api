@@ -6,6 +6,7 @@ JOB-001, JOB-002, JOB-003, JOB-004 기능의 실제 구현 위치를 제공한�
 from shared.contracts import FeatureRequest, FeatureResult
 
 
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def job_001(request: FeatureRequest) -> FeatureResult:
     """[JOB-001] Agent Job 생성.
 
@@ -14,6 +15,7 @@ async def job_001(request: FeatureRequest) -> FeatureResult:
     raise NotImplementedError("[JOB-001] 기능 구현이 필요합니다.")
 
 
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def job_002(request: FeatureRequest) -> FeatureResult:
     """[JOB-002] Agent Job 조회.
 

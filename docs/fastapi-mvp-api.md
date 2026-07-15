@@ -7,7 +7,7 @@
 - 내부 API Prefix는 기본 `/internal/v1`이며 `API_PREFIX` 환경변수로 변경할 수 있습니다.
 - 내부 인증은 MVP 제외 범위이므로 적용하지 않습니다. 인증 추가 전까지 외부 네트워크에 노출하지 않습니다.
 - Request ID와 Trace ID는 각각 `X-Request-ID`, `X-Trace-ID` 헤더로 전달하며, 누락되거나 형식이 잘못되면 Agent API가 생성합니다.
-- 비동기 Wiki 및 생성 요청은 `202 Accepted`와 `job_id`를 반환합니다.
+- 비동기 Wiki 및 생성 요청은 필요한 입력을 PostgreSQL에 Commit한 뒤 `202 Accepted`와 `job_id`를 반환합니다.
 - 사용자 컨텍스트는 단조 증가하는 `context_version`으로 오래된 데이터 덮어쓰기를 방지합니다.
 - 웹 클리핑, URL, 위키마킹과 콘텐츠 생성은 요청별 멱등성 키로 중복 Job 생성을 방지합니다.
 - Agent Worker는 Job을 Batch로 Claim하되 각 Job을 독립 실행하며, Claim 크기와 실제 LLM 호출 동시성을 분리합니다.
@@ -27,12 +27,92 @@
 | Method | Path | 기능 ID | 성공 상태 | 설명 |
 |---|---|---|---:|---|
 | `PUT` | `/internal/v1/users/{user_id}/context` | `SVC-001` | `200` | 사용자 플랜, 언어, 개인화 및 차단 설정을 반영합니다. |
-| `POST` | `/internal/v1/users/{user_id}/wiki-sources/clippings` | `SVC-002` | `202` | 웹 클리핑 Personal Wiki Builder Job을 등록합니다. |
+| `POST` | `/internal/v1/users/{user_id}/wiki-sources/clippings` | `SVC-002` | `202` | 웹 클리핑 Markdown을 저장하고 Personal Wiki Builder Job을 등록합니다. |
 | `POST` | `/internal/v1/users/{user_id}/wiki-sources/urls` | `SVC-003` | `202` | URL Personal Wiki Builder Job을 등록합니다. |
 | `POST` | `/internal/v1/users/{user_id}/wiki-sources/content-marks` | `SVC-004` | `202` | 생성 콘텐츠 위키마킹 Job을 등록합니다. |
 | `POST` | `/internal/v1/users/{user_id}/generations` | `SVC-008` | `202` | 밤비 콘텐츠 생성 Job을 등록합니다. |
 | `GET` | `/internal/v1/jobs/{job_id}` | `SVC-013` | `200` | Job 상태와 진행률을 조회합니다. |
 | `GET` | `/internal/v1/jobs/{job_id}/result` | `SVC-014` | `200` | 완료된 Job 결과를 조회합니다. 미완료 시 `409`를 반환합니다. |
+
+### 웹 클리핑 저장 계약
+
+Browser Extension은 Agent API 내부 경로를 인터넷에 직접 노출해 호출하지 않습니다.
+Extension이 service-api의 사용자 인증을 거쳐 클리핑을 전달하면 service-api가 아래
+내부 경로를 호출합니다.
+
+요청 예시:
+
+```json
+{
+  "source_event_id": "clip-019f6482-1b57-7b02-93a9-8cfb7ce604fe",
+  "title": "langchain-ai/openwiki",
+  "source": "https://github.com/langchain-ai/openwiki",
+  "author": null,
+  "published": null,
+  "created": "2026-07-14",
+  "description": "OpenWiki is a CLI that writes and maintains agent documentation.",
+  "tags": ["clippings", "ai"],
+  "content": "## OpenWiki\n\nOpenWiki는 코드베이스 문서를 유지하는 CLI입니다."
+}
+```
+
+| 필드 | 필수 | 제약 | 저장 위치 |
+|---|---|---|---|
+| `source_event_id` | O | 사용자 안에서 Unique, 1~128자 | `wiki_source_events.source_event_id` |
+| `title` | O | 공백 제외 1~1,000자 | `wiki_document_versions.title` |
+| `source` | O | HTTP 또는 HTTPS URL, 최대 2,048자 | `wiki_documents.canonical_url` |
+| `author` | X | 최대 500자 | `wiki_document_versions.author` |
+| `published` | X | ISO 8601 날짜 또는 날짜·시각 | `wiki_document_versions.published_at` |
+| `created` | O | `YYYY-MM-DD`, 클리퍼가 만든 날짜 | `wiki_document_versions.clipped_on` |
+| `description` | X | 최대 4,000자 | `wiki_document_versions.description` |
+| `tags` | X | 최대 50개, 항목당 1~100자, 기본 빈 Array | `wiki_document_versions.tags` |
+| `content` | O | UTF-8 Markdown, 공백 제외 1자 이상, 요청 전체 최대 2 MiB | `wiki_document_versions.normalized_content` |
+
+- `content_format`은 서버가 `markdown`으로 기록하고 `content_hash`는 Frontmatter를 분리한 Markdown 본문 기준으로 계산합니다.
+- YAML Frontmatter 문자열 전체를 `content`에 중복 저장하지 않습니다. 각 필드를 Parsing한 뒤 정식 컬럼에 저장합니다.
+- `author`, `published`, `description`의 빈 문자열은 NULL로 정규화하고 Tag는 공백 제거·중복 제거 후 저장합니다.
+- 같은 user_id와 source_event_id 요청은 기존 `job_id`, `document_id`, `document_version_id`를 반환하고 새 Row를 만들지 않습니다.
+- 같은 canonical_url의 내용이 변경되면 기존 wiki_documents를 유지하고 wiki_document_versions.version을 증가시킵니다.
+- 같은 Namespace에 동일 content_hash가 이미 있으면 새 문서 Version을 만들지 않고 기존 document_id와 document_version_id를 응답합니다.
+
+Agent API는 아래 항목을 하나의 짧은 DB Transaction으로 Commit합니다.
+
+1. `wiki_source_events` 수신 Event
+2. `wiki_documents` 문서 Head와 `wiki_document_versions` Markdown 원문 Version
+3. `agent_jobs`의 `personal_wiki_build` Job과 document_version_id Payload
+
+응답 예시:
+
+```json
+{
+  "source_event_id": "clip-019f6482-1b57-7b02-93a9-8cfb7ce604fe",
+  "document_id": "5fe942f4-1df7-43bd-813f-d2e9913ab2aa",
+  "document_version_id": "96e1195f-c549-481b-9510-87d541d17b11",
+  "job_id": "3c7e6728-8410-4fd5-9954-0530a764cc67",
+  "status": "queued",
+  "accepted_at": "2026-07-15T03:00:00Z"
+}
+```
+
+202 응답은 Source Event, Markdown 원문과 Job이 모두 영속 저장됐다는 의미입니다.
+Chunk와 Embedding 생성 완료를 의미하지 않으며 완료 여부는 Job 조회 API로 확인합니다.
+
+### Personal Wiki Builder Worker
+
+Personal Wiki Builder는 별도 Worker Process로 실행하며 HTTP 요청 수명 안에서
+Chunking이나 Embedding을 수행하지 않습니다.
+
+1. `queued` 상태의 `personal_wiki_build` Job을 `FOR UPDATE SKIP LOCKED`로 Batch Claim합니다.
+2. `locked_by`, `locked_at`, `lease_expires_at`, `status=running`을 같은 Transaction에서 갱신합니다.
+3. Job Payload의 document_version_id로 저장된 Markdown과 Frontmatter를 조회합니다.
+4. 정규화·중복 확인 후 wiki_chunks를 멱등 Upsert합니다.
+5. Chunk별 Embedding을 생성해 wiki_embeddings에 설정 Version과 함께 멱등 Upsert합니다.
+6. 개인 Wiki Version과 관심사 재계산을 반영합니다.
+7. source_event와 Job을 completed로 전환하고 document_id, document_version_id, chunk_count를 Job 결과에 기록합니다.
+
+각 Job은 독립 Transaction과 재시도 횟수를 갖습니다. Embedding Provider 장애가 발생해도
+원본 Markdown Version은 유지하며, 재시도는 파생 Chunk·Embedding만 다시 생성합니다.
+Lease가 만료된 running Job은 다른 Worker가 다시 Claim할 수 있습니다.
 
 ## Service Worker 연동
 
@@ -163,21 +243,30 @@ Service Worker는 각 Snapshot을 `content_id + version`으로 service-db에 멱
 
 ```mermaid
 sequenceDiagram
+    participant Clipper as Browser Extension
     participant ServiceAPI as service-api
     participant AgentAPI as agent-api
-    participant JobStore as MVP Job Store
+    participant AgentDB as PostgreSQL agent-db
     participant Scheduler as agent-scheduler
-    participant Worker as agent-worker
+    participant WikiWorker as Personal Wiki Builder
+    participant GenerationWorker as Generation Worker
     participant ServiceWorker as service-worker
     participant ServiceDB as service-db
 
-    ServiceAPI->>AgentAPI: POST Wiki 또는 Generation 요청
-    AgentAPI->>JobStore: 멱등성 확인 및 Job 생성
-    AgentAPI-->>ServiceAPI: 202 Accepted + job_id
-    Scheduler->>JobStore: 스케줄 대상 Job Batch 등록
-    Worker->>JobStore: Job Batch Claim + Lease
-    loop Claim한 Job별 제한된 동시 실행
-        Worker->>JobStore: 생성 결과와 ready Snapshot 저장
+    Clipper->>ServiceAPI: 인증된 Markdown 클리핑 전송
+    ServiceAPI->>AgentAPI: POST /wiki-sources/clippings
+    AgentAPI->>AgentDB: Source Event + 문서 Version + Job Commit
+    AgentAPI-->>ServiceAPI: 202 + document_version_id + job_id
+    WikiWorker->>AgentDB: Personal Wiki Job Batch Claim + Lease
+    loop Claim한 클리핑 Job별 실행
+        WikiWorker->>AgentDB: Chunk + Embedding + 관심사 + 완료 상태 저장
+    end
+    ServiceAPI->>AgentAPI: 콘텐츠 Generation 요청
+    AgentAPI->>AgentDB: Generation Job 생성
+    Scheduler->>AgentDB: 스케줄 대상 Job Batch 등록
+    GenerationWorker->>AgentDB: Generation Job Batch Claim + Lease
+    loop Claim한 생성 Job별 제한된 동시 실행
+        GenerationWorker->>AgentDB: 생성 결과와 ready Snapshot 저장
     end
     ServiceAPI->>AgentAPI: GET /jobs/{job_id}/result
     AgentAPI-->>ServiceAPI: 완료 결과
@@ -195,6 +284,8 @@ sequenceDiagram
 | Code | HTTP | 설명 |
 |---|---:|---|
 | `REQUEST_VALIDATION_ERROR` | `422` | 요청 Path 또는 Body 검증에 실패했습니다. |
+| `CLIPPING_CONTENT_TOO_LARGE` | `413` | 클리핑 요청이 MVP의 2 MiB 제한을 초과했습니다. |
+| `CLIPPING_SOURCE_EVENT_CONFLICT` | `409` | 같은 source_event_id에 기존 요청과 다른 Payload가 전달됐습니다. |
 | `STALE_CONTEXT_VERSION` | `409` | 최신 버전보다 오래된 사용자 컨텍스트입니다. |
 | `JOB_NOT_FOUND` | `404` | Agent Job이 존재하지 않습니다. |
 | `JOB_RESULT_NOT_READY` | `409` | Job 결과가 아직 준비되지 않았습니다. |
@@ -206,6 +297,14 @@ sequenceDiagram
 | `SERVICE_NOT_READY` | `503` | 애플리케이션 컴포넌트가 준비되지 않았습니다. |
 | `INTERNAL_SERVER_ERROR` | `500` | 예상하지 못한 내부 오류가 발생했습니다. |
 
-## MVP 저장소 제한
+## MVP 저장소 계약
 
-현재 사용자 컨텍스트와 Job은 API 계약과 상태 전이를 먼저 검증하기 위한 메모리 저장소를 사용합니다. 프로세스 재시작 시 해당 데이터가 사라지며 다중 인스턴스 간 상태를 공유하지 않습니다. 단건 및 Batch Publish Snapshot 조회·Claim·ACK는 `AGENT_DATABASE_URL`이 설정되면 PostgreSQL 저장소를 사용하고, 설정되지 않으면 테스트용 인메모리 저장소를 사용합니다. 나머지 Agent DB와 Queue Adapter도 동일한 서비스 경계를 유지한 채 영속 구현으로 교체해야 합니다.
+웹 클리핑 API와 Personal Wiki Builder Worker는 `AGENT_DATABASE_URL`이 설정된
+PostgreSQL을 필수로 사용합니다. `wiki_source_events`, `wiki_documents`,
+`wiki_document_versions`, `wiki_chunks`, `wiki_embeddings`, `agent_jobs`,
+`agent_job_attempts`의 영속 구현과 Worker Claim·Lease가 MVP 범위입니다.
+
+클리핑 Markdown 또는 Job을 인메모리에만 저장하는 경로는 단위 테스트 대역으로만
+허용하며, Runtime에서 DB 연결이 없으면 클리핑 API는 성공 응답 대신
+`SERVICE_NOT_READY`를 반환해야 합니다. 단건·Batch Publish Snapshot 조회·Claim·ACK도
+동일하게 PostgreSQL을 기본 저장소로 사용합니다.

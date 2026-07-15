@@ -1,4 +1,4 @@
-"""MVP Batch 처리 설계 문서의 상호 정합성을 검증한다."""
+"""MVP Batch 및 웹 클리핑 저장·Worker 설계 문서의 상호 정합성을 검증한다."""
 
 from pathlib import Path
 
@@ -36,6 +36,41 @@ def test_mvp_scope_includes_generation_and_publish_batch_flow() -> None:
     assert "부분 성공 Batch ACK" in mvp_scope
 
 
+def test_mvp_scope_includes_clipping_persistence_and_worker() -> None:
+    """MVP 범위가 클리핑 원문 저장과 Personal Wiki Worker 책임을 포함하는지 검증한다."""
+    mvp_scope = _read(MVP_SCOPE)
+    required_feature_ids = {
+        "WSE-001",
+        "WSE-011",
+        "WSE-013",
+        "PWIKI-006",
+        "PWIKI-007",
+        "PWIKI-011",
+        "PWE-002",
+        "WBA-001",
+        "WBA-003",
+        "JOB-001",
+        "JOB-010",
+        "WC-001",
+        "WC-002",
+        "WC-006",
+        "WC-009",
+        "WC-013",
+        "DB-002",
+        "DB-003",
+        "DB-004",
+        "DB-005",
+        "DB-026",
+    }
+
+    for feature_id in required_feature_ids:
+        assert f"| {feature_id} |" in mvp_scope
+
+    assert "### 웹 클리핑 Worker 완료 계약" in mvp_scope
+    assert "Markdown 원문과 Frontmatter" in mvp_scope
+    assert "인메모리에만 저장한 상태로 성공" in mvp_scope
+
+
 def test_fastapi_spec_defines_batch_claim_and_ack_contracts() -> None:
     """FastAPI MVP 문서에 Batch Claim과 ACK 경로 및 부분 성공 계약이 있는지 검증한다."""
     fastapi_spec = _read(FASTAPI_SPEC)
@@ -45,6 +80,27 @@ def test_fastapi_spec_defines_batch_claim_and_ack_contracts() -> None:
     assert "PUBLISH_BATCH_OWNERSHIP_MISMATCH" in fastapi_spec
     assert "PUBLISH_BATCH_LEASE_EXPIRED" in fastapi_spec
     assert '"retry_scheduled_count"' in fastapi_spec
+
+
+def test_fastapi_spec_defines_clipping_storage_and_worker_contract() -> None:
+    """FastAPI MVP 문서가 클리핑 Payload, DB Transaction과 Worker 완료 조건을 정의하는지 검증한다."""
+    fastapi_spec = _read(FASTAPI_SPEC)
+
+    assert "### 웹 클리핑 저장 계약" in fastapi_spec
+    assert '"source_event_id"' in fastapi_spec
+    assert '"title"' in fastapi_spec
+    assert '"source"' in fastapi_spec
+    assert '"author"' in fastapi_spec
+    assert '"published"' in fastapi_spec
+    assert '"created"' in fastapi_spec
+    assert '"description"' in fastapi_spec
+    assert '"tags"' in fastapi_spec
+    assert '"content"' in fastapi_spec
+    assert "wiki_document_versions.normalized_content" in fastapi_spec
+    assert "Source Event, Markdown 원문과 Job이 모두 영속 저장" in fastapi_spec
+    assert "### Personal Wiki Builder Worker" in fastapi_spec
+    assert "FOR UPDATE SKIP LOCKED" in fastapi_spec
+    assert "클리핑 Markdown 또는 Job을 인메모리에만 저장" in fastapi_spec
 
 
 def test_db_design_defines_claim_lease_and_retry_state() -> None:

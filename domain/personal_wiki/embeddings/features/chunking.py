@@ -15,6 +15,7 @@ async def pwe_001(request: FeatureRequest) -> FeatureResult:
     raise NotImplementedError("[PWE-001] 기능 구현이 필요합니다.")
 
 
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def pwe_002(request: FeatureRequest) -> FeatureResult:
     """[PWE-002] Chunk 저장.
 

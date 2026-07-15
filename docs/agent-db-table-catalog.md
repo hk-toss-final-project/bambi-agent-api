@@ -1,8 +1,9 @@
 # Agent DB 테이블 카탈로그
 
 > 기준: 2026-07-14, commit 8940cb1. 물리 스키마의 최종 기준은
-> database/migrations/0001_initial.sql과
-> database/migrations/0002_publish_snapshot_batches.sql입니다.
+> database/migrations/0001_initial.sql,
+> database/migrations/0002_publish_snapshot_batches.sql,
+> database/migrations/0003_web_clipping_markdown.sql입니다.
 
 이 문서는 Agent DB의 38개 테이블을 영역과 데이터 성격으로 분류하고, 각 테이블의
 책임, 핵심 관계·제약, RLS 적용 여부와 현재 애플리케이션 연결 상태를 정리합니다.
@@ -103,14 +104,14 @@ namespace_key가 데이터 경계를 결정합니다.
 | 테이블 | 성격 | 책임 | 핵심 관계·제약 | RLS | 현재 연결 |
 |---|---|---|---|---|---|
 | wiki_documents | Master/Head | 문서의 Scope, 최신 버전, URL, Hash와 상태 관리 | Personal은 user/{user_id}, Global은 global, Namespace 내 URL·Hash Unique | 적용 | Schema only |
-| wiki_document_versions | Version | 제목, 요약, 정규화 본문과 원문 Object URI 보존 | document_id + version Unique, normalized_content 또는 object_uri 필수 | 적용 | Schema only |
+| wiki_document_versions | Version | 제목, 웹 클리핑 Frontmatter, Markdown 본문과 원문 Object URI 보존 | document_id + version Unique, normalized_content 또는 object_uri 필수, content_format 제한 | 적용 | Schema only |
 | wiki_chunks | Derived | 문서 버전을 검색·LLM 입력 단위로 분할 | document_version_id + chunk_index Unique, FTS와 pg_trgm GIN Index | 적용 | Schema only |
 | wiki_embeddings | Derived | Chunk의 의미 검색 Vector와 생성 설정 보존 | chunk_id + embedding_config_id Unique, vector(1536), Cosine HNSW | 적용 | Schema only |
 
-현재 DDL에는 content_format Column이 없습니다. Markdown을 정규화 원문으로
-사용할 경우 wiki_document_versions.normalized_content에 저장하고
-source_metadata에 Format과 원본 Provider Metadata를 기록하는 것은 애플리케이션
-규약입니다. DB가 Markdown 형식을 직접 강제하지는 않습니다.
+웹 클리핑의 title과 본문은 wiki_document_versions.title과 normalized_content에,
+source URL은 부모 wiki_documents.canonical_url에 저장합니다. author, published_at,
+clipped_on, description, tags와 content_format은 0003 Migration에서 정식 Column으로
+추가되어 Frontmatter를 JSONB에 숨기지 않고 조회할 수 있습니다.
 
 Embedding은 원본이 아니라 다시 생성할 수 있는 검색 Index입니다. 원문과 Version은
 wiki_document_versions가 소유하고, wiki_chunks와 wiki_embeddings는 Chunk 정책이나
@@ -249,5 +250,6 @@ Docker Entry Point의 Migration과 Seed는 빈 Volume을 처음 만들 때만 �
 - 논리 설계, 데이터 소유권과 배포 기준: agent-db-design.md
 - 실제 초기 Schema: ../database/migrations/0001_initial.sql
 - Publish Batch 확장: ../database/migrations/0002_publish_snapshot_batches.sql
+- 웹 클리핑 Markdown 확장: ../database/migrations/0003_web_clipping_markdown.sql
 - 로컬 실행과 Schema 검증: ../database/README.md
 - Service Worker HTTP 계약: fastapi-mvp-api.md

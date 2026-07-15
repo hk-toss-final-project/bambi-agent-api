@@ -1,13 +1,13 @@
 # Bambi Agent API 프로젝트 구조
 
-이 문서는 `agent-api-feature-spec.md`의 실제 기능 영역 1~43절을 코드 구조에 매핑한 결과입니다. 상세 API 필드, URL, 데이터 플로우는 명세에 정의되어 있지 않으므로 임의로 확정하지 않고 공통 계약과 라우터 경계만 만들었습니다.
+이 문서는 `agent-api-feature-spec.md`의 실제 기능 영역 1~43절을 코드 구조에 매핑한 결과입니다. MVP의 웹 클리핑 Payload, PostgreSQL 저장과 Worker 데이터 플로우는 `fastapi-mvp-api.md`를 구현 계약으로 사용하고, 그 밖의 상세 계약은 확정 전까지 공통 경계만 유지합니다.
 
 ## 스캐폴드 원칙
 
 - 전체 기능 626개는 기능 ID를 소문자로 바꾼 비동기 함수와 1:1로 연결됩니다. 예: `BAMBI-009` → `bambi_009(...)`.
 - 모든 기능 함수는 `FeatureRequest`를 받고 `FeatureResult`를 반환하며, 현재는 `NotImplementedError`를 발생시킵니다.
 - 각 기능 영역의 `api.py`는 구현을 포함하지 않는 공개 facade이며, `features/` 아래 응집도 기준으로 분리된 구현 모듈의 함수를 import하고 `__all__`로 노출합니다.
-- 전용 MVP 범위 문서가 구현 우선순위의 기준입니다. 해당 47개 함수 바로 위에 `# MVP:` 주석을 붙였습니다.
+- 전용 MVP 범위 문서가 구현 우선순위의 기준입니다. 해당 71개 함수 바로 위에 `# MVP:` 주석을 붙였습니다.
 - 전체 명세 44~46절의 MVP·2차·3차 항목은 기존 기능을 묶은 로드맵이므로 실행 함수를 중복 생성하지 않았습니다.
 - API Request/Response 상세 필드가 확정되면 `app/schemas/`에 도메인별 Pydantic 모델을 추가하고, `app/routers/`의 라우터에서 기능 함수를 호출합니다.
 - Agent DB의 물리 스키마와 운영 기준은 `docs/agent-db-design.md`, 실행 가능한 SQL은 `database/`에서 관리합니다.
@@ -98,8 +98,8 @@ domain/personal_wiki/documents/
 
 ## MVP 구현 흐름
 
-1. `app/routers/service/api.py`의 Service API 요청과 Scheduler 대상자를 멱등한 Job으로 변환합니다.
-2. `workers/features/personal_wiki_builder.py`가 개인 Wiki 문서·Chunk·Embedding·관심사를 구성합니다.
+1. Browser Extension의 클리핑은 service-api 인증을 거쳐 Agent API에 전달되고, Source Event·Markdown 문서 Version·Job을 한 DB Transaction으로 저장합니다.
+2. `workers/features/personal_wiki_builder.py`가 저장된 document_version_id를 기준으로 개인 Wiki Chunk·Embedding·관심사를 구성합니다.
 3. `workers/features/global_source_collector.py`가 Naver, GDELT, NewsAPI Connector를 실행하고 정규화·중복 제거합니다.
 4. Worker Runtime이 실행 가능한 Job을 `FOR UPDATE SKIP LOCKED`로 Batch Claim하고 작업별 동시성을 제한합니다.
 5. `workers/features/bambi_generation.py`가 개인 Wiki와 Global Source 검색 결과로 각 콘텐츠를 독립 생성합니다.

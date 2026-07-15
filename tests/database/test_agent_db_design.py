@@ -8,6 +8,9 @@ MIGRATION_PATH = PROJECT_ROOT / "database" / "migrations" / "0001_initial.sql"
 BATCH_MIGRATION_PATH = (
     PROJECT_ROOT / "database" / "migrations" / "0002_publish_snapshot_batches.sql"
 )
+WEB_CLIPPING_MIGRATION_PATH = (
+    PROJECT_ROOT / "database" / "migrations" / "0003_web_clipping_markdown.sql"
+)
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
 DESIGN_PATH = PROJECT_ROOT / "docs" / "agent-db-design.md"
@@ -111,9 +114,8 @@ def test_table_catalog_documents_every_migration_table() -> None:
 
 
 def test_column_dictionary_documents_every_migration_column() -> None:
-    """컬럼 사전이 두 Migration의 모든 Table과 Column을 정확히 문서화하는지 검증한다."""
+    """컬럼 사전이 모든 Migration의 Table과 Column을 정확히 문서화하는지 검증한다."""
     migration = _read(MIGRATION_PATH)
-    batch_migration = _read(BATCH_MIGRATION_PATH)
     expected: dict[str, set[str]] = {}
 
     for match in re.finditer(
@@ -126,15 +128,17 @@ def test_column_dictionary_documents_every_migration_column() -> None:
             re.findall(r"^    ([a-z_]+)\s+[a-z]", table_body, re.MULTILINE)
         )
 
-    for match in re.finditer(
-        r"ALTER TABLE agent\.([a-z_]+)(.*?);",
-        batch_migration,
-        re.DOTALL,
-    ):
-        table_name, alter_body = match.groups()
-        expected.setdefault(table_name, set()).update(
-            re.findall(r"ADD COLUMN ([a-z_]+)", alter_body)
-        )
+    for migration_path in (BATCH_MIGRATION_PATH, WEB_CLIPPING_MIGRATION_PATH):
+        additional_migration = _read(migration_path)
+        for match in re.finditer(
+            r"ALTER TABLE agent\.([a-z_]+)(.*?);",
+            additional_migration,
+            re.DOTALL,
+        ):
+            table_name, alter_body = match.groups()
+            expected.setdefault(table_name, set()).update(
+                re.findall(r"ADD COLUMN ([a-z_]+)", alter_body)
+            )
 
     dictionary = _read(COLUMN_DICTIONARY_PATH)
     sections = list(
@@ -165,6 +169,7 @@ def test_compose_requires_secret_and_initializes_schema() -> None:
     assert "127.0.0.1:${AGENT_DB_PORT:-5432}:5432" in compose
     assert "/docker-entrypoint-initdb.d/0001_initial.sql:ro" in compose
     assert "/docker-entrypoint-initdb.d/0002_publish_snapshot_batches.sql:ro" in compose
+    assert "/docker-entrypoint-initdb.d/0003_web_clipping_markdown.sql:ro" in compose
     assert "/docker-entrypoint-initdb.d/9001_dev_publish_snapshots.sql:ro" in compose
     assert "/docker-entrypoint-initdb.d/9002_dev_publish_snapshot_batch.sql:ro" in compose
     assert "pg_isready" in compose
@@ -205,6 +210,25 @@ def test_batch_migration_defines_claim_lease_and_retry_contract() -> None:
     assert "uq_publish_attempts_snapshot_claim" in migration
     assert "ix_publish_snapshots_claimable" in migration
     assert "VALUES (2, 'Publish Snapshot batch claim and lease')" in migration
+
+
+def test_web_clipping_migration_defines_markdown_frontmatter_contract() -> None:
+    """세 번째 Migration이 웹 클리핑 Markdown과 Frontmatter 필드를 추가하는지 검증한다."""
+    migration = _read(WEB_CLIPPING_MIGRATION_PATH)
+
+    assert "ALTER TABLE agent.wiki_document_versions" in migration
+    assert "ADD COLUMN author text" in migration
+    assert "ADD COLUMN published_at timestamptz" in migration
+    assert "ADD COLUMN clipped_on date" in migration
+    assert "ADD COLUMN description text" in migration
+    assert "ADD COLUMN tags text[] NOT NULL DEFAULT '{}'" in migration
+    assert "ADD COLUMN content_format text" in migration
+    assert "WHEN normalized_content IS NOT NULL THEN 'markdown'" in migration
+    assert "ELSE 'external_object'" in migration
+    assert "CHECK (content_format IN ('markdown', 'plain_text', 'external_object'))" in migration
+    assert "ix_wiki_document_versions_tags" in migration
+    assert "ix_wiki_document_versions_clipped" in migration
+    assert "VALUES (3, 'Store web clipping Markdown fields')" in migration
 
 
 def test_batch_seed_provides_three_resettable_mock_snapshots() -> None:

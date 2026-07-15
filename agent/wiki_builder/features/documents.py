@@ -6,6 +6,7 @@ WBA-003, WBA-004, WBA-005 기능의 실제 구현 위치를 제공한다.
 from shared.contracts import FeatureRequest, FeatureResult
 
 
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def wba_003(request: FeatureRequest) -> FeatureResult:
     """[WBA-003] Wiki 문서 정규화.
 

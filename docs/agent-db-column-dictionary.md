@@ -1,7 +1,7 @@
 # Agent DB 컬럼 사전
 
-> 기준: 2026-07-14, commit 8940cb1. 38개 테이블, 446개 컬럼을
-> 0001_initial.sql과 0002_publish_snapshot_batches.sql 기준으로 정리했습니다.
+> 기준: 2026-07-15. 38개 테이블, 452개 컬럼을 0001_initial.sql,
+> 0002_publish_snapshot_batches.sql, 0003_web_clipping_markdown.sql 기준으로 정리했습니다.
 
 이 문서는 Agent DB의 모든 테이블과 컬럼을 물리 Schema 수준에서 설명합니다.
 테이블의 영역·성격·관계·RLS·런타임 연결 상태는
@@ -225,13 +225,20 @@ Personal Wiki와 Global Source 문서의 안정적인 식별자, Scope와 최신
 | normalized_content | text | 선택 | 정규화된 본문, Markdown 또는 일반 Text 저장 위치 |
 | content_hash | text | 필수 | 이 Version 본문의 64자 무결성 Hash |
 | object_uri | text | 선택 | DB 밖에 저장한 HTML, PDF, 원본 Payload의 URI |
-| source_metadata | jsonb | 자동, 빈 Object | Provider 원본 ID, 형식, 작성자·발행 시각 등 Version Metadata |
+| source_metadata | jsonb | 자동, 빈 Object | Provider 원본 ID 등 정식 컬럼으로 분리하지 않은 Version Metadata |
 | created_by_job_id | uuid | 선택, FK | 이 Version을 생성한 agent_jobs 식별자 |
 | created_at | timestamptz | 자동 | Version 생성 시각 |
+| author | text | 선택 | 웹 클리핑 Frontmatter의 author |
+| published_at | timestamptz | 선택 | 원문이 외부 Source에 게시된 시각 |
+| clipped_on | date | 선택 | 웹 클리핑 Frontmatter의 created 날짜 |
+| description | text | 선택 | 웹 클리핑 Frontmatter의 description 원문 |
+| tags | text[] | 자동, 빈 Array | 웹 클리핑 Frontmatter의 tags |
+| content_format | text | 자동, markdown | markdown, plain_text, external_object |
 
-normalized_content와 object_uri 중 적어도 하나는 반드시 존재합니다. Markdown을
-사용할 경우 현재 DDL은 형식을 강제하지 않으므로 source_metadata의
-content_format 같은 애플리케이션 규약이 필요합니다.
+normalized_content와 object_uri 중 적어도 하나는 반드시 존재합니다. 웹 클리핑의
+source는 부모 wiki_documents.canonical_url에, title과 Markdown 본문은 각각 title과
+normalized_content에 저장합니다. 0003 이전의 정규화 본문은 markdown, 외부 Object만
+있는 Version은 external_object로 Backfill됩니다.
 
 ### wiki_chunks
 
@@ -778,4 +785,5 @@ Agent DB에 적용된 Migration Version을 기록합니다.
 - [Agent DB 상세 설계](agent-db-design.md): 설계 원칙, ERD, RLS와 운영 정책
 - [초기 Migration](../database/migrations/0001_initial.sql): 기본 Schema 정의
 - [발행 Batch Migration](../database/migrations/0002_publish_snapshot_batches.sql): Claim과 Lease 확장
+- [웹 클리핑 Markdown Migration](../database/migrations/0003_web_clipping_markdown.sql): Frontmatter와 본문 형식 확장
 - [Database 실행 안내](../database/README.md): Local DB 기동과 Migration 적용 방법

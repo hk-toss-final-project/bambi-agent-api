@@ -472,7 +472,7 @@
 | ID | 기능 | 설명 |
 |---|---|---|
 | WORKER-001 | Global Source Collector Worker | 외부 데이터를 수집하고 Global Source Pool에 저장한다. |
-| WORKER-002 | Personal Wiki Builder Worker | 사용자 선택 데이터를 개인 Wiki로 구성한다. |
+| WORKER-002 | Personal Wiki Builder Worker | 저장된 클리핑 Markdown을 Job Batch로 처리해 개인 Wiki Chunk·Embedding·관심사를 갱신한다. |
 | WORKER-003 | Bambi Generation Worker | 개인화 콘텐츠를 생성한다. |
 | WORKER-004 | Content Quality Worker | 생성 콘텐츠의 품질과 안전성을 평가한다. |
 | WORKER-005 | Summary Worker | 요약 작업을 수행한다. |
@@ -564,7 +564,7 @@
 | ID | 기능 | 설명 |
 |---|---|---|
 | SVC-001 | 사용자 컨텍스트 전달 | 서비스 사용자 설정을 Agent 컨텍스트로 전달한다. |
-| SVC-002 | 웹 클리핑 처리 요청 | 클리핑 데이터를 개인 Wiki 처리 작업으로 전달한다. |
+| SVC-002 | 웹 클리핑 처리 요청 | 클리핑 Markdown과 Frontmatter를 영속 저장하고 개인 Wiki 처리 Job을 등록한다. |
 | SVC-003 | URL 처리 요청 | 입력된 URL을 개인 Wiki 처리 작업으로 전달한다. |
 | SVC-004 | 위키마킹 처리 요청 | 사용자가 선택한 콘텐츠의 Wiki 편입을 요청한다. |
 | SVC-005 | 콘텐츠 상호작용 전달 | 콘텐츠와의 대화와 수정 결과를 전달한다. |
@@ -716,7 +716,7 @@
 |---|---|---|
 | DB-001 | 사용자 컨텍스트 저장 | Agent가 사용할 최소 사용자 컨텍스트를 저장한다. |
 | DB-002 | Wiki Source Event 저장 | 개인 Wiki 반영의 근거가 되는 이벤트를 저장한다. |
-| DB-003 | 개인 Wiki 문서 저장 | 사용자별 Wiki 문서와 버전을 저장한다. |
+| DB-003 | 개인 Wiki 문서 저장 | 사용자별 Wiki 문서 Version에 클리핑 Markdown 원문과 Frontmatter를 저장한다. |
 | DB-004 | 개인 Wiki Chunk 저장 | 개인 Wiki 검색용 Chunk를 저장한다. |
 | DB-005 | 개인 Wiki Embedding 저장 | 개인 Wiki의 Vector 데이터를 저장한다. |
 | DB-006 | 개인 Wiki Version 저장 | 개인 Wiki 재구성 버전을 저장한다. |
@@ -749,7 +749,7 @@
 
 | ID | 기능 | 설명 |
 |---|---|---|
-| OBJ-001 | 원본 HTML 저장 | 수집 또는 클리핑한 HTML 원문을 저장한다. |
+| OBJ-001 | 원본 Source 저장 | 웹 클리핑은 Markdown 원문을 DB에 보존하고, 수집 HTML 등 대용량 원본만 Object Storage에 저장한다. |
 | OBJ-002 | PDF 저장 | 논문과 공시 등의 PDF 원문을 저장한다. |
 | OBJ-003 | 외부 API 원본 응답 저장 | 대용량 외부 API 응답을 저장한다. |
 | OBJ-004 | 대용량 본문 저장 | DB에 적합하지 않은 긴 텍스트를 저장한다. |
@@ -850,13 +850,13 @@
 | MVP-001 | FastAPI 기본 진입점 | Agent API 실행과 기본 시스템 기능을 구현한다. |
 | MVP-002 | Internal API 인증 | Service와 Agent 간 내부 인증을 구현한다. |
 | MVP-003 | 사용자 컨텍스트 관리 | Agent용 최소 사용자 컨텍스트를 관리한다. |
-| MVP-004 | 웹 클리핑 처리 | 사용자 웹 클리핑을 개인 Wiki에 반영한다. |
+| MVP-004 | 웹 클리핑 처리 | 사용자 웹 클리핑을 수신해 Markdown 원문을 영속 저장하고 Wiki Build Job을 등록한다. |
 | MVP-005 | URL 입력 처리 | 사용자가 입력한 URL을 개인 Wiki에 반영한다. |
-| MVP-006 | 개인 Wiki 문서 구성 | 사용자 선택 데이터로 Wiki 문서를 생성한다. |
-| MVP-007 | 개인 Wiki Chunk 및 Embedding | 개인 Wiki 검색 기반을 구현한다. |
+| MVP-006 | 개인 Wiki 문서 구성 | 클리핑 Frontmatter와 Markdown을 Version이 있는 Wiki 문서로 저장한다. |
+| MVP-007 | 개인 Wiki Chunk 및 Embedding | Worker가 저장된 Markdown의 Chunk와 Embedding을 생성·영속 저장한다. |
 | MVP-008 | 개인 Wiki 검색 | Keyword, Vector, Hybrid 검색을 구현한다. |
 | MVP-009 | 관심사 기본 분류 | 개인 Wiki에서 사용자 관심사를 추출한다. |
-| MVP-010 | Personal Wiki Builder | 개인 Wiki 증분 Build를 구현한다. |
+| MVP-010 | Personal Wiki Builder | Lease 기반 Worker가 클리핑 Job을 증분 Build하고 상태·재시도를 관리한다. |
 | MVP-011 | RSS 수집 | Global Source RSS 수집을 구현한다. |
 | MVP-012 | 직접 URL 수집 | 외부 URL Source 수집을 구현한다. |
 | MVP-013 | Global Source Pool | 외부 수집 문서 저장과 검색 기반을 구현한다. |
@@ -865,7 +865,7 @@
 | MVP-016 | 콘텐츠 품질 평가 | 기본 품질 기준과 재생성을 구현한다. |
 | MVP-017 | Content Ready 이벤트 | 생성 결과 완료 이벤트를 구현한다. |
 | MVP-018 | Service Worker 발행 연동 | Publish Snapshot Batch Claim, 부분 성공 ACK와 service-db 반영 흐름을 구현한다. |
-| MVP-019 | Agent Job 관리 | Job Batch Claim, Lease, 상태와 재시도를 구현한다. |
+| MVP-019 | Agent Job 관리 | 클리핑·생성 Job의 PostgreSQL 저장, Batch Claim, Lease, 상태와 재시도를 구현한다. |
 | MVP-020 | Retry 및 Dead Letter | 실패 작업 처리 기반을 구현한다. |
 | MVP-021 | Prompt 관리 | Prompt Template과 버전 관리를 구현한다. |
 | MVP-022 | Model Config 관리 | 작업별 모델 설정 관리를 구현한다. |

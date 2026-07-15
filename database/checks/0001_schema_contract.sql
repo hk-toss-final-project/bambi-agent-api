@@ -36,7 +36,16 @@ DECLARE
         'audit_logs',
         'publish_snapshots'
     ];
-    table_name text;
+    required_web_clipping_columns text[] := ARRAY[
+        'author',
+        'published_at',
+        'clipped_on',
+        'description',
+        'tags',
+        'content_format'
+    ];
+    required_table_name text;
+    required_column_name text;
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') THEN
         RAISE EXCEPTION 'vector extension is missing';
@@ -46,9 +55,21 @@ BEGIN
         RAISE EXCEPTION 'pg_trgm extension is missing';
     END IF;
 
-    FOREACH table_name IN ARRAY required_tables LOOP
-        IF to_regclass('agent.' || table_name) IS NULL THEN
-            RAISE EXCEPTION 'required table agent.% is missing', table_name;
+    FOREACH required_table_name IN ARRAY required_tables LOOP
+        IF to_regclass('agent.' || required_table_name) IS NULL THEN
+            RAISE EXCEPTION 'required table agent.% is missing', required_table_name;
+        END IF;
+    END LOOP;
+
+    FOREACH required_column_name IN ARRAY required_web_clipping_columns LOOP
+        IF NOT EXISTS (
+            SELECT 1
+            FROM information_schema.columns AS schema_column
+            WHERE schema_column.table_schema = 'agent'
+              AND schema_column.table_name = 'wiki_document_versions'
+              AND schema_column.column_name = required_column_name
+        ) THEN
+            RAISE EXCEPTION 'required web clipping column agent.wiki_document_versions.% is missing', required_column_name;
         END IF;
     END LOOP;
 

@@ -24,12 +24,13 @@ INSERT INTO agent.wiki_documents (
     namespace_key,
     user_id,
     source_type,
+    canonical_url,
     content_hash
 )
 VALUES
-    ('global', 'global', NULL, 'news_api', repeat('a', 64)),
-    ('personal', 'user/rls-user-a', 'rls-user-a', 'url', repeat('b', 64)),
-    ('personal', 'user/rls-user-b', 'rls-user-b', 'url', repeat('c', 64));
+    ('global', 'global', NULL, 'news_api', 'https://rls-contract.invalid/global', repeat('a', 64)),
+    ('personal', 'user/rls-user-a', 'rls-user-a', 'url', 'https://rls-contract.invalid/user-a', repeat('b', 64)),
+    ('personal', 'user/rls-user-b', 'rls-user-b', 'url', 'https://rls-contract.invalid/user-b', repeat('c', 64));
 
 SET ROLE agent_rls_contract_role;
 SET LOCAL app.user_id = 'rls-user-a';
@@ -40,7 +41,8 @@ DECLARE
     visible_rows integer;
 BEGIN
     SELECT count(*) INTO visible_rows
-    FROM agent.user_context_snapshots;
+    FROM agent.user_context_snapshots
+    WHERE user_id IN ('rls-user-a', 'rls-user-b');
 
     IF visible_rows <> 1 THEN
         RAISE EXCEPTION 'user scope expected 1 row but saw %', visible_rows;
@@ -54,14 +56,16 @@ DECLARE
     deleted_rows integer;
 BEGIN
     SELECT count(*) INTO visible_rows
-    FROM agent.wiki_documents;
+    FROM agent.wiki_documents
+    WHERE canonical_url LIKE 'https://rls-contract.invalid/%';
 
     IF visible_rows <> 2 THEN
         RAISE EXCEPTION 'user scope expected global and own Wiki rows but saw %', visible_rows;
     END IF;
 
     DELETE FROM agent.wiki_documents
-    WHERE knowledge_scope = 'global';
+    WHERE knowledge_scope = 'global'
+      AND canonical_url = 'https://rls-contract.invalid/global';
     GET DIAGNOSTICS deleted_rows = ROW_COUNT;
 
     IF deleted_rows <> 0 THEN
@@ -77,7 +81,8 @@ DECLARE
     visible_rows integer;
 BEGIN
     SELECT count(*) INTO visible_rows
-    FROM agent.user_context_snapshots;
+    FROM agent.user_context_snapshots
+    WHERE user_id IN ('rls-user-a', 'rls-user-b');
 
     IF visible_rows <> 2 THEN
         RAISE EXCEPTION 'system scope expected 2 rows but saw %', visible_rows;

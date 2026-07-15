@@ -6,6 +6,7 @@ DB-002, DB-003, DB-004, DB-005, DB-006, DB-007 기능의 실제 구현 위치를
 from shared.contracts import FeatureRequest, FeatureResult
 
 
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def db_002(request: FeatureRequest) -> FeatureResult:
     """[DB-002] Wiki Source Event 저장.
 
@@ -14,6 +15,7 @@ async def db_002(request: FeatureRequest) -> FeatureResult:
     raise NotImplementedError("[DB-002] 기능 구현이 필요합니다.")
 
 
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def db_003(request: FeatureRequest) -> FeatureResult:
     """[DB-003] 개인 Wiki 문서 저장.
 
@@ -22,6 +24,7 @@ async def db_003(request: FeatureRequest) -> FeatureResult:
     raise NotImplementedError("[DB-003] 기능 구현이 필요합니다.")
 
 
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def db_004(request: FeatureRequest) -> FeatureResult:
     """[DB-004] 개인 Wiki Chunk 저장.
 
@@ -30,6 +33,7 @@ async def db_004(request: FeatureRequest) -> FeatureResult:
     raise NotImplementedError("[DB-004] 기능 구현이 필요합니다.")
 
 
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def db_005(request: FeatureRequest) -> FeatureResult:
     """[DB-005] 개인 Wiki Embedding 저장.
 

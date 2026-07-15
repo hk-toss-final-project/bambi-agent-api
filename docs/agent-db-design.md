@@ -130,6 +130,23 @@ erDiagram
 - 자동 수집 Global 문서는 사용자의 선택 없이 Personal Namespace로 이동하지 않습니다.
 - Personal 문서 삭제 시 Version → Chunk → Embedding 순서가 Foreign Key Cascade로 정리됩니다.
 
+### 웹 클리핑 Markdown
+
+웹 클리퍼가 전달하는 YAML Frontmatter와 Markdown 본문은 Personal Wiki 문서 Version으로 보존합니다. HTML 원문을 다시 저장하지 않으며, LLM 요약·Chunk·Embedding 생성 후에도 Markdown은 사용자가 저장한 기준 원문으로 유지합니다.
+
+| 클리퍼 필드 | 저장 위치 |
+|---|---|
+| `title` | `wiki_document_versions.title` |
+| `source` | `wiki_documents.canonical_url` |
+| `author` | `wiki_document_versions.author` |
+| `published` | `wiki_document_versions.published_at` |
+| `created` | `wiki_document_versions.clipped_on` |
+| `description` | `wiki_document_versions.description` |
+| `tags` | `wiki_document_versions.tags` |
+| Markdown 본문 | `wiki_document_versions.normalized_content` |
+
+`wiki_source_events`는 클리핑 요청의 멱등성, 처리 상태와 최소 수신 Metadata만 보관합니다. `0003_web_clipping_markdown.sql`은 기존 문서 Version에 Frontmatter 컬럼과 `content_format`을 추가하며, 기존 정규화 본문은 `markdown`, 외부 Object만 있는 Version은 `external_object`로 Backfill합니다.
+
 ### Hybrid Search와 Vector
 
 - 의미 검색: `wiki_embeddings.embedding vector(1536)`과 Cosine HNSW Index

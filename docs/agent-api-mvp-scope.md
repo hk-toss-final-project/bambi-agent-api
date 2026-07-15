@@ -5,6 +5,8 @@
 ## MVP 목표
 
 - 사용자가 선택한 데이터로 개인 LLM Wiki를 구성한다.
+- 웹 클리퍼가 전달한 Frontmatter와 Markdown 원문을 PostgreSQL에 영구 저장한다.
+- Personal Wiki Builder Worker가 저장된 클리핑을 Chunk·Embedding·관심사 갱신까지 비동기로 처리한다.
 - 개인 Wiki 데이터를 기반으로 사용자 관심사를 분류한다.
 - Naver API, NewsAPI, GDELT 데이터를 정기적으로 수집한다.
 - 개인 Wiki와 최신 수집 데이터를 결합해 밤비 콘텐츠를 생성한다.
@@ -16,12 +18,29 @@
 | ID | 기능 | 설명 |
 |---|---|---|
 | SVC-001 | 사용자 컨텍스트 전달 | 서비스 사용자 설정을 Agent 컨텍스트로 전달한다. |
-| SVC-002 | 웹 클리핑 처리 요청 | 클리핑 데이터를 개인 Wiki 처리 작업으로 전달한다. |
+| SVC-002 | 웹 클리핑 처리 요청 | 클리핑 Markdown을 영속 저장하고 Personal Wiki Builder Job을 등록한다. |
 | SVC-003 | URL 처리 요청 | 입력된 URL을 개인 Wiki 처리 작업으로 전달한다. |
 | SVC-004 | 위키마킹 처리 요청 | 사용자가 선택한 콘텐츠의 Wiki 편입을 요청한다. |
 | SVC-008 | 콘텐츠 생성 요청 | 밤비의 콘텐츠 생성을 요청한다. |
 | SVC-013 | Agent Job 상태 조회 | 비동기 작업 상태를 조회한다. |
 | SVC-014 | Agent 결과 조회 | 생성 및 처리 결과를 Agent API에서 조회한다. |
+
+### 웹 클리핑 수신·영속 저장
+
+| ID | 기능 | 설명 |
+|---|---|---|
+| WSE-001 | 웹 클리핑 이벤트 수신 | title, source, author, published, created, description, tags와 Markdown 본문을 수신한다. |
+| WSE-011 | 이벤트 중복 처리 방지 | 사용자와 source_event_id 조합으로 동일 클리핑의 중복 저장·Job 생성을 막는다. |
+| WSE-013 | 이벤트 처리 상태 관리 | 클리핑의 received, processing, completed, failed 상태를 Worker 처리와 동기화한다. |
+| PWIKI-006 | 개인 Wiki 문서 버전 관리 | 같은 URL의 내용이 바뀌면 기존 문서를 덮어쓰지 않고 Version을 추가한다. |
+| PWIKI-007 | Wiki 문서 출처 추적 | Source Event, 원본 URL과 문서 Version의 관계를 보존한다. |
+| PWIKI-011 | Wiki 문서 정규화 | Frontmatter와 Markdown 본문을 공통 Wiki 문서 구조로 변환한다. |
+| DB-002 | Wiki Source Event 저장 | 클리핑 요청과 처리 상태를 wiki_source_events에 영속 저장한다. |
+| DB-003 | 개인 Wiki 문서 저장 | Markdown 원문과 Frontmatter를 wiki_documents와 wiki_document_versions에 영속 저장한다. |
+
+클리핑 API는 DB Transaction이 Commit된 뒤에만 202 Accepted를 반환합니다. Agent API가
+Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 저장한 상태로 성공을
+반환하는 구현은 MVP 완료로 보지 않습니다.
 
 ## 2. 사용자 개인 LLM Wiki
 
@@ -32,6 +51,7 @@
 | PWIKI-005 | 개인 Wiki 문서 삭제 | 사용자가 제거한 데이터를 Wiki 검색 대상에서 제외한다. |
 | PWIKI-008 | Wiki 문서 중복 제거 | 동일하거나 유사한 개인 Wiki 문서를 중복 제거한다. |
 | PWE-001 | 개인 Wiki 문서 Chunking | Wiki 문서를 의미 단위 Chunk로 분할한다. |
+| PWE-002 | Chunk 저장 | 생성된 Chunk를 문서 Version과 연결해 PostgreSQL에 저장한다. |
 | PWE-004 | Embedding 생성 | 개인 Wiki Chunk의 Vector를 생성한다. |
 | PWE-005 | Embedding 저장 | 사용자별 Vector 검색 저장소에 Embedding을 저장한다. |
 | PRAG-003 | Hybrid Search | Keyword와 Vector 검색 결과를 결합한다. |
@@ -87,6 +107,36 @@
 | SW-004 | Publish Snapshot 조회 | Agent API에서 단건 Snapshot을 조회하거나 준비된 Snapshot Batch를 Claim한다. |
 | SW-007 | service-db 콘텐츠 Upsert | Batch의 각 콘텐츠 발행본을 멱등하게 저장하거나 갱신한다. |
 | SW-009 | 발행 완료 ACK | 단건 또는 Batch의 항목별 service-db 반영 결과를 Agent API에 알린다. |
+
+### Personal Wiki Builder Worker 구현 범위
+
+| ID | 기능 | 설명 |
+|---|---|---|
+| WBA-001 | Incremental Wiki Build | 새로 저장된 클리핑 문서 Version만 증분 처리한다. |
+| WBA-003 | Wiki 문서 정규화 | 저장된 Markdown과 Metadata를 Chunking 가능한 공통 구조로 정리한다. |
+| JOB-001 | Agent Job 생성 | 클리핑 저장 Transaction에서 Personal Wiki Build Job을 함께 생성한다. |
+| JOB-002 | Agent Job 조회 | API와 Worker가 클리핑 Job 상태와 진행률을 조회한다. |
+| JOB-006 | Agent Job 진행률 관리 | 정규화, Chunking, Embedding, 관심사 갱신 단계를 기록한다. |
+| JOB-007 | Agent Job 결과 연결 | 완료 Job에 document_id와 document_version_id를 연결한다. |
+| JOB-010 | Agent Job Idempotency | 동일 클리핑 요청이 Worker Job을 중복 생성하지 않도록 한다. |
+| WC-001 | Queue Job Consume | Worker가 실행 가능한 Personal Wiki Job Batch를 가져온다. |
+| WC-002 | Job Claim | FOR UPDATE SKIP LOCKED와 Lease로 Job Batch를 점유한다. |
+| WC-006 | Retry 정책 | 재시도 가능한 Chunking·Embedding 실패를 Backoff 후 다시 처리한다. |
+| WC-009 | Idempotency 처리 | 같은 document_version_id를 다시 처리해도 파생 Row가 중복되지 않게 한다. |
+| WC-013 | Concurrency 제어 | Claim 크기와 Embedding 동시 실행 수를 별도로 제한한다. |
+| DB-004 | 개인 Wiki Chunk 저장 | wiki_chunks에 문서 Version별 Chunk를 영속 저장한다. |
+| DB-005 | 개인 Wiki Embedding 저장 | wiki_embeddings에 Chunk별 Vector를 영속 저장한다. |
+| DB-026 | Agent Job 저장 | agent_jobs와 agent_job_attempts에 Claim, Lease, 상태와 시도 이력을 저장한다. |
+
+### 웹 클리핑 Worker 완료 계약
+
+- Extension은 service-api의 사용자 인증 경계를 거치고, service-api가 Agent API의 내부 클리핑 경로를 호출합니다.
+- Agent API는 source_event_id 멱등성을 확인한 뒤 Source Event, Wiki 문서·Version, Personal Wiki Build Job을 한 Transaction으로 저장합니다.
+- Markdown 원문 저장은 LLM 호출 없이 수행하며 title과 본문은 각각 wiki_document_versions.title, normalized_content에 보존합니다.
+- Worker는 Job Batch를 Lease와 함께 Claim하고 document_version_id를 기준으로 정규화, Chunk 저장, Embedding 생성·저장과 관심사 재계산을 수행합니다.
+- Worker 재시도 중에도 Markdown 원문과 Frontmatter는 삭제하지 않습니다. 파생 Chunk와 Embedding만 멱등하게 다시 생성할 수 있습니다.
+- 성공 시 Source Event와 Job을 completed로 바꾸고 document_id, document_version_id, chunk_count를 결과에 기록합니다.
+- 최종 실패 시 Source Event와 Job의 오류를 기록하되 저장된 Markdown 원문은 사용자가 삭제할 때까지 유지합니다.
 
 ### MVP Batch 처리 계약
 

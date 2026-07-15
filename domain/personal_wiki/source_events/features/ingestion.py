@@ -6,6 +6,7 @@ WSE-001, WSE-002, WSE-003, WSE-004, WSE-005, WSE-006, WSE-007, WSE-008 기능의
 from shared.contracts import FeatureRequest, FeatureResult
 
 
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def wse_001(request: FeatureRequest) -> FeatureResult:
     """[WSE-001] 웹 클리핑 이벤트 수신.
 

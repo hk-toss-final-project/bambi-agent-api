@@ -1,6 +1,6 @@
 # Agent DB 로컬 실행
 
-`agent-db`는 PostgreSQL 17과 pgvector를 사용합니다. Docker Compose는 최초 데이터 볼륨 생성 시 `migrations/0001_initial.sql`과 `migrations/0002_publish_snapshot_batches.sql`을 순서대로 적용하고, Service Worker API 연동용 개발 Seed 두 개를 이어서 적용합니다.
+`agent-db`는 PostgreSQL 17과 pgvector를 사용합니다. Docker Compose는 최초 데이터 볼륨 생성 시 `migrations/0001_initial.sql`, `migrations/0002_publish_snapshot_batches.sql`, `migrations/0003_web_clipping_markdown.sql`을 순서대로 적용하고, Service Worker API 연동용 개발 Seed 두 개를 이어서 적용합니다.
 
 ## 시작
 
@@ -81,11 +81,17 @@ Scheduler나 시스템 관리 작업은 별도 권한을 가진 Worker 계정에
 ## 초기화
 
 Migration과 개발 Seed는 Docker Entry Point에서 빈 Volume에만 자동 실행됩니다. 기존
-볼륨에는 `0002` Migration을 먼저 한 번 적용합니다.
+볼륨에는 아직 적용하지 않은 Migration을 Version 순서대로 한 번씩 적용합니다.
 
 ```bash
 docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/migrations/0002_publish_snapshot_batches.sql
+docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/migrations/0003_web_clipping_markdown.sql
 ```
+
+`0003`은 웹 클리퍼의 Markdown Frontmatter를 `wiki_document_versions`의 정식
+컬럼으로 저장합니다. `title`과 Markdown 본문은 기존 `title`,
+`normalized_content`를 사용하고, `source` URL은 부모 `wiki_documents.canonical_url`에
+저장합니다.
 
 목업 데이터를 다시 적용할 때는 다음 두 Seed를 순서대로 실행합니다. 두 번째 Seed는
 기존 발행 시도 이력을 지우고 세 Snapshot을 `ready` 상태로 되돌리므로 로컬 연동
