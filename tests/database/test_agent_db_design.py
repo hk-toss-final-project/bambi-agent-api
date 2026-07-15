@@ -42,6 +42,8 @@ CLIPPING_SEED_GENERATOR_PATH = (
     PROJECT_ROOT / "scripts" / "generate_web_clipping_seed.py"
 )
 CLIPPING_DUMMY_PATH = PROJECT_ROOT / "dummy" / "clippings"
+MIGRATION_RUNNER_PATH = PROJECT_ROOT / "scripts" / "run_agent_db_migrations.sh"
+DATABASE_INITIALIZER_PATH = PROJECT_ROOT / "scripts" / "initialize_agent_db.sh"
 
 
 def _read(path: Path) -> str:
@@ -186,24 +188,56 @@ def test_column_dictionary_documents_every_migration_column() -> None:
     assert documented == expected
 
 
-def test_compose_requires_secret_and_initializes_schema() -> None:
-    """로컬 Compose가 비밀번호를 요구하고 Migration과 Health Check를 연결하는지 검증한다."""
+def test_compose_requires_secret_and_runs_pending_migrations() -> None:
+    """Compose가 DB 시작마다 미적용 Migration을 실행하고 완료 여부를 검사하는지 검증한다."""
     compose = _read(COMPOSE_PATH)
 
     assert "pgvector/pgvector:0.8.1-pg17-bookworm" in compose
     assert "AGENT_DB_PASSWORD:?" in compose
     assert "127.0.0.1:${AGENT_DB_PORT:-5432}:5432" in compose
-    assert "/docker-entrypoint-initdb.d/0001_initial.sql:ro" in compose
-    assert "/docker-entrypoint-initdb.d/0002_publish_snapshot_batches.sql:ro" in compose
-    assert "/docker-entrypoint-initdb.d/0003_web_clipping_markdown.sql:ro" in compose
+    assert "./database/migrations:/opt/bambi/migrations:ro" in compose
+    assert "./database/seeds:/opt/bambi/seeds:ro" in compose
     assert (
-        "/docker-entrypoint-initdb.d/0004_separate_user_sources_from_llm_wiki.sql:ro"
-        in compose
+        "./scripts/run_agent_db_migrations.sh:"
+        "/usr/local/bin/run-agent-db-migrations:ro" in compose
     )
-    assert "/docker-entrypoint-initdb.d/9001_dev_publish_snapshots.sql:ro" in compose
-    assert "/docker-entrypoint-initdb.d/9002_dev_publish_snapshot_batch.sql:ro" in compose
-    assert "/docker-entrypoint-initdb.d/9003_dev_web_clippings.sql:ro" in compose
+    assert (
+        "./scripts/initialize_agent_db.sh:"
+        "/docker-entrypoint-initdb.d/0000_initialize_agent_db.sh:ro" in compose
+    )
+    assert "post_start:" in compose
+    assert "command: /bin/sh /usr/local/bin/run-agent-db-migrations" in compose
+    assert "run-agent-db-migrations --check" in compose
     assert "pg_isready" in compose
+
+
+def test_migration_runner_applies_only_pending_versioned_files() -> None:
+    """Runner가 파일 순서, 적용 이력과 동시 실행 잠금을 강제하는지 검증한다."""
+    runner = _read(MIGRATION_RUNNER_PATH)
+
+    assert "[0-9][0-9][0-9][0-9]_*.sql" in runner
+    assert "pg_advisory_lock" in runner
+    assert "pg_advisory_unlock" in runner
+    assert "agent.schema_migrations" in runner
+    assert "max(version)" in runner
+    assert "AS should_apply" in runner
+    assert r"\\gset" in runner
+    assert r"\\ir %s" in runner
+    assert "-v ON_ERROR_STOP=1" in runner
+    assert 'MODE="${1:-}"' in runner
+    assert 'if [ "$MODE" = "--check" ]' in runner
+
+
+def test_database_initializer_runs_migrations_before_dev_seeds() -> None:
+    """빈 DB 초기화가 Schema를 먼저 만든 뒤 선택적으로 개발 Seed를 적용하는지 검증한다."""
+    initializer = _read(DATABASE_INITIALIZER_PATH)
+
+    migration_position = initializer.index("/usr/local/bin/run-agent-db-migrations")
+    seed_position = initializer.index("/opt/bambi/seeds/")
+
+    assert migration_position < seed_position
+    assert "AGENT_DB_APPLY_DEV_SEEDS:-true" in initializer
+    assert "psql -X -v ON_ERROR_STOP=1" in initializer
 
 
 def test_dev_seed_builds_service_worker_snapshot_dependency_chain() -> None:

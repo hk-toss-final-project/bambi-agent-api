@@ -224,7 +224,7 @@ MVP의 실시간·대량 발행 경로는 Agent API가 agent-db를 직접 노출
 
 루트 `compose.yaml`은 `pgvector/pgvector:0.8.1-pg17-bookworm`을 `127.0.0.1`에만 노출합니다. 비밀번호는 파일에 기본값으로 넣지 않으며 `.env`의 `AGENT_DB_PASSWORD`가 없으면 Compose가 시작되지 않습니다.
 
-초기화와 검증 절차는 `database/README.md`를 따릅니다. Docker Entry Point Migration은 빈 Volume에서만 자동 실행되므로 기존 Schema 변경은 반드시 다음 순번 Migration으로 추가해야 합니다.
+초기화와 검증 절차는 `database/README.md`를 따릅니다. 빈 Volume은 Docker Entry Point가 Migration과 개발 Seed를 적용하고, 기존 Volume은 Compose `post_start` Runner가 `schema_migrations`에 없는 SQL을 자동 적용합니다. 적용된 파일은 수정하지 않고 Schema 변경은 반드시 다음 순번 Migration으로 추가합니다.
 
 ## 7. GCP 배포
 

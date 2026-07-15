@@ -212,8 +212,9 @@ Append-only 성격을 강제해야 합니다.
 |---|---|---|---|---|---|
 | schema_migrations | History/System | 적용된 Agent DB Migration 버전과 설명 기록 | version PK | 없음 | Migration Script |
 
-Docker Entry Point의 Migration과 Seed는 빈 Volume을 처음 만들 때만 자동 실행됩니다.
-이미 생성된 Volume은 다음 순번 Migration을 명시적으로 적용해야 합니다.
+빈 Volume은 Docker Entry Point가 Migration과 개발 Seed를 순서대로 적용합니다. 기존
+Volume은 Compose `post_start` Runner가 `schema_migrations`에 없는 다음 순번
+Migration을 자동 적용하며, 적용이 끝나야 Health Check를 통과합니다.
 
 ## 14. 핵심 관계 흐름
 

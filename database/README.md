@@ -1,6 +1,11 @@
 # Agent DB 로컬 실행
 
-`agent-db`는 PostgreSQL 17과 pgvector를 사용합니다. Docker Compose는 최초 데이터 볼륨 생성 시 `migrations/0001_initial.sql`부터 `migrations/0004_separate_user_sources_from_llm_wiki.sql`까지 순서대로 적용하고, Publish Snapshot Seed 두 개와 웹 클리핑 Seed를 이어서 적용합니다.
+`agent-db`는 PostgreSQL 17과 pgvector를 사용합니다. Docker Compose는 DB가 시작될
+때마다 `scripts/run_agent_db_migrations.sh`를 실행해 `schema_migrations`에 없는 SQL만
+파일명 순서대로 적용합니다. 빈 볼륨을 처음 만들 때는 Migration이 끝난 후 Publish
+Snapshot Seed 두 개와 웹 클리핑 Seed를 이어서 적용합니다.
+
+자동 실행에는 Lifecycle Hook을 지원하는 Docker Compose 2.30 이상이 필요합니다.
 
 ## 시작
 
@@ -8,10 +13,12 @@
 cp .env.example .env
 ```
 
-`.env`에 `AGENT_DB_PASSWORD`와 애플리케이션이 사용할 `AGENT_DATABASE_URL`을 설정합니다. 비밀번호가 포함된 `.env`는 Git에서 제외됩니다.
+`.env`에 `AGENT_DB_PASSWORD`와 애플리케이션이 사용할 `AGENT_DATABASE_URL`을 설정합니다.
+빈 로컬 DB에 개발 Seed가 필요 없으면 `AGENT_DB_APPLY_DEV_SEEDS=false`로 설정합니다.
+비밀번호가 포함된 `.env`는 Git에서 제외됩니다.
 
 ```bash
-docker compose up -d agent-db
+docker compose up -d --wait agent-db
 docker compose ps agent-db
 ```
 
@@ -75,6 +82,10 @@ docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_US
 ## 마이그레이션 원칙
 
 - 적용된 SQL 파일은 수정하지 않고 다음 순번 파일을 추가합니다.
+- Migration 파일은 `NNNN_description.sql` 형식으로 만들고 Transaction 안에서 같은
+  번호를 `agent.schema_migrations`에 기록합니다.
+- 로컬 Compose는 `post_start` Hook으로 매 기동 시 미적용 Migration을 자동 적용합니다.
+  Advisory Lock으로 동시에 실행된 Runner가 같은 Migration을 중복 적용하지 않습니다.
 - 운영 마이그레이션은 Agent API 시작 과정이 아니라 별도 Cloud Run Job에서 한 번만 실행합니다.
 - `vector`, `pg_trgm` 확장은 Cloud SQL Primary에서 `cloudsqlsuperuser` 권한으로 먼저 생성합니다.
 - 애플리케이션 계정은 테이블 소유자가 아니어야 하며 DML 최소 권한만 부여합니다.
@@ -90,15 +101,23 @@ COMMIT;
 
 Scheduler나 시스템 관리 작업은 별도 권한을 가진 Worker 계정에서 `app.access_scope = 'system'`을 사용합니다.
 
-## 초기화
+## 자동 Migration과 초기화
 
-Migration과 개발 Seed는 Docker Entry Point에서 빈 Volume에만 자동 실행됩니다. 기존
-볼륨에는 아직 적용하지 않은 Migration을 Version 순서대로 한 번씩 적용합니다.
+새 Migration 파일을 받은 다른 PC에서도 기존 볼륨을 유지한 채 아래 명령만 실행하면
+미적용 Version이 자동 반영됩니다. Migration이 실패하거나 최신 Version이 확인되지
+않으면 Health Check가 통과하지 않습니다.
 
 ```bash
-docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/migrations/0002_publish_snapshot_batches.sql
-docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/migrations/0003_web_clipping_markdown.sql
-docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/migrations/0004_separate_user_sources_from_llm_wiki.sql
+git pull
+docker compose up -d --wait agent-db
+```
+
+Runner를 수동으로 다시 확인하거나 실행할 수도 있습니다. 이미 적용된 Version은
+건너뛰므로 반복 실행해도 같은 DDL을 다시 수행하지 않습니다.
+
+```bash
+docker compose exec -T -u postgres agent-db /bin/sh /usr/local/bin/run-agent-db-migrations
+docker compose exec -T -u postgres agent-db /bin/sh /usr/local/bin/run-agent-db-migrations --check
 ```
 
 `0004`는 `0003`에서 Wiki Version으로 분류했던 개인 웹 클리핑을
@@ -125,9 +144,11 @@ uv run python scripts/generate_web_clipping_seed.py
 uv run python scripts/generate_web_clipping_seed.py --check
 ```
 
-개발 데이터를 모두 삭제해도 되는 경우에만 아래 명령으로 볼륨을 제거한 뒤 다시 시작합니다.
+개발 Seed는 빈 볼륨의 최초 초기화에만 적용됩니다. `AGENT_DB_APPLY_DEV_SEEDS=false`로
+설정하면 새 DB에서도 Seed를 건너뜁니다. 개발 데이터를 모두 삭제해도 되는 경우에만
+아래 명령으로 볼륨을 제거한 뒤 다시 시작합니다.
 
 ```bash
 docker compose down --volumes
-docker compose up -d agent-db
+docker compose up -d --wait agent-db
 ```
