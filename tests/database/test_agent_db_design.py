@@ -188,8 +188,8 @@ def test_column_dictionary_documents_every_migration_column() -> None:
     assert documented == expected
 
 
-def test_compose_requires_secret_and_runs_pending_migrations() -> None:
-    """Compose가 DB 시작마다 미적용 Migration을 실행하고 완료 여부를 검사하는지 검증한다."""
+def test_compose_requires_secret_and_runs_database_initializer() -> None:
+    """Compose가 DB 시작마다 Migration과 선택적 개발 Seed를 같은 경로로 실행한다."""
     compose = _read(COMPOSE_PATH)
 
     assert "pgvector/pgvector:0.8.1-pg17-bookworm" in compose
@@ -203,11 +203,12 @@ def test_compose_requires_secret_and_runs_pending_migrations() -> None:
     )
     assert (
         "./scripts/initialize_agent_db.sh:"
-        "/docker-entrypoint-initdb.d/0000_initialize_agent_db.sh:ro" in compose
+        "/usr/local/bin/initialize-agent-db:ro" in compose
     )
     assert "post_start:" in compose
-    assert "command: /bin/sh /usr/local/bin/run-agent-db-migrations" in compose
-    assert "run-agent-db-migrations --check" in compose
+    assert "command: /bin/sh /usr/local/bin/initialize-agent-db" in compose
+    assert "/docker-entrypoint-initdb.d/" not in compose
+    assert "initialize-agent-db --check" in compose
     assert "pg_isready" in compose
 
 
@@ -229,15 +230,18 @@ def test_migration_runner_applies_only_pending_versioned_files() -> None:
 
 
 def test_database_initializer_runs_migrations_before_dev_seeds() -> None:
-    """빈 DB 초기화가 Schema를 먼저 만든 뒤 선택적으로 개발 Seed를 적용하는지 검증한다."""
+    """DB 시작 경로가 Schema 후 변경된 개발 Seed만 적용하는지 검증한다."""
     initializer = _read(DATABASE_INITIALIZER_PATH)
 
     migration_position = initializer.index("/usr/local/bin/run-agent-db-migrations")
-    seed_position = initializer.index("/opt/bambi/seeds/")
+    seed_position = initializer.index('expected_checksum="$(seed_checksum)"')
 
     assert migration_position < seed_position
     assert "AGENT_DB_APPLY_DEV_SEEDS:-true" in initializer
     assert "psql -X -v ON_ERROR_STOP=1" in initializer
+    assert "sha256sum" in initializer
+    assert "flock -x" in initializer
+    assert 'if [ "$MODE" = "--check" ]' in initializer
 
 
 def test_dev_seed_builds_service_worker_snapshot_dependency_chain() -> None:
