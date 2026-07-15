@@ -33,6 +33,22 @@
 | `POST` | `/internal/v1/users/{user_id}/generations` | `SVC-008` | `202` | 밤비 콘텐츠 생성 Job을 등록합니다. |
 | `GET` | `/internal/v1/jobs/{job_id}` | `SVC-013` | `200` | Job 상태와 진행률을 조회합니다. |
 | `GET` | `/internal/v1/jobs/{job_id}/result` | `SVC-014` | `200` | 완료된 Job 결과를 조회합니다. 미완료 시 `409`를 반환합니다. |
+| `GET` | `/internal/v1/users/{user_id}/wiki/graph` | `PWIKI-003` | `200` | 현재 개인 Wiki 문서와 관계 Graph를 조회합니다. |
+
+### 개인 Wiki Graph 조회
+
+`GET /internal/v1/users/{user_id}/wiki/graph`는 현재 활성 Entity·Concept Head와
+각 Head의 최신 Version, 문서 사이의 관계를 한 번에 반환합니다. 조회 Transaction에는
+`app.user_id`와 `app.access_scope=user`를 설정해 다른 사용자의 문서를 차단합니다.
+
+응답의 `nodes`는 문서 ID, 종류, 논리 Key, 제목, subtype, 요약, 별칭, Vault 경로,
+Version, 수정 시각, Markdown 본문과 연결 차수를 포함합니다. `edges`는 source·target
+문서 ID와 `entity_relation`, `applies_concept`, `related_concept`, `alias_of` 관계 유형을
+포함합니다. `stats`는 Entity·Concept·관계·고립 Node 수를 제공합니다.
+
+`GET /wiki-graph?user_id={user_id}`는 이 API를 사용하는 내부 시각화 페이지입니다.
+브라우저는 표시와 일시적인 물리 좌표만 관리하며 Wiki 지식의 원본은 PostgreSQL입니다.
+DB 연결이 준비되지 않은 Runtime은 Graph API에 `SERVICE_NOT_READY`를 반환합니다.
 
 ### 웹 클리핑 저장 계약
 

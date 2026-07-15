@@ -103,6 +103,15 @@ WHERE document.namespace_key = 'user/mock-clipping-user'
 ORDER BY document.file_path;
 ```
 
+Agent API를 실행한 뒤에는 Obsidian 스타일 관계 Graph에서 같은 데이터를 확인할 수
+있습니다. 화면에서 사용자 ID를 바꾸면 해당 Namespace를 다시 조회합니다.
+
+```text
+http://127.0.0.1:8000/wiki-graph?user_id=mock-clipping-user
+```
+
+Graph 원본 JSON은 `GET /internal/v1/users/{user_id}/wiki/graph`에서 조회합니다.
+
 발행 ACK는 조회 응답의 `version`과 `snapshot_hash`를 그대로 전달합니다.
 
 ```bash

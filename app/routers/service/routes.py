@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Request, status
 
-from app.dependencies import get_mvp_service
+from app.dependencies import get_mvp_service, get_wiki_graph_service
 from app.schemas.mvp import (
     AcceptedJobResponse,
     ContentMarkRequest,
@@ -16,7 +16,9 @@ from app.schemas.mvp import (
     UserContextUpsertRequest,
     WebClippingRequest,
 )
+from app.schemas.wiki import WikiGraphResponse
 from app.services.mvp import AgentApiMvpService
+from app.services.wiki_graph import WikiGraphService
 
 router = APIRouter(tags=["service-api"])
 UserId = Annotated[str, Path(min_length=1, max_length=128, description="사용자 ID")]
@@ -113,6 +115,21 @@ async def request_content_mark(
         request_id=_request_id(request),
         payload=payload.model_dump(mode="json"),
     )
+
+
+@router.get(
+    "/users/{user_id}/wiki/graph",
+    response_model=WikiGraphResponse,
+    operation_id="pwiki_003",
+    summary="개인 Wiki Graph 조회",
+)
+async def get_personal_wiki_graph(
+    user_id: UserId,
+    request: Request,
+    service: WikiGraphService = Depends(get_wiki_graph_service),
+) -> WikiGraphResponse:
+    """[PWIKI-003] 현재 Entity·Concept 문서와 관계 Graph를 조회한다."""
+    return await service.get_graph(user_id, _request_id(request))
 
 
 @router.post(

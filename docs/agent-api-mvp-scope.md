@@ -58,6 +58,17 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | PRAG-006 | 개인 Wiki Context 구성 | LLM 입력에 사용할 개인 Wiki Context를 구성한다. |
 | PRAG-007 | Citation 연결 | 생성 결과와 참조한 개인 Wiki 문서를 연결한다. |
 
+### 개인 Wiki Graph 조회
+
+- `PWIKI-003`은 현재 Entity·Concept 문서 Version과 `wiki_document_relations`를
+  Node·Edge Graph로 조회합니다.
+- Graph 응답은 사용자 Namespace의 문서만 포함하고 PostgreSQL RLS 사용자 Scope를
+  함께 적용합니다.
+- 내부 데이터 API는 `GET /internal/v1/users/{user_id}/wiki/graph`, 시각화 페이지는
+  `GET /wiki-graph?user_id={user_id}`로 제공합니다.
+- 페이지는 검색, Entity·Concept 필터, 확대·축소·이동·Node Drag와 Markdown 상세
+  보기를 제공하며 별도의 브라우저 저장소를 지식 원본으로 사용하지 않습니다.
+
 ### Obsidian LLM Wiki 구조 계약
 
 - Entity는 입력에서 발견한 고유 대상별로 `entities/{document_key}.md` 한 개를 유지합니다.

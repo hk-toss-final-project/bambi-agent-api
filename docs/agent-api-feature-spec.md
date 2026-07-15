@@ -72,7 +72,7 @@
 |---|---|---|
 | PWIKI-001 | 개인 Wiki 생성 | 사용자별 개인 LLM Wiki 영역을 생성한다. |
 | PWIKI-002 | 개인 Wiki 문서 생성 | 사용자가 선택한 데이터를 Entity·Concept·Schema Wiki 문서로 변환한다. |
-| PWIKI-003 | 개인 Wiki 문서 조회 | 사용자의 Wiki 문서 목록과 상세 내용을 조회한다. |
+| PWIKI-003 | 개인 Wiki 문서 조회 | 사용자의 Wiki 문서 목록·상세 내용과 Entity·Concept 관계 Graph를 조회한다. |
 | PWIKI-004 | 개인 Wiki 문서 수정 | 사용자 메모와 수정 내용을 Wiki 문서에 반영한다. |
 | PWIKI-005 | 개인 Wiki 문서 삭제 | 사용자가 제거한 데이터를 Wiki 검색 대상에서 제외한다. |
 | PWIKI-006 | 개인 Wiki 문서 버전 관리 | 각 Markdown 문서 변경 이력과 Wiki Build별 문서 Version·파일 경로 구성을 관리한다. |
