@@ -4,7 +4,7 @@
 """
 
 from .features.global_source_collector import worker_001
-from .features.personal_wiki_builder import worker_002
+from .features.personal_wiki_builder import run_personal_wiki_batch, worker_002
 from .features.bambi_generation import worker_003
 from .features.content_quality import worker_004
 from .features.summary import worker_005

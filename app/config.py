@@ -37,6 +37,19 @@ class Settings(BaseModel):
         default=None, description="NewsAPI Secret 참조 값"
     )
     gdelt_base_url: str | None = Field(default=None, description="GDELT API 기본 URL")
+    wiki_llm_model: str = Field(
+        default="gpt-4.1-mini", description="Personal Wiki 분류 모델"
+    )
+    wiki_embedding_model: str = Field(
+        default="text-embedding-3-small",
+        description="Personal Wiki Chunk Embedding 모델",
+    )
+    personal_wiki_worker_batch_size: int = Field(
+        default=1, ge=1, le=100, description="Personal Wiki Worker Job Claim 개수"
+    )
+    personal_wiki_job_lease_seconds: int = Field(
+        default=600, ge=30, le=3600, description="Personal Wiki Job Lease 초"
+    )
 
 
 def _optional_env(name: str) -> str | None:
@@ -51,6 +64,12 @@ def _boolean_env(name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _integer_env(name: str, default: int) -> int:
+    """환경변수의 정수 문자열을 설정 값으로 변환한다."""
+    value = os.getenv(name)
+    return int(value) if value is not None else default
 
 
 def load_settings() -> Settings:
@@ -71,4 +90,14 @@ def load_settings() -> Settings:
         naver_client_secret=_optional_env("NAVER_CLIENT_SECRET"),
         news_api_key=_optional_env("NEWS_API_KEY"),
         gdelt_base_url=_optional_env("GDELT_BASE_URL"),
+        wiki_llm_model=os.getenv("WIKI_LLM_MODEL", "gpt-4.1-mini"),
+        wiki_embedding_model=os.getenv(
+            "WIKI_EMBEDDING_MODEL", "text-embedding-3-small"
+        ),
+        personal_wiki_worker_batch_size=_integer_env(
+            "PERSONAL_WIKI_WORKER_BATCH_SIZE", 1
+        ),
+        personal_wiki_job_lease_seconds=_integer_env(
+            "PERSONAL_WIKI_JOB_LEASE_SECONDS", 600
+        ),
     )

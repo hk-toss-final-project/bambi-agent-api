@@ -17,6 +17,10 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("API_PREFIX", "/agent/internal/v1")
     monkeypatch.setenv("DOCS_ENABLED", "false")
     monkeypatch.setenv("OPENAI_API_KEY", "test-secret")
+    monkeypatch.setenv("WIKI_LLM_MODEL", "gpt-4.1-mini")
+    monkeypatch.setenv("WIKI_EMBEDDING_MODEL", "text-embedding-3-small")
+    monkeypatch.setenv("PERSONAL_WIKI_WORKER_BATCH_SIZE", "3")
+    monkeypatch.setenv("PERSONAL_WIKI_JOB_LEASE_SECONDS", "900")
 
     settings = load_settings()
 
@@ -27,6 +31,10 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     assert settings.docs_enabled is False
     assert settings.openai_api_key is not None
     assert settings.openai_api_key.get_secret_value() == "test-secret"
+    assert settings.wiki_llm_model == "gpt-4.1-mini"
+    assert settings.wiki_embedding_model == "text-embedding-3-small"
+    assert settings.personal_wiki_worker_batch_size == 3
+    assert settings.personal_wiki_job_lease_seconds == 900
 
 
 def test_create_container_uses_postgres_for_publish_snapshots() -> None:

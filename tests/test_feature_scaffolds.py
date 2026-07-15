@@ -218,6 +218,10 @@ def test_feature_functions_have_korean_docstrings() -> None:
 
 
 def test_feature_functions_are_unimplemented_stubs() -> None:
-    """요청 범위대로 기능 함수에 실제 구현이 들어가지 않았는지 검증한다."""
+    """구현 완료 표시 기능과 나머지 스텁의 상태가 명시적으로 일치하는지 검증한다."""
+    implemented = {"WBA-001", "WORKER-002"}
     for feature_id, (path, node, _) in discover_feature_functions().items():
-        assert is_not_implemented_stub(node), f"스텁이 아닌 함수: {feature_id} ({path})"
+        if feature_id in implemented:
+            assert not is_not_implemented_stub(node), f"구현이 필요한 함수: {feature_id} ({path})"
+        else:
+            assert is_not_implemented_stub(node), f"스텁이 아닌 함수: {feature_id} ({path})"

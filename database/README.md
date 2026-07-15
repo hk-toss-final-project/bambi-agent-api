@@ -64,6 +64,45 @@ WHERE source.user_id = 'mock-clipping-user'
 ORDER BY version.clipped_on DESC, version.title;
 ```
 
+### Personal Wiki Builder 실행
+
+`.env`에 `AGENT_DATABASE_URL`과 `OPENAI_API_KEY`를 설정한 뒤 대기 Job 한 건을
+증분 Wiki로 처리합니다. Worker는 Entity·Concept·Schema Version, 원본
+출처 관계, Wiki Chunk·Embedding, Build Snapshot을 저장한 뒤 Job을 완료합니다.
+
+```bash
+uv run python -m workers.main --worker personal-wiki --limit 1
+```
+
+실제 LLM·Embedding API 비용이 발생하므로 처음에는 한 건만 처리해 결과를
+검수합니다. 품질 벤치마크는 모델의 현재 토큰 단가를 직접 전달해
+별도로 실행합니다.
+
+```bash
+uv run python bench/wiki_builder/run.py \
+  --model gpt-4.1-mini \
+  --input-cost-per-million <current-input-price> \
+  --output-cost-per-million <current-output-price>
+```
+
+생성된 Wiki는 다음 SQL로 확인합니다.
+
+```sql
+SELECT document.document_kind,
+       document.document_key,
+       document.file_path,
+       version.version,
+       version.title,
+       version.normalized_content
+FROM agent.wiki_documents AS document
+JOIN agent.wiki_document_versions AS version
+  ON version.document_id = document.id
+ AND version.version = document.current_version
+WHERE document.namespace_key = 'user/mock-clipping-user'
+  AND document.deleted_at IS NULL
+ORDER BY document.file_path;
+```
+
 발행 ACK는 조회 응답의 `version`과 `snapshot_hash`를 그대로 전달합니다.
 
 ```bash

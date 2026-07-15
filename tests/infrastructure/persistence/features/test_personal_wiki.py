@@ -6,25 +6,36 @@ from typing import Any
 
 from infrastructure.persistence.features.personal_wiki import (
     UserSourceDocumentForAgent,
+    chunk_wiki_markdown,
     get_user_source_document_version_for_agent,
+    list_existing_wiki_entries,
+    list_existing_wiki_relations,
 )
 
 
 class _FakeCursor:
     """psycopg Cursor의 fetchone만 흉내 내는 결정적 Test Double."""
 
-    def __init__(self, row: dict[str, Any] | None) -> None:
+    def __init__(self, row: dict[str, Any] | list[dict[str, Any]] | None) -> None:
         self._row = row
 
     async def fetchone(self) -> dict[str, Any] | None:
         """생성 시 전달된 고정 Row를 그대로 반환한다."""
+        if isinstance(self._row, list):
+            return self._row[0] if self._row else None
         return self._row
+
+    async def fetchall(self) -> list[dict[str, Any]]:
+        """생성 시 전달된 Row를 목록으로 반환한다."""
+        if self._row is None:
+            return []
+        return self._row if isinstance(self._row, list) else [self._row]
 
 
 class _FakeConnection:
     """전달된 SQL과 Parameter를 기록하고 고정된 Row를 반환하는 Test Double."""
 
-    def __init__(self, row: dict[str, Any] | None) -> None:
+    def __init__(self, row: dict[str, Any] | list[dict[str, Any]] | None) -> None:
         self._row = row
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
 
@@ -43,6 +54,7 @@ def _sample_row() -> dict[str, Any]:
         "source_type": "web_clipping",
         "canonical_url": "https://example.com/article",
         "source_document_version_id": "version-1",
+        "source_event_id": "event-1",
         "version": 2,
         "title": "제목",
         "author": "저자",
@@ -52,6 +64,7 @@ def _sample_row() -> dict[str, Any]:
         "tags": ["ai", "wiki"],
         "raw_content": "# 본문",
         "content_format": "markdown",
+        "content_hash": "a" * 64,
         "object_uri": None,
         "source_metadata": {"clipper": "obsidian"},
     }
@@ -72,6 +85,7 @@ def test_get_user_source_document_version_for_agent_maps_row() -> None:
     assert result == UserSourceDocumentForAgent(
         source_document_id="doc-1",
         source_document_version_id="version-1",
+        source_event_id="event-1",
         user_id="user-1",
         namespace_key="user/user-1",
         source_type="web_clipping",
@@ -85,6 +99,7 @@ def test_get_user_source_document_version_for_agent_maps_row() -> None:
         tags=["ai", "wiki"],
         raw_content="# 본문",
         content_format="markdown",
+        content_hash="a" * 64,
         object_uri=None,
         source_metadata={"clipper": "obsidian"},
     )
@@ -127,3 +142,74 @@ def test_get_user_source_document_version_for_agent_defaults_null_collections() 
     assert result is not None
     assert result.tags == []
     assert result.source_metadata == {}
+
+
+def test_list_existing_wiki_entries_maps_current_versions() -> None:
+    """기존 Wiki 최신 Version과 Builder Metadata를 중복 판단 객체로 변환한다."""
+    connection = _FakeConnection(
+        [
+            {
+                "document_kind": "entity",
+                "document_key": "obsidian",
+                "domain": "product",
+                "title": "Obsidian",
+                "summary": "Markdown 노트 도구",
+                "source_metadata": {"aliases": ["옵시디언"]},
+            }
+        ]
+    )
+
+    result = asyncio.run(
+        list_existing_wiki_entries(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            document_kind="entity",
+        )
+    )
+
+    assert result[0].document_key == "obsidian"
+    assert result[0].metadata == {"aliases": ["옵시디언"]}
+    query, params = connection.executed[0]
+    assert "version.version = document.current_version" in query
+    assert params == ("user/user-1", "entity")
+
+
+def test_chunk_wiki_markdown_splits_at_heading_boundaries() -> None:
+    """Wiki Markdown을 섹션 Heading 단위의 검색 Chunk로 나눈다."""
+    content = "---\ntype: entity\n---\n## Description\n설명\n## Related Entities\n- 관계"
+
+    chunks = chunk_wiki_markdown(content)
+
+    assert chunks == [
+        "---\ntype: entity\n---",
+        "## Description\n설명",
+        "## Related Entities\n- 관계",
+    ]
+
+
+def test_list_existing_wiki_relations_maps_document_keys() -> None:
+    """누적 관계 Row를 Schema와 Persistence가 공유하는 관계 계획으로 변환한다."""
+    connection = _FakeConnection(
+        [
+            {
+                "source_document_kind": "entity",
+                "source_document_key": "obsidian",
+                "target_document_kind": "concept",
+                "target_document_key": "연결-노트",
+                "relation_type": "applies_concept",
+                "metadata": {"confidence": 0.9},
+            }
+        ]
+    )
+
+    result = asyncio.run(
+        list_existing_wiki_relations(
+            connection,  # type: ignore[arg-type]
+            namespace_key="user/user-1",
+        )
+    )
+
+    assert result[0].source_document_key == "obsidian"
+    assert result[0].target_document_key == "연결-노트"
+    assert result[0].metadata == {"confidence": 0.9}
+    assert connection.executed[0][1] == ("user/user-1",)

@@ -4,7 +4,27 @@
 """
 
 from .features.users import db_001
-from .features.personal_wiki import db_002, db_003, db_004, db_005, db_006, db_007
+from .features.personal_wiki import (
+    UserSourceDocumentForAgent,
+    PersistedWikiBuild,
+    PersistedWikiDocument,
+    WikiChunkForEmbedding,
+    WikiEmbeddingValue,
+    chunk_wiki_markdown,
+    db_002,
+    db_003,
+    db_004,
+    db_005,
+    db_006,
+    db_007,
+    get_user_source_document_version_for_agent,
+    get_wiki_chunks_for_embedding,
+    list_existing_wiki_entries,
+    list_existing_wiki_relations,
+    persist_wiki_build,
+    persist_wiki_embeddings,
+    set_personal_wiki_scope,
+)
 from .features.global_source import (
     db_008,
     db_009,
@@ -17,7 +37,14 @@ from .features.global_source import (
 from .features.generation import db_015, db_016, db_017, db_018, db_019, db_020
 from .features.recommendation import db_021
 from .features.configuration import db_022, db_023, db_024, db_025
-from .features.jobs import db_026
+from .features.jobs import (
+    ClaimedAgentJob,
+    claim_personal_wiki_jobs,
+    complete_agent_job,
+    db_026,
+    fail_agent_job,
+    set_system_job_scope,
+)
 from .features.events import db_027
 from .features.api_keys import db_028
 from .features.usage import db_029
