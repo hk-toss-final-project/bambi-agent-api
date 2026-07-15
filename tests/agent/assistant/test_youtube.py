@@ -90,31 +90,26 @@ def test_filter_recent_videos_excludes_unparseable_and_old() -> None:
     assert kept == ["최근"]
 
 
-def test_digest_for_user_expands_query_on_first_visit(monkeypatch) -> None:
-    """시청 이력이 없는 첫 조회는 날짜 제한 없이 입문성 검색어까지 확장한다."""
+def test_digest_for_user_applies_recency_on_first_visit(monkeypatch) -> None:
+    """시청 이력이 없는 첫 조회도 최근(48시간 이내) 영상만 남기고 오래된 영상은 제외한다."""
     from agent.assistant import history
 
     monkeypatch.setattr(history, "get_watched_video_ids", lambda user_id, keyword: set())
-
-    calls: list[str] = []
-
-    def fake_search(query, limit=4):
-        calls.append(query)
-        if "란 무엇인가" in query:
-            return [{"video_id": "intro-1", "title": "입문 영상", "url": "u", "published_time": "3 months ago"}]
-        return [{"video_id": "raw-1", "title": "일반 영상", "url": "u2", "published_time": "10 days ago"}]
-
-    monkeypatch.setattr(youtube, "search_videos", fake_search)
+    monkeypatch.setattr(
+        youtube,
+        "search_videos",
+        lambda query, limit=4: [
+            {"video_id": "v1", "title": "최근 영상", "url": "u1", "published_time": "5 hours ago"},
+            {"video_id": "v2", "title": "오래된 영상", "url": "u2", "published_time": "3 months ago"},
+        ],
+    )
     monkeypatch.setattr(youtube, "fetch_transcript", lambda vid, languages=("ko", "en"): "자막")
     monkeypatch.setattr(youtube, "summarize_text", lambda text, instruction, model="gpt-4.1-mini": "요약")
 
-    digest = youtube.youtube_digest_for_user("전고체", "minji", limit=4)
+    digest = youtube.youtube_digest_for_user("전고체", "minji", limit=4, max_age_hours=48)
 
-    assert any("란 무엇인가" in query for query in calls)
-    # 오래된 영상(3개월 전)도 첫 조회에서는 날짜 제한 없이 포함된다.
     titles = [item["title"] for item in digest]
-    assert "입문 영상" in titles
-    assert "일반 영상" in titles
+    assert titles == ["최근 영상"]
 
 
 def test_summarize_videos_with_delay_sleeps_between_but_not_before_first(monkeypatch) -> None:

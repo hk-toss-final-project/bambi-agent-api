@@ -3,9 +3,30 @@
 Reddit의 비공식 JSON API는 상시 차단되어 search.rss(feedparser)로 전환했다.
 """
 
+from datetime import UTC, datetime
+
 import pytest
 
 from agent.assistant import reddit
+
+# 최신성 필터(48시간) 검증에 쓰는 고정 기준 시각.
+_NOW = datetime(2026, 7, 14, 9, 0, tzinfo=UTC)
+
+
+def _entry(title: str, published_dt: datetime | None = _NOW, **overrides):
+    """search.rss 파싱 결과를 흉내 낸 가짜 엔트리를 만든다. 기본 발행시각은 _NOW."""
+    entry = {
+        "id": f"https://www.reddit.com/t3_{title}",
+        "title": title,
+        "link": f"https://www.reddit.com/r/test/comments/{title}/",
+        "summary": "to <a href='...'>r/test</a>",
+        "content": [{"value": "본문"}],
+    }
+    if published_dt is not None:
+        entry["published"] = published_dt.isoformat()
+        entry["published_parsed"] = published_dt.utctimetuple()
+    entry.update(overrides)
+    return entry
 
 
 @pytest.fixture(autouse=True)
@@ -94,14 +115,6 @@ def test_search_posts_raises_on_rate_limit_status(monkeypatch) -> None:
 def test_search_posts_retries_after_rate_limit_then_succeeds(monkeypatch) -> None:
     """429를 받으면 x-ratelimit-reset만큼 기다린 뒤 재시도해 성공 결과를 반환한다."""
 
-    class FakeEntry(dict):
-        pass
-
-    fake_entry = FakeEntry(
-        id="id1", title="제목", link="https://www.reddit.com/r/test/comments/1/",
-        summary="to <a href='...'>r/test</a>", content=[{"value": "본문"}],
-    )
-
     class FakeParsed(dict):
         pass
 
@@ -116,12 +129,12 @@ def test_search_posts_retries_after_rate_limit_then_succeeds(monkeypatch) -> Non
             parsed.entries = []
             return parsed
         parsed = FakeParsed(status=200)
-        parsed.entries = [fake_entry]
+        parsed.entries = [_entry("제목")]
         return parsed
 
     monkeypatch.setattr("feedparser.parse", fake_parse)
 
-    posts = reddit.search_posts("키워드", limit=1, yesterday_only=False)
+    posts = reddit.search_posts("키워드", limit=1, reference_now=_NOW)
 
     assert call_count["n"] == 2
     assert sleep_calls == [12.0]
@@ -145,15 +158,6 @@ def test_search_posts_raises_after_second_failure(monkeypatch) -> None:
 
 def test_search_posts_caches_repeated_keyword(monkeypatch) -> None:
     """짧은 시간 내 같은 키워드 재검색은 새 요청 없이 캐시를 반환한다."""
-
-    class FakeEntry(dict):
-        pass
-
-    fake_entry = FakeEntry(
-        id="id1", title="글", link="https://www.reddit.com/r/test/comments/1/",
-        summary="to <a href='...'>r/test</a>", content=[{"value": "본문"}],
-    )
-
     call_count = {"n": 0}
 
     def fake_parse(url, request_headers=None):
@@ -163,37 +167,21 @@ def test_search_posts_caches_repeated_keyword(monkeypatch) -> None:
             pass
 
         parsed = FakeParsed(status=200)
-        parsed.entries = [fake_entry]
+        parsed.entries = [_entry("글")]
         return parsed
 
     monkeypatch.setattr("feedparser.parse", fake_parse)
 
-    first = reddit.search_posts("캐시 키워드", limit=1, yesterday_only=False)
-    second = reddit.search_posts("캐시 키워드", limit=1, yesterday_only=False)
+    first = reddit.search_posts("캐시 키워드", limit=1, reference_now=_NOW)
+    second = reddit.search_posts("캐시 키워드", limit=1, reference_now=_NOW)
 
     assert call_count["n"] == 1  # 두 번째 호출은 Reddit에 다시 요청하지 않음
     assert first == second
 
 
-def test_search_posts_keeps_only_yesterday_by_default(monkeypatch) -> None:
-    """기본값(yesterday_only=True)은 어제 작성된 게시글만 남긴다."""
-    from datetime import datetime, timedelta
-
-    from agent.assistant import feeds
-
-    now = datetime(2026, 7, 14, 9, 0, tzinfo=feeds._ARTICLE_TIMEZONE)
-    yesterday = now - timedelta(days=1)
-    two_days_ago = now - timedelta(days=2)
-
-    def make_entry(title, published_dt):
-        entry = {
-            "id": title, "title": title, "link": f"https://www.reddit.com/{title}/",
-            "summary": "to <a href='...'>r/test</a>", "content": [{"value": "본문"}],
-        }
-        if published_dt is not None:
-            entry["published"] = published_dt.isoformat()
-            entry["published_parsed"] = published_dt.utctimetuple()
-        return entry
+def test_search_posts_keeps_only_recent_by_default(monkeypatch) -> None:
+    """기본값은 최근(48시간 이내) 작성된 게시글만 남기고, 작성시각을 모르는 글은 제외한다."""
+    from datetime import timedelta
 
     class FakeParsed(dict):
         pass
@@ -204,31 +192,26 @@ def test_search_posts_keeps_only_yesterday_by_default(monkeypatch) -> None:
         captured_urls.append(url)
         parsed = FakeParsed(status=200)
         parsed.entries = [
-            make_entry("오늘글", now),
-            make_entry("어제글", yesterday),
-            make_entry("그저께글", two_days_ago),
-            make_entry("날짜없음", None),
+            _entry("오늘글", _NOW),
+            _entry("어제글", _NOW - timedelta(days=1)),
+            _entry("사흘전글", _NOW - timedelta(days=3)),
+            _entry("날짜없음", None),
         ]
         return parsed
 
     monkeypatch.setattr("feedparser.parse", fake_parse)
 
-    posts = reddit.search_posts("키워드", limit=5, reference_now=now)
+    posts = reddit.search_posts("키워드", limit=5, reference_now=_NOW)
 
-    assert [p["title"] for p in posts] == ["어제글"]
-    assert "sort=new" in captured_urls[0]  # 어제 글을 놓치지 않게 최신순으로 요청
+    assert [p["title"] for p in posts] == ["오늘글", "어제글"]
+    assert "sort=new" in captured_urls[0]  # 최근 글을 놓치지 않게 최신순으로 요청
 
 
 def test_search_posts_parses_feed_entries(monkeypatch) -> None:
     """search.rss 파싱 결과를 게시글 딕셔너리로 변환한다."""
-
-    class FakeEntry(dict):
-        pass
-
-    fake_entry = FakeEntry(
-        id="https://www.reddit.com/t3_abc",
-        title="제목",
-        link="https://www.reddit.com/r/test/comments/abc/",
+    fake_entry = _entry(
+        "제목",
+        _NOW,
         summary=(
             "<div class='md'><p>본문 내용</p></div> submitted by "
             "<a href='...'>u/someone</a> to <a href='https://www.reddit.com/r/test/'>r/test</a>"
@@ -246,7 +229,7 @@ def test_search_posts_parses_feed_entries(monkeypatch) -> None:
 
     monkeypatch.setattr("feedparser.parse", fake_parse)
 
-    posts = reddit.search_posts("키워드", limit=1, yesterday_only=False)
+    posts = reddit.search_posts("키워드", limit=1, reference_now=_NOW)
 
     assert len(posts) == 1
     assert posts[0]["title"] == "제목"

@@ -213,25 +213,6 @@ def youtube_digest(
     return _summarize_videos_with_delay(recent, model=model)
 
 
-def _build_intro_queries(keyword: str) -> list[str]:
-    """처음 접하는 키워드일 때 입문·개요성 영상까지 폭넓게 찾기 위한 검색어 목록을 만든다."""
-    return [keyword, f"{keyword}란 무엇인가?"]
-
-
-def _deduplicate_by_video_id(videos: list[dict[str, object]]) -> list[dict[str, object]]:
-    """여러 검색어 결과를 합칠 때 동일 영상을 한 번만 남긴다."""
-    seen: set[str] = set()
-    unique: list[dict[str, object]] = []
-    for video in videos:
-        video_id = str(video.get("video_id") or "")
-        if video_id and video_id in seen:
-            continue
-        if video_id:
-            seen.add(video_id)
-        unique.append(video)
-    return unique
-
-
 def youtube_digest_for_user(
     keyword: str,
     user_id: str,
@@ -241,22 +222,16 @@ def youtube_digest_for_user(
 ) -> list[dict[str, object]]:
     """사용자의 시청 이력을 반영해 개인화된 YouTube 요약 목록을 반환한다.
 
-    이 키워드를 처음 조회하는 사용자에게는 날짜 제한 없이 입문성 검색어까지
-    확장해 폭넓게 보여준다. 이미 조회한 적이 있으면 최근 영상 중 아직 보지
-    않은 영상만 남긴다.
+    첫 조회 여부와 무관하게 항상 최근(max_age_hours 이내) 영상만 후보로 삼고,
+    그중 이미 본 영상은 제외한다. 기사·Reddit과 같은 최신성 기준을 공유한다.
+    조건을 만족하는 새 영상이 없으면 빈 목록을 반환한다(새 소식 없음).
     """
     already_watched = history.get_watched_video_ids(user_id, keyword)
 
-    if not already_watched:
-        pool: list[dict[str, object]] = []
-        for query in _build_intro_queries(keyword):
-            pool.extend(search_videos(query, limit=max(limit * 2, 8)))
-        candidates = _deduplicate_by_video_id(pool)[: limit * 3]
-    else:
-        pool_size = max(limit * 6, 18)
-        pool = search_videos(keyword, limit=pool_size)
-        recent = filter_recent_videos(pool, max_age_hours=max_age_hours)
-        candidates = [video for video in recent if video.get("video_id") not in already_watched]
+    pool_size = max(limit * 6, 18)
+    pool = search_videos(keyword, limit=pool_size)
+    recent = filter_recent_videos(pool, max_age_hours=max_age_hours)
+    candidates = [video for video in recent if video.get("video_id") not in already_watched]
 
     selected = candidates[:limit]
     return _summarize_videos_with_delay(selected, model=model)

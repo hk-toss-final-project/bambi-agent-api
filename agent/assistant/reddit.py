@@ -23,7 +23,7 @@ from __future__ import annotations
 import calendar
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from urllib.parse import quote_plus
 
 from agent.assistant import feeds
@@ -113,50 +113,40 @@ def search_posts(
     keyword: str,
     limit: int = 4,
     *,
-    yesterday_only: bool = True,
+    max_age_hours: float = feeds._DEFAULT_MAX_AGE_HOURS,
     reference_now: datetime | None = None,
 ) -> list[dict[str, object]]:
-    """키워드로 Reddit 게시글을 검색해 메타데이터 목록을 반환한다.
+    """키워드로 최근 작성된 Reddit 게시글을 검색해 메타데이터 목록을 반환한다.
 
-    기본값(yesterday_only=True)은 뉴스 기사와 같은 기준(한국 시간 달력상 어제)에
-    발행된 게시글만 남긴다. 발행 시각이 없는 항목(서브레딧 추천 등)은 제외한다.
-    어제 게시글을 찾으려면 최신순(sort=new)으로 넉넉한 풀을 받아와 클라이언트에서
-    날짜로 거른다. 짧은 시간 내 같은 검색은 캐시된 결과를 그대로 반환한다.
+    뉴스 기사와 같은 기준(발행된 지 max_age_hours 이내, 기본 48시간)으로 최근
+    게시글만 남긴다. 발행 시각이 없는 항목(서브레딧 추천 등)은 제외한다. 최근
+    게시글을 놓치지 않도록 최신순(sort=new)으로 넉넉한 풀을 받아와 클라이언트에서
+    경과 시간으로 거른다. 짧은 시간 내 같은 검색은 캐시된 결과를 그대로 반환한다.
+    조건을 만족하는 게시글이 없으면 빈 리스트를 반환한다(새 소식 없음).
 
     Args:
         keyword: 검색어
         limit: 가져올 게시글 수
-        yesterday_only: True면 한국 시간 기준 어제 작성된 게시글만 남긴다.
+        max_age_hours: 작성 경과 시간 허용 상한(시간). 이보다 오래된 게시글은 제외한다.
         reference_now: "지금" 기준 시각(테스트용). 생략하면 실제 현재 시각을 쓴다.
 
     Returns:
         {id, title, url, subreddit, body, published, published_ts} 딕셔너리 리스트
     """
-    if yesterday_only:
-        now = reference_now or datetime.now(feeds._ARTICLE_TIMEZONE)
-        target_date = (now.astimezone(feeds._ARTICLE_TIMEZONE) - timedelta(days=1)).date()
-        filter_tag = f"y:{target_date.isoformat()}"
-        sort = "new"
-        # 날짜로 걸러내면 대부분 탈락하므로 피드가 주는 최대치(약 25건)를 받아온다.
-        fetch_limit = 25
-    else:
-        target_date = None
-        filter_tag = "all"
-        sort = "relevance"
-        fetch_limit = limit
+    # 경과 시간으로 걸러내면 대부분 탈락하므로 피드가 주는 최대치(약 25건)를 받아온다.
+    fetch_limit = 25
 
-    cache_key = _cache_key(keyword, limit, filter_tag)
+    cache_key = _cache_key(keyword, limit, f"recent:{max_age_hours}")
     cached = _search_cache.get(cache_key)
     if cached is not None and cached[0] > time.time():
         return list(cached[1])
 
     query = quote_plus(keyword)
-    feed_url = f"{_SEARCH_RSS_URL}?q={query}&limit={fetch_limit}&sort={sort}"
+    feed_url = f"{_SEARCH_RSS_URL}?q={query}&limit={fetch_limit}&sort=new"
     parsed = _fetch_feed(feed_url)
 
     posts = _parse_posts(parsed.entries, fetch_limit)
-    if target_date is not None:
-        posts = feeds.filter_to_date(posts, target_date)
+    posts = feeds.filter_recent_entries(posts, max_age_hours=max_age_hours, reference_now=reference_now)
     posts = posts[:limit]
 
     _search_cache[cache_key] = (time.time() + _CACHE_TTL_SECONDS, posts)

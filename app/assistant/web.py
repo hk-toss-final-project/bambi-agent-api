@@ -1,10 +1,10 @@
 """키워드 비서 웹 라우터.
 
 / 에서 사용자 식별자와 키워드를 입력받아 YouTube 자막 요약, Reddit 게시글 요약,
-최신·중복 제거 기사 URL을 함께 보여준다. YouTube는 사용자의 시청 이력을 반영해
-개인화한다: 처음 조회하는 키워드는 입문성 영상까지 폭넓게 보여주고, 이미 조회한
-적이 있으면 최근 영상 중 아직 보지 않은 영상만 남긴다. "봤다"는 판단은 실제로
-영상 링크를 클릭했을 때만 기록한다(/watch 리다이렉트 경유).
+최근·중복 제거 기사 URL을 함께 보여준다. YouTube는 최근(48시간 이내) 영상 중
+사용자가 아직 보지 않은 영상만 남긴다. "봤다"는 판단은 실제로 영상 링크를
+클릭했을 때만 기록한다(/watch 리다이렉트 경유). 기사는 최근(48시간 이내) 발행된
+기사 중 이전 리포트에서 이미 보여준 적 없는 것만 남긴다.
 
 실제 외부 호출(YouTube, Reddit, Google News RSS, Jina Reader)과 LLM 요약이
 일어나므로 응답에 다소 시간이 걸린다.
@@ -58,8 +58,8 @@ def _form_html(user_id: str = "") -> str:
 {_PAGE_STYLE}
 <h1>🔎 키워드 비서 AI</h1>
 <p class="banner">키워드를 입력하면 관련 YouTube 영상 자막과 Reddit 게시글을 요약하고,
-최신 뉴스 URL을 중복 없이 모아줍니다. YouTube는 이전에 본 영상을 기억해뒀다가
-다음에는 새 영상 위주로 보여줍니다.</p>
+최근 뉴스 URL을 중복 없이 모아줍니다. YouTube와 기사 모두 이전에 보여준 것은
+기억해뒀다가 다음에는 새 것 위주로 보여줍니다.</p>
 <form method="post" action="/search">
   <label for="user_id">이름 / 아이디</label>
   <input id="user_id" name="user_id" required placeholder="예: minji" value="{user_id_value}">
@@ -115,9 +115,9 @@ def _render_youtube(items: list[dict[str, object]], user_id: str, keyword: str) 
 
 
 def _render_reddit(items: list[dict[str, object]]) -> str:
-    """어제 작성된 Reddit 게시글 요약 카드를 HTML로 렌더링한다."""
+    """최근 작성된 Reddit 게시글 요약 카드를 HTML로 렌더링한다."""
     if not items:
-        return "<p class='note'>어제 작성된 게시글을 찾지 못했습니다.</p>"
+        return "<p class='note'>최근 작성된 게시글이 없습니다.</p>"
     cards = []
     for item in items:
         title = html.escape(str(item.get("title") or ""))
@@ -137,9 +137,9 @@ def _render_reddit(items: list[dict[str, object]]) -> str:
 
 
 def _render_articles(items: list[dict[str, object]]) -> str:
-    """어제 발행된 기사 URL 카드를 HTML로 렌더링한다."""
+    """최근 발행된 새 기사 URL 카드를 HTML로 렌더링한다."""
     if not items:
-        return "<p class='note'>어제 발행된 기사를 찾지 못했습니다.</p>"
+        return "<p class='note'>새로운 기사가 없습니다.</p>"
     cards = []
     for item in items:
         title = html.escape(str(item.get("title") or ""))
@@ -174,9 +174,9 @@ async def assistant_search(user_id: str = Form(...), keyword: str = Form(...)) -
 {errors_html}
 <h2>▶️ 관련 YouTube 요약</h2>
 {_render_youtube(result.get("youtube", []), result["user_id"], result["keyword"])}
-<h2>👽 어제 Reddit 게시글 요약</h2>
+<h2>👽 최근 Reddit 게시글 요약</h2>
 {_render_reddit(result.get("reddit", []))}
-<h2>📰 어제 기사 (중복 제거)</h2>
+<h2>📰 최근 기사 (새 소식만)</h2>
 {_render_articles(result.get("articles", []))}
 """
 

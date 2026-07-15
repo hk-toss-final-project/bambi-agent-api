@@ -5,6 +5,20 @@ import pytest
 from agent.assistant import service
 
 
+def _patch_article_history(monkeypatch, already_reported: set[str] | None = None) -> list[tuple]:
+    """기사 보고 이력을 파일 대신 메모리로 대체하고, 기록 호출 내역을 반환한다."""
+    recorded: list[tuple] = []
+    monkeypatch.setattr(
+        service.history, "get_reported_article_keys", lambda user_id, keyword: already_reported or set()
+    )
+    monkeypatch.setattr(
+        service.history,
+        "record_reported_article",
+        lambda *args, **kwargs: recorded.append(args),
+    )
+    return recorded
+
+
 def test_assist_combines_all_sources(monkeypatch) -> None:
     """YouTube·Reddit 요약과 기사 결과를 하나의 딕셔너리로 묶는다."""
     monkeypatch.setattr(
@@ -13,7 +27,10 @@ def test_assist_combines_all_sources(monkeypatch) -> None:
         lambda kw, user_id, limit=4, model="gpt-4.1-mini": [{"title": "영상"}],
     )
     monkeypatch.setattr(service, "reddit_digest", lambda kw, limit=4, model="gpt-4.1-mini": [{"title": "게시글"}])
-    monkeypatch.setattr(service, "latest_articles", lambda kw, limit=6: [{"title": "기사"}])
+    monkeypatch.setattr(
+        service, "latest_articles", lambda kw, limit=6, exclude_urls=None: [{"title": "기사", "url": "https://a.com/1"}]
+    )
+    _patch_article_history(monkeypatch)
 
     result = service.assist("전고체 배터리", user_id="minji")
 
@@ -21,7 +38,7 @@ def test_assist_combines_all_sources(monkeypatch) -> None:
     assert result["user_id"] == "minji"
     assert result["youtube"] == [{"title": "영상"}]
     assert result["reddit"] == [{"title": "게시글"}]
-    assert result["articles"] == [{"title": "기사"}]
+    assert result["articles"] == [{"title": "기사", "url": "https://a.com/1"}]
     assert result["errors"] == []
 
 
@@ -37,13 +54,16 @@ def test_assist_isolates_source_failure(monkeypatch) -> None:
         lambda kw, user_id, limit=4, model="gpt-4.1-mini": [{"title": "영상"}],
     )
     monkeypatch.setattr(service, "reddit_digest", boom)
-    monkeypatch.setattr(service, "latest_articles", lambda kw, limit=6: [{"title": "기사"}])
+    monkeypatch.setattr(
+        service, "latest_articles", lambda kw, limit=6, exclude_urls=None: [{"title": "기사", "url": "https://a.com/1"}]
+    )
+    _patch_article_history(monkeypatch)
 
     result = service.assist("키워드", user_id="minji")
 
     assert result["youtube"] == [{"title": "영상"}]
     assert result["reddit"] == []
-    assert result["articles"] == [{"title": "기사"}]
+    assert result["articles"] == [{"title": "기사", "url": "https://a.com/1"}]
     assert any("Reddit" in err for err in result["errors"])
 
 
@@ -57,11 +77,52 @@ def test_assist_passes_user_id_to_youtube(monkeypatch) -> None:
 
     monkeypatch.setattr(service, "youtube_digest_for_user", fake_youtube)
     monkeypatch.setattr(service, "reddit_digest", lambda kw, limit=4, model="gpt-4.1-mini": [])
-    monkeypatch.setattr(service, "latest_articles", lambda kw, limit=6: [])
+    monkeypatch.setattr(service, "latest_articles", lambda kw, limit=6, exclude_urls=None: [])
+    _patch_article_history(monkeypatch)
 
     service.assist("키워드", user_id="minji")
 
     assert captured["user_id"] == "minji"
+
+
+def test_assist_passes_reported_history_to_articles(monkeypatch) -> None:
+    """이미 보고한 기사 URL 집합이 latest_articles의 exclude_urls로 전달된다."""
+    captured = {}
+
+    def fake_articles(kw, limit=6, exclude_urls=None):
+        captured["exclude_urls"] = exclude_urls
+        return []
+
+    monkeypatch.setattr(service, "youtube_digest_for_user", lambda kw, user_id, limit=4, model="gpt-4.1-mini": [])
+    monkeypatch.setattr(service, "reddit_digest", lambda kw, limit=4, model="gpt-4.1-mini": [])
+    monkeypatch.setattr(service, "latest_articles", fake_articles)
+    _patch_article_history(monkeypatch, already_reported={"https://a.com/seen"})
+
+    service.assist("키워드", user_id="minji")
+
+    assert captured["exclude_urls"] == {"https://a.com/seen"}
+
+
+def test_assist_records_reported_articles(monkeypatch) -> None:
+    """리포트에 실은 기사가 정규 URL 키로 보고 이력에 기록된다."""
+    monkeypatch.setattr(service, "youtube_digest_for_user", lambda kw, user_id, limit=4, model="gpt-4.1-mini": [])
+    monkeypatch.setattr(service, "reddit_digest", lambda kw, limit=4, model="gpt-4.1-mini": [])
+    monkeypatch.setattr(
+        service,
+        "latest_articles",
+        lambda kw, limit=6, exclude_urls=None: [
+            {"title": "기사1", "url": "https://a.com/1?utm=x"},
+            {"title": "기사2", "url": "https://b.com/2"},
+        ],
+    )
+    recorded = _patch_article_history(monkeypatch)
+
+    service.assist("코스피", user_id="minji")
+
+    assert recorded == [
+        ("minji", "코스피", "https://a.com/1", "기사1", "https://a.com/1?utm=x"),
+        ("minji", "코스피", "https://b.com/2", "기사2", "https://b.com/2"),
+    ]
 
 
 def test_assist_rejects_empty_keyword() -> None:

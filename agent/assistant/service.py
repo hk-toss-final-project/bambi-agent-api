@@ -9,7 +9,8 @@
 
 from __future__ import annotations
 
-from agent.assistant.feeds import latest_articles
+from agent.assistant import history
+from agent.assistant.feeds import canonical_url, latest_articles
 from agent.assistant.reddit import reddit_digest
 from agent.assistant.youtube import youtube_digest_for_user
 
@@ -25,9 +26,12 @@ def assist(
 ) -> dict[str, object]:
     """키워드로 YouTube·Reddit 요약과 최신 기사 URL을 모아 반환한다.
 
-    YouTube는 사용자의 시청 이력을 반영해 개인화한다: 처음 조회하는 키워드는
-    날짜 제한 없이 입문성 영상까지 폭넓게 보여주고, 이미 조회한 적이 있으면
-    최근 영상 중 아직 보지 않은 영상만 남긴다.
+    YouTube는 최근(48시간 이내) 영상 중 사용자가 아직 보지 않은 영상만 남긴다.
+    첫 조회 여부와 무관하게 항상 최신성 기준을 적용한다.
+
+    기사는 보고 이력을 반영해 개인화한다: 최근 발행된 기사 중 이번 리포트에
+    처음 싣는 기사만 반환하고, 실은 기사는 이력에 기록해 다음 리포트에서
+    반복되지 않게 한다. 새 기사가 없으면 빈 목록을 반환한다(새 소식 없음).
 
     Args:
         keyword: 사용자 검색 키워드
@@ -43,13 +47,14 @@ def assist(
     normalized = keyword.strip()
     if not normalized:
         raise ValueError("키워드가 비어 있습니다.")
-    if not user_id.strip():
+    normalized_user_id = user_id.strip()
+    if not normalized_user_id:
         raise ValueError("사용자 식별자가 비어 있습니다.")
 
     errors: list[str] = []
 
     try:
-        youtube = youtube_digest_for_user(normalized, user_id.strip(), limit=youtube_limit, model=model)
+        youtube = youtube_digest_for_user(normalized, normalized_user_id, limit=youtube_limit, model=model)
     except Exception as error:
         youtube = []
         errors.append(f"YouTube 처리 실패: {type(error).__name__}: {error}")
@@ -61,14 +66,24 @@ def assist(
         errors.append(f"Reddit 처리 실패: {type(error).__name__}: {error}")
 
     try:
-        articles = latest_articles(normalized, limit=article_limit)
+        # 이미 리포트에 실었던 기사는 제외하고, 새로 실은 기사는 이력에 기록한다.
+        already_reported = history.get_reported_article_keys(normalized_user_id, normalized)
+        articles = latest_articles(normalized, limit=article_limit, exclude_urls=already_reported)
+        for article in articles:
+            history.record_reported_article(
+                normalized_user_id,
+                normalized,
+                canonical_url(str(article.get("url") or "")),
+                str(article.get("title") or ""),
+                str(article.get("url") or ""),
+            )
     except Exception as error:
         articles = []
         errors.append(f"기사 수집 실패: {type(error).__name__}: {error}")
 
     return {
         "keyword": normalized,
-        "user_id": user_id.strip(),
+        "user_id": normalized_user_id,
         "youtube": youtube,
         "reddit": reddit,
         "articles": articles,
