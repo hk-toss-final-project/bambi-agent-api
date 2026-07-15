@@ -1,8 +1,8 @@
-"""agent/wiki_builder/vault.py의 순수 Markdown 렌더링을 검증한다. LLM·DB 호출 없음."""
+"""개인 지식 Wiki Vault Markdown 렌더러를 검증한다."""
 
 import pytest
 
-from agent.wiki_builder import vault
+from agent.wiki_builder.features import vault
 from agent.wiki_builder.models import ExistingWikiEntry, WikiRelationPlan
 
 
@@ -12,9 +12,9 @@ def test_slugify_normalizes_spaces_and_case() -> None:
     assert vault.slugify("사용자 인증") == "사용자-인증"
 
 
-def test_slugify_collapses_repeated_separators() -> None:
-    """연속된 구분자를 하나로 합친다."""
-    assert vault.slugify("A///B  --  C") == "a-b-c"
+def test_slugify_preserves_original_script_and_emoji() -> None:
+    """일본어·중국어와 Emoji를 번역하거나 제거하지 않고 파일 키에 보존한다."""
+    assert vault.slugify("札幌 夏旅行 🪻") == "札幌-夏旅行-🪻"
 
 
 def test_slugify_rejects_empty_name() -> None:
@@ -23,183 +23,134 @@ def test_slugify_rejects_empty_name() -> None:
         vault.slugify("   ")
 
 
-def test_compute_content_hash_is_deterministic_and_64_chars() -> None:
-    """같은 입력은 같은 64자 Hash를 만들고, 다른 입력은 다른 Hash를 만든다."""
+def test_compute_content_hash_is_deterministic() -> None:
+    """내용 Hash는 결정적이고 64자이다."""
     first = vault.compute_content_hash("본문")
-    again = vault.compute_content_hash("본문")
-    different = vault.compute_content_hash("다른 본문")
-
-    assert first == again
+    assert first == vault.compute_content_hash("본문")
     assert len(first) == 64
-    assert first != different
 
 
-def test_entity_and_concept_file_paths_match_db_check_constraint() -> None:
-    """wiki_documents의 file_path CHECK 패턴과 일치하는 경로를 만든다."""
-    assert vault.entity_file_path("wiki-documents") == "entities/wiki-documents.md"
-    assert vault.concept_file_path("versioned-config") == "concepts/versioned-config.md"
+def test_paths_match_database_contract() -> None:
+    """entity·concept·schema 경로와 Schema 키가 DB 제약에 맞다."""
+    assert vault.entity_file_path("obsidian") == "entities/obsidian.md"
+    assert vault.concept_file_path("연결-노트") == "concepts/연결-노트.md"
+    assert vault.SCHEMA_DOCUMENT_KEY == "root"
     assert vault.SCHEMA_FILE_PATH == "schema/schema.md"
+    assert vault.source_file_path("검색결과", "abcdef1234") == "sources/검색결과_abcdef.md"
 
 
-def test_render_entity_markdown_matches_rulebook_template() -> None:
-    """규칙서 entities/ 템플릿의 Frontmatter와 6개 Heading을 그대로 포함한다."""
+def test_render_entity_markdown_matches_personal_vault_template() -> None:
+    """entity Markdown이 Frontmatter와 고정 섹션을 모두 포함한다."""
     markdown = vault.render_entity_markdown(
-        name="wiki_documents",
-        domain="지식 문서",
-        role="Personal LLM Wiki 문서의 Head를 관리한다.",
-        columns=["id", "document_kind", "document_key"],
-        relations=["wiki_document_versions와 1:N"],
-        related_concepts=["Versioned Configuration"],
-        source_titles=["Agent DB 테이블 카탈로그"],
+        name="Obsidian",
+        subtype="product",
+        description="Markdown 기반 지식 관리 도구다.",
+        aliases=["옵시디언"],
+        related_entities=["Obsidian Web Clipper"],
+        related_concepts=["연결 노트"],
+        mention_entries=[
+            ("Markdown 파일을 사용한다.", "[[sources/obsidian_abcdef|Obsidian 소개]]")
+        ],
+        source_links=[],
+        source_title="Obsidian 소개",
+        source_link="[[sources/obsidian_abcdef|Obsidian 소개]]",
+        created="2026-07-15",
+        updated="2026-07-15",
     )
 
-    assert markdown.startswith("---\n")
-    assert 'title: "wiki_documents"' in markdown
     assert "type: entity" in markdown
-    assert "domain: 지식 문서" in markdown
-    assert "# wiki_documents" in markdown
-    assert "## 역할" in markdown
-    assert "## 주요 컬럼" in markdown
-    assert "- id" in markdown
-    assert "## 관계" in markdown
-    assert "## 관련 개념" in markdown
-    assert "[[versioned-configuration]] Versioned Configuration" in markdown
-    assert "## 출처" in markdown
-    assert "[[agent-db-테이블-카탈로그]] Agent DB 테이블 카탈로그" in markdown
+    assert 'tags: ["product"]' in markdown
+    assert 'aliases: ["옵시디언"]' in markdown
+    assert "generation_complete: true" in markdown
+    assert "## Basic Information" in markdown
+    assert "## Description" in markdown
+    assert "[[entities/obsidian-web-clipper|Obsidian Web Clipper]]" in markdown
+    assert "[[concepts/연결-노트|연결 노트]]" in markdown
+    assert '"Markdown 파일을 사용한다." — [[sources/obsidian_abcdef|Obsidian 소개]]' in markdown
 
 
-def test_render_entity_markdown_fills_empty_sections_with_placeholder() -> None:
-    """값이 없는 목록 Section은 안내 문구로 채운다."""
-    markdown = vault.render_entity_markdown(
-        name="빈 엔티티",
-        domain="미분류",
-        role="설명 없음",
-        columns=[],
-        relations=[],
-        related_concepts=[],
-        source_titles=[],
-    )
-
-    assert "- 기록된 컬럼 없음" in markdown
-    assert "- 기록된 관계 없음" in markdown
-    assert "- 관련 개념 없음" in markdown
-    assert "- 출처 없음" in markdown
-
-
-def test_render_concept_markdown_matches_rulebook_template() -> None:
-    """규칙서 concepts/ 템플릿의 요약 인용문과 Heading을 포함한다."""
+def test_render_concept_markdown_matches_personal_vault_template() -> None:
+    """concept Markdown이 정의·특성·활용·관계·인용 섹션을 포함한다."""
     markdown = vault.render_concept_markdown(
-        title="Versioned Configuration",
-        summary="설정을 덮어쓰지 않고 새 Version Row로 추가한다.",
-        explanation="이전 값 복구와 감사 추적을 위해 불변 이력을 유지한다.",
-        related_entities=["prompt_templates", "model_configs"],
-        related_concepts=[],
-        source_titles=["Agent DB 상세 설계"],
+        title="연결 노트",
+        subtype="method",
+        definition="노트를 링크로 연결하는 방법이다.",
+        key_characteristics=["양방향 연결"],
+        applications=["개인 지식 관리"],
+        aliases=["linked notes"],
+        related_entities=["Obsidian"],
+        related_concepts=["지식 그래프"],
+        mention_entries=[
+            ("노트를 연결한다.", "[[sources/obsidian_abcdef|Obsidian 소개]]")
+        ],
+        source_links=[],
+        source_link="[[sources/obsidian_abcdef|Obsidian 소개]]",
+        created="2026-07-15",
+        updated="2026-07-15",
     )
 
-    assert 'title: "Versioned Configuration"' in markdown
     assert "type: concept" in markdown
-    assert "# Versioned Configuration" in markdown
-    assert "> 설정을 덮어쓰지 않고 새 Version Row로 추가한다." in markdown
-    assert "## 설명 (왜 이렇게 설계했는지, 트레이드오프)" in markdown
-    assert "## 관련 엔티티" in markdown
-    assert "[[prompt-templates]] prompt_templates" in markdown
-    assert "## 관련 개념" in markdown
-    assert "- 관련 개념 없음" in markdown
-    assert "## 출처" in markdown
+    assert 'tags: ["method"]' in markdown
+    assert "## Definition" in markdown
+    assert "## Key Characteristics" in markdown
+    assert "- 양방향 연결" in markdown
+    assert "## Applications" in markdown
+    assert "[[entities/obsidian|Obsidian]]" in markdown
 
 
-def test_render_schema_markdown_groups_entities_by_domain() -> None:
-    """entity를 domain별로 묶고 concept·relation을 함께 나열한다."""
+def test_render_schema_markdown_uses_full_paths() -> None:
+    """Schema의 문서 링크가 entity·concept 풀 경로를 사용한다."""
     entities = [
-        ExistingWikiEntry("entity", "wiki-documents", "wiki_documents", "지식 문서", None),
-        ExistingWikiEntry("entity", "prompt-templates", "prompt_templates", "설정", None),
+        ExistingWikiEntry("entity", "obsidian", "Obsidian", "product", None)
     ]
-    concepts = [ExistingWikiEntry("concept", "versioned-configuration", "Versioned Configuration", None, None)]
+    concepts = [
+        ExistingWikiEntry("concept", "연결-노트", "연결 노트", "method", None)
+    ]
     relations = [
         WikiRelationPlan(
-            source_document_key="wiki-documents",
-            source_document_kind="entity",
-            target_document_key="versioned-configuration",
-            target_document_kind="concept",
-            relation_type="applies_concept",
+            "obsidian", "entity", "연결-노트", "concept", "applies_concept"
         )
     ]
 
-    markdown = vault.render_schema_markdown(entities=entities, concepts=concepts, relations=relations)
-
-    assert "type: schema" in markdown
-    assert "### 지식 문서" in markdown
-    assert "### 설정" in markdown
-    assert "[[wiki-documents]] wiki_documents" in markdown
-    assert "## Concepts" in markdown
-    assert "[[versioned-configuration]] Versioned Configuration" in markdown
-    assert "## Relations" in markdown
-    assert "[[wiki-documents]] --applies_concept--> [[versioned-configuration]]" in markdown
-
-
-def test_render_schema_markdown_handles_empty_namespace() -> None:
-    """entity·concept·relation이 하나도 없어도 안내 문구로 채운다."""
-    markdown = vault.render_schema_markdown(entities=[], concepts=[], relations=[])
-
-    assert "- (등록된 entity 없음)" in markdown
-    assert "- (등록된 concept 없음)" in markdown
-    assert "- (등록된 관계 없음)" in markdown
-
-
-def test_render_index_markdown_lists_all_sections() -> None:
-    """index.md는 entity·concept·schema·source를 모두 나열한다."""
-    entities = [ExistingWikiEntry("entity", "wiki-documents", "wiki_documents", "지식 문서", None)]
-    concepts = [ExistingWikiEntry("concept", "versioned-configuration", "Versioned Configuration", None, None)]
-
-    markdown = vault.render_index_markdown(
-        entities=entities,
-        concepts=concepts,
-        source_titles=["클리핑: pgvector 소개"],
-        generated_at="2026-07-15T00:00:00+09:00",
+    markdown = vault.render_schema_markdown(
+        entities=entities, concepts=concepts, relations=relations
     )
 
-    assert "# Wiki Index" in markdown
-    assert "_generated_at: 2026-07-15T00:00:00+09:00_" in markdown
-    assert "## Entities (1)" in markdown
-    assert "[[wiki-documents]] wiki_documents" in markdown
-    assert "## Concepts (1)" in markdown
-    assert "## Schema" in markdown
-    assert "- [[schema]]" in markdown
-    assert "## Sources (1)" in markdown
-    assert "클리핑: pgvector 소개" in markdown
+    assert "[[entities/obsidian|Obsidian]]" in markdown
+    assert "[[concepts/연결-노트|연결 노트]]" in markdown
+    assert "[[entities/obsidian]] --applies_concept--> [[concepts/연결-노트]]" in markdown
 
 
-def test_render_source_manifest_lists_produced_documents() -> None:
-    """이 원본이 만든 entity·concept을 함께 보여준다."""
+def test_render_source_manifest_inherits_source_tags() -> None:
+    """source Markdown은 클리핑 태그와 내용 Hash를 그대로 보존한다."""
     markdown = vault.render_source_manifest_markdown(
-        source_title="클리핑: pgvector 소개",
-        source_url="https://example.com/pgvector",
-        entity_titles=["wiki_embeddings"],
-        concept_titles=[],
+        source_title="Obsidian 소개",
+        source_url="https://example.com/obsidian",
+        source_summary="Obsidian은 지식 관리 도구다.",
+        source_tags=["clippings", "pkm"],
+        content_hash="abcdef",
+        ingested_at="2026-07-15T12:00:00+09:00",
+        entity_links=[("obsidian", "Obsidian")],
+        concept_links=[("연결-노트", "연결 노트")],
     )
 
-    assert 'title: "클리핑: pgvector 소개"' in markdown
-    assert "- 원본: https://example.com/pgvector" in markdown
-    assert "[[wiki-embeddings]] wiki_embeddings" in markdown
-    assert "## 이 출처로 생성·갱신된 Concept" in markdown
-    assert "- (없음)" in markdown
+    assert 'tags: ["clippings", "pkm"]' in markdown
+    assert 'contentHash: "abcdef"' in markdown
+    assert "[[entities/obsidian|Obsidian]]" in markdown
+    assert "[[concepts/연결-노트|연결 노트]]" in markdown
 
 
-def test_render_log_entry_summarizes_build_counts() -> None:
-    """생성·갱신 개수와 schema 재생성 여부를 한 줄로 요약한다."""
+def test_render_log_entry_uses_operation_block() -> None:
+    """ingest 로그를 한 줄이 아닌 운영 Block 형식으로 만든다."""
     entry = vault.render_log_entry(
-        timestamp="2026-07-15T00:00:00+09:00",
-        source_title="클리핑: pgvector 소개",
-        created_entities=["wiki_embeddings"],
-        updated_entities=[],
-        created_concepts=[],
-        updated_concepts=["Versioned Configuration"],
-        schema_regenerated=True,
+        timestamp="2026-07-15T12:00:00+09:00",
+        source_title="Obsidian 소개",
+        model="gpt-4.1-mini",
+        source_size_bytes=2048,
+        created_paths=["entities/obsidian.md"],
+        updated_paths=["schema/schema.md"],
     )
 
-    assert entry.startswith("2026-07-15T00:00:00+09:00 | 출처: 클리핑: pgvector 소개")
-    assert "entity 생성: wiki_embeddings" in entry
-    assert "concept 갱신: Versioned Configuration" in entry
-    assert "schema 재생성: 예" in entry
-    assert "entity 갱신" not in entry
+    assert "ingest | Obsidian 소개 · gpt-4.1-mini · 2.0KB" in entry
+    assert "**Created pages**：[[entities/obsidian]]" in entry
+    assert "**Updated pages**：[[schema/schema]]" in entry

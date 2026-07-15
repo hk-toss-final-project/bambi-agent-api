@@ -182,13 +182,31 @@ frontmatter: `version`(int), `updated`(date), `auto_suggestion_count`(int).
 
 ---
 
-## 7. 기존 `agent/wiki_builder/` 구현과의 차이 ⚠️
+## 7. `agent/wiki_builder/` 구현 상태
 
-현 구현(`vault.py`, `models.py`, `planner.py`, `llm_wiki.py`, 테스트 34개 통과)은 **이 문서의 포맷과 다른 산출물을 만든다.** 코드 docstring이 참조하는 "Agent DB Wiki 생성 규칙서"는 저장소에 파일로 존재하지 않는다.
+2026-07-15 개선으로 구현의 의미 모델을 DB 문서화 Wiki에서 **개인
+지식 Wiki**로 변경했다. Entity는 사람·조직·프로젝트·제품·사건·장소를,
+Concept은 이론·방법·분야·현상·표준·용어를 표현한다.
 
-현 구현은 **Agent DB 구조를 문서화하는 위키**로 보인다(entity = DB 테이블, `columns` = 컬럼, concept 설명 = "왜 이렇게 설계했는지, 트레이드오프"). 반면 이 문서가 기술한 Vault는 **개인 지식 위키**(entity = 사람·장소·제품)다. 폴더 taxonomy만 같고 내용 모델이 다르다.
+현재 구현은 Frontmatter, 고정 섹션, 풀 경로 Wiki Link,
+`슬러그_해시6.md` source 파일, 3섹션 index, Block 형식 ingest log,
+원본 tag 상속, verbatim 인용 검증, 별칭·출처 append-only 병합을
+이 문서와 동일한 방향으로 생성한다.
 
-| 항목 | 현 구현 (`vault.py`) | 실제 Vault (이 문서) |
+DB MVP 계약에서 `schema/schema.md`는 Graph Snapshot으로 자동 생성하고,
+DB 무결성 Hash는 SHA-256 64자를 유지한다. source/index/log는 현재
+Build Artifact로 반환하며 실제 Vault 파일 Export는 별도 Adapter 범위다.
+
+### 변경 전 구현과의 차이 기록
+
+변경 전 구현(`vault.py`, `models.py`, `planner.py`, `llm_wiki.py`)은 **이
+문서의 포맷과 다른 산출물을 만들었다.** 아래 표는 개선 이전 상태를
+기록한 historical note다.
+
+변경 전 구현은 **Agent DB 구조를 문서화하는 위키**였고, 이
+문서가 기술한 Vault는 **개인 지식 위키**였다.
+
+| 항목 | 변경 전 구현 (`vault.py`) | 실제 Vault (이 문서) |
 |---|---|---|
 | entity frontmatter | `title`, `type`, `domain`, `tags: [entity, {domain}]` | `type`, `created`, `updated`, `sources[]`, `tags:[서브타입]`, `aliases[]`, `generation_complete` |
 | entity 섹션 | `# 이름` / 역할 / 주요 컬럼 / 관계 / 관련 개념 / 출처 | Basic Information / Description / Related Entities / Related Concepts / Mentions in Source |
@@ -203,12 +221,12 @@ frontmatter: `version`(int), `updated`(date), `auto_suggestion_count`(int).
 | slug | 이모지·`&`·`•` → `-` 로 치환 | 이모지 보존 (`여름-홋카이도-여행-브이로그🪻-…`) |
 | content hash | SHA-256 64자 | `contentHash: 20c2-bb30eb38` (2파트 단축형), 파일명 접미사 6자 hex |
 
-### 결정이 필요한 항목
+### 개선 시 확정한 항목
 
-1. **두 위키는 같은 것인가?** Vault 포맷으로 현 구현을 수렴시킬지, 아니면 DB 문서화 위키와 개인 지식 위키를 별개 산출물로 둘지.
-2. **schema의 방향** — 산출물(현 구현) vs 입력 설정(Vault). 이 둘은 정반대라 양립이 어렵다.
-3. **entity 모델** — `columns`/`role`/`domain`(DB 지향)을 유지할지, `aliases`/`Description`/`Mentions`(지식 지향)로 바꿀지.
-4. **"Agent DB Wiki 생성 규칙서"의 소재** — 저장소에 없다. 이 문서가 그 자리를 대신할지, 별도 문서인지.
+1. DB 문서화 Wiki가 아닌 개인 지식 Wiki 의미 모델을 사용한다.
+2. `schema/schema.md`는 DB MVP의 Build Graph Snapshot으로 유지한다.
+3. Entity는 `aliases`·Description·Mentions를 중심으로 표현하고 DB 컬럼 문서화 필드는 제거한다.
+4. 이 문서를 개인 Wiki 생성 규칙과 구현 정합성의 기준으로 사용한다.
 
 ---
 

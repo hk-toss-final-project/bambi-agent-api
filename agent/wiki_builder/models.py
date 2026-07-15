@@ -1,7 +1,7 @@
-"""LLM Wiki Builder가 계층 사이에서 주고받는 순수 데이터 구조.
+"""개인 LLM Wiki Builder가 계층 사이에서 주고받는 순수 데이터 구조.
 
-DB 스키마나 LLM 호출에 의존하지 않는 값 객체만 모아, vault·llm_wiki·planner·
-persistence 모듈이 서로 순환 참조 없이 이 모듈만 공유하게 한다.
+DB 스키마나 LLM 호출에 의존하지 않는 값 객체만 모아, 분류·계획·
+영속화 계층이 순환 참조 없이 공유하게 한다.
 """
 
 from __future__ import annotations
@@ -18,30 +18,37 @@ class ExistingWikiEntry:
     title: str
     domain: str | None
     summary: str | None
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
 class EntityClassification:
-    """LLM이 판단한 entity 후보 한 건."""
+    """LLM이 판단한 사람·조직·제품 등의 entity 후보 한 건."""
 
     name: str
-    domain: str
-    role: str
-    columns: list[str] = field(default_factory=list)
-    relations: list[str] = field(default_factory=list)
+    subtype: str = "other"
+    description: str = ""
+    aliases: list[str] = field(default_factory=list)
+    related_entity_names: list[str] = field(default_factory=list)
     related_concepts: list[str] = field(default_factory=list)
+    mentions: list[str] = field(default_factory=list)
     matched_existing_key: str | None = None
     is_alias: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class ConceptClassification:
-    """LLM이 판단한 concept 후보 한 건."""
+    """LLM이 판단한 이론·방법·분야·용어 등의 concept 후보 한 건."""
 
     title: str
-    summary: str
-    explanation: str
+    subtype: str = "other"
+    definition: str = ""
+    key_characteristics: list[str] = field(default_factory=list)
+    applications: list[str] = field(default_factory=list)
     related_entity_names: list[str] = field(default_factory=list)
+    related_concepts: list[str] = field(default_factory=list)
+    aliases: list[str] = field(default_factory=list)
+    mentions: list[str] = field(default_factory=list)
     matched_existing_key: str | None = None
     overlaps_existing: bool = False
 
@@ -50,6 +57,7 @@ class ConceptClassification:
 class WikiClassification:
     """LLM 분류 호출 한 번의 전체 결과."""
 
+    source_summary: str = ""
     entities: list[EntityClassification] = field(default_factory=list)
     concepts: list[ConceptClassification] = field(default_factory=list)
 
@@ -66,6 +74,7 @@ class WikiDocumentPlan:
     summary: str
     normalized_content: str
     action: str
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
