@@ -133,6 +133,26 @@ docker compose exec -T -u postgres agent-db /bin/sh /usr/local/bin/initialize-ag
 `wiki_documents`와 `wiki_document_versions`는 Worker가 생성한 LLM Wiki만 저장하고,
 `wiki_document_sources`가 Wiki Version과 원본 Version을 연결합니다.
 
+`0005`는 LLM Wiki를 `entities/*.md`, `concepts/*.md`, `schema/schema.md`로
+식별할 수 있도록 `wiki_documents`에 문서 유형·논리 Key·파일 경로를
+추가합니다. `wiki_document_relations`는 문서 Graph를,
+`wiki_version_documents`는 특정 Wiki Build의 정확한 문서 Version 구성을 보존합니다.
+
+```sql
+SELECT document.document_kind,
+       document.document_key,
+       document.file_path,
+       version.version,
+       version.normalized_content
+FROM agent.wiki_documents AS document
+JOIN agent.wiki_document_versions AS version
+  ON version.document_id = document.id
+ AND version.version = document.current_version
+WHERE document.namespace_key = 'user/{user_id}'
+  AND document.deleted_at IS NULL
+ORDER BY document.file_path;
+```
+
 목업 데이터를 다시 적용할 때는 다음 Seed를 순서대로 실행합니다. 두 번째 Seed는
 기존 발행 시도 이력을 지우고 세 Snapshot을 `ready` 상태로 되돌립니다. 세 번째
 Seed는 클리핑 Job과 Source Event를 `queued`, `received`로 되돌리고 해당 원본으로

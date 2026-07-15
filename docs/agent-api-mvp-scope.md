@@ -4,7 +4,7 @@
 
 ## MVP 목표
 
-- 사용자가 선택한 데이터로 개인 LLM Wiki를 구성한다.
+- 사용자가 선택한 데이터로 Entity·Concept·Schema 구조의 개인 LLM Wiki를 구성한다.
 - 웹 클리퍼가 전달한 Frontmatter와 Markdown 원문을 PostgreSQL에 영구 저장한다.
 - Personal Wiki Builder Worker가 저장된 클리핑을 Chunk·Embedding·관심사 갱신까지 비동기로 처리한다.
 - 개인 Wiki 데이터를 기반으로 사용자 관심사를 분류한다.
@@ -36,7 +36,7 @@
 | PWIKI-007 | Wiki 문서 출처 추적 | 생성된 Wiki Version과 참고한 원본 Version의 관계를 보존한다. |
 | PWIKI-011 | Wiki 문서 정규화 | Frontmatter와 Markdown 원본을 읽어 LLM Wiki 문서 구조로 변환한다. |
 | DB-002 | Wiki Source Event·원본 저장 | 요청 상태는 wiki_source_events에, Frontmatter와 Markdown은 user_source_documents 계열에 영속 저장한다. |
-| DB-003 | 개인 LLM Wiki 문서 저장 | Worker가 만든 Wiki를 wiki_documents·wiki_document_versions에 저장하고 wiki_document_sources로 원본을 연결한다. |
+| DB-003 | 개인 LLM Wiki 문서 저장 | Worker가 만든 Entity·Concept·Schema를 wiki_documents·wiki_document_versions에 저장하고 원본·문서 관계를 연결한다. |
 
 클리핑 API는 DB Transaction이 Commit된 뒤에만 202 Accepted를 반환합니다. Agent API가
 Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 저장한 상태로 성공을
@@ -57,6 +57,16 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | PRAG-003 | Hybrid Search | Keyword와 Vector 검색 결과를 결합한다. |
 | PRAG-006 | 개인 Wiki Context 구성 | LLM 입력에 사용할 개인 Wiki Context를 구성한다. |
 | PRAG-007 | Citation 연결 | 생성 결과와 참조한 개인 Wiki 문서를 연결한다. |
+
+### Obsidian LLM Wiki 구조 계약
+
+- Entity는 입력에서 발견한 고유 대상별로 `entities/{document_key}.md` 한 개를 유지합니다.
+- 같은 `document_key`의 Entity가 이미 있으면 새 문서를 만들지 않고 기존 `wiki_documents`에 새 `wiki_document_versions`를 추가합니다.
+- Concept은 둘 이상 Entity에서 반복되는 설계 패턴일 때만 `concepts/{document_key}.md`로 생성합니다. 단일 Entity 전용 설명은 Entity 문서에 남깁니다.
+- 기존 Concept과 70% 이상 겹치는 패턴은 새 문서로 만들지 않고 기존 Concept을 갱신합니다. 의미 유사도는 Worker가 판단하고 DB는 결과만 보존합니다.
+- Schema는 사용자 Namespace당 `schema/schema.md` 하나만 존재하며, Entity 추가·삭제나 관계 변경 시 새 Version을 생성합니다.
+- 완성 Markdown은 YAML Frontmatter를 포함해 `wiki_document_versions.normalized_content`에 저장합니다.
+- `wiki_document_relations`는 Entity·Concept 관계를, `wiki_version_documents`는 특정 Wiki Build의 문서 Version·파일 경로 구성을 보존합니다.
 
 ## 3. DB 기반 관심사 분류
 
@@ -117,12 +127,12 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | JOB-001 | Agent Job 생성 | 클리핑 저장 Transaction에서 Personal Wiki Build Job을 함께 생성한다. |
 | JOB-002 | Agent Job 조회 | API와 Worker가 클리핑 Job 상태와 진행률을 조회한다. |
 | JOB-006 | Agent Job 진행률 관리 | 정규화, Chunking, Embedding, 관심사 갱신 단계를 기록한다. |
-| JOB-007 | Agent Job 결과 연결 | 입력에는 source_document_id·source_document_version_id를, 완료 결과에는 생성된 document_id·document_version_id를 연결한다. |
+| JOB-007 | Agent Job 결과 연결 | 입력에는 원본 ID를, 완료 결과에는 생성·갱신된 문서/Version ID 목록과 wiki_version_id를 연결한다. |
 | JOB-010 | Agent Job Idempotency | 동일 클리핑 요청이 Worker Job을 중복 생성하지 않도록 한다. |
 | WC-001 | Queue Job Consume | Worker가 실행 가능한 Personal Wiki Job Batch를 가져온다. |
 | WC-002 | Job Claim | FOR UPDATE SKIP LOCKED와 Lease로 Job Batch를 점유한다. |
 | WC-006 | Retry 정책 | 재시도 가능한 Chunking·Embedding 실패를 Backoff 후 다시 처리한다. |
-| WC-009 | Idempotency 처리 | 같은 source_document_version_id를 다시 처리해도 Wiki·출처·파생 Row가 중복되지 않게 한다. |
+| WC-009 | Idempotency 처리 | 같은 원본을 다시 처리해도 document_kind+document_key, Wiki·출처·관계·Snapshot Row가 중복되지 않게 한다. |
 | WC-013 | Concurrency 제어 | Claim 크기와 Embedding 동시 실행 수를 별도로 제한한다. |
 | DB-004 | 개인 Wiki Chunk 저장 | wiki_chunks에 문서 Version별 Chunk를 영속 저장한다. |
 | DB-005 | 개인 Wiki Embedding 저장 | wiki_embeddings에 Chunk별 Vector를 영속 저장한다. |
@@ -133,9 +143,9 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 - Extension은 service-api의 사용자 인증 경계를 거치고, service-api가 Agent API의 내부 클리핑 경로를 호출합니다.
 - Agent API는 source_event_id 멱등성을 확인한 뒤 Source Event, 사용자 원본 문서·Version, Personal Wiki Build Job을 한 Transaction으로 저장합니다.
 - Markdown 원문 저장은 LLM 호출 없이 수행하며 title과 본문은 각각 user_source_document_versions.title, raw_content에 보존합니다.
-- Worker는 Job Batch를 Lease와 함께 Claim하고 source_document_version_id를 기준으로 LLM Wiki 문서·Version과 wiki_document_sources 출처 관계를 생성한 뒤 Chunk, Embedding과 관심사를 갱신합니다.
+- Worker는 Job Batch를 Lease와 함께 Claim하고 source_document_version_id를 기준으로 Entity·Concept·Schema를 Upsert합니다. 새 문서 Version, 원본·문서 관계, Wiki Build 구성을 한 결과 Transaction에 저장한 뒤 Chunk, Embedding과 관심사를 갱신합니다.
 - Worker 재시도 중에도 Markdown 원문과 Frontmatter는 삭제하지 않습니다. 생성 Wiki·출처 관계·Chunk·Embedding만 멱등하게 다시 생성할 수 있습니다.
-- 성공 시 Source Event와 Job을 completed로 바꾸고 source_document_id, source_document_version_id, document_id, document_version_id, chunk_count를 결과에 기록합니다.
+- 성공 시 Source Event와 Job을 completed로 바꾸고 source_document_id, source_document_version_id, wiki_version_id, affected_documents, chunk_count를 결과에 기록합니다. affected_documents의 각 항목은 document_id, document_version_id, document_kind, document_key, file_path를 포함합니다.
 - 최종 실패 시 Source Event와 Job의 오류를 기록하되 저장된 Markdown 원문은 사용자가 삭제할 때까지 유지합니다.
 
 ### MVP Batch 처리 계약

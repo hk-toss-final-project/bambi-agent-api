@@ -4,9 +4,10 @@
 > database/migrations/0001_initial.sql,
 > database/migrations/0002_publish_snapshot_batches.sql,
 > database/migrations/0003_web_clipping_markdown.sql,
-> database/migrations/0004_separate_user_sources_from_llm_wiki.sql입니다.
+> database/migrations/0004_separate_user_sources_from_llm_wiki.sql,
+> database/migrations/0005_structure_llm_wiki_documents.sql입니다.
 
-이 문서는 Agent DB의 41개 테이블을 영역과 데이터 성격으로 분류하고, 각 테이블의
+이 문서는 Agent DB의 43개 테이블을 영역과 데이터 성격으로 분류하고, 각 테이블의
 책임, 핵심 관계·제약, RLS 적용 여부와 현재 애플리케이션 연결 상태를 정리합니다.
 데이터 소유권, 배포 구조와 운영 원칙은 agent-db-design.md를 함께 참고합니다.
 컬럼별 타입·필수 여부·기본값·의미는 agent-db-column-dictionary.md를 참고합니다.
@@ -58,8 +59,8 @@ user_context_snapshots와 agent_jobs 대신 인메모리 저장소를 사용합�
 | 설정 | prompt_templates, prompt_versions, model_configs, retrieval_configs, embedding_configs |
 | 사용자·Job | user_context_snapshots, agent_jobs, agent_job_attempts |
 | 사용자 원본 | wiki_source_events, user_source_documents, user_source_document_versions |
-| 지식 문서·검색 공용 | wiki_documents, wiki_document_versions, wiki_document_sources, wiki_chunks, wiki_embeddings |
-| Personal Wiki | wiki_versions |
+| 지식 문서·검색 공용 | wiki_documents, wiki_document_versions, wiki_document_sources, wiki_document_relations, wiki_chunks, wiki_embeddings |
+| Personal Wiki | wiki_versions, wiki_version_documents |
 | 사용자 관심사 | user_interest_profiles, user_interests, interest_evidence |
 | Global Source·Discovery | global_sources, global_collection_runs, global_trends, global_trend_documents, discovery_candidates |
 | 콘텐츠 생성 | generation_requests, generation_runs, generated_content_candidates, citations, content_assets |
@@ -73,6 +74,8 @@ user_context_snapshots와 agent_jobs 대신 인메모리 저장소를 사용합�
 publish_snapshots, publish_attempts에 Lease 기반 Batch 처리 Column과 Index를
 추가합니다. 0003은 과거 Wiki Version에 클리핑 필드를 추가하고, 0004는 해당 필드를
 사용자 원본 테이블로 이관하면서 원본·LLM Wiki·출처 관계 테이블 3개를 추가합니다.
+0005는 Wiki Head에 Entity·Concept·Schema 유형과 Vault 경로를 추가하고,
+문서 Graph·Wiki Build 구성 관계 테이블 2개를 추가합니다.
 
 ## 3. 설정
 
@@ -101,20 +104,25 @@ agent_jobs는 0002 Migration에서 lease_expires_at과 Claim 가능 Job 조회 I
 
 ## 5. 지식 문서와 검색
 
-아래 다섯 테이블은 Agent가 구성한 Personal LLM Wiki와 정규화된 Global 지식이
+아래 여섯 테이블은 Agent가 구성한 Personal LLM Wiki와 정규화된 Global 지식이
 공유합니다. knowledge_scope와 namespace_key가 데이터 경계를 결정합니다.
 
 | 테이블 | 성격 | 책임 | 핵심 관계·제약 | RLS | 현재 연결 |
 |---|---|---|---|---|---|
-| wiki_documents | Master/Head | Agent가 생성한 Wiki 문서의 Scope, 최신 버전, URL, Hash와 상태 관리 | Personal은 user/{user_id}, Global은 global, Namespace 내 URL·Hash Unique | 적용 | Schema only |
+| wiki_documents | Master/Head | Agent가 생성한 Wiki 문서의 Scope, Entity·Concept·Schema 유형, 논리 Key, Vault 경로와 최신 버전 관리 | Namespace 내 유형+Key·파일 경로 Unique, Schema 1개 | 적용 | Schema only |
 | wiki_document_versions | Version | LLM이 구성한 제목, 요약, 정규화 본문과 생성 Job 보존 | document_id + version Unique, normalized_content 또는 object_uri 필수 | 적용 | Schema only |
 | wiki_document_sources | Relation | 생성된 Wiki Version과 참고한 사용자 원본 Version 연결 | Wiki Version + 원본 Version Composite PK, 동일 Namespace FK | 적용 | Schema only |
+| wiki_document_relations | Relation/Graph | Entity·Concept 등 Wiki 문서 사이의 현재 관계 저장 | 출발+대상+유형 Composite PK, 동일 Namespace FK, 자기 참조 금지 | 적용 | Schema only |
 | wiki_chunks | Derived | 문서 버전을 검색·LLM 입력 단위로 분할 | document_version_id + chunk_index Unique, FTS와 pg_trgm GIN Index | 적용 | Schema only |
 | wiki_embeddings | Derived | Chunk의 의미 검색 Vector와 생성 설정 보존 | chunk_id + embedding_config_id Unique, vector(1536), Cosine HNSW | 적용 | Schema only |
 
 wiki_document_versions.normalized_content는 클리핑 원문이 아니라 Worker가 원본을
 정리·통합해 만든 LLM Wiki 본문입니다. wiki_chunks와 wiki_embeddings도 이 Wiki
 결과에서 다시 만들 수 있는 검색 파생 데이터입니다.
+
+Personal LLM Wiki의 신규 문서는 document_kind으로 entity, concept, schema를
+사용합니다. document는 0005 적용 전 문서와 정규화된 일반 Global 문서의
+호환 유형입니다. source_type은 유입 경로이므로 문서 구조 유형으로 재사용하지 않습니다.
 
 ## 6. Personal Wiki
 
@@ -123,7 +131,8 @@ wiki_document_versions.normalized_content는 클리핑 원문이 아니라 Worke
 | wiki_source_events | Operational/Event | 클리핑, URL, 위키마킹 등 사용자 입력의 멱등 처리 | user_id + source_event_id Unique, Job 참조, received~ignored 상태 | 적용 | Schema only |
 | user_source_documents | Master/Head | 사용자가 저장한 클리핑·URL 원본의 식별자, URL, 최신 버전과 상태 관리 | Personal Namespace 강제, URL·Hash Unique, Soft Delete | 적용 | Schema only |
 | user_source_document_versions | Version/Raw | Frontmatter, Markdown 원문 또는 외부 Object URI를 버전별 보존 | source_document_id + version Unique, raw_content 또는 object_uri 필수 | 적용 | Schema only |
-| wiki_versions | Snapshot/Version | 사용자 Wiki 전체 Build 버전과 문서·Chunk 수 보존 | user_id + version Unique, 사용자별 active 1개 | 적용 | Schema only |
+| wiki_versions | Snapshot/Version | 사용자 Wiki 전체 Build 버전과 문서·Chunk 수 보존 | user_id + version Unique, Personal Namespace 강제, 사용자별 active 1개 | 적용 | Schema only |
+| wiki_version_documents | Snapshot Relation | Wiki Build를 구성한 정확한 문서 Version과 당시 Vault 경로 보존 | Build+문서 Version PK, Build+파일 경로 Unique, 동일 Namespace FK | 적용 | Schema only |
 
 웹 클리핑의 title, author, published, created, description, tags와 Markdown 본문은
 user_source_document_versions에, source URL은 user_source_documents.canonical_url에
@@ -226,9 +235,10 @@ Seed가 최신 상태여야 Health Check를 통과합니다.
       → agent_jobs(personal_wiki_build)
       → wiki_documents
       → wiki_document_versions
-      → wiki_document_sources
+      → wiki_document_sources / wiki_document_relations
       → wiki_chunks
       → wiki_embeddings
+      → wiki_versions / wiki_version_documents
 
 ### Global Source
 
@@ -260,5 +270,6 @@ Seed가 최신 상태여야 Health Check를 통과합니다.
 - Publish Batch 확장: ../database/migrations/0002_publish_snapshot_batches.sql
 - 웹 클리핑 Markdown 확장: ../database/migrations/0003_web_clipping_markdown.sql
 - 사용자 원본과 LLM Wiki 분리: ../database/migrations/0004_separate_user_sources_from_llm_wiki.sql
+- LLM Wiki Vault 구조·관계·Snapshot: ../database/migrations/0005_structure_llm_wiki_documents.sql
 - 로컬 실행과 Schema 검증: ../database/README.md
 - Service Worker HTTP 계약: fastapi-mvp-api.md

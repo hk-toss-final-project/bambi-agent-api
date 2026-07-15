@@ -1,6 +1,6 @@
 # Agent DB PostgreSQL 설계
 
-테이블 41개의 영역·성격·관계·RLS·런타임 연결 상태는
+테이블 43개의 영역·성격·관계·RLS·런타임 연결 상태는
 [Agent DB 테이블 카탈로그](agent-db-table-catalog.md)에서 확인합니다.
 각 컬럼의 타입·필수 여부·기본값·의미는
 [Agent DB 컬럼 사전](agent-db-column-dictionary.md)에서 확인합니다.
@@ -66,9 +66,13 @@ erDiagram
     USER_SOURCE_DOCUMENTS ||--o{ USER_SOURCE_DOCUMENT_VERSIONS : "versions"
     USER_SOURCE_DOCUMENT_VERSIONS }o--o{ WIKI_DOCUMENT_VERSIONS : "source of"
     WIKI_DOCUMENTS ||--o{ WIKI_DOCUMENT_VERSIONS : "versions"
+    WIKI_DOCUMENTS ||--o{ WIKI_DOCUMENT_RELATIONS : "source"
+    WIKI_DOCUMENTS ||--o{ WIKI_DOCUMENT_RELATIONS : "target"
     WIKI_DOCUMENT_VERSIONS ||--o{ WIKI_CHUNKS : "chunks"
     WIKI_CHUNKS ||--o{ WIKI_EMBEDDINGS : "embeds"
     EMBEDDING_CONFIGS ||--o{ WIKI_EMBEDDINGS : "configures"
+    WIKI_VERSIONS ||--o{ WIKI_VERSION_DOCUMENTS : "contains"
+    WIKI_DOCUMENT_VERSIONS ||--o{ WIKI_VERSION_DOCUMENTS : "snapshotted as"
     GENERATION_REQUESTS ||--o{ GENERATION_RUNS : "attempts"
     GENERATION_RUNS ||--o{ GENERATED_CONTENT_CANDIDATES : "produces"
     GENERATED_CONTENT_CANDIDATES ||--o{ CITATIONS : "cites"
@@ -82,10 +86,10 @@ erDiagram
 |---|---|---|
 | DB-001 | 사용자 컨텍스트 저장 | `user_context_snapshots` |
 | DB-002 | Wiki Source Event·사용자 원본 저장 | `wiki_source_events`, `user_source_documents`, `user_source_document_versions` |
-| DB-003 | 개인 LLM Wiki 문서 저장과 원본 추적 | `wiki_documents`, `wiki_document_versions`, `wiki_document_sources` |
+| DB-003 | 개인 LLM Wiki 문서 저장과 원본·문서 관계 추적 | `wiki_documents`, `wiki_document_versions`, `wiki_document_sources`, `wiki_document_relations` |
 | DB-004 | 개인 Wiki Chunk 저장 | `wiki_chunks` |
 | DB-005 | 개인 Wiki Embedding 저장 | `wiki_embeddings` |
-| DB-006 | 개인 Wiki Version 저장 | `wiki_versions` |
+| DB-006 | 개인 Wiki Build Version과 구성 문서 저장 | `wiki_versions`, `wiki_version_documents` |
 | DB-007 | 사용자 관심사 저장 | `user_interest_profiles`, `user_interests`, `interest_evidence` |
 | DB-008 | Global Source 저장 | `global_sources` |
 | DB-009 | Global Collection Run 저장 | `global_collection_runs` |
@@ -132,6 +136,31 @@ Agent가 만든 `wiki_documents`, `wiki_document_versions`, `wiki_chunks`, `wiki
 - 자동 수집 Global 문서는 사용자의 선택 없이 Personal Namespace로 이동하지 않습니다.
 - Personal LLM Wiki 문서 삭제 시 Version → 출처 연결·Chunk → Embedding 순서가 Foreign Key Cascade로 정리됩니다. 사용자 원본은 별도 삭제 요청 전까지 영향을 받지 않습니다.
 
+### Obsidian LLM Wiki Vault 구조
+
+Personal LLM Wiki의 Entity, Concept, Schema는 서로 다른 Table이 아니라
+`wiki_documents`의 논리 문서 Row로 저장합니다. Markdown 변경은 같은
+`document_id`에 `wiki_document_versions` Row를 추가하는 방식으로 보존합니다.
+
+| document_kind | 기본 경로 | 생성·갱신 기준 |
+|---|---|---|
+| `entity` | `entities/{document_key}.md` | 서로 다른 구체 대상당 한 문서. 같은 Key는 새 Row 대신 새 Version 생성 |
+| `concept` | `concepts/{document_key}.md` | 둘 이상 Entity가 공유하는 설계 패턴당 한 문서 |
+| `schema` | `schema/schema.md` | Namespace당 항상 하나만 유지하고 Entity·관계 변경 시 새 Version 생성 |
+| `document` | `documents/{document_key}.md` | 0005 이전 문서와 구조화되지 않은 일반·Global 문서 호환 유형 |
+
+- `document_key`는 문서 내용이 변경되어도 같은 논리 대상을 찾는 Upsert Key입니다.
+- `file_path`는 Obsidian으로 내보낼 Vault 경로이며 Namespace 내 활성 문서 사이에서 Unique합니다.
+- `source_type`은 클리핑·RSS·Agent 생성 등 유입 경로이므로 Entity·Concept·Schema 구분에 사용하지 않습니다.
+- YAML Frontmatter를 포함한 완성 Markdown은 `wiki_document_versions.normalized_content`에 저장해 Vault 파일로 손실 없이 내보냅니다.
+- `wiki_document_relations`는 Entity 관계, Concept 적용, Concept 간 관계와 별칭을 구조화합니다. 관계 설명·Cardinality는 Metadata에 보존합니다.
+- 각 `wiki_versions` Build는 `wiki_version_documents`로 정확한 문서 Version과 당시 파일 경로를 고정해 해당 시점의 Vault를 재구성할 수 있게 합니다.
+
+Concept의 2개 이상 Entity 공유, 기존 Concept과 70% 이상 중복, 실질적 설계
+이유 포함 여부는 의미 판단이므로 DB Check 제약이 아니라 Worker 정책으로
+검증합니다. DB는 판단 결과의 안정적 식별, Namespace 격리와 이력 복원을
+담당합니다.
+
 ### 웹 클리핑 Markdown
 
 웹 클리퍼가 전달하는 YAML Frontmatter와 Markdown 본문은 `user_source_document_versions`에 원본으로 보존합니다. HTML 원문을 다시 저장하지 않으며, LLM Wiki·Chunk·Embedding 생성 후에도 Markdown은 사용자가 저장한 기준 원문으로 유지합니다.
@@ -147,7 +176,7 @@ Agent가 만든 `wiki_documents`, `wiki_document_versions`, `wiki_chunks`, `wiki
 | `tags` | `user_source_document_versions.tags` |
 | Markdown 본문 | `user_source_document_versions.raw_content` |
 
-`wiki_source_events`는 클리핑 요청의 멱등성, 처리 상태와 최소 수신 Metadata만 보관합니다. Worker는 원본 Version ID로 Job을 처리해 `wiki_documents`와 `wiki_document_versions`를 새로 만들고 `wiki_document_sources`에 출처를 연결합니다. `0004_separate_user_sources_from_llm_wiki.sql`은 0003에서 Wiki Version으로 저장했던 기존 개인 클리핑을 원본 테이블로 이관하고, Wiki Version에서 Frontmatter 전용 컬럼을 제거합니다.
+`wiki_source_events`는 클리핑 요청의 멱등성, 처리 상태와 최소 수신 Metadata만 보관합니다. Worker는 원본 Version ID로 Job을 처리해 `document_kind + document_key`로 `wiki_documents`를 Upsert하고, 새 `wiki_document_versions`와 `wiki_document_sources`를 생성합니다. `0004_separate_user_sources_from_llm_wiki.sql`은 0003에서 Wiki Version으로 저장했던 기존 개인 클리핑을 원본 테이블로 이관하고, Wiki Version에서 Frontmatter 전용 컬럼을 제거합니다. `0005_structure_llm_wiki_documents.sql`은 Wiki 파일 식별·문서 Graph·Build Snapshot 구조를 추가합니다.
 
 ### Hybrid Search와 Vector
 

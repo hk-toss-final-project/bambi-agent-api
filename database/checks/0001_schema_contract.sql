@@ -12,9 +12,11 @@ DECLARE
         'wiki_documents',
         'wiki_document_versions',
         'wiki_document_sources',
+        'wiki_document_relations',
         'wiki_chunks',
         'wiki_embeddings',
         'wiki_versions',
+        'wiki_version_documents',
         'user_interest_profiles',
         'user_interests',
         'global_sources',
@@ -47,6 +49,12 @@ DECLARE
         'tags',
         'content_format'
     ];
+    required_wiki_document_columns text[] := ARRAY[
+        'document_kind',
+        'document_key',
+        'file_path',
+        'domain'
+    ];
     required_table_name text;
     required_column_name text;
 BEGIN
@@ -76,6 +84,28 @@ BEGIN
         END IF;
     END LOOP;
 
+    FOREACH required_column_name IN ARRAY required_wiki_document_columns LOOP
+        IF NOT EXISTS (
+            SELECT 1
+            FROM information_schema.columns AS schema_column
+            WHERE schema_column.table_schema = 'agent'
+              AND schema_column.table_name = 'wiki_documents'
+              AND schema_column.column_name = required_column_name
+        ) THEN
+            RAISE EXCEPTION 'required structured Wiki column agent.wiki_documents.% is missing', required_column_name;
+        END IF;
+    END LOOP;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns AS schema_column
+        WHERE schema_column.table_schema = 'agent'
+          AND schema_column.table_name = 'wiki_versions'
+          AND schema_column.column_name = 'namespace_key'
+    ) THEN
+        RAISE EXCEPTION 'required structured Wiki column agent.wiki_versions.namespace_key is missing';
+    END IF;
+
     IF EXISTS (
         SELECT 1
         FROM information_schema.columns AS schema_column
@@ -96,6 +126,16 @@ BEGIN
         RAISE EXCEPTION 'HNSW embedding index is missing';
     END IF;
 
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_indexes
+        WHERE schemaname = 'agent'
+          AND indexname = 'uq_wiki_documents_schema_per_namespace'
+          AND indexdef LIKE '%UNIQUE%'
+    ) THEN
+        RAISE EXCEPTION 'single schema document index is missing';
+    END IF;
+
     IF EXISTS (
         SELECT 1
         FROM pg_class AS relation
@@ -107,6 +147,8 @@ BEGIN
               'user_source_document_versions',
               'wiki_documents',
               'wiki_document_sources',
+              'wiki_document_relations',
+              'wiki_version_documents',
               'wiki_chunks',
               'wiki_embeddings',
               'generated_content_candidates'

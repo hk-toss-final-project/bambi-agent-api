@@ -1,8 +1,9 @@
 # Agent DB 컬럼 사전
 
-> 기준: 2026-07-15. 41개 테이블, 481개 컬럼을 0001_initial.sql,
+> 기준: 2026-07-15. 43개 테이블, 497개 컬럼을 0001_initial.sql,
 > 0002_publish_snapshot_batches.sql, 0003_web_clipping_markdown.sql,
-> 0004_separate_user_sources_from_llm_wiki.sql 기준으로 정리했습니다.
+> 0004_separate_user_sources_from_llm_wiki.sql,
+> 0005_structure_llm_wiki_documents.sql 기준으로 정리했습니다.
 
 이 문서는 Agent DB의 모든 테이블과 컬럼을 물리 Schema 수준에서 설명합니다.
 테이블의 영역·성격·관계·RLS·런타임 연결 상태는
@@ -247,6 +248,10 @@ Agent가 생성한 Personal LLM Wiki와 정규화된 Global 문서의 식별자�
 | user_id | text | 선택 | Personal 문서 소유 사용자, Global 문서는 NULL |
 | source_event_id | uuid | 선택, FK | Personal Wiki 편입의 원천 wiki_source_events 식별자 |
 | source_type | text | 필수 | clipping, rss, news_api 등 문서 유입 유형 |
+| document_kind | text | 필수 | 문서 구조 유형: document, entity, concept, schema |
+| document_key | text | 필수 | Namespace와 문서 유형 안에서 안정적으로 Upsert할 논리 Key |
+| file_path | text | 필수 | Obsidian Vault 기준 Markdown 경로 |
+| domain | text | 선택 | Entity 등의 업무·지식 Domain |
 | canonical_url | text | 선택 | 중복 판정과 원문 연결에 사용할 정규 URL |
 | language | text | 자동, und | 문서 언어 코드, 미확정은 und |
 | status | text | 자동, active | active, deleted, archived, superseded |
@@ -291,6 +296,22 @@ Frontmatter와 Markdown은 이 테이블이 아니라 user_source_document_versi
 | relation_type | text | 자동, source | source, citation, inspiration |
 | relevance_score | numeric(8,6) | 선택 | Wiki와 원본의 관련도, 0~1 |
 | created_at | timestamptz | 자동 | 출처 관계 생성 시각 |
+
+### wiki_document_relations
+
+Entity, Concept 등 생성된 Wiki 문서 사이의 현재 논리 Graph를 저장합니다.
+
+| 컬럼 | 타입 | 필수·기본값 | 설명 |
+|---|---|---|---|
+| source_document_id | uuid | 필수, FK, 복합 PK | 관계를 설명하는 출발 wiki_documents 식별자 |
+| target_document_id | uuid | 필수, FK, 복합 PK | 관계가 가리키는 대상 wiki_documents 식별자 |
+| namespace_key | text | 필수 | 출발·대상 문서에 동일하게 적용되는 Namespace |
+| relation_type | text | 필수, 복합 PK | entity_relation, applies_concept, related_concept, alias_of |
+| metadata | jsonb | 자동, 빈 Object | Cardinality, 관계 이름, 병합 판단 등 확장 Metadata |
+| created_at | timestamptz | 자동 | 관계 생성 시각 |
+
+자기 자신을 대상으로 하는 관계는 금지되며, 복합 FK가 서로 다른
+Namespace의 문서를 연결하지 못하게 막습니다.
 
 ### wiki_chunks
 
@@ -359,6 +380,7 @@ Chunk의 의미 검색 Vector를 생성 설정과 함께 저장합니다.
 |---|---|---|---|
 | id | uuid | 자동, PK | Wiki Build Version 내부 식별자 |
 | user_id | text | 필수 | Wiki 소유 사용자 식별자 |
+| namespace_key | text | 필수 | 반드시 user/{user_id}인 Wiki Build Namespace |
 | version | bigint | 필수 | 사용자 안에서 증가하는 Wiki Build 버전 |
 | status | text | 자동, building | building, active, failed, retired |
 | document_count | integer | 자동, 0 | 이 Build에 포함된 활성 문서 수 |
@@ -367,6 +389,21 @@ Chunk의 의미 검색 Vector를 생성 설정과 함께 저장합니다.
 | built_by_job_id | uuid | 선택, FK | Wiki Build를 실행한 agent_jobs 식별자 |
 | created_at | timestamptz | 자동 | Build 버전 생성 시각 |
 | activated_at | timestamptz | 선택 | active 버전으로 전환된 시각 |
+
+### wiki_version_documents
+
+특정 Personal Wiki Build를 구성한 문서 Version과 당시 Vault 경로를 고정합니다.
+
+| 컬럼 | 타입 | 필수·기본값 | 설명 |
+|---|---|---|---|
+| wiki_version_id | uuid | 필수, FK, 복합 PK | 소속 wiki_versions Build 식별자 |
+| document_version_id | uuid | 필수, FK, 복합 PK | Build에 포함된 wiki_document_versions 식별자 |
+| namespace_key | text | 필수 | Wiki Build와 문서 Version에 동일하게 적용되는 사용자 Namespace |
+| file_path | text | 필수 | 해당 Build 시점의 Markdown 파일 경로 |
+| created_at | timestamptz | 자동 | Build 구성에 문서 Version을 포함한 시각 |
+
+하나의 Build에서 같은 파일 경로를 두 문서가 공유할 수 없고, 복합 FK로
+Wiki Build와 문서 Version의 Namespace 일치를 보장합니다.
 
 ## 6. 사용자 관심사
 
@@ -839,4 +876,5 @@ Agent DB에 적용된 Migration Version을 기록합니다.
 - [발행 Batch Migration](../database/migrations/0002_publish_snapshot_batches.sql): Claim과 Lease 확장
 - [웹 클리핑 Markdown Migration](../database/migrations/0003_web_clipping_markdown.sql): Frontmatter와 본문 형식 확장
 - [사용자 원본·LLM Wiki 분리 Migration](../database/migrations/0004_separate_user_sources_from_llm_wiki.sql): 원본 테이블과 출처 관계 추가
+- [LLM Wiki Vault 구조 Migration](../database/migrations/0005_structure_llm_wiki_documents.sql): 문서 유형·관계·Build 구성 추가
 - [Database 실행 안내](../database/README.md): Local DB 기동과 Migration 적용 방법

@@ -19,11 +19,18 @@ SOURCE_SEPARATION_MIGRATION_PATH = (
     / "migrations"
     / "0004_separate_user_sources_from_llm_wiki.sql"
 )
+STRUCTURED_WIKI_MIGRATION_PATH = (
+    PROJECT_ROOT
+    / "database"
+    / "migrations"
+    / "0005_structure_llm_wiki_documents.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
     WEB_CLIPPING_MIGRATION_PATH,
     SOURCE_SEPARATION_MIGRATION_PATH,
+    STRUCTURED_WIKI_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
@@ -63,9 +70,11 @@ def test_migration_contains_all_agent_db_feature_tables() -> None:
         "wiki_documents",
         "wiki_document_versions",
         "wiki_document_sources",
+        "wiki_document_relations",
         "wiki_chunks",
         "wiki_embeddings",
         "wiki_versions",
+        "wiki_version_documents",
         "user_interest_profiles",
         "user_interests",
         "global_sources",
@@ -320,6 +329,33 @@ def test_source_separation_migration_moves_raw_data_out_of_llm_wiki() -> None:
     assert "VALUES (4, 'Separate user source documents from generated LLM Wiki')" in migration
 
 
+def test_structured_wiki_migration_models_vault_files_and_snapshots() -> None:
+    """다섯 번째 Migration이 Wiki 파일 유형, 관계와 Build 구성을 구조화하는지 검증한다."""
+    migration = _read(STRUCTURED_WIKI_MIGRATION_PATH)
+
+    assert "ADD COLUMN document_kind text" in migration
+    assert "ADD COLUMN document_key text" in migration
+    assert "ADD COLUMN file_path text" in migration
+    assert "ADD COLUMN domain text" in migration
+    assert "document_kind IN ('document', 'entity', 'concept', 'schema')" in migration
+    assert "uq_wiki_documents_logical_key" in migration
+    assert "uq_wiki_documents_file_path" in migration
+    assert "uq_wiki_documents_schema_per_namespace" in migration
+    assert "CREATE TABLE agent.wiki_document_relations" in migration
+    assert "CREATE TABLE agent.wiki_version_documents" in migration
+    assert "FOREIGN KEY (wiki_version_id, namespace_key)" in migration
+    assert "FOREIGN KEY (document_version_id, namespace_key)" in migration
+    assert (
+        "ALTER TABLE agent.wiki_document_relations ENABLE ROW LEVEL SECURITY"
+        in migration
+    )
+    assert (
+        "ALTER TABLE agent.wiki_version_documents ENABLE ROW LEVEL SECURITY"
+        in migration
+    )
+    assert "VALUES (5, 'Structure LLM Wiki documents and snapshots')" in migration
+
+
 def test_batch_seed_provides_three_resettable_mock_snapshots() -> None:
     """Batch Seed가 세 콘텐츠를 준비하고 반복 적용 시 Claim 상태를 초기화하는지 검증한다."""
     seed = _read(BATCH_SEED_PATH)
@@ -386,6 +422,8 @@ def test_database_schema_contract_is_available() -> None:
 
     assert "vector extension is missing" in schema_check
     assert "HNSW embedding index is missing" in schema_check
+    assert "single schema document index is missing" in schema_check
+    assert "required structured Wiki column" in schema_check
     assert "agent-db schema contract passed" in schema_check
 
 
@@ -399,5 +437,9 @@ def test_database_rls_contract_is_available() -> None:
     assert "user scope deleted % global Wiki rows" in rls_check
     assert "user scope expected 1 source row" in rls_check
     assert "user scope deleted % other-user source rows" in rls_check
+    assert "user scope expected 1 Wiki relation" in rls_check
+    assert "user scope expected 1 Wiki version document" in rls_check
+    assert "system scope expected 2 Wiki relations" in rls_check
+    assert "system scope expected 2 Wiki version documents" in rls_check
     assert "system scope expected 2 rows" in rls_check
     assert "ROLLBACK" in rls_check

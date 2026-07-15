@@ -71,12 +71,12 @@
 | ID | 기능 | 설명 |
 |---|---|---|
 | PWIKI-001 | 개인 Wiki 생성 | 사용자별 개인 LLM Wiki 영역을 생성한다. |
-| PWIKI-002 | 개인 Wiki 문서 생성 | 사용자가 선택한 데이터를 Wiki 문서로 변환한다. |
+| PWIKI-002 | 개인 Wiki 문서 생성 | 사용자가 선택한 데이터를 Entity·Concept·Schema Wiki 문서로 변환한다. |
 | PWIKI-003 | 개인 Wiki 문서 조회 | 사용자의 Wiki 문서 목록과 상세 내용을 조회한다. |
 | PWIKI-004 | 개인 Wiki 문서 수정 | 사용자 메모와 수정 내용을 Wiki 문서에 반영한다. |
 | PWIKI-005 | 개인 Wiki 문서 삭제 | 사용자가 제거한 데이터를 Wiki 검색 대상에서 제외한다. |
-| PWIKI-006 | 개인 Wiki 문서 버전 관리 | 문서 변경 이력을 버전으로 관리한다. |
-| PWIKI-007 | Wiki 문서 출처 추적 | 클리핑, URL, 위키마킹 등 문서 유입 경로를 기록한다. |
+| PWIKI-006 | 개인 Wiki 문서 버전 관리 | 각 Markdown 문서 변경 이력과 Wiki Build별 문서 Version·파일 경로 구성을 관리한다. |
+| PWIKI-007 | Wiki 문서 출처 추적 | 클리핑·URL 원본 출처와 Entity·Concept 문서 간 관계를 기록한다. |
 | PWIKI-008 | Wiki 문서 중복 제거 | 동일하거나 유사한 개인 Wiki 문서를 중복 제거한다. |
 | PWIKI-009 | Wiki 문서 병합 | 유사한 사용자 지식을 하나의 문서나 주제로 병합한다. |
 | PWIKI-010 | Wiki 문서 요약 | 긴 문서를 개인 Wiki용 요약 문서로 구성한다. |
@@ -716,10 +716,10 @@
 |---|---|---|
 | DB-001 | 사용자 컨텍스트 저장 | Agent가 사용할 최소 사용자 컨텍스트를 저장한다. |
 | DB-002 | Wiki Source Event·사용자 원본 저장 | 개인 Wiki 반영 이벤트와 클리핑 Markdown·Frontmatter 원본 Version을 저장한다. |
-| DB-003 | 개인 LLM Wiki 문서 저장 | Worker가 생성한 Wiki 문서 Version과 사용자 원본 출처 관계를 저장한다. |
+| DB-003 | 개인 LLM Wiki 문서 저장 | Worker가 생성한 Entity·Concept·Schema 문서 Version과 원본·문서 관계를 저장한다. |
 | DB-004 | 개인 Wiki Chunk 저장 | 개인 Wiki 검색용 Chunk를 저장한다. |
 | DB-005 | 개인 Wiki Embedding 저장 | 개인 Wiki의 Vector 데이터를 저장한다. |
-| DB-006 | 개인 Wiki Version 저장 | 개인 Wiki 재구성 버전을 저장한다. |
+| DB-006 | 개인 Wiki Version 저장 | 개인 Wiki Build 버전과 해당 시점의 문서 Version·Vault 경로 구성을 저장한다. |
 | DB-007 | 사용자 관심사 저장 | 관심사 프로필, 계층, 관계를 저장한다. |
 | DB-008 | Global Source 저장 | 외부 수집 Source와 설정을 저장한다. |
 | DB-009 | Global Collection Run 저장 | 수집 실행 결과와 상태를 저장한다. |

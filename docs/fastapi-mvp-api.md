@@ -105,11 +105,11 @@ Chunking이나 Embedding을 수행하지 않습니다.
 1. `queued` 상태의 `personal_wiki_build` Job을 `FOR UPDATE SKIP LOCKED`로 Batch Claim합니다.
 2. `locked_by`, `locked_at`, `lease_expires_at`, `status=running`을 같은 Transaction에서 갱신합니다.
 3. Job Payload의 source_document_version_id로 저장된 Markdown과 Frontmatter를 조회합니다.
-4. 정규화·중복 확인과 LLM 구성을 거쳐 wiki_documents·wiki_document_versions를 멱등 Upsert하고 wiki_document_sources로 원본을 연결합니다.
+4. 정규화·중복 확인과 LLM 구성을 거쳐 `document_kind + document_key`로 Entity·Concept·Schema Head를 멱등 Upsert하고 새 `wiki_document_versions`·원본 출처·문서 관계를 저장합니다.
 5. 생성된 Wiki Version을 Chunking하고 wiki_chunks를 멱등 Upsert합니다.
 6. Chunk별 Embedding을 생성해 wiki_embeddings에 설정 Version과 함께 멱등 Upsert합니다.
-7. 개인 Wiki Version과 관심사 재계산을 반영합니다.
-8. source_event와 Job을 completed로 전환하고 원본·Wiki 식별자와 chunk_count를 Job 결과에 기록합니다.
+7. `wiki_versions`와 `wiki_version_documents`에 현재 Vault의 문서 Version·파일 경로를 고정하고 관심사 재계산을 반영합니다.
+8. source_event와 Job을 completed로 전환하고 원본 ID, wiki_version_id, affected_documents 목록과 chunk_count를 Job 결과에 기록합니다.
 
 각 Job은 독립 Transaction과 재시도 횟수를 갖습니다. Embedding Provider 장애가 발생해도
 원본 Markdown Version은 유지하며, 재시도는 파생 Chunk·Embedding만 다시 생성합니다.
@@ -303,7 +303,8 @@ sequenceDiagram
 웹 클리핑 API와 Personal Wiki Builder Worker는 `AGENT_DATABASE_URL`이 설정된
 PostgreSQL을 필수로 사용합니다. `wiki_source_events`, `user_source_documents`,
 `user_source_document_versions`, `wiki_documents`, `wiki_document_versions`,
-`wiki_document_sources`, `wiki_chunks`, `wiki_embeddings`, `agent_jobs`,
+`wiki_document_sources`, `wiki_document_relations`, `wiki_versions`,
+`wiki_version_documents`, `wiki_chunks`, `wiki_embeddings`, `agent_jobs`,
 `agent_job_attempts`의 영속 구현과 Worker Claim·Lease가 MVP 범위입니다.
 
 클리핑 Markdown 또는 Job을 인메모리에만 저장하는 경로는 단위 테스트 대역으로만
