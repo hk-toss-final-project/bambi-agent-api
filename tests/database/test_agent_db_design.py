@@ -49,6 +49,11 @@ CLIPPING_SEED_GENERATOR_PATH = (
     PROJECT_ROOT / "scripts" / "generate_web_clipping_seed.py"
 )
 CLIPPING_DUMMY_PATH = PROJECT_ROOT / "dummy" / "clippings"
+USER_URL_SEED_PATH = PROJECT_ROOT / "database" / "seeds" / "0004_dev_user_urls.sql"
+USER_URL_SEED_GENERATOR_PATH = (
+    PROJECT_ROOT / "scripts" / "generate_user_url_seed.py"
+)
+USER_URL_DUMMY_PATH = PROJECT_ROOT / "dummy" / "urls" / "url.txt"
 MIGRATION_RUNNER_PATH = PROJECT_ROOT / "scripts" / "run_agent_db_migrations.sh"
 DATABASE_INITIALIZER_PATH = PROJECT_ROOT / "scripts" / "initialize_agent_db.sh"
 
@@ -414,6 +419,47 @@ def test_web_clipping_seed_builds_resettable_worker_dependency_chain() -> None:
     assert "DELETE FROM agent.agent_job_attempts" in seed
     assert "DELETE FROM agent.wiki_documents AS document" in seed
     assert "ON CONFLICT (id) DO UPDATE" in seed
+
+
+def test_user_url_seed_is_generated_from_dummy_url_file() -> None:
+    """생성된 URL Seed가 dummy/urls의 목록과 동기화됐는지 검증한다."""
+    result = subprocess.run(
+        [sys.executable, str(USER_URL_SEED_GENERATOR_PATH), "--check"],
+        cwd=PROJECT_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    seed = _read(USER_URL_SEED_PATH)
+    urls = [
+        line.strip()
+        for line in _read(USER_URL_DUMMY_PATH).splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+    assert result.returncode == 0, result.stderr
+    assert urls
+    for url in urls:
+        assert url in seed
+
+
+def test_user_url_seed_registers_heads_without_overwriting_collection_results() -> None:
+    """URL Seed가 Event·문서 Head만 만들고 기존 수집 상태와 Version을 보존하는지 검증한다."""
+    seed = _read(USER_URL_SEED_PATH)
+    event_position = seed.index("INSERT INTO agent.wiki_source_events")
+    document_position = seed.index("INSERT INTO agent.user_source_documents")
+
+    assert event_position < document_position
+    assert "mock-clipping-user" in seed
+    assert "user-url-" in seed
+    assert "'url'" in seed
+    assert "ON CONFLICT (user_id, source_event_id) DO UPDATE" in seed
+    assert "payload = event.payload || EXCLUDED.payload" in seed
+    assert "ON CONFLICT (namespace_key, canonical_url)" in seed
+    assert "metadata = document.metadata || EXCLUDED.metadata" in seed
+    assert "INSERT INTO agent.user_source_document_versions" not in seed
+    assert "status = 'received'" not in seed
+    assert "error_code = NULL" not in seed
 
 
 def test_database_schema_contract_is_available() -> None:

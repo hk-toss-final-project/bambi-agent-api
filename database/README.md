@@ -3,7 +3,8 @@
 `agent-db`는 PostgreSQL 17과 pgvector를 사용합니다. Docker Compose는 DB가 시작될
 때마다 `scripts/initialize_agent_db.sh`를 실행합니다. 먼저
 `schema_migrations`에 없는 SQL을 파일명 순서대로 적용하고, 개발 Seed 파일의
-합성 Checksum이 바뀌었으면 Publish Snapshot과 웹 클리핑 Seed를 이어서 적용합니다.
+합성 Checksum이 바뀌었으면 Publish Snapshot, 웹 클리핑과 사용자 URL Seed를
+이어서 적용합니다.
 
 자동 실행에는 Lifecycle Hook을 지원하는 Docker Compose 2.30 이상이 필요합니다.
 
@@ -62,6 +63,29 @@ FROM agent.user_source_document_versions AS version
 JOIN agent.user_source_documents AS source ON source.id = version.source_document_id
 WHERE source.user_id = 'mock-clipping-user'
 ORDER BY version.clipped_on DESC, version.title;
+```
+
+`dummy/urls/url.txt`의 URL도 같은 사용자의 `wiki_source_events`와
+`user_source_documents` Head로 등록됩니다. DB 초기화 과정에서는 외부 HTTP 요청을
+하지 않으므로 본문 Version은 만들지 않으며, 기존에 Jina Reader로 수집한 이벤트 상태와
+본문 Version이 있으면 Seed 재적용 후에도 보존합니다.
+
+```sql
+SELECT event.status, source.canonical_url, source.current_version
+FROM agent.user_source_documents AS source
+JOIN agent.wiki_source_events AS event
+  ON event.user_id = source.user_id
+ AND event.source_url = source.canonical_url
+WHERE source.user_id = 'mock-clipping-user'
+  AND source.source_type = 'url'
+ORDER BY source.canonical_url;
+```
+
+등록된 URL의 Markdown 본문까지 실제로 수집하려면 `.env`에
+`AGENT_DATABASE_URL`을 설정하고 별도 수집 스크립트를 실행합니다.
+
+```bash
+uv run python scripts/ingest_user_urls.py
 ```
 
 ### Personal Wiki Builder 실행
@@ -205,19 +229,23 @@ ORDER BY document.file_path;
 기존 발행 시도 이력을 지우고 세 Snapshot을 `ready` 상태로 되돌립니다. 세 번째
 Seed는 클리핑 Job과 Source Event를 `queued`, `received`로 되돌리고 해당 원본으로
 생성한 Wiki·Chunk·Embedding과 Job 시도 이력을 삭제하므로 로컬 목업 데이터를 초기화해도
-될 때만 실행합니다.
+될 때만 실행합니다. 네 번째 Seed는 URL Event와 원본 문서 Head를 멱등 등록하며 이미
+수집한 상태와 본문 Version은 변경하지 않습니다.
 
 ```bash
 docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/seeds/0001_dev_publish_snapshots.sql
 docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/seeds/0002_dev_publish_snapshot_batch.sql
 docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/seeds/0003_dev_web_clippings.sql
+docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/seeds/0004_dev_user_urls.sql
 ```
 
-클리핑 Markdown을 추가하거나 수정한 뒤에는 생성된 SQL을 갱신합니다.
+클리핑 Markdown이나 URL 목록을 추가·수정한 뒤에는 해당 생성 SQL을 갱신합니다.
 
 ```bash
 uv run python scripts/generate_web_clipping_seed.py
 uv run python scripts/generate_web_clipping_seed.py --check
+uv run python scripts/generate_user_url_seed.py
+uv run python scripts/generate_user_url_seed.py --check
 ```
 
 개발 Seed는 DB 볼륨에 저장된 합성 Checksum과 현재 Seed 파일이 다를 때만

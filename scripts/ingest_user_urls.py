@@ -10,6 +10,8 @@ wiki_source_events에 failed 상태와 오류로 기록한다.
 등록해(SVC-003, JOB-001) Personal Wiki Builder Worker가 이 원본을 개인
 Wiki 문서로 반영할 수 있게 한다.
 
+기본 입력은 dummy/urls/url.txt이며 --url을 지정하면 해당 URL만 수집한다.
+
 실행: uv run python scripts/ingest_user_urls.py [--user-id <id>] [--url <url> ...]
 """
 
@@ -37,23 +39,12 @@ from infrastructure.persistence.api import (
     set_personal_wiki_scope,
 )
 from infrastructure.sources.connectors.api import JinaReadError, fetch_url_via_jina
+from scripts.user_url_file import load_user_urls
 
 type DictRow = dict[str, Any]
 
-# 사용자가 입력했다고 가정하는 기본 URL 목록.
-DEFAULT_URLS: tuple[str, ...] = (
-    "https://n.news.naver.com/article/437/0000501311?cds=news_media_pc",
-    "https://finance.naver.com/sise/sise_index.naver?code=KOSPI",
-    "https://n.news.naver.com/article/437/0000501292?sid=102",
-    "https://finance.naver.com/world/sise.naver?symbol=NAS@IXIC",
-    "https://www.youtube.com/watch?v=yGryBf5IcTk",
-    "https://www.youtube.com/watch?v=WDt24qzK2Ig",
-    "https://nol.yanolja.com/stay/domestic/1000093246",
-    "https://dart.fss.or.kr/",
-    "https://www.compuzone.co.kr/product/product_detail.htm?ProductNo=1300993",
-    "https://alphacatcherhq.slack.com/archives/C0BFYD2P4NQ/p1784103422483809",
-    "https://www.facebook.com/BLOCKO.Official",
-)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_URL_FILE = PROJECT_ROOT / "dummy" / "urls" / "url.txt"
 DEFAULT_USER_ID = "mock-clipping-user"
 
 
@@ -181,7 +172,13 @@ def main() -> int:
         "--url",
         action="append",
         dest="urls",
-        help="수집할 URL. 생략하면 기본 목록을 사용한다.",
+        help="수집할 URL. 생략하면 --url-file의 목록을 사용한다.",
+    )
+    parser.add_argument(
+        "--url-file",
+        type=Path,
+        default=DEFAULT_URL_FILE,
+        help="--url을 생략했을 때 읽을 URL 목록 파일.",
     )
     args = parser.parse_args()
 
@@ -190,7 +187,7 @@ def main() -> int:
         print("AGENT_DATABASE_URL이 설정되지 않았습니다.", file=sys.stderr)
         return 2
 
-    urls = args.urls or list(DEFAULT_URLS)
+    urls = args.urls or load_user_urls(args.url_file)
     # Windows의 psycopg 비동기 연결은 Proactor Loop를 지원하지 않는다.
     loop_factory = asyncio.SelectorEventLoop if sys.platform == "win32" else None
     with asyncio.Runner(loop_factory=loop_factory) as runner:
