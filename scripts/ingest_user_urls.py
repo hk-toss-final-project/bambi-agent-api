@@ -6,6 +6,10 @@ Jina Reader(r.jina.ai)로 읽은 Markdown 본문은 재수집 시 변경될 수 
 Version과 같으면 새 Version을 만들지 않고, 실패한 수집은 Version 대신
 wiki_source_events에 failed 상태와 오류로 기록한다.
 
+새 Version을 저장하면 같은 Transaction에서 personal_wiki_build Job을 멱등
+등록해(SVC-003, JOB-001) Personal Wiki Builder Worker가 이 원본을 개인
+Wiki 문서로 반영할 수 있게 한다.
+
 실행: uv run python scripts/ingest_user_urls.py [--user-id <id>] [--url <url> ...]
 """
 
@@ -26,6 +30,7 @@ from psycopg.rows import dict_row
 
 from app.config import load_settings
 from infrastructure.persistence.api import (
+    enqueue_personal_wiki_build_job,
     mark_url_source_event,
     register_user_url_source,
     save_user_url_document_version,
@@ -112,6 +117,17 @@ async def ingest_url(
                 resolved_url=result.resolved_url,
                 published_at=parse_published_time(result.published_time),
             )
+            enqueued = None
+            if saved is not None:
+                enqueued = await enqueue_personal_wiki_build_job(
+                    connection,
+                    user_id=user_id,
+                    source_document_id=registered.source_document_id,
+                    source_document_version_id=saved.source_version_id,
+                    source_version=saved.version,
+                    source_event_id=source_event_id,
+                    source_event_row_id=registered.source_event_row_id,
+                )
             await mark_url_source_event(
                 connection,
                 source_event_row_id=registered.source_event_row_id,
@@ -131,7 +147,12 @@ async def ingest_url(
 
     if saved is None:
         return "unchanged (동일 content_hash, 새 Version 생략)"
-    return f"saved (version {saved.version}, {len(result.markdown)} chars)"
+    job_note = (
+        f", wiki job {'등록' if enqueued.created else '재사용'} {enqueued.job_id}"
+        if enqueued is not None
+        else ""
+    )
+    return f"saved (version {saved.version}, {len(result.markdown)} chars{job_note})"
 
 
 async def run(user_id: str, urls: list[str], database_url: str) -> int:

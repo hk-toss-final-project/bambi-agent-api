@@ -44,9 +44,11 @@ from .features.recommendation import db_021
 from .features.configuration import db_022, db_023, db_024, db_025
 from .features.jobs import (
     ClaimedAgentJob,
+    EnqueuedWikiBuildJob,
     claim_personal_wiki_jobs,
     complete_agent_job,
     db_026,
+    enqueue_personal_wiki_build_job,
     fail_agent_job,
     set_system_job_scope,
 )

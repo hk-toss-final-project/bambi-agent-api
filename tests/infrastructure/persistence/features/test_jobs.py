@@ -7,8 +7,10 @@ import pytest
 
 from infrastructure.persistence.features.jobs import (
     ClaimedAgentJob,
+    EnqueuedWikiBuildJob,
     claim_personal_wiki_jobs,
     complete_agent_job,
+    enqueue_personal_wiki_build_job,
     fail_agent_job,
 )
 
@@ -160,6 +162,75 @@ def test_fail_agent_job_requires_active_lease_before_updating_attempt() -> None:
     assert "status = 'running'" in connection.executed[0][0]
     assert "lease_expires_at > clock_timestamp()" in connection.executed[0][0]
     assert "RETURNING id" in connection.executed[0][0]
+
+
+def test_enqueue_personal_wiki_build_job_creates_queued_job() -> None:
+    """새 원본 Version 저장 시 Version 단위 멱등 키로 queued Job을 등록한다."""
+    connection = _FakeConnection([[{"id": "job-1"}], []])
+
+    enqueued = asyncio.run(
+        enqueue_personal_wiki_build_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            source_document_id="doc-1",
+            source_document_version_id="version-1",
+            source_version=2,
+            source_event_id="user-url-abc",
+            source_event_row_id="event-1",
+        )
+    )
+
+    assert enqueued == EnqueuedWikiBuildJob(job_id="job-1", created=True)
+    insert_sql, insert_params = connection.executed[0]
+    assert "'personal_wiki_build'" in insert_sql
+    assert "ON CONFLICT (feature_id, COALESCE(user_id, ''), idempotency_key)" in insert_sql
+    assert insert_params is not None
+    assert insert_params[0] == "SVC-003"
+    assert insert_params[2] == "user-url-abc:v2"
+    event_sql, event_params = connection.executed[1]
+    assert "agent.wiki_source_events" in event_sql
+    assert event_params == ("job-1", "event-1")
+
+
+def test_enqueue_personal_wiki_build_job_reuses_existing_job() -> None:
+    """같은 이벤트·Version의 재요청은 새 Job 없이 기존 Job을 반환한다."""
+    connection = _FakeConnection([[], [{"id": "job-9"}], []])
+
+    enqueued = asyncio.run(
+        enqueue_personal_wiki_build_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            source_document_id="doc-1",
+            source_document_version_id="version-1",
+            source_version=1,
+            source_event_id="user-url-abc",
+            source_event_row_id="event-1",
+        )
+    )
+
+    assert enqueued == EnqueuedWikiBuildJob(job_id="job-9", created=False)
+    assert "DO NOTHING" in connection.executed[0][0]
+    assert "SELECT id" in connection.executed[1][0]
+    assert connection.executed[2][1] == ("job-9", "event-1")
+
+
+def test_enqueue_personal_wiki_build_job_skips_event_link_without_row_id() -> None:
+    """이벤트 Row ID가 없으면 wiki_source_events 연결을 시도하지 않는다."""
+    connection = _FakeConnection([[{"id": "job-1"}]])
+
+    enqueued = asyncio.run(
+        enqueue_personal_wiki_build_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            source_document_id="doc-1",
+            source_document_version_id="version-1",
+            source_version=1,
+            source_event_id="user-url-abc",
+        )
+    )
+
+    assert enqueued.created is True
+    assert len(connection.executed) == 1
 
 
 def test_fail_agent_job_stops_when_lease_is_lost() -> None:

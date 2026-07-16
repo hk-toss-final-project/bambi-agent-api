@@ -248,6 +248,102 @@ async def fail_agent_job(
     return next_status
 
 
+@dataclass(frozen=True, slots=True)
+class EnqueuedWikiBuildJob:
+    """원본 Version 하나에 대해 등록되거나 재사용된 Personal Wiki Build Job."""
+
+    job_id: str
+    created: bool
+
+
+async def enqueue_personal_wiki_build_job(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    source_document_id: str,
+    source_document_version_id: str,
+    source_version: int,
+    source_event_id: str,
+    source_event_row_id: str | None = None,
+    feature_id: str = "SVC-003",
+) -> EnqueuedWikiBuildJob:
+    """저장된 사용자 원본 Version을 처리할 personal_wiki_build Job을 멱등 등록한다.
+
+    SVC-003(URL 처리 요청)이 저장한 원본을 Personal Wiki Builder Worker가
+    집어갈 수 있도록, 원본 저장과 같은 Transaction에서 호출한다(JOB-001).
+    source_event_id + 원본 version 조합을 멱등성 키로 사용해 같은 요청이
+    Job을 중복 생성하지 않고(JOB-010), 재수집으로 내용이 바뀌어 새 Version이
+    생기면 그 Version만 처리하는 새 Job을 만든다.
+
+    Args:
+        user_id: 원본을 소유한 사용자 ID
+        source_document_id: user_source_documents Head ID
+        source_document_version_id: 처리 대상 user_source_document_versions ID
+        source_version: 처리 대상 원본 Version 번호
+        source_event_id: Service 계층이 부여한 멱등 이벤트 식별자
+        source_event_row_id: Job과 연결할 wiki_source_events Row ID
+        feature_id: Job을 등록한 기능 ID (기본 SVC-003)
+
+    Returns:
+        Job ID와 이번 호출에서 새로 생성됐는지 여부
+    """
+    idempotency_key = f"{source_event_id}:v{source_version}"
+    payload = {
+        "content_format": "markdown",
+        "source_document_id": source_document_id,
+        "source_document_version_id": source_document_version_id,
+        "source_event_id": source_event_id,
+        "source_event_row_id": source_event_row_id,
+    }
+    cursor = await connection.execute(
+        """
+        INSERT INTO agent.agent_jobs (
+            feature_id,
+            job_type,
+            user_id,
+            idempotency_key,
+            status,
+            progress,
+            payload,
+            retryable
+        ) VALUES (%s, 'personal_wiki_build', %s, %s, 'queued', 0, %s, true)
+        ON CONFLICT (feature_id, COALESCE(user_id, ''), idempotency_key)
+        DO NOTHING
+        RETURNING id
+        """,
+        (feature_id, user_id, idempotency_key, Jsonb(payload)),
+    )
+    row = await cursor.fetchone()
+    created = row is not None
+    if row is None:
+        cursor = await connection.execute(
+            """
+            SELECT id
+            FROM agent.agent_jobs
+            WHERE feature_id = %s
+              AND COALESCE(user_id, '') = %s
+              AND idempotency_key = %s
+            """,
+            (feature_id, user_id, idempotency_key),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise RuntimeError(
+                f"멱등 충돌한 Personal Wiki Job을 찾을 수 없습니다: {idempotency_key}"
+            )
+    job_id = str(row["id"])
+    if source_event_row_id is not None:
+        await connection.execute(
+            """
+            UPDATE agent.wiki_source_events
+            SET job_id = %s
+            WHERE id = %s
+            """,
+            (job_id, source_event_row_id),
+        )
+    return EnqueuedWikiBuildJob(job_id=job_id, created=created)
+
+
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def db_026(request: FeatureRequest) -> FeatureResult:
     """[DB-026] Agent Job 저장.
