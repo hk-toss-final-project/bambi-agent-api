@@ -10,8 +10,10 @@ from infrastructure.persistence.features.jobs import (
     EnqueuedWikiBuildJob,
     claim_personal_wiki_jobs,
     complete_agent_job,
+    defer_user_wiki_build_jobs,
     enqueue_personal_wiki_build_job,
     fail_agent_job,
+    release_user_wiki_build_jobs,
 )
 
 
@@ -231,6 +233,47 @@ def test_enqueue_personal_wiki_build_job_skips_event_link_without_row_id() -> No
 
     assert enqueued.created is True
     assert len(connection.executed) == 1
+
+
+def test_defer_user_wiki_build_jobs_applies_quiet_window_with_max_wait_cap() -> None:
+    """대기 Job 연기가 조용 시간과 첫 대기 기준 최대 대기 상한을 함께 사용한다."""
+    connection = _FakeConnection([[{"id": "job-1"}, {"id": "job-2"}]])
+
+    affected = asyncio.run(
+        defer_user_wiki_build_jobs(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            quiet_minutes=10,
+            max_wait_minutes=30,
+        )
+    )
+
+    assert affected == 2
+    sql, params = connection.executed[0]
+    assert "job_type = 'personal_wiki_build'" in sql
+    assert "status = 'queued'" in sql
+    assert "attempt_count = 0" in sql
+    assert "LEAST(" in sql
+    assert "min(created_at)" in sql
+    assert params == ("user-1", 30, 10)
+
+
+def test_release_user_wiki_build_jobs_makes_queued_jobs_claimable_now() -> None:
+    """강제 실행이 사용자의 queued Job scheduled_at을 현재 시각으로 당긴다."""
+    connection = _FakeConnection([[{"id": "job-1"}, {"id": "job-2"}, {"id": "job-3"}]])
+
+    affected = asyncio.run(
+        release_user_wiki_build_jobs(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+        )
+    )
+
+    assert affected == 3
+    sql, params = connection.executed[0]
+    assert "scheduled_at = clock_timestamp()" in sql
+    assert "status = 'queued'" in sql
+    assert params == ("user-1",)
 
 
 def test_fail_agent_job_stops_when_lease_is_lost() -> None:

@@ -344,6 +344,89 @@ async def enqueue_personal_wiki_build_job(
     return EnqueuedWikiBuildJob(job_id=job_id, created=created)
 
 
+async def defer_user_wiki_build_jobs(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    quiet_minutes: int,
+    max_wait_minutes: int,
+) -> int:
+    """사용자의 대기 중 Wiki Build Job 실행 시각을 수집 조용 시간만큼 미룬다.
+
+    새 원본이 수집될 때마다 호출해 모든 queued Job의 scheduled_at을
+    `지금 + quiet_minutes`로 미루되, 가장 오래된 대기 Job의 created_at
+    + max_wait_minutes를 넘지 않게 상한을 둔다. Worker Claim이
+    scheduled_at <= now 조건을 사용하므로 이 값이 곧 Build 시작 시각이
+    된다. 재시도 Backoff가 걸린 Job(attempt_count > 0)은 건드리지 않는다.
+
+    Args:
+        user_id: 원본을 수집한 사용자 ID
+        quiet_minutes: 마지막 수집 후 Build를 미루는 시간(분)
+        max_wait_minutes: 첫 대기 Job 발생 후 최대 대기시간(분)
+
+    Returns:
+        실행 시각이 조정된 Job 수
+    """
+    cursor = await connection.execute(
+        """
+        WITH pending AS (
+            SELECT id, created_at
+            FROM agent.agent_jobs
+            WHERE job_type = 'personal_wiki_build'
+              AND user_id = %s
+              AND status = 'queued'
+              AND attempt_count = 0
+            FOR UPDATE
+        ),
+        horizon AS (
+            SELECT min(created_at) AS first_created_at FROM pending
+        )
+        UPDATE agent.agent_jobs AS job
+        SET
+            scheduled_at = LEAST(
+                horizon.first_created_at + (%s * interval '1 minute'),
+                clock_timestamp() + (%s * interval '1 minute')
+            ),
+            updated_at = clock_timestamp()
+        FROM pending, horizon
+        WHERE job.id = pending.id
+        RETURNING job.id
+        """,
+        (user_id, max_wait_minutes, quiet_minutes),
+    )
+    return len(await cursor.fetchall())
+
+
+async def release_user_wiki_build_jobs(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+) -> int:
+    """사용자의 대기 중 Wiki Build Job을 지금 즉시 실행 가능하게 만든다.
+
+    "지금 Wiki에 반영" 강제 실행용으로, queued 상태 Job의 scheduled_at을
+    현재 시각으로 당긴다. 재시도 Backoff가 걸린 Job도 함께 당긴다.
+
+    Args:
+        user_id: 강제 실행을 요청한 사용자 ID
+
+    Returns:
+        즉시 실행 가능으로 바뀐 Job 수
+    """
+    cursor = await connection.execute(
+        """
+        UPDATE agent.agent_jobs
+        SET scheduled_at = clock_timestamp(), updated_at = clock_timestamp()
+        WHERE job_type = 'personal_wiki_build'
+          AND user_id = %s
+          AND status = 'queued'
+        RETURNING id
+        """,
+        (user_id,),
+    )
+    return len(await cursor.fetchall())
+
+
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def db_026(request: FeatureRequest) -> FeatureResult:
     """[DB-026] Agent Job 저장.

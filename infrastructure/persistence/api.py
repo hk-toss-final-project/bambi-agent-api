@@ -48,8 +48,10 @@ from .features.jobs import (
     claim_personal_wiki_jobs,
     complete_agent_job,
     db_026,
+    defer_user_wiki_build_jobs,
     enqueue_personal_wiki_build_job,
     fail_agent_job,
+    release_user_wiki_build_jobs,
     set_system_job_scope,
 )
 from .features.events import db_027

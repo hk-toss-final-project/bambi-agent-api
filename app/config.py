@@ -50,6 +50,18 @@ class Settings(BaseModel):
     personal_wiki_job_lease_seconds: int = Field(
         default=600, ge=30, le=3600, description="Personal Wiki Job Lease 초"
     )
+    wiki_build_quiet_minutes: int = Field(
+        default=10,
+        ge=0,
+        le=1440,
+        description="마지막 원본 수집 후 Wiki Build를 미루는 조용한 시간(분)",
+    )
+    wiki_build_max_wait_minutes: int = Field(
+        default=30,
+        ge=1,
+        le=1440,
+        description="첫 대기 원본 발생 후 Wiki Build 최대 대기시간(분)",
+    )
 
 
 def _optional_env(name: str) -> str | None:
@@ -100,4 +112,6 @@ def load_settings() -> Settings:
         personal_wiki_job_lease_seconds=_integer_env(
             "PERSONAL_WIKI_JOB_LEASE_SECONDS", 600
         ),
+        wiki_build_quiet_minutes=_integer_env("WIKI_BUILD_QUIET_MINUTES", 10),
+        wiki_build_max_wait_minutes=_integer_env("WIKI_BUILD_MAX_WAIT_MINUTES", 30),
     )

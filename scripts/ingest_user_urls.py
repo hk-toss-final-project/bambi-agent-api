@@ -7,8 +7,10 @@ Version과 같으면 새 Version을 만들지 않고, 실패한 수집은 Versio
 wiki_source_events에 failed 상태와 오류로 기록한다.
 
 새 Version을 저장하면 같은 Transaction에서 personal_wiki_build Job을 멱등
-등록해(SVC-003, JOB-001) Personal Wiki Builder Worker가 이 원본을 개인
-Wiki 문서로 반영할 수 있게 한다.
+등록하고(SVC-003, JOB-001), 사용자의 대기 Job 전체 실행 시각을 조용 시간
+정책(SCH-009: 마지막 수집 + WIKI_BUILD_QUIET_MINUTES, 상한 첫 대기 Job +
+WIKI_BUILD_MAX_WAIT_MINUTES)으로 미룬다. Worker는 그 시각 이후에만 Job을
+Claim해 개인 Wiki 문서로 반영한다.
 
 기본 입력은 dummy/urls/url.txt이며 --url을 지정하면 해당 URL만 수집한다.
 
@@ -32,6 +34,7 @@ from psycopg.rows import dict_row
 
 from app.config import load_settings
 from infrastructure.persistence.api import (
+    defer_user_wiki_build_jobs,
     enqueue_personal_wiki_build_job,
     mark_url_source_event,
     register_user_url_source,
@@ -64,12 +67,19 @@ def parse_published_time(value: str | None) -> datetime | None:
 
 
 async def ingest_url(
-    connection: AsyncConnection[DictRow], *, user_id: str, url: str
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    url: str,
+    quiet_minutes: int,
+    max_wait_minutes: int,
 ) -> str:
     """URL 하나를 등록·수집·저장하고 처리 결과 요약 문자열을 반환한다.
 
     등록과 저장은 각각 별도 트랜잭션으로 처리해 한 URL의 실패가
-    다른 URL의 저장에 영향을 주지 않게 한다.
+    다른 URL의 저장에 영향을 주지 않게 한다. 새 Version을 저장하면
+    같은 트랜잭션에서 사용자의 대기 Wiki Build Job 전체를 조용 시간
+    정책(SCH-009)으로 미룬다.
     """
     source_event_id = make_source_event_id(url)
     async with connection.transaction():
@@ -119,6 +129,12 @@ async def ingest_url(
                     source_event_id=source_event_id,
                     source_event_row_id=registered.source_event_row_id,
                 )
+                await defer_user_wiki_build_jobs(
+                    connection,
+                    user_id=user_id,
+                    quiet_minutes=quiet_minutes,
+                    max_wait_minutes=max_wait_minutes,
+                )
             await mark_url_source_event(
                 connection,
                 source_event_row_id=registered.source_event_row_id,
@@ -146,7 +162,14 @@ async def ingest_url(
     return f"saved (version {saved.version}, {len(result.markdown)} chars{job_note})"
 
 
-async def run(user_id: str, urls: list[str], database_url: str) -> int:
+async def run(
+    user_id: str,
+    urls: list[str],
+    database_url: str,
+    *,
+    quiet_minutes: int,
+    max_wait_minutes: int,
+) -> int:
     """모든 URL을 순차 수집하고 결과를 출력한다. 실패가 있으면 1을 반환한다."""
     connection: AsyncConnection[DictRow] = await AsyncConnection.connect(
         database_url, row_factory=dict_row
@@ -154,7 +177,13 @@ async def run(user_id: str, urls: list[str], database_url: str) -> int:
     failures = 0
     try:
         for url in urls:
-            summary = await ingest_url(connection, user_id=user_id, url=url)
+            summary = await ingest_url(
+                connection,
+                user_id=user_id,
+                url=url,
+                quiet_minutes=quiet_minutes,
+                max_wait_minutes=max_wait_minutes,
+            )
             if summary.startswith("failed"):
                 failures += 1
             print(f"- {url}\n  -> {summary}")
@@ -191,7 +220,15 @@ def main() -> int:
     # Windows의 psycopg 비동기 연결은 Proactor Loop를 지원하지 않는다.
     loop_factory = asyncio.SelectorEventLoop if sys.platform == "win32" else None
     with asyncio.Runner(loop_factory=loop_factory) as runner:
-        return runner.run(run(args.user_id, urls, settings.agent_database_url))
+        return runner.run(
+            run(
+                args.user_id,
+                urls,
+                settings.agent_database_url,
+                quiet_minutes=settings.wiki_build_quiet_minutes,
+                max_wait_minutes=settings.wiki_build_max_wait_minutes,
+            )
+        )
 
 
 if __name__ == "__main__":
