@@ -601,7 +601,12 @@ async def _upsert_wiki_document(
     document: WikiDocumentPlan,
     job_id: str,
 ) -> tuple[PersistedWikiDocument, bool]:
-    """Wiki Head를 멱등 Upsert하고 내용이 바뀐 경우에만 새 Version을 추가한다."""
+    """Wiki Head를 멱등 Upsert하고 내용이 바뀐 경우에만 새 Version을 추가한다.
+
+    같은 Namespace에 동일 content_hash 문서가 이미 있으면(PWIKI-008 중복
+    제거) 새 Head나 Version을 만들지 않고 기존 문서를 재사용해
+    uq_wiki_documents_content 충돌을 방지한다.
+    """
     content_hash = compute_content_hash(document.normalized_content)
     head_cursor = await connection.execute(
         """
@@ -616,7 +621,34 @@ async def _upsert_wiki_document(
         (source.namespace_key, document.document_kind, document.document_key),
     )
     head = await head_cursor.fetchone()
-    if head is None:
+    duplicate_cursor = await connection.execute(
+        """
+        SELECT id, document_kind, document_key, file_path, current_version
+        FROM agent.wiki_documents
+        WHERE namespace_key = %s
+          AND content_hash = %s
+          AND deleted_at IS NULL
+        FOR UPDATE
+        """,
+        (source.namespace_key, content_hash),
+    )
+    duplicate = await duplicate_cursor.fetchone()
+    if head is not None and duplicate is not None and duplicate["id"] == head["id"]:
+        duplicate = None
+
+    persisted_kind = document.document_kind
+    persisted_key = document.document_key
+    persisted_path = document.file_path
+    if head is None and duplicate is not None:
+        # PWIKI-008: 동일 내용의 문서가 이미 있으면 새 Head 대신 재사용한다.
+        document_id = duplicate["id"]
+        version = int(duplicate["current_version"])
+        changed = False
+        action = "deduplicated"
+        persisted_kind = duplicate["document_kind"]
+        persisted_key = duplicate["document_key"]
+        persisted_path = duplicate["file_path"]
+    elif head is None:
         insert_cursor = await connection.execute(
             """
             INSERT INTO agent.wiki_documents (
@@ -661,6 +693,10 @@ async def _upsert_wiki_document(
         version = int(head["current_version"])
         changed = head["content_hash"] != content_hash
         action = "update" if changed else "unchanged"
+        if changed and duplicate is not None:
+            # 갱신 내용이 다른 문서와 동일하면 Version을 만들지 않는다(PWIKI-008).
+            changed = False
+            action = "deduplicated"
         if changed:
             version += 1
             await connection.execute(
@@ -766,9 +802,9 @@ async def _upsert_wiki_document(
         PersistedWikiDocument(
             document_id=str(document_id),
             document_version_id=str(document_version_id),
-            document_kind=document.document_kind,
-            document_key=document.document_key,
-            file_path=document.file_path,
+            document_kind=persisted_kind,
+            document_key=persisted_key,
+            file_path=persisted_path,
             version=version,
             action=action,
         ),

@@ -155,37 +155,55 @@ async def run_personal_wiki_batch(
                     embedding_model=embedding_model,
                 )
             except Exception as error:
-                retryable = not isinstance(error, ValueError)
-                async with connection.transaction():
-                    await set_system_job_scope(connection)
-                    next_status = await fail_agent_job(
+                results.append(
+                    await _record_job_failure(
                         connection,
                         job=job,
                         worker_id=worker_id,
-                        error_code=(
-                            "WIKI_BUILD_RETRYABLE"
-                            if retryable
-                            else "WIKI_BUILD_INPUT_INVALID"
-                        ),
-                        error_message=str(error),
-                        retryable=retryable,
+                        error=error,
                     )
-                results.append(
-                    {
-                        "job_id": job.job_id,
-                        "status": next_status,
-                        "error_code": (
-                            "WIKI_BUILD_RETRYABLE"
-                            if retryable
-                            else "WIKI_BUILD_INPUT_INVALID"
-                        ),
-                    }
                 )
             else:
                 results.append({"job_id": job.job_id, "status": "completed", **result})
         return results
     finally:
         await connection.close()
+
+
+async def _record_job_failure(
+    connection: AsyncConnection[DictRow],
+    *,
+    job: ClaimedAgentJob,
+    worker_id: str,
+    error: Exception,
+) -> dict[str, object]:
+    """Job 실패를 기록하고, 기록조차 못 해도 Batch 실행을 계속하게 한다.
+
+    Lease가 이미 만료돼 실패 기록의 소유권 검증에 걸리면(RuntimeError)
+    Worker 프로세스를 죽이는 대신 lease_lost 결과로 보고한다. 해당 Job은
+    Lease 만료 후 다른 Claim이 다시 처리하거나 관리자 수동 복구 대상이 된다.
+    """
+    retryable = not isinstance(error, ValueError)
+    error_code = "WIKI_BUILD_RETRYABLE" if retryable else "WIKI_BUILD_INPUT_INVALID"
+    try:
+        async with connection.transaction():
+            await set_system_job_scope(connection)
+            next_status = await fail_agent_job(
+                connection,
+                job=job,
+                worker_id=worker_id,
+                error_code=error_code,
+                error_message=str(error),
+                retryable=retryable,
+            )
+    except RuntimeError as ownership_error:
+        return {
+            "job_id": job.job_id,
+            "status": "lease_lost",
+            "error_code": "WIKI_BUILD_LEASE_LOST",
+            "error_message": f"{ownership_error} (원인: {str(error)[:200]})",
+        }
+    return {"job_id": job.job_id, "status": next_status, "error_code": error_code}
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.

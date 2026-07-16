@@ -3,7 +3,7 @@
 구현 모듈의 기능 함수를 안정적인 import 경로로 다시 노출한다.
 """
 
-from .features.queue import wc_001, wc_002
+from .features.queue import consume_personal_wiki_jobs, wc_001, wc_002
 from .features.heartbeat import wc_003, wc_004
 from .features.progress import wc_005
 from .features.retry import wc_006, wc_007, wc_008

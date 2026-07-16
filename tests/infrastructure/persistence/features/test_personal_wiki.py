@@ -7,10 +7,12 @@ from typing import Any
 
 import pytest
 
+from agent.wiki_builder.models import WikiDocumentPlan
 from infrastructure.persistence.features.personal_wiki import (
     RegisteredUrlSource,
     SavedUserSourceVersion,
     UserSourceDocumentForAgent,
+    _upsert_wiki_document,
     chunk_wiki_markdown,
     get_user_source_document_version_for_agent,
     list_existing_wiki_entries,
@@ -414,4 +416,120 @@ def test_mark_url_source_event_records_failure_details() -> None:
         "failed",
         "failed",
         "event-row-1",
+    )
+
+
+class _SequencedConnection:
+    """호출 순서별 응답 목록을 돌려주는 Connection Test Double."""
+
+    def __init__(self, responses: list[dict[str, Any] | list[dict[str, Any]] | None]) -> None:
+        self._responses = responses
+        self.executed: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def execute(self, query: str, params: tuple[Any, ...]) -> _FakeCursor:
+        """실행된 SQL을 기록하고 순서에 맞는 고정 Cursor를 반환한다."""
+        self.executed.append((query, params))
+        row = self._responses.pop(0) if self._responses else None
+        return _FakeCursor(row)
+
+
+def _sample_source() -> UserSourceDocumentForAgent:
+    """Wiki Build 대상 사용자 원본 Version 예시."""
+    return UserSourceDocumentForAgent(
+        source_document_id="doc-1",
+        source_document_version_id="version-1",
+        source_event_id="event-1",
+        user_id="user-1",
+        namespace_key="user/user-1",
+        source_type="url",
+        canonical_url="https://example.com",
+        version=1,
+        title="원본",
+        author=None,
+        published_at=None,
+        clipped_on=None,
+        description=None,
+    )
+
+
+def _sample_plan_document() -> WikiDocumentPlan:
+    """저장 예정인 entity 문서 계획 예시."""
+    return WikiDocumentPlan(
+        document_kind="entity",
+        document_key="postgresql",
+        file_path="entities/postgresql.md",
+        domain=None,
+        title="PostgreSQL",
+        summary="요약",
+        normalized_content="## Description\n동일한 본문",
+        action="create",
+    )
+
+
+def test_upsert_wiki_document_reuses_existing_document_with_same_content() -> None:
+    """새 Head의 내용이 기존 문서와 동일하면 INSERT 없이 재사용한다(PWIKI-008)."""
+    duplicate = {
+        "id": "doc-existing",
+        "document_kind": "entity",
+        "document_key": "postgres",
+        "file_path": "entities/postgres.md",
+        "current_version": 2,
+    }
+    connection = _SequencedConnection(
+        [None, duplicate, {"id": "version-existing"}, None]
+    )
+
+    persisted, changed = asyncio.run(
+        _upsert_wiki_document(
+            connection,  # type: ignore[arg-type]
+            source=_sample_source(),
+            document=_sample_plan_document(),
+            job_id="job-1",
+        )
+    )
+
+    assert changed is False
+    assert persisted.action == "deduplicated"
+    assert persisted.document_id == "doc-existing"
+    assert persisted.document_key == "postgres"
+    assert persisted.version == 2
+    assert not any(
+        "INSERT INTO agent.wiki_documents" in query
+        for query, _ in connection.executed
+    )
+
+
+def test_upsert_wiki_document_skips_version_when_update_duplicates_other_document() -> None:
+    """갱신 내용이 다른 문서와 동일하면 새 Version을 만들지 않는다(PWIKI-008)."""
+    head = {"id": "doc-head", "current_version": 3, "content_hash": "b" * 64}
+    duplicate = {
+        "id": "doc-existing",
+        "document_kind": "entity",
+        "document_key": "postgres",
+        "file_path": "entities/postgres.md",
+        "current_version": 2,
+    }
+    connection = _SequencedConnection(
+        [head, duplicate, {"id": "version-head-3"}, None]
+    )
+
+    persisted, changed = asyncio.run(
+        _upsert_wiki_document(
+            connection,  # type: ignore[arg-type]
+            source=_sample_source(),
+            document=_sample_plan_document(),
+            job_id="job-1",
+        )
+    )
+
+    assert changed is False
+    assert persisted.action == "deduplicated"
+    assert persisted.document_id == "doc-head"
+    assert persisted.version == 3
+    assert not any(
+        "INSERT INTO agent.wiki_document_versions" in query
+        for query, _ in connection.executed
+    )
+    assert not any(
+        "UPDATE agent.wiki_documents" in query for query, _ in connection.executed
     )

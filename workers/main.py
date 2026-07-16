@@ -11,6 +11,7 @@ import sys
 
 from app.config import Settings, load_settings
 from workers.api import run_personal_wiki_batch
+from workers.runtime.api import consume_personal_wiki_jobs
 
 
 def _parse_args() -> argparse.Namespace:
@@ -60,10 +61,10 @@ async def _run_batch_once(
 async def _run() -> None:
     """단발 또는 상주 모드로 Personal Wiki Worker를 실행한다.
 
-    상주 모드는 실행 가능한 Job(scheduled_at <= now)이 있으면 연속으로
-    Batch를 소진하고, 없으면 interval-seconds 동안 대기 후 다시 확인한다.
-    조용 시간 정책(SCH-009)이 미뤄 둔 Job은 그 시각이 되기 전에는
-    Claim되지 않는다.
+    상주 모드는 WC-001 Queue Job Consume 루프에 위임한다. 실행 가능한
+    Job(scheduled_at <= now)이 있으면 연속으로 Batch를 소진하고, 없으면
+    interval-seconds 동안 대기 후 다시 확인한다. 조용 시간 정책(SCH-009)이
+    미뤄 둔 Job은 그 시각이 되기 전에는 Claim되지 않는다.
     """
     args = _parse_args()
     settings = load_settings()
@@ -74,12 +75,21 @@ async def _run() -> None:
         results = await _run_batch_once(args, settings, worker_id)
         print(json.dumps(results, ensure_ascii=False, indent=2))
         return
-    while True:
-        results = await _run_batch_once(args, settings, worker_id)
-        if results:
-            print(json.dumps(results, ensure_ascii=False), flush=True)
-            continue
-        await asyncio.sleep(args.interval_seconds)
+    await consume_personal_wiki_jobs(
+        database_url=settings.agent_database_url,
+        worker_id=worker_id,
+        limit=args.limit or settings.personal_wiki_worker_batch_size,
+        lease_seconds=(
+            args.lease_seconds or settings.personal_wiki_job_lease_seconds
+        ),
+        model=args.model or settings.wiki_llm_model,
+        embedding_model=args.embedding_model or settings.wiki_embedding_model,
+        interval_seconds=args.interval_seconds,
+        max_batches=None,
+        on_batch=lambda results: print(
+            json.dumps(results, ensure_ascii=False), flush=True
+        ),
+    )
 
 
 def main() -> None:
