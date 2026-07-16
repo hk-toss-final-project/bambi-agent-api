@@ -29,14 +29,17 @@ _SYSTEM_PROMPT = (
     "너는 개인화된 일간 정보 보고서를 쓰는 한국어 비서다. "
     "제공된 자료에 있는 내용만 사용하고, 없는 사실을 지어내지 않는다. "
     "자료가 부족하면 부족하다고 솔직히 적는다. "
+    "불릿 나열이 아니라 잘 읽히는 '줄글(문단)'로 쓴다. 각 문단은 3~5문장으로, "
+    "문장들이 자연스럽게 이어지도록 흐름을 만든다. "
     "출력은 Markdown이며 다음 두 부분으로 구성한다: "
-    "(1) '## 핵심 요약' — 오늘 알아야 할 내용을 6~9개 불릿으로 충실히 정리한다. "
-    "각 불릿은 사실뿐 아니라 배경·맥락·수치·상반된 관점까지 한두 문장으로 담아 "
-    "구체적으로 쓴다. 여러 자료에서 겹치는 흐름은 종합하고, 엇갈리는 부분은 함께 적는다. "
-    "(2) '## 나에게 적용하면' — 이 내용이 사용자에게 어떤 의미인지, 어떤 기회·리스크가 "
-    "있는지, 무엇을 하면 좋을지를 4~6개 불릿으로 구체적이고 실천적으로 쓴다. "
-    "각 항목은 '왜 그런지' 이유까지 덧붙인다. "
-    "그 외 개요·서론·맺음말 같은 군더더기 섹션은 넣지 않는다. 출처 URL은 본문에 넣지 않는다."
+    "(1) '## 핵심 요약' — 오늘 알아야 할 내용을 2~3개 문단의 줄글로 서술한다. "
+    "여러 자료에서 겹치는 흐름을 하나의 이야기로 종합하고, 배경·맥락·수치·상반된 관점을 "
+    "문장 안에 녹여 설명한다. "
+    "(2) '## 나에게 적용하면' — 이 내용이 사용자에게 어떤 의미이고 어떤 기회·리스크가 "
+    "있는지, 무엇을 하면 좋을지를 1~2개 문단의 줄글로 풀어 쓴다. 근거(왜 그런지)를 "
+    "문장 안에 함께 설명한다. "
+    "불릿(-, *)이나 번호 목록은 쓰지 말고 문단으로만 쓴다. "
+    "개요·서론·맺음말 같은 군더더기 섹션은 넣지 않는다. 출처 URL은 본문에 넣지 않는다."
 )
 
 
@@ -76,6 +79,11 @@ def _format_fresh(fresh: dict[str, object]) -> str:
 _MAX_SOURCES = 5
 
 
+def collect_sources(fresh: dict[str, object], max_sources: int = _MAX_SOURCES) -> list[dict[str, str]]:
+    """출처 목록(라벨·제목·URL)을 공개로 반환한다. 웹이 출처 블록을 그릴 때 쓴다."""
+    return _collect_sources(fresh, max_sources=max_sources)
+
+
 def _collect_sources(fresh: dict[str, object], max_sources: int = _MAX_SOURCES) -> list[dict[str, str]]:
     """최신 자료에서 실제 URL이 있는 출처를 모아 상위 max_sources개만 남긴다.
 
@@ -94,7 +102,11 @@ def _collect_sources(fresh: dict[str, object], max_sources: int = _MAX_SOURCES) 
             if not url or url in seen:
                 continue
             seen.add(url)
-            bucket.append({"label": label, "title": str(item.get("title") or url), "url": url})
+            # 유튜브는 썸네일, 기사는 대표 이미지를 함께 싣는다(있으면).
+            image = str(item.get("thumbnail_url") or item.get("image_url") or "") or None
+            bucket.append(
+                {"label": label, "title": str(item.get("title") or url), "url": url, "image_url": image}
+            )
         buckets.append(bucket)
 
     # 유형을 라운드로빈으로 번갈아 뽑아 다양성을 확보한다.

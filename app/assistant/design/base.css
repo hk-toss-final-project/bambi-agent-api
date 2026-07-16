@@ -1,0 +1,52 @@
+/* AlphaCatcher — base layout (독립 페이지용)
+   목업 전용 요소 제거: .toolbar/.seg(화면·테마 전환), 외부 canvas 배경, .app 외곽 border/radius,
+   .page 목업 padding, body 하단 목업 여백. 나머지 규칙은 원본 그대로. */
+@import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500&family=Space+Grotesk:wght@400;500;600&display=swap');
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css');
+
+*{box-sizing:border-box;margin:0;padding:0}
+
+body{background:var(--bg-soft);font-family:"Pretendard Variable",Pretendard,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;-webkit-font-smoothing:antialiased;padding:0;}
+.page{background:var(--bg-soft);color:var(--ink);min-height:100vh;transition:background .25s;padding:0;}
+
+/* ============ STAGE / APP ============ */
+.stage{width:1440px;max-width:100%;margin:0 auto;}
+.screen[hidden]{display:none;}
+.app{width:1440px;max-width:100%;margin:0 auto;background:var(--bg-soft);overflow:hidden;transition:background .25s,border-color .25s;}
+
+/* ---- top nav ---- */
+.nav{position:relative;display:flex;align-items:center;gap:18px;height:58px;padding:0 24px;background:var(--bg);border-bottom:1px solid var(--line);}
+.logo{display:flex;align-items:center;gap:9px;}
+.logo .word{font-family:"Quicksand",sans-serif;font-weight:400;font-size:17px;letter-spacing:.02em;color:var(--ink);}
+.nav-search{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:596px;max-width:calc(100% - 380px);height:38px;border:1px solid var(--line);border-radius:19px;background:var(--bg-soft);display:flex;align-items:center;gap:9px;padding:0 15px;font-size:13px;color:var(--ink-dim);}
+.nav-search .sico{width:13px;height:13px;border:1.5px solid var(--low);border-radius:50%;position:relative;flex-shrink:0;}
+.nav-search .sico::after{content:"";position:absolute;width:5px;height:1.5px;background:var(--low);bottom:-2px;right:-4px;transform:rotate(45deg);}
+.nav .spacer{flex:1;}
+.nav-ico{width:38px;height:38px;border:1px solid var(--line);border-radius:50%;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:15px;color:var(--ink-mid);position:relative;}
+.nav-ico .badge{position:absolute;top:2px;right:3px;width:7px;height:7px;border-radius:50%;background:var(--signal);border:2px solid var(--bg);}
+.nav-avatar{width:34px;height:34px;border-radius:50%;background:var(--bg-soft);border:1px solid var(--line-strong);display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:700;color:var(--ink-mid);}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:13.5px;font-weight:600;padding:9px 15px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);white-space:nowrap;cursor:pointer;font-family:inherit;}
+.btn.signal{background:var(--signal);border-color:var(--signal);color:var(--on-signal);}
+.btn.sm{padding:7px 12px;font-size:12.5px;border-radius:8px;}
+.btn.ghost{background:transparent;color:var(--ink-mid);}
+.link{font-size:13px;font-weight:600;color:var(--signal-ink);cursor:pointer;}
+
+/* ---- shell: nav + feed + right rail ---- */
+.shell{display:flex;gap:22px;padding:24px 20px 56px;align-items:flex-start;justify-content:center;}
+.side-l{width:300px;flex-shrink:0;position:sticky;top:16px;}
+.feed{width:auto;flex:1;min-width:0;max-width:760px;}
+.reader{width:auto;flex:1;min-width:0;max-width:760px;}
+.side-r{width:300px;flex-shrink:0;position:sticky;top:16px;display:flex;flex-direction:column;gap:14px;}
+
+/* left nav */
+.menu{background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:8px;}
+.mi{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:10px;font-size:14.5px;color:var(--ink-mid);margin-bottom:1px;cursor:pointer;}
+.mi .ic{width:20px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;font-size:15px;color:var(--ink-dim);}
+.mi:hover{background:var(--bg-soft);}
+.mi.on{color:var(--ink);font-weight:700;background:var(--bg-soft);}
+.mi.on .ic{color:var(--signal);}
+.mi .cnt{margin-left:auto;font-size:11.5px;color:var(--ink-dim);}
+.menu .divider{height:1px;background:var(--line);margin:7px 6px;}
+.side-cta{margin-top:12px;}
+.side-cta .btn{width:100%;}
+.side-foot{margin-top:12px;font-size:11.5px;color:var(--ink-dim);line-height:1.6;padding:0 6px;}

@@ -109,14 +109,17 @@ def search_videos(keyword: str, limit: int = 4) -> list[dict[str, object]]:
     raw = VideosSearch(keyword, limit=limit).result()
     videos: list[dict[str, object]] = []
     for item in raw.get("result", []):
+        video_id = item.get("id")
         videos.append(
             {
-                "video_id": item.get("id"),
+                "video_id": video_id,
                 "title": item.get("title"),
                 "url": item.get("link"),
                 "channel": (item.get("channel") or {}).get("name"),
                 "duration": item.get("duration"),
                 "published_time": item.get("publishedTime"),
+                # video_id만으로 조립 가능한 공식 썸네일 URL (API 키 불필요).
+                "thumbnail_url": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" if video_id else None,
             }
         )
     return videos
@@ -175,6 +178,7 @@ def summarize_video(video: dict[str, object], model: str = "gpt-4.1-mini") -> di
         "channel": video.get("channel"),
         "duration": video.get("duration"),
         "published_time": video.get("published_time"),
+        "thumbnail_url": video.get("thumbnail_url"),
         "summary": summary,
         "note": note,
     }

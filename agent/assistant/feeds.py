@@ -156,41 +156,48 @@ def _clean_jina_content(text: str) -> str:
     return text
 
 
-def _make_snippet(entry: dict[str, object], use_jina: bool) -> str:
-    """Jina 본문(가능하면) 또는 RSS 요약에서 짧은 요지를 만든다.
+def _extract_jina_image(text: str) -> str | None:
+    """Jina 응답에서 기사 대표 이미지 URL을 하나 뽑는다. 없으면 None.
 
-    Jina 본문은 메타데이터 헤더·마크다운을 제거해 사람이 읽는 텍스트만 남긴다.
-    URL은 요지에 넣지 않는다.
+    Jina는 헤더에 'Image N: <url>' 형태로, 본문에는 마크다운 이미지 '![alt](url)'
+    형태로 이미지를 남긴다. 아이콘·로고·트래킹 픽셀 등은 대표 이미지가 아니므로
+    최소 폭을 가진 흔한 이미지 확장자를 우선한다.
     """
+    import re
+
+    candidates = re.findall(r"Image \d+:\s*(https?://\S+)", text)
+    candidates += re.findall(r"!\[[^\]]*\]\((https?://[^)]+)\)", text)
+    for url in candidates:
+        low = url.lower()
+        if any(bad in low for bad in ("logo", "icon", "sprite", "1x1", "blank", "avatar")):
+            continue
+        if re.search(r"\.(jpg|jpeg|png|webp)(\?|$)", low):
+            return url
+    return candidates[0] if candidates else None
+
+
+def _clean_text(entry: dict[str, object], content: str | None, max_chars: int) -> str:
+    """Jina 콘텐츠(있으면) 또는 RSS 요약을 정제해 사람이 읽는 텍스트로 만든다."""
     import html as html_lib
     import re
 
-    content = jina_read(str(entry.get("link", ""))) if use_jina else None
-    if content:
-        text = _clean_jina_content(content)
-    else:
-        # RSS summary에는 HTML 태그가 섞일 수 있어 제거한다.
-        text = re.sub(r"<[^>]+>", " ", str(entry.get("summary", "")))
-        text = re.sub(r"https?://\S+", " ", text)
-
-    text = html_lib.unescape(text)          # &nbsp; 등 엔티티 복원
-    text = " ".join(text.split())
-    return text[:_SNIPPET_CHARS]
-
-
-def _article_full_text(entry: dict[str, object], use_jina: bool) -> str:
-    """LLM 요약 입력용으로 기사 본문 텍스트를 넉넉히 확보한다(요지보다 길게)."""
-    import html as html_lib
-    import re
-
-    content = jina_read(str(entry.get("link", ""))) if use_jina else None
     if content:
         text = _clean_jina_content(content)
     else:
         text = re.sub(r"<[^>]+>", " ", str(entry.get("summary", "")))
         text = re.sub(r"https?://\S+", " ", text)
     text = html_lib.unescape(text)
-    return " ".join(text.split())[:4000]
+    return " ".join(text.split())[:max_chars]
+
+
+def _make_snippet(entry: dict[str, object], content: str | None) -> str:
+    """정제한 짧은 요지를 만든다. content는 미리 조회한 Jina 텍스트(없으면 None)."""
+    return _clean_text(entry, content, _SNIPPET_CHARS)
+
+
+def _article_full_text(entry: dict[str, object], content: str | None) -> str:
+    """LLM 요약 입력용으로 기사 본문 텍스트를 넉넉히 확보한다(요지보다 길게)."""
+    return _clean_text(entry, content, 4000)
 
 
 def _summarize_article(title: str, content: str, model: str) -> str:
@@ -249,17 +256,21 @@ def latest_articles(
 
     articles: list[dict[str, object]] = []
     for index, entry in enumerate(unique):
+        # 상위 jina_top개만 Jina로 본문을 한 번 조회해, 요지·이미지에 함께 쓴다.
+        content = jina_read(str(entry.get("link", ""))) if index < jina_top else None
+        image_url = _extract_jina_image(content) if content else None
         if summarize:
-            full_text = _article_full_text(entry, use_jina=index < jina_top)
+            full_text = _article_full_text(entry, content)
             snippet = _summarize_article(str(entry.get("title") or ""), full_text, model) if full_text else ""
         else:
-            snippet = _make_snippet(entry, use_jina=index < jina_top)
+            snippet = _make_snippet(entry, content)
         articles.append(
             {
                 "title": entry.get("title"),
                 "url": entry.get("link"),
                 "published": entry.get("published"),
                 "snippet": snippet,
+                "image_url": image_url,
             }
         )
     return articles
