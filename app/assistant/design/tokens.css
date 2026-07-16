@@ -1,0 +1,31 @@
+/* AlphaCatcher — design tokens (light/dark)
+   원본: alphacatcher-feed-detail-mockup-v2.html <style> 테마 토큰 블록 (무수정 유지) */
+/* ============ THEME TOKENS ============ */
+.page[data-theme="light"]{
+  --canvas:#E3E6EA;
+  --bg:#FFFFFF; --bg-soft:#F5F6F8; --bg-inset:#EEF0F3;
+  --line:#E6E8EC; --line-strong:#D7DBE0;
+  --ink:#141619; --ink-mid:#454B54; --ink-dim:#6B7280;
+  --signal:#FF5A00; --signal-ink:#E35200; --on-signal:#FFFFFF;
+  --wash:rgba(255,90,0,.09); --wash-strong:rgba(255,90,0,.20);
+  --today-bg:#FAFBFC; --today-line:#E6E8EC; --avatar-bg:#FCE4D4;
+  --ok:#1F8A54; --ok-dot:#34A66A; --mid:#D89A2B; --low:#A6ADB6;
+  --err:#DC2626; --err-bg:#FEF2F2; --err-line:#FBD5D5;
+  --caution:#8A6D1F; --caution-bg:#FDF7EA; --caution-line:#EFE2BE;
+  --frame:#D7DBE0; --skel1:#EDEFF2; --skel2:#F6F7F9; --img:#EEF0F3;
+  --shadow:0 1px 2px rgba(20,22,25,.05);
+}
+.page[data-theme="dark"]{
+  --canvas:#0A0B0D;
+  --bg:#181B21; --bg-soft:#20242C; --bg-inset:#252A33;
+  --line:#2C323C; --line-strong:#3B424E;
+  --ink:#EEF1F5; --ink-mid:#C4CBD4; --ink-dim:#949CA8;
+  --signal:#FF7A33; --signal-ink:#FF8A4D; --on-signal:#241200;
+  --wash:rgba(255,122,51,.14); --wash-strong:rgba(255,122,51,.30);
+  --today-bg:#1C2026; --today-line:#2C323C; --avatar-bg:#2E2318;
+  --ok:#43C088; --ok-dot:#43C088; --mid:#E0B44E; --low:#7F8792;
+  --err:#F87171; --err-bg:#2A1A1C; --err-line:#5A2E30;
+  --caution:#E6C67E; --caution-bg:#282213; --caution-line:#463C1D;
+  --frame:#2C323C; --skel1:#20242C; --skel2:#2A2F38; --img:#20242C;
+  --shadow:0 1px 2px rgba(0,0,0,.32);
+}

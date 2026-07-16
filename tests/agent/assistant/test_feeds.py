@@ -174,16 +174,15 @@ def test_latest_articles_summarizes_when_enabled(monkeypatch) -> None:
     assert "URL Source" not in articles[0]["snippet"]
 
 
-def test_make_snippet_strips_html_tags(monkeypatch) -> None:
-    """RSS 요약의 HTML 태그를 제거하고 길이를 제한한다."""
-    monkeypatch.setattr(feeds, "jina_read", lambda url: None)
+def test_make_snippet_strips_html_tags() -> None:
+    """RSS 요약(content=None)의 HTML 태그를 제거하고 길이를 제한한다."""
     entry = {"link": "https://a.com/1", "summary": "<a href='x'>제목</a> <b>본문</b>"}
-    snippet = feeds._make_snippet(entry, use_jina=False)
+    snippet = feeds._make_snippet(entry, None)
     assert "<" not in snippet
     assert "제목" in snippet and "본문" in snippet
 
 
-def test_make_snippet_cleans_jina_metadata_and_urls(monkeypatch) -> None:
+def test_make_snippet_cleans_jina_metadata_and_urls() -> None:
     """Jina 응답의 메타데이터 헤더와 URL을 제거하고 본문만 남긴다."""
     jina_raw = (
         "Title: 코스피 급등\n"
@@ -193,11 +192,26 @@ def test_make_snippet_cleans_jina_metadata_and_urls(monkeypatch) -> None:
         "# [코스피](https://news.example/1)\n"
         "코스피가 외국인 매수에 7400선을 돌파했다. 자세히는 https://news.example/1 참고."
     )
-    monkeypatch.setattr(feeds, "jina_read", lambda url: jina_raw)
 
-    snippet = feeds._make_snippet({"link": "https://news.example/1"}, use_jina=True)
+    snippet = feeds._make_snippet({"link": "https://news.example/1"}, jina_raw)
 
     assert "URL Source" not in snippet
     assert "Markdown Content" not in snippet
     assert "http" not in snippet  # URL 제거됨
     assert "코스피가 외국인 매수에 7400선을 돌파했다" in snippet
+
+
+def test_extract_jina_image_picks_content_image_over_icon() -> None:
+    """헤더/본문 이미지 중 아이콘·로고는 걸러내고 대표 이미지를 뽑는다."""
+    text = (
+        "Image 1: https://cdn.example/logo.png\n"
+        "Markdown Content:\n"
+        "![hero](https://cdn.example/photos/hero-960.jpg)\n"
+        "본문 텍스트"
+    )
+    assert feeds._extract_jina_image(text) == "https://cdn.example/photos/hero-960.jpg"
+
+
+def test_extract_jina_image_returns_none_when_no_image() -> None:
+    """이미지가 없으면 None을 반환한다."""
+    assert feeds._extract_jina_image("Markdown Content:\n본문만 있음") is None

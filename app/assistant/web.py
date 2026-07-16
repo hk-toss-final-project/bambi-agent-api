@@ -19,9 +19,29 @@ from fastapi import APIRouter, Form
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from pathlib import Path
+
 from agent.assistant import history
-from agent.assistant.report import build_report_context, generate_report
+from agent.assistant.report import build_report_context, collect_sources, generate_report
 from agent.assistant.service import assist
+from agent.assistant.stocks import build_stock_chart
+
+# report-detail 디자인 핸드오프에서 가져온 공유 CSS(tokens·base·product-components).
+# 보고서 결과 페이지를 AlphaCatcher 디자인으로 렌더링하는 데 사용한다.
+_DESIGN_DIR = Path(__file__).resolve().parent / "design"
+
+
+def _load_design_css() -> str:
+    """vendoring한 디자인 CSS 세 파일을 하나로 합쳐 인라인용 문자열로 반환한다."""
+    parts = []
+    for name in ("tokens.css", "base.css", "product-components.css"):
+        path = _DESIGN_DIR / name
+        if path.exists():
+            parts.append(path.read_text(encoding="utf-8"))
+    return "\n".join(parts)
+
+
+_DESIGN_CSS = _load_design_css()
 
 assistant_router = APIRouter(tags=["assistant"])
 
@@ -261,7 +281,7 @@ async def report_form() -> str:
 
 
 def _run_report(keyword: str, user_id: str) -> dict[str, object]:
-    """최신 자료를 수집하고 개인화 보고서를 생성한다(블로킹 작업 묶음)."""
+    """최신 자료를 수집하고 개인화 보고서 본문과 출처 목록을 만든다(블로킹 작업 묶음)."""
     assist_result = assist(keyword, user_id=user_id)
     fresh = {
         "youtube": assist_result.get("youtube", []),
@@ -271,8 +291,121 @@ def _run_report(keyword: str, user_id: str) -> dict[str, object]:
     # TODO: ①user_context_snapshots(DB), ②개인 Wiki 지식(prag_006) 어댑터가 준비되면
     #       settings·knowledge를 채워 build_report_context에 전달한다.
     context = build_report_context(keyword, fresh)
-    report_markdown = generate_report(context)
-    return {"result": assist_result, "report": report_markdown}
+    # 출처는 화면 하단 블록에 따로 그리므로 본문에는 붙이지 않는다.
+    body_markdown = generate_report(context, include_sources=False)
+    return {
+        "result": assist_result,
+        "body_markdown": body_markdown,
+        "sources": collect_sources(fresh),
+        # 키워드가 주가/지수면 차트를 만든다(아니면 None). 네트워크 실패도 None.
+        "chart": build_stock_chart(keyword),
+    }
+
+
+def _extract_lead(markdown_body: str) -> str:
+    """보고서 본문에서 리드 문장(첫 요약 문장)을 뽑는다."""
+    import re
+
+    text = re.sub(r"^#+ .*$", "", markdown_body, flags=re.MULTILINE)
+    text = " ".join(text.split())
+    first = re.split(r"(?<=[.。!?])\s", text, maxsplit=1)
+    return (first[0] if first else text)[:180]
+
+
+def _render_source_rows(sources: list[dict[str, str]]) -> str:
+    """출처 목록을 디자인의 .srcrow 형식으로 렌더링한다. 이미지가 있으면 썸네일을 붙인다."""
+    rows = []
+    for index, source in enumerate(sources, start=1):
+        title = html.escape(str(source.get("title") or ""))
+        url = html.escape(str(source.get("url") or ""))
+        label = html.escape(str(source.get("label") or ""))
+        image = str(source.get("image_url") or "")
+        thumb = (
+            f'<img src="{html.escape(image)}" alt="" loading="lazy" '
+            f'style="width:56px;height:40px;object-fit:cover;border-radius:6px;flex-shrink:0;" '
+            f'onerror="this.style.display=\'none\'">'
+            if image
+            else ""
+        )
+        rows.append(
+            f'<div class="srcrow"><span class="no2">[{index}]</span>{thumb}'
+            f'<div style="flex:1;"><div class="sn">{title}</div><div class="pub">{label}</div></div>'
+            f'<span class="stp">{label}</span>'
+            f'<a class="go" href="{url}" target="_blank">원문 열기 ↗</a></div>'
+        )
+    return "\n".join(rows)
+
+
+def _render_chart(chart: dict[str, object] | None) -> str:
+    """주가 차트가 있으면 figure로 렌더링한다(SVG는 신뢰된 내부 생성물이라 그대로 삽입)."""
+    if not chart or not chart.get("chart_svg"):
+        return ""
+    name = html.escape(str(chart.get("name") or ""))
+    symbol = html.escape(str(chart.get("symbol") or ""))
+    return (
+        '<figure class="fig" style="margin:0 0 18px;">'
+        f'{chart["chart_svg"]}'
+        f'<figcaption class="pmeta" style="margin-top:6px;">{name} ({symbol}) · 출처 Stooq 일별 종가</figcaption>'
+        '</figure>'
+    )
+
+
+def _render_report_detail(
+    keyword: str,
+    body_markdown: str,
+    sources: list[dict[str, str]],
+    errors: list,
+    chart: dict[str, object] | None = None,
+) -> str:
+    """AlphaCatcher report-detail 디자인으로 보고서 결과 페이지를 렌더링한다."""
+    kw = html.escape(keyword)
+    lead = html.escape(_extract_lead(body_markdown))
+    body_html = _render_markdown(body_markdown)
+    chart_html = _render_chart(chart)
+    src_count = len(sources)
+    src_rows = _render_source_rows(sources) or "<p class='pmeta'>표시할 출처가 없습니다.</p>"
+    errors_html = "".join(
+        f'<div class="dlead" style="color:var(--err)">{html.escape(str(e))}</div>' for e in errors
+    )
+
+    return f"""<!doctype html>
+<html lang="ko"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{kw} 브리핑</title>
+<style>{_DESIGN_CSS}</style>
+</head>
+<body>
+<div class="page" data-theme="light"><div class="stage"><div class="app">
+  <nav class="nav">
+    <div class="logo"><span class="word">alphacatcher</span></div>
+    <div class="spacer"></div>
+  </nav>
+  <div class="shell"><main class="reader">
+    <div class="readbar"><a class="back" href="/report"><span class="ar">←</span>새 보고서</a><span class="rsp"></span></div>
+    <article class="dcard">
+      <div class="dhead">
+        <span class="pav me">나</span>
+        <div><div class="pname">{kw} 브리핑</div><div class="pmeta">방금 생성 · 수집 자료 종합</div></div>
+        <span class="dpill">나만 보기</span>
+      </div>
+      <h1 class="dtitle">{kw} — 오늘의 브리핑</h1>
+      <p class="dlead">{lead}</p>
+      <div class="dmeta">
+        <span>출처 <b>{src_count}건</b></span><span class="dot">·</span>
+        <span>왜 나에게 왔나: 관심사 <b>‘{kw}’</b> 검색</span>
+      </div>
+      {errors_html}
+      {chart_html}
+      <div class="md">{body_html}</div>
+    </article>
+    <section class="block">
+      <div class="bt">출처 <span class="cnt">{src_count}건</span></div>
+      {src_rows}
+    </section>
+  </main></div>
+</div></div></div>
+</body></html>"""
 
 
 @assistant_router.post("/report/generate", response_class=HTMLResponse)
@@ -280,17 +413,10 @@ async def report_generate(user_id: str = Form(...), keyword: str = Form(...)) ->
     """키워드로 최신 자료를 모아 개인화 보고서를 생성해 보여준다."""
     outcome = await run_in_threadpool(_run_report, keyword, user_id)
     result = outcome["result"]
-    errors_html = "".join(
-        f"<div class='err'>{html.escape(str(err))}</div>" for err in result.get("errors", [])
+    return _render_report_detail(
+        keyword=str(result["keyword"]),
+        body_markdown=str(outcome["body_markdown"]),
+        sources=outcome["sources"],
+        errors=result.get("errors", []),
+        chart=outcome.get("chart"),
     )
-
-    return f"""
-<!doctype html>
-<meta charset="utf-8">
-<title>{html.escape(result['keyword'])} 보고서</title>
-{_PAGE_STYLE}
-<h1>📄 “{html.escape(result['keyword'])}” 보고서</h1>
-<p><a href="/report">← 다른 키워드로 보고서 생성</a></p>
-{errors_html}
-<div class="card">{_render_markdown(str(outcome['report']))}</div>
-"""
