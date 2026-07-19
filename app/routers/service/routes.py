@@ -1,10 +1,21 @@
 """Service API가 호출하는 FastAPI MVP 내부 라우터."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Path, Request, status
+from fastapi import APIRouter, Depends, Path, Query, Request, status
 
-from app.dependencies import get_mvp_service, get_wiki_graph_service
+from app.dependencies import (
+    get_mvp_service,
+    get_interest_service,
+    get_generated_content_service,
+    get_wiki_document_service,
+    get_wiki_graph_service,
+)
+from app.schemas.generated_content import (
+    GeneratedContentDetailResponse,
+    GeneratedContentListResponse,
+)
+from app.schemas.interests import InterestProfileResponse
 from app.schemas.mvp import (
     AcceptedJobResponse,
     ContentMarkRequest,
@@ -16,9 +27,17 @@ from app.schemas.mvp import (
     UserContextUpsertRequest,
     WebClippingRequest,
 )
-from app.schemas.wiki import WikiGraphResponse
+from app.schemas.wiki import (
+    WikiBuildDetailResponse,
+    WikiDocumentDetailResponse,
+    WikiDocumentListResponse,
+    WikiGraphResponse,
+)
 from app.services.mvp import AgentApiMvpService
 from app.services.wiki_graph import WikiGraphService
+from app.services.wiki_documents import WikiDocumentService
+from app.services.interests import InterestService
+from app.services.generated_content import GeneratedContentService
 
 router = APIRouter(tags=["service-api"])
 UserId = Annotated[str, Path(min_length=1, max_length=128, description="사용자 ID")]
@@ -59,13 +78,10 @@ async def request_web_clipping(
     service: AgentApiMvpService = Depends(get_mvp_service),
 ) -> AcceptedJobResponse:
     """[SVC-002] 웹 클리핑을 Personal Wiki Builder Job으로 등록한다."""
-    return await service.enqueue_job(
-        feature_id="SVC-002",
-        job_type="personal_wiki_web_clipping",
+    return await service.submit_web_clipping(
         user_id=user_id,
-        idempotency_key=payload.source_event_id,
+        payload=payload,
         request_id=_request_id(request),
-        payload=payload.model_dump(mode="json"),
     )
 
 
@@ -83,13 +99,10 @@ async def request_url_wiki_source(
     service: AgentApiMvpService = Depends(get_mvp_service),
 ) -> AcceptedJobResponse:
     """[SVC-003] 사용자 입력 URL을 Personal Wiki Builder Job으로 등록한다."""
-    return await service.enqueue_job(
-        feature_id="SVC-003",
-        job_type="personal_wiki_url",
+    return await service.submit_url_source(
         user_id=user_id,
-        idempotency_key=payload.source_event_id,
+        payload=payload,
         request_id=_request_id(request),
-        payload=payload.model_dump(mode="json"),
     )
 
 
@@ -132,6 +145,112 @@ async def get_personal_wiki_graph(
     return await service.get_graph(user_id, _request_id(request))
 
 
+@router.get(
+    "/users/{user_id}/wiki/documents",
+    response_model=WikiDocumentListResponse,
+    operation_id="pwiki_003_list",
+    summary="개인 Wiki 문서 목록 조회",
+)
+async def list_personal_wiki_documents(
+    user_id: UserId,
+    document_kind: Annotated[
+        Literal["document", "entity", "concept", "schema"] | None,
+        Query(description="필터링할 Wiki 문서 종류"),
+    ] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    service: WikiDocumentService = Depends(get_wiki_document_service),
+) -> WikiDocumentListResponse:
+    """[PWIKI-003] 사용자 Namespace의 현재 Wiki 문서 목록을 조회한다."""
+    return await service.list_documents(
+        user_id,
+        document_kind=document_kind,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/users/{user_id}/wiki/documents/{document_id}",
+    response_model=WikiDocumentDetailResponse,
+    operation_id="pwiki_003_detail",
+    summary="개인 Wiki 문서 상세 조회",
+)
+async def get_personal_wiki_document(
+    user_id: UserId,
+    document_id: Annotated[
+        str, Path(min_length=1, max_length=128, description="Wiki 문서 UUID")
+    ],
+    service: WikiDocumentService = Depends(get_wiki_document_service),
+) -> WikiDocumentDetailResponse:
+    """[PWIKI-003] 현재 Wiki 문서 Markdown, 출처와 관계를 조회한다."""
+    return await service.get_document(user_id, document_id)
+
+
+@router.get(
+    "/users/{user_id}/wiki/versions/{wiki_version_id}",
+    response_model=WikiBuildDetailResponse,
+    operation_id="pwiki_006_detail",
+    summary="개인 Wiki Build 상세 조회",
+)
+async def get_personal_wiki_version(
+    user_id: UserId,
+    wiki_version_id: Annotated[
+        str, Path(min_length=1, max_length=128, description="Wiki Build UUID")
+    ],
+    service: WikiDocumentService = Depends(get_wiki_document_service),
+) -> WikiBuildDetailResponse:
+    """[PWIKI-006] 특정 Build에 고정된 문서 Version 구성을 조회한다."""
+    return await service.get_wiki_version(user_id, wiki_version_id)
+
+
+@router.get(
+    "/users/{user_id}/interests",
+    response_model=InterestProfileResponse,
+    operation_id="int_001_get",
+    summary="활성 관심 키워드 조회",
+)
+async def get_active_interests(
+    user_id: UserId,
+    service: InterestService = Depends(get_interest_service),
+) -> InterestProfileResponse:
+    """[INT-001] 개인 Wiki에서 계산된 활성 관심 Topic을 조회한다."""
+    return await service.get_active(user_id)
+
+
+@router.get(
+    "/users/{user_id}/generated-contents",
+    response_model=GeneratedContentListResponse,
+    operation_id="bambi_018_list",
+    summary="Bambi 생성 콘텐츠 목록 조회",
+)
+async def list_generated_contents(
+    user_id: UserId,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    service: GeneratedContentService = Depends(get_generated_content_service),
+) -> GeneratedContentListResponse:
+    """[BAMBI-018] 사용자의 저장된 Bambi 생성 후보를 최신순으로 조회한다."""
+    return await service.list_contents(user_id, limit=limit, offset=offset)
+
+
+@router.get(
+    "/users/{user_id}/generated-contents/{candidate_id}",
+    response_model=GeneratedContentDetailResponse,
+    operation_id="bambi_018_detail",
+    summary="Bambi 생성 콘텐츠 상세 조회",
+)
+async def get_generated_content(
+    user_id: UserId,
+    candidate_id: Annotated[
+        str, Path(min_length=1, max_length=128, description="생성 후보 UUID")
+    ],
+    service: GeneratedContentService = Depends(get_generated_content_service),
+) -> GeneratedContentDetailResponse:
+    """[BAMBI-018] 생성 본문, 실행 정보와 Citation을 조회한다."""
+    return await service.get_content(user_id, candidate_id)
+
+
 @router.post(
     "/users/{user_id}/generations",
     response_model=AcceptedJobResponse,
@@ -146,13 +265,10 @@ async def request_generation(
     service: AgentApiMvpService = Depends(get_mvp_service),
 ) -> AcceptedJobResponse:
     """[SVC-008] 밤비 개인화 콘텐츠 생성 Job을 등록한다."""
-    return await service.enqueue_job(
-        feature_id="SVC-008",
-        job_type="bambi_generation",
+    return await service.submit_generation(
         user_id=user_id,
-        idempotency_key=payload.idempotency_key,
+        payload=payload,
         request_id=_request_id(request),
-        payload=payload.model_dump(mode="json"),
     )
 
 

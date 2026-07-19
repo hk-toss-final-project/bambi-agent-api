@@ -29,6 +29,41 @@ OPENAPI_TAGS = [
     },
 ]
 
+DEVELOPMENT_OPENAPI_TAGS = [
+    {
+        "name": "dev-jobs",
+        "description": "등록된 Agent Job을 개발 환경에서 즉시 실행합니다.",
+    },
+    {
+        "name": "dev-wiki",
+        "description": "Personal Wiki Builder를 개발 환경에서 직접 검증합니다.",
+    },
+    {
+        "name": "dev-interests",
+        "description": "개인 Wiki 기반 관심 키워드를 즉시 재계산합니다.",
+    },
+    {
+        "name": "dev-global",
+        "description": "관심 키워드로 최신 외부 자료를 수집하고 Global 문서로 저장합니다.",
+    },
+    {
+        "name": "dev-bambi",
+        "description": "개인 Wiki와 Global 최신 자료로 Bambi 콘텐츠를 즉시 생성합니다.",
+    },
+    {
+        "name": "dev-scenarios",
+        "description": "원본 저장부터 Bambi 콘텐츠까지 전체 흐름을 한 요청으로 실행합니다.",
+    },
+]
+
+
+def build_openapi_tags(*, include_development: bool) -> list[dict[str, str]]:
+    """실행 환경에 맞는 OpenAPI Tag 목록을 새 목록으로 반환한다."""
+    tags = [dict(tag) for tag in OPENAPI_TAGS]
+    if include_development:
+        tags.extend(dict(tag) for tag in DEVELOPMENT_OPENAPI_TAGS)
+    return tags
+
 SWAGGER_UI_PARAMETERS: dict[str, bool | str] = {
     "displayRequestDuration": True,
     "filter": True,

@@ -1,9 +1,16 @@
 """FastAPI MVP 내부 API에서 사용하는 요청과 응답 스키마."""
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    model_validator,
+)
 
 
 class ImmutableSchema(BaseModel):
@@ -108,9 +115,30 @@ class WikiSourceRequestBase(ImmutableSchema):
 class WebClippingRequest(WikiSourceRequestBase):
     """웹 클리핑을 개인 Wiki 처리 작업으로 전달하는 요청."""
 
-    url: HttpUrl = Field(description="클리핑 원문 URL")
+    source: HttpUrl = Field(
+        validation_alias=AliasChoices("source", "url"),
+        description="클리핑 원문 URL. 기존 url 필드도 입력 호환을 위해 허용",
+    )
     title: str = Field(min_length=1, max_length=500, description="클리핑 제목")
-    content: str = Field(min_length=1, description="클리핑 본문")
+    author: str | None = Field(
+        default=None, max_length=500, description="원문 작성자"
+    )
+    published: datetime | None = Field(default=None, description="원문 게시 시각")
+    created: date | None = Field(default=None, description="사용자가 클리핑한 날짜")
+    description: str | None = Field(
+        default=None, max_length=4000, description="원문 설명"
+    )
+    tags: list[str] = Field(
+        default_factory=list,
+        max_length=100,
+        description="클리퍼가 전달한 태그 목록",
+    )
+    content: str = Field(min_length=1, description="Markdown 클리핑 본문")
+
+    @property
+    def url(self) -> HttpUrl:
+        """기존 호출부가 사용할 수 있도록 source URL을 url 속성으로 제공한다."""
+        return self.source
 
 
 class UrlWikiSourceRequest(WikiSourceRequestBase):
@@ -151,6 +179,15 @@ class AcceptedJobResponse(ImmutableSchema):
     status: JobStatus = Field(description="현재 작업 상태")
     request_id: str = Field(description="요청 추적 ID")
     created_at: datetime = Field(description="작업 생성 시각")
+    source_document_id: str | None = Field(
+        default=None, description="원본 문서 Head 식별자"
+    )
+    source_document_version_id: str | None = Field(
+        default=None, description="즉시 저장된 원본 문서 Version 식별자"
+    )
+    generation_request_id: str | None = Field(
+        default=None, description="Bambi 생성 요청 식별자"
+    )
 
 
 class JobStatusResponse(AcceptedJobResponse):

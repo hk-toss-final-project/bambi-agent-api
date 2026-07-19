@@ -8,6 +8,7 @@ import pytest
 from infrastructure.persistence.features.jobs import (
     ClaimedAgentJob,
     EnqueuedWikiBuildJob,
+    claim_agent_job_by_id,
     claim_personal_wiki_jobs,
     complete_agent_job,
     defer_user_wiki_build_jobs,
@@ -108,6 +109,41 @@ def test_claim_personal_wiki_jobs_validates_limits() -> None:
                 lease_seconds=600,
             )
         )
+
+
+def test_claim_agent_job_by_id_records_dev_lease_and_attempt() -> None:
+    """개발 실행기가 지정 Job 하나를 Lease로 점유하고 Attempt를 남기는지 검증한다."""
+    connection = _FakeConnection(
+        [
+            [
+                {
+                    "id": "job-1",
+                    "user_id": "user-1",
+                    "feature_id": "SVC-003",
+                    "job_type": "personal_wiki_url",
+                    "attempt_count": 1,
+                    "max_attempts": 3,
+                    "payload": {"url": "https://example.com"},
+                }
+            ],
+            [],
+            [],
+        ]
+    )
+
+    claimed = asyncio.run(
+        claim_agent_job_by_id(
+            connection,  # type: ignore[arg-type]
+            job_id="job-1",
+            worker_id="dev-api:run-1",
+            lease_seconds=180,
+        )
+    )
+
+    assert claimed is not None
+    assert claimed.job_type == "personal_wiki_url"
+    assert connection.executed[0][1] == ("dev-api:run-1", 180, "job-1")
+    assert "agent.agent_job_attempts" in connection.executed[1][0]
 
 
 def test_complete_agent_job_updates_job_attempt_and_source_event() -> None:
@@ -301,3 +337,4 @@ def test_fail_agent_job_stops_when_lease_is_lost() -> None:
         )
 
     assert len(connection.executed) == 1
+    claim_agent_job_by_id,

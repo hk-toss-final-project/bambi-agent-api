@@ -45,14 +45,33 @@ from .features.configuration import db_022, db_023, db_024, db_025
 from .features.jobs import (
     ClaimedAgentJob,
     EnqueuedWikiBuildJob,
+    StoredAgentJob,
+    claim_agent_job_by_id,
     claim_personal_wiki_jobs,
     complete_agent_job,
     db_026,
     defer_user_wiki_build_jobs,
     enqueue_personal_wiki_build_job,
+    enqueue_url_collection_job,
     fail_agent_job,
+    get_agent_job,
     release_user_wiki_build_jobs,
     set_system_job_scope,
+)
+from .features.source_ingestion import (
+    PersistedSourceSubmission,
+    register_url_and_enqueue,
+    save_web_clipping_and_enqueue,
+)
+from .features.generation_runtime import (
+    PersistedGenerationSubmission,
+    StaleContextVersionError,
+    StoredUserContext,
+    UserContextRequiredError,
+    enqueue_bambi_generation_job,
+    load_bambi_context,
+    persist_bambi_generation,
+    upsert_user_context_snapshot,
 )
 from .features.events import db_027
 from .features.api_keys import db_028

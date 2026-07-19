@@ -6,7 +6,16 @@
 from .features.orchestration import bambi_001, bambi_002
 from .features.context import bambi_003, bambi_012
 from .features.retrieval import bambi_004, bambi_005, bambi_006
-from .features.generation import bambi_007, bambi_008, bambi_009, bambi_010
+from .features.generation import (
+    BambiContextDocument,
+    GeneratedBambiContent,
+    bambi_007,
+    bambi_008,
+    bambi_009,
+    bambi_010,
+    generate_bambi_content,
+    parse_bambi_generation,
+)
 from .features.citations import bambi_011
 from .features.validation import bambi_013, bambi_014, bambi_015, bambi_016
 from .features.versioning import bambi_017

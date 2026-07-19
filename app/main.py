@@ -14,8 +14,8 @@ from app.exceptions import register_exception_handlers
 from app.middleware.tracing import RequestTracingMiddleware
 from app.openapi import (
     OPENAPI_DESCRIPTION,
-    OPENAPI_TAGS,
     SWAGGER_UI_PARAMETERS,
+    build_openapi_tags,
     register_swagger_ui,
 )
 from app.routers.routes import build_api_router
@@ -34,7 +34,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
 def register_routers(application: FastAPI, settings: Settings) -> None:
     """[SYS-002] 기능 영역별 최상위 API 라우터를 애플리케이션에 등록한다."""
-    application.include_router(build_api_router(settings.api_prefix))
+    application.include_router(build_api_router(settings))
 
 
 def create_app(
@@ -51,7 +51,9 @@ def create_app(
         docs_url=None,
         redoc_url="/redoc" if resolved_settings.docs_enabled else None,
         openapi_url="/openapi.json" if resolved_settings.docs_enabled else None,
-        openapi_tags=OPENAPI_TAGS,
+        openapi_tags=build_openapi_tags(
+            include_development=resolved_settings.dev_agent_api_enabled
+        ),
         swagger_ui_parameters=SWAGGER_UI_PARAMETERS,
     )
     application.state.container = container or create_container(resolved_settings)

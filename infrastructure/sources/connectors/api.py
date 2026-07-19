@@ -20,6 +20,14 @@ from .features.url import (
     fetch_url_via_jina,
     parse_jina_reader_response,
 )
+from .features.latest import (
+    GdeltNewsProvider,
+    LatestArticle,
+    LatestInformationProvider,
+    LatestProviderError,
+    NaverNewsProvider,
+    NewsApiProvider,
+)
 from .features.custom import col_012
 
 __all__ = [

@@ -16,6 +16,20 @@ class Settings(BaseModel):
     environment: str = Field(default="local", description="실행 환경 이름")
     api_prefix: str = Field(default="/internal/v1", description="내부 API 경로 Prefix")
     docs_enabled: bool = Field(default=True, description="OpenAPI 문서 활성화 여부")
+    enable_dev_agent_api: bool = Field(
+        default=False,
+        description="개발용 Agent 동기 실행 API 활성화 여부",
+    )
+    dev_agent_api_token: SecretStr | None = Field(
+        default=None,
+        description="개발용 Agent API 보호 토큰",
+    )
+    dev_agent_timeout_seconds: int = Field(
+        default=180,
+        ge=10,
+        le=900,
+        description="개발용 Agent 동기 실행 제한 시간(초)",
+    )
     agent_database_url: str | None = Field(
         default=None, description="Agent DB 연결 문자열"
     )
@@ -40,6 +54,9 @@ class Settings(BaseModel):
     wiki_llm_model: str = Field(
         default="gpt-4.1-mini", description="Personal Wiki 분류 모델"
     )
+    bambi_llm_model: str = Field(
+        default="gpt-4.1-mini", description="Bambi 콘텐츠 생성 모델"
+    )
     wiki_embedding_model: str = Field(
         default="text-embedding-3-small",
         description="Personal Wiki Chunk Embedding 모델",
@@ -62,6 +79,11 @@ class Settings(BaseModel):
         le=1440,
         description="첫 대기 원본 발생 후 Wiki Build 최대 대기시간(분)",
     )
+
+    @property
+    def dev_agent_api_enabled(self) -> bool:
+        """개발·테스트 환경에서 명시적으로 허용된 경우에만 개발 API를 활성화한다."""
+        return self.enable_dev_agent_api and self.environment in {"local", "test"}
 
 
 def _optional_env(name: str) -> str | None:
@@ -93,6 +115,9 @@ def load_settings() -> Settings:
         environment=os.getenv("APP_ENV", "local"),
         api_prefix=os.getenv("API_PREFIX", "/internal/v1"),
         docs_enabled=_boolean_env("DOCS_ENABLED", True),
+        enable_dev_agent_api=_boolean_env("ENABLE_DEV_AGENT_API", False),
+        dev_agent_api_token=_optional_env("DEV_AGENT_API_TOKEN"),
+        dev_agent_timeout_seconds=_integer_env("DEV_AGENT_TIMEOUT_SECONDS", 180),
         agent_database_url=_optional_env("AGENT_DATABASE_URL"),
         vector_store_url=_optional_env("VECTOR_STORE_URL"),
         queue_url=_optional_env("QUEUE_URL"),
@@ -103,6 +128,7 @@ def load_settings() -> Settings:
         news_api_key=_optional_env("NEWS_API_KEY"),
         gdelt_base_url=_optional_env("GDELT_BASE_URL"),
         wiki_llm_model=os.getenv("WIKI_LLM_MODEL", "gpt-4.1-mini"),
+        bambi_llm_model=os.getenv("BAMBI_LLM_MODEL", "gpt-4.1-mini"),
         wiki_embedding_model=os.getenv(
             "WIKI_EMBEDDING_MODEL", "text-embedding-3-small"
         ),

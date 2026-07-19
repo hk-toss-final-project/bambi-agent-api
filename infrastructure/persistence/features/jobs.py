@@ -5,6 +5,7 @@ Personal Wiki Worker가 PostgreSQL Job을 Lease로 점유하고, 각 시도의
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from psycopg import AsyncConnection
@@ -26,6 +27,26 @@ class ClaimedAgentJob:
     attempt_number: int
     max_attempts: int
     payload: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class StoredAgentJob:
+    """API와 개발 실행기가 조회하는 Agent Job 저장 레코드."""
+
+    job_id: str
+    user_id: str
+    feature_id: str
+    job_type: str
+    idempotency_key: str
+    status: str
+    progress: int
+    request_id: str
+    payload: dict[str, Any]
+    result: dict[str, Any] | None
+    error_code: str | None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
 
 
 async def set_system_job_scope(connection: AsyncConnection[DictRow]) -> None:
@@ -125,6 +146,131 @@ async def claim_personal_wiki_jobs(
     return jobs
 
 
+async def get_agent_job(
+    connection: AsyncConnection[DictRow], *, job_id: str
+) -> StoredAgentJob | None:
+    """Job ID로 현재 상태, 입력과 결과를 조회한다."""
+    cursor = await connection.execute(
+        """
+        SELECT
+            id,
+            user_id,
+            feature_id,
+            job_type,
+            idempotency_key,
+            status,
+            progress,
+            COALESCE(request_id, '') AS request_id,
+            payload,
+            result,
+            error_code,
+            created_at,
+            updated_at,
+            completed_at
+        FROM agent.agent_jobs
+        WHERE id = %s
+        """,
+        (job_id,),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return StoredAgentJob(
+        job_id=str(row["id"]),
+        user_id=row["user_id"] or "",
+        feature_id=row["feature_id"],
+        job_type=row["job_type"],
+        idempotency_key=row["idempotency_key"],
+        status=row["status"],
+        progress=int(row["progress"]),
+        request_id=row["request_id"],
+        payload=dict(row["payload"] or {}),
+        result=(dict(row["result"]) if row["result"] is not None else None),
+        error_code=row["error_code"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        completed_at=row["completed_at"],
+    )
+
+
+async def claim_agent_job_by_id(
+    connection: AsyncConnection[DictRow],
+    *,
+    job_id: str,
+    worker_id: str,
+    lease_seconds: int,
+) -> ClaimedAgentJob | None:
+    """개발 실행용으로 지정한 Job 하나를 Lease로 점유한다."""
+    if not 30 <= lease_seconds <= 3600:
+        raise ValueError("Job Lease는 30초에서 3600초 사이여야 합니다.")
+    cursor = await connection.execute(
+        """
+        UPDATE agent.agent_jobs
+        SET
+            status = 'running',
+            locked_at = clock_timestamp(),
+            locked_by = %s,
+            lease_expires_at = clock_timestamp() + (%s * interval '1 second'),
+            started_at = COALESCE(started_at, clock_timestamp()),
+            attempt_count = attempt_count + 1,
+            progress = GREATEST(progress, 5),
+            error_code = NULL,
+            error_message = NULL,
+            updated_at = clock_timestamp()
+        WHERE id = %s
+          AND attempt_count < max_attempts
+          AND (
+                status = 'queued'
+                OR (status = 'running' AND lease_expires_at < clock_timestamp())
+          )
+        RETURNING
+            id,
+            user_id,
+            feature_id,
+            job_type,
+            attempt_count,
+            max_attempts,
+            payload
+        """,
+        (worker_id, lease_seconds, job_id),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    job = ClaimedAgentJob(
+        job_id=str(row["id"]),
+        user_id=row["user_id"],
+        feature_id=row["feature_id"],
+        job_type=row["job_type"],
+        attempt_number=int(row["attempt_count"]),
+        max_attempts=int(row["max_attempts"]),
+        payload=dict(row["payload"] or {}),
+    )
+    await connection.execute(
+        """
+        INSERT INTO agent.agent_job_attempts (
+            job_id,
+            user_id,
+            attempt_number,
+            worker_id,
+            status
+        ) VALUES (%s, %s, %s, %s, 'running')
+        ON CONFLICT (job_id, attempt_number) DO NOTHING
+        """,
+        (job.job_id, job.user_id, job.attempt_number, worker_id),
+    )
+    await connection.execute(
+        """
+        UPDATE agent.wiki_source_events
+        SET status = 'processing', error_code = NULL, error_message = NULL,
+            updated_at = clock_timestamp()
+        WHERE job_id = %s
+        """,
+        (job.job_id,),
+    )
+    return job
+
+
 async def complete_agent_job(
     connection: AsyncConnection[DictRow],
     *,
@@ -142,6 +288,7 @@ async def complete_agent_job(
             result = %s,
             retryable = false,
             completed_at = clock_timestamp(),
+            updated_at = clock_timestamp(),
             locked_at = NULL,
             locked_by = NULL,
             lease_expires_at = NULL
@@ -198,6 +345,7 @@ async def fail_agent_job(
                 ELSE scheduled_at
             END,
             completed_at = CASE WHEN %s THEN NULL ELSE clock_timestamp() END,
+            updated_at = clock_timestamp(),
             locked_at = NULL,
             locked_by = NULL,
             lease_expires_at = NULL
@@ -266,6 +414,7 @@ async def enqueue_personal_wiki_build_job(
     source_event_id: str,
     source_event_row_id: str | None = None,
     feature_id: str = "SVC-003",
+    request_id: str | None = None,
 ) -> EnqueuedWikiBuildJob:
     """저장된 사용자 원본 Version을 처리할 personal_wiki_build Job을 멱등 등록한다.
 
@@ -305,13 +454,14 @@ async def enqueue_personal_wiki_build_job(
             status,
             progress,
             payload,
-            retryable
-        ) VALUES (%s, 'personal_wiki_build', %s, %s, 'queued', 0, %s, true)
+            retryable,
+            request_id
+        ) VALUES (%s, 'personal_wiki_build', %s, %s, 'queued', 0, %s, true, %s)
         ON CONFLICT (feature_id, COALESCE(user_id, ''), idempotency_key)
         DO NOTHING
         RETURNING id
         """,
-        (feature_id, user_id, idempotency_key, Jsonb(payload)),
+        (feature_id, user_id, idempotency_key, Jsonb(payload), request_id),
     )
     row = await cursor.fetchone()
     created = row is not None
@@ -341,6 +491,72 @@ async def enqueue_personal_wiki_build_job(
             """,
             (job_id, source_event_row_id),
         )
+    return EnqueuedWikiBuildJob(job_id=job_id, created=created)
+
+
+async def enqueue_url_collection_job(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    source_document_id: str,
+    source_event_id: str,
+    source_event_row_id: str,
+    url: str,
+    request_id: str,
+) -> EnqueuedWikiBuildJob:
+    """사용자 URL을 Markdown으로 수집할 비동기 Job을 멱등 등록한다."""
+    payload = {
+        "url": url,
+        "source_document_id": source_document_id,
+        "source_event_id": source_event_id,
+        "source_event_row_id": source_event_row_id,
+    }
+    cursor = await connection.execute(
+        """
+        INSERT INTO agent.agent_jobs (
+            feature_id,
+            job_type,
+            user_id,
+            idempotency_key,
+            status,
+            progress,
+            payload,
+            retryable,
+            request_id
+        ) VALUES ('SVC-003', 'personal_wiki_url', %s, %s, 'queued', 0, %s, true, %s)
+        ON CONFLICT (feature_id, COALESCE(user_id, ''), idempotency_key)
+        DO NOTHING
+        RETURNING id
+        """,
+        (user_id, source_event_id, Jsonb(payload), request_id),
+    )
+    row = await cursor.fetchone()
+    created = row is not None
+    if row is None:
+        cursor = await connection.execute(
+            """
+            SELECT id
+            FROM agent.agent_jobs
+            WHERE feature_id = 'SVC-003'
+              AND COALESCE(user_id, '') = %s
+              AND idempotency_key = %s
+            """,
+            (user_id, source_event_id),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise RuntimeError(
+                f"멱등 충돌한 URL 수집 Job을 찾을 수 없습니다: {source_event_id}"
+            )
+    job_id = str(row["id"])
+    await connection.execute(
+        """
+        UPDATE agent.wiki_source_events
+        SET job_id = %s, updated_at = clock_timestamp()
+        WHERE id = %s
+        """,
+        (job_id, source_event_row_id),
+    )
     return EnqueuedWikiBuildJob(job_id=job_id, created=created)
 
 
