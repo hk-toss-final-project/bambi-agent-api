@@ -11,7 +11,7 @@ from typing import Any
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
-from agent.wiki_builder.features.vault import compute_content_hash
+from shared.hashing import compute_content_hash
 from infrastructure.persistence.features.jobs import (
     enqueue_personal_wiki_build_job,
     enqueue_url_collection_job,

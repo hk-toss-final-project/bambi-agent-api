@@ -7,41 +7,18 @@
 import json
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
 from pathlib import Path
 
 from agent.assistant.summarize import complete
 
+# 하위 호환 재노출: 기존 generation.BambiContextDocument 등 사용처를 유지한다.
+from shared.bambi_models import BambiContextDocument, GeneratedBambiContent
 from shared.contracts import FeatureRequest, FeatureResult
 
 _PROMPT_PATH = Path(__file__).parents[2] / "prompts" / "templates" / "bambi_system.md"
 _SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8").strip()
 _CITATION_REF = re.compile(r"\[([PG]\d+)\]")
 _MAX_CONTEXT_CHARS = 16000
-
-
-@dataclass(frozen=True, slots=True)
-class BambiContextDocument:
-    """Bambi 생성에 전달할 개인·Global 검색 문서 Chunk."""
-
-    reference: str
-    document_version_id: str
-    chunk_id: str
-    namespace_key: str
-    title: str
-    content: str
-    url: str | None
-    score: float
-
-
-@dataclass(frozen=True, slots=True)
-class GeneratedBambiContent:
-    """검증된 Bambi 제목·요약·본문과 사용한 문서 참조."""
-
-    title: str
-    summary: str
-    body: str
-    citation_references: tuple[str, ...]
 
 
 def _strip_json_fence(value: str) -> str:

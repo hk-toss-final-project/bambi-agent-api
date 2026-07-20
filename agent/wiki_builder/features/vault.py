@@ -7,13 +7,15 @@ LLM이 분류한 entity·concept·source를 검증 가능한 Obsidian Markdown�
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import unicodedata
 from collections.abc import Iterable, Sequence
 
 from agent.wiki_builder.models import ExistingWikiEntry, WikiRelationPlan
+
+# 하위 호환 재노출: 기존 vault.compute_content_hash 사용처를 유지한다.
+from shared.hashing import compute_content_hash  # noqa: F401
 
 SCHEMA_DOCUMENT_KEY = "root"
 SCHEMA_FILE_PATH = "schema/schema.md"
@@ -37,11 +39,6 @@ def slugify(name: str) -> str:
     if not normalized:
         raise ValueError(f"빈 이름은 document_key로 변환할 수 없습니다: {name!r}")
     return normalized
-
-
-def compute_content_hash(content: str) -> str:
-    """문서 본문의 64자 SHA-256 무결성 Hash를 계산한다."""
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def entity_file_path(document_key: str) -> str:

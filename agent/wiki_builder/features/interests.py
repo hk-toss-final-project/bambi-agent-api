@@ -7,9 +7,11 @@ LLM 호출 없이 현재 Wiki 문서의 제목, 영역, 별칭, 태그와 요약
 import re
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 
 from shared.contracts import FeatureRequest, FeatureResult
+
+# 하위 호환 재노출: 기존 interests.InterestCandidate 사용처를 유지한다.
+from shared.wiki_models import InterestCandidate  # noqa: F401
 
 _TOKEN_PATTERN = re.compile(r"[가-힣]{2,}|[A-Za-z][A-Za-z0-9._+-]{2,}")
 _STOP_WORDS = {
@@ -32,18 +34,6 @@ _STOP_WORDS = {
     "other",
     "schema",
 }
-
-
-@dataclass(frozen=True, slots=True)
-class InterestCandidate:
-    """현재 Wiki에서 계산된 관심 Topic과 근거 문서 목록."""
-
-    topic: str
-    category: str | None
-    score: float
-    confidence: float
-    document_ids: tuple[str, ...]
-    evidence: dict[str, object]
 
 
 def _tokens(value: str) -> list[str]:

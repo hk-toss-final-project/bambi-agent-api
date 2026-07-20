@@ -11,14 +11,14 @@ from typing import Any
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
-from agent.wiki_builder.models import (
+from shared.contracts import FeatureRequest, FeatureResult
+from shared.hashing import compute_content_hash
+from shared.wiki_models import (
     ExistingWikiEntry,
     WikiBuildPlan,
     WikiDocumentPlan,
     WikiRelationPlan,
 )
-from agent.wiki_builder.features.vault import compute_content_hash
-from shared.contracts import FeatureRequest, FeatureResult
 
 type DictRow = dict[str, Any]
 

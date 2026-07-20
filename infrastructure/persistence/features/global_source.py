@@ -22,7 +22,7 @@ from typing import Any
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
-from agent.wiki_builder.features.vault import compute_content_hash
+from shared.hashing import compute_content_hash
 from infrastructure.sources.connectors.features.latest import LatestArticle
 from shared.contracts import FeatureRequest, FeatureResult
 

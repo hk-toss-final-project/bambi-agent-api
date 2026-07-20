@@ -13,7 +13,7 @@ from typing import Any, Sequence
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
-from agent.bambi.api import BambiContextDocument, GeneratedBambiContent
+from shared.bambi_models import BambiContextDocument, GeneratedBambiContent
 
 type DictRow = dict[str, Any]
 

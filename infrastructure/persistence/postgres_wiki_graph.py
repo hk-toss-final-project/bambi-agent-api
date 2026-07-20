@@ -13,8 +13,8 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
-from agent.wiki_builder.api import InterestCandidate
-from agent.wiki_builder.features.vault import compute_content_hash
+from shared.hashing import compute_content_hash
+from shared.wiki_models import InterestCandidate
 from infrastructure.sources.connectors.api import LatestArticle
 
 
