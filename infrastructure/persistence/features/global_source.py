@@ -242,7 +242,11 @@ async def persist_collected_articles(
                 "document_id": document_id,
                 "document_version_id": str(version_row["id"]),
                 "content_status": content_status,
-                "published_at": article.published_at,
+                "published_at": (
+                    article.published_at.isoformat()
+                    if article.published_at
+                    else None
+                ),
                 "source_name": article.source_name,
                 "language": article.language,
             }

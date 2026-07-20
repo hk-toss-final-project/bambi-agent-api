@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from typing import Any
 
@@ -102,6 +103,41 @@ def test_persist_skips_existing_url_and_saves_new_as_pending() -> None:
     assert "INSERT INTO agent.wiki_documents" in document_sql
     assert document_params is not None
     assert document_params[4].obj["content_status"] == "pending"
+
+
+def test_persist_returns_json_serializable_published_at() -> None:
+    """저장 결과의 published_at이 JSON으로 바로 직렬화되는 문자열인지 검증한다.
+
+    published_at을 datetime 그대로 반환하면 워커가 결과를 json.dumps할 때
+    TypeError가 발생하므로, isoformat 문자열로 변환됐는지와 결과 전체가
+    default 인자 없이 직렬화되는지 확인한다.
+    """
+    connection = _FakeConnection(
+        [
+            [{"id": "source-1"}],  # INSERT global_sources
+            [{"id": "run-1"}],  # INSERT global_collection_runs
+            [],  # 기사 존재 SELECT → 없음
+            [{"id": "doc-1"}],  # INSERT wiki_documents
+            [{"id": "ver-1"}],  # INSERT wiki_document_versions
+            [],  # INSERT wiki_chunks
+            [],  # UPDATE global_collection_runs
+        ]
+    )
+
+    result = asyncio.run(
+        persist_collected_articles(
+            connection,  # type: ignore[arg-type]
+            provider="gdelt",
+            query="AI Agent",
+            articles=[_article("https://example.com/new")],
+        )
+    )
+
+    items = result["items"]
+    assert isinstance(items, list) and len(items) == 1
+    assert items[0]["published_at"] == "2026-07-20T00:00:00+00:00"
+    # default 없이도 직렬화되어야 한다(워커가 실제로 이렇게 출력한다).
+    json.dumps(result, ensure_ascii=False)
 
 
 def test_persist_counts_conflict_insert_as_duplicate() -> None:

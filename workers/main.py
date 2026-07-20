@@ -154,11 +154,11 @@ async def _run() -> None:
         )
     if not args.loop:
         results = await _run_batch_once(args, settings, worker_id)
-        print(json.dumps(results, ensure_ascii=False, indent=2))
+        print(json.dumps(results, ensure_ascii=False, indent=2, default=str))
         return
     def on_batch(results: list[dict[str, object]]) -> None:
         """결과가 있는 Batch를 JSON Line으로 출력한다."""
-        print(json.dumps(results, ensure_ascii=False), flush=True)
+        print(json.dumps(results, ensure_ascii=False, default=str), flush=True)
     if args.worker == "bambi-generation":
         await consume_bambi_generation_jobs(
             database_url=settings.agent_database_url,
