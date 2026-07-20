@@ -54,14 +54,30 @@ async def set_system_job_scope(connection: AsyncConnection[DictRow]) -> None:
     await connection.execute("SET LOCAL app.access_scope = 'system'")
 
 
-async def claim_personal_wiki_jobs(
+async def claim_runnable_agent_jobs(
     connection: AsyncConnection[DictRow],
     *,
+    job_type: str,
     worker_id: str,
     limit: int,
     lease_seconds: int,
 ) -> list[ClaimedAgentJob]:
-    """실행 가능한 Personal Wiki Job을 SKIP LOCKED와 Lease로 점유한다."""
+    """지정한 유형의 실행 가능한 Job을 SKIP LOCKED와 Lease로 Batch 점유한다.
+
+    queued이거나 Lease가 만료된 running Job 중 scheduled_at이 지난 것을
+    우선순위 순서로 점유하고 Job별 Attempt를 기록한다. Wiki 원본이 연결된
+    Job이면 wiki_source_events 상태도 processing으로 동기화한다.
+
+    Args:
+        connection: 시스템 Scope가 설정된 DB 연결
+        job_type: 점유할 Job 유형 (예: personal_wiki_build, bambi_generation)
+        worker_id: Job Lease 소유자 식별자
+        limit: 한 번에 점유할 최대 Job 수
+        lease_seconds: Job Lease 유지 시간(초)
+
+    Returns:
+        점유한 Job 목록
+    """
     if not 1 <= limit <= 100:
         raise ValueError("Job Claim limit은 1에서 100 사이여야 합니다.")
     if not 30 <= lease_seconds <= 3600:
@@ -71,7 +87,7 @@ async def claim_personal_wiki_jobs(
         WITH claimable AS (
             SELECT id
             FROM agent.agent_jobs
-            WHERE job_type = 'personal_wiki_build'
+            WHERE job_type = %s
               AND scheduled_at <= clock_timestamp()
               AND attempt_count < max_attempts
               AND (
@@ -107,7 +123,7 @@ async def claim_personal_wiki_jobs(
             job.max_attempts,
             job.payload
         """,
-        (limit, worker_id, lease_seconds),
+        (job_type, limit, worker_id, lease_seconds),
     )
     rows = await cursor.fetchall()
     jobs: list[ClaimedAgentJob] = []
@@ -144,6 +160,23 @@ async def claim_personal_wiki_jobs(
             (job.job_id,),
         )
     return jobs
+
+
+async def claim_personal_wiki_jobs(
+    connection: AsyncConnection[DictRow],
+    *,
+    worker_id: str,
+    limit: int,
+    lease_seconds: int,
+) -> list[ClaimedAgentJob]:
+    """실행 가능한 Personal Wiki Job을 SKIP LOCKED와 Lease로 점유한다."""
+    return await claim_runnable_agent_jobs(
+        connection,
+        job_type="personal_wiki_build",
+        worker_id=worker_id,
+        limit=limit,
+        lease_seconds=lease_seconds,
+    )
 
 
 async def get_agent_job(

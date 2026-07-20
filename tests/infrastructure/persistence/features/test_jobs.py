@@ -10,6 +10,7 @@ from infrastructure.persistence.features.jobs import (
     EnqueuedWikiBuildJob,
     claim_agent_job_by_id,
     claim_personal_wiki_jobs,
+    claim_runnable_agent_jobs,
     complete_agent_job,
     defer_user_wiki_build_jobs,
     enqueue_personal_wiki_build_job,
@@ -109,6 +110,43 @@ def test_claim_personal_wiki_jobs_validates_limits() -> None:
                 lease_seconds=600,
             )
         )
+
+
+def test_claim_runnable_agent_jobs_parameterizes_job_type() -> None:
+    """일반화된 Batch Claim이 Job 유형을 SQL 파라미터로 받아 점유한다."""
+    connection = _FakeConnection(
+        [
+            [
+                {
+                    "id": "job-9",
+                    "user_id": "user-1",
+                    "feature_id": "SVC-008",
+                    "job_type": "bambi_generation",
+                    "attempt_count": 1,
+                    "max_attempts": 3,
+                    "payload": {"topic": "개인화", "content_type": "article"},
+                }
+            ],
+            [],
+            [],
+        ]
+    )
+
+    jobs = asyncio.run(
+        claim_runnable_agent_jobs(
+            connection,  # type: ignore[arg-type]
+            job_type="bambi_generation",
+            worker_id="worker-1",
+            limit=5,
+            lease_seconds=600,
+        )
+    )
+
+    assert jobs[0].job_type == "bambi_generation"
+    claim_sql, claim_params = connection.executed[0]
+    assert "job_type = %s" in claim_sql
+    assert "FOR UPDATE SKIP LOCKED" in claim_sql
+    assert claim_params is not None and claim_params[0] == "bambi_generation"
 
 
 def test_claim_agent_job_by_id_records_dev_lease_and_attempt() -> None:

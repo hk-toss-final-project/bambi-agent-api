@@ -48,6 +48,7 @@ from .features.jobs import (
     StoredAgentJob,
     claim_agent_job_by_id,
     claim_personal_wiki_jobs,
+    claim_runnable_agent_jobs,
     complete_agent_job,
     db_026,
     defer_user_wiki_build_jobs,

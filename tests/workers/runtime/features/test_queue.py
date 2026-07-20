@@ -6,7 +6,11 @@ from typing import Any
 import pytest
 
 from shared.contracts import FeatureRequest
-from workers.runtime.features.queue import consume_personal_wiki_jobs, wc_001
+from workers.runtime.features.queue import (
+    consume_bambi_generation_jobs,
+    consume_personal_wiki_jobs,
+    wc_001,
+)
 
 
 class _FakeBatchRunner:
@@ -56,6 +60,29 @@ def test_consume_drains_available_batches_up_to_max_batches() -> None:
         [{"job_id": "job-1", "status": "completed"}],
         [{"job_id": "job-2", "status": "completed"}],
     ]
+
+
+def test_consume_bambi_generation_jobs_passes_generation_arguments() -> None:
+    """Bambi 소비 루프가 생성 Batch 실행기에 생성 인자만 전달한다."""
+    runner = _FakeBatchRunner([[{"job_id": "bambi-job-1", "status": "completed"}]])
+
+    results = asyncio.run(
+        consume_bambi_generation_jobs(
+            database_url="postgresql://test",
+            worker_id="bambi-worker-1",
+            limit=3,
+            lease_seconds=600,
+            model="gpt-4.1-mini",
+            interval_seconds=0,
+            max_batches=1,
+            batch_runner=runner,
+        )
+    )
+
+    assert [result["job_id"] for result in results] == ["bambi-job-1"]
+    assert runner.calls[0]["worker_id"] == "bambi-worker-1"
+    assert runner.calls[0]["model"] == "gpt-4.1-mini"
+    assert "embedding_model" not in runner.calls[0]
 
 
 def test_consume_returns_empty_when_no_jobs_are_claimable() -> None:

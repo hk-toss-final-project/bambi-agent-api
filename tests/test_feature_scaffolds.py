@@ -219,7 +219,7 @@ def test_feature_functions_have_korean_docstrings() -> None:
 
 def test_feature_functions_are_unimplemented_stubs() -> None:
     """구현 완료 표시 기능과 나머지 스텁의 상태가 명시적으로 일치하는지 검증한다."""
-    implemented = {"PWIKI-003", "SCH-009", "WBA-001", "WC-001", "WORKER-002"}
+    implemented = {"PWIKI-003", "SCH-009", "WBA-001", "WC-001", "WORKER-002", "WORKER-003"}
     for feature_id, (path, node, _) in discover_feature_functions().items():
         if feature_id in implemented:
             assert not is_not_implemented_stub(node), f"구현이 필요한 함수: {feature_id} ({path})"
