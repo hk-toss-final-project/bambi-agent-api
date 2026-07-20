@@ -1,0 +1,530 @@
+"""일간 수집→선별→통합요약 파이프라인 오케스트레이터.
+
+명세의 처리 순서를 구현한다:
+
+  수집(기존 소스, 최근 N일) → 날짜 추출 → 기초 필터(스팸/짧은 글/URL 중복)
+  → 임베딩 → 유사도 필터 → 클러스터링 → 스코어링
+  → 최근 7일 보고서와 중복 검사 → 임계값 판정
+  → [통과] 클러스터 통합 요약 생성 (Daily)
+  → [미달] 워터폴 폴백 (주간 트렌드 → 에버그린)
+  → 보고서 아이템 임베딩을 중복 방지 이력에 저장
+
+수집 소스는 기존 그대로(Google News RSS, YouTube, Reddit) 유지하고, 이 모듈은
+"수집 후 선별"만 담당한다. 각 단계에서 제외된 문서와 사유를 log에 남겨 임계값
+튜닝에 쓸 수 있게 한다. 스코어링·중복 제거는 scoring/dedup 모듈에 분리돼 있어
+나중에 wiki 저장소가 붙어도 재사용할 수 있다.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime, timedelta
+
+from agent.assistant import clustering, config, dedup, feeds, history, reddit, scoring, youtube
+from agent.assistant.dates import extract_published
+from agent.assistant.embeddings import embed_texts
+from agent.assistant.summarize import complete
+
+logger = logging.getLogger("agent.assistant.pipeline")
+
+# 수집 단계에서 소스별로 확보할 후보 풀 크기.
+_NEWS_POOL = 30
+_YOUTUBE_POOL = 18
+_REDDIT_POOL = 10
+
+# 통합 요약 프롬프트에 넣을 클러스터 문서당 최대 문자 수.
+_SUMMARY_DOC_CHARS = 1500
+
+_CLUSTER_SUMMARY_SYSTEM = (
+    "너는 여러 문서를 하나의 인사이트로 통합 요약하는 한국어 비서다. "
+    "제공된 문서들에 있는 내용만 사용하고, 없는 사실을 지어내지 않는다."
+)
+
+
+def _exclude(log: dict[str, object], stage: str, doc: dict[str, object], reason: str) -> None:
+    """문서 제외 사실을 파이프라인 로그와 로거에 남긴다."""
+    entry = {
+        "stage": stage,
+        "reason": reason,
+        "title": str(doc.get("title") or ""),
+        "url": str(doc.get("url") or ""),
+    }
+    exclusions = log.setdefault("exclusions", [])
+    assert isinstance(exclusions, list)
+    exclusions.append(entry)
+    logger.info("제외[%s/%s] %s (%s)", stage, reason, entry["title"], entry["url"])
+
+
+def _news_documents(keyword: str, now: datetime) -> list[dict[str, object]]:
+    """Google News RSS에서 후보 문서를 수집한다 (날짜 추출 전 원시 상태)."""
+    entries = feeds.fetch_feed_entries(feeds.build_news_feed_url(keyword))
+    unique = feeds.deduplicate(entries)[:_NEWS_POOL]
+    docs: list[dict[str, object]] = []
+    for entry in unique:
+        title = str(entry.get("title") or "")
+        url = str(entry.get("link") or "")
+        snippet = feeds._clean_text(entry, None, 500)
+        docs.append(
+            {
+                "source_type": "news",
+                "title": title,
+                "url": url,
+                "url_key": feeds.canonical_url(url),
+                "text": f"{title}\n{snippet}".strip(),
+                "published_ts": entry.get("published_ts", 0),
+                "published_raw": entry.get("published", ""),
+            }
+        )
+    return docs
+
+
+def _youtube_documents(keyword: str, now: datetime, window_hours: float) -> list[dict[str, object]]:
+    """YouTube 검색에서 후보 문서를 수집한다. 상대 시간을 발행일 근사치로 환산한다."""
+    pool = youtube.search_videos(keyword, limit=_YOUTUBE_POOL)
+    docs: list[dict[str, object]] = []
+    for video in pool:
+        age_hours = youtube._relative_age_hours(str(video.get("published_time") or ""))
+        if age_hours is None or age_hours > window_hours:
+            continue
+        title = str(video.get("title") or "")
+        url = str(video.get("url") or "")
+        docs.append(
+            {
+                "source_type": "youtube",
+                "title": title,
+                "url": url,
+                "url_key": feeds.canonical_url(url),
+                "text": f"{title}\n{video.get('channel') or ''}".strip(),
+                "published_ts": (now - timedelta(hours=age_hours)).timestamp(),
+                "published_raw": str(video.get("published_time") or ""),
+                "video_id": video.get("video_id"),
+                "thumbnail_url": video.get("thumbnail_url"),
+            }
+        )
+    return docs
+
+
+def _reddit_documents(keyword: str, now: datetime, window_hours: float) -> list[dict[str, object]]:
+    """Reddit 검색에서 후보 문서를 수집한다."""
+    posts = reddit.search_posts(
+        keyword, limit=_REDDIT_POOL, max_age_hours=window_hours, reference_now=now
+    )
+    docs: list[dict[str, object]] = []
+    for post in posts:
+        title = str(post.get("title") or "")
+        url = str(post.get("url") or "")
+        body = str(post.get("body") or "")
+        docs.append(
+            {
+                "source_type": "reddit",
+                "title": title,
+                "url": url,
+                "url_key": feeds.canonical_url(url),
+                "text": f"{title}\n{body[:500]}".strip(),
+                "published_ts": post.get("published_ts", 0),
+                "published_raw": str(post.get("published") or ""),
+                "body": body,
+            }
+        )
+    return docs
+
+
+def collect_documents(
+    keyword: str,
+    *,
+    now: datetime,
+    window_hours: float,
+) -> tuple[list[dict[str, object]], list[str]]:
+    """세 소스(뉴스·YouTube·Reddit)에서 후보 문서를 모은다.
+
+    소스별 실패를 격리해, 한 소스가 실패해도 나머지 문서는 그대로 반환하고
+    실패 사유를 errors에 담는다.
+    """
+    docs: list[dict[str, object]] = []
+    errors: list[str] = []
+    collectors = (
+        ("뉴스", lambda: _news_documents(keyword, now)),
+        ("YouTube", lambda: _youtube_documents(keyword, now, window_hours)),
+        ("Reddit", lambda: _reddit_documents(keyword, now, window_hours)),
+    )
+    for label, collector in collectors:
+        try:
+            docs.extend(collector())
+        except Exception as error:
+            errors.append(f"{label} 수집 실패: {type(error).__name__}: {error}")
+    return docs, errors
+
+
+def _resolve_dates(
+    docs: list[dict[str, object]],
+    *,
+    user_id: str,
+    keyword: str,
+    now: datetime,
+) -> None:
+    """각 문서의 발행일을 폴백 체인으로 확정하고 first_seen을 기록한다 (제자리 수정).
+
+    발행일 추출이 전부 실패하면 first_seen(최초 발견 시각)을 발행일 대용으로 쓴다.
+    본문 HTML은 수집 단계에서 확보하지 않으므로 pubDate → URL 패턴 → first_seen
+    순으로 동작한다(메타태그·본문 파싱 단계는 HTML이 있을 때만 작동한다).
+    """
+    for doc in docs:
+        published, method = extract_published(
+            published_ts=doc.get("published_ts"),  # type: ignore[arg-type]
+            html=str(doc.get("html") or ""),
+            url=str(doc.get("url") or ""),
+        )
+        first_seen = history.record_collected(
+            user_id,
+            keyword,
+            str(doc.get("url_key") or ""),
+            str(doc.get("title") or ""),
+            str(doc.get("url") or ""),
+            first_seen=now,
+        )
+        doc["first_seen"] = first_seen
+        if published is None:
+            published, method = first_seen, "first_seen"
+        doc["published"] = published
+        doc["published_method"] = method
+
+
+def _basic_filter(
+    docs: list[dict[str, object]],
+    *,
+    now: datetime,
+    window_hours: float,
+    log: dict[str, object],
+) -> list[dict[str, object]]:
+    """기초 필터: URL 중복(당일·과거 수집분)·짧은 글·수집 창 밖 문서를 제외한다."""
+    today = now.date()
+    seen_keys: set[str] = set()
+    kept: list[dict[str, object]] = []
+    for doc in docs:
+        url_key = str(doc.get("url_key") or "")
+        if not url_key:
+            _exclude(log, "basic_filter", doc, "no_url")
+            continue
+        if url_key in seen_keys:
+            _exclude(log, "basic_filter", doc, "duplicate_url")
+            continue
+        first_seen = doc.get("first_seen")
+        if isinstance(first_seen, datetime) and first_seen.date() < today:
+            # 이전 실행에서 이미 수집한 URL은 재수집하지 않는다.
+            _exclude(log, "basic_filter", doc, "url_already_collected")
+            continue
+        if len(str(doc.get("text") or "")) < config.MIN_DOC_CHARS:
+            _exclude(log, "basic_filter", doc, "too_short")
+            continue
+        published = doc.get("published")
+        if isinstance(published, datetime) and published < now - timedelta(hours=window_hours):
+            # 몇 년 전 문서 등 수집 창 밖 문서를 차단한다.
+            _exclude(log, "basic_filter", doc, "outside_window")
+            continue
+        seen_keys.add(url_key)
+        kept.append(doc)
+    return kept
+
+
+def _cluster_context_text(cluster_docs: list[dict[str, object]]) -> str:
+    """클러스터 문서들을 통합 요약 프롬프트에 넣을 텍스트로 정리한다."""
+    lines: list[str] = []
+    for index, doc in enumerate(cluster_docs, start=1):
+        text = str(doc.get("text") or "")[:_SUMMARY_DOC_CHARS]
+        lines.append(f"[문서 {index}] ({doc.get('source_type')}) {text}")
+    return "\n\n".join(lines)
+
+
+def summarize_cluster(
+    keyword: str,
+    cluster_docs: list[dict[str, object]],
+    model: str = "gpt-4.1-mini",
+) -> str:
+    """같은 클러스터의 문서들을 하나의 아티클로 통합 요약한다.
+
+    개별 요약 대신 클러스터 전체를 컨텍스트로 주고, 공통 맥락을 하나의
+    인사이트로 정리하게 한다.
+    """
+    user_prompt = (
+        f"주제: {keyword}\n\n"
+        "아래 문서들은 같은 이슈를 다루는 것으로 묶인 문서들이다. "
+        "이 문서들의 공통 맥락을 하나의 인사이트로 요약하라. "
+        "한국어 두세 문장의 줄글로 쓰고, 문서 간 차이(추가 정보·상반된 관점)가 있으면 "
+        "한 문장으로 덧붙여라.\n\n" + _cluster_context_text(cluster_docs)
+    )
+    return complete(_CLUSTER_SUMMARY_SYSTEM, user_prompt, model=model)
+
+
+def _build_clusters(
+    docs: list[dict[str, object]],
+    doc_embeddings: list[list[float]],
+    similarities: list[float],
+    *,
+    now: datetime,
+    cold_start: bool,
+) -> list[dict[str, object]]:
+    """클러스터링과 스코어링을 수행해 클러스터 목록을 만든다.
+
+    각 클러스터는 대표 문서(최고 final_score)와 대표 점수(클러스터 내 최고
+    final_score), cluster_boost가 반영된 멤버 점수를 가진다.
+    """
+    groups = clustering.greedy_clusters(doc_embeddings)
+    clusters: list[dict[str, object]] = []
+    for group in groups:
+        boost = scoring.cluster_boost(len(group))
+        members: list[dict[str, object]] = []
+        for index in group:
+            doc = docs[index]
+            score = scoring.score_document(
+                doc, similarities[index], boost=boost, now=now, cold_start=cold_start
+            )
+            members.append({**doc, "score": score, "embedding": doc_embeddings[index]})
+        representative = max(members, key=lambda m: m["score"]["final_score"])
+        clusters.append(
+            {
+                "members": members,
+                "representative": representative,
+                "size": len(members),
+                "final_score": representative["score"]["final_score"],
+            }
+        )
+    return clusters
+
+
+def _weekly_trend_items(
+    user_id: str,
+    keyword: str,
+    *,
+    now: datetime,
+) -> list[dict[str, object]]:
+    """주간 트렌드 폴백: 최근 WEEKLY_TREND_DAYS일 수집분 중 최고 점수 이슈를 고른다."""
+    cutoff = now - timedelta(days=config.WEEKLY_TREND_DAYS)
+    entries = history.get_collected_entries(user_id, keyword)
+    candidates: list[dict[str, object]] = []
+    for url_key, entry in entries.items():
+        try:
+            first_seen = datetime.fromisoformat(str(entry.get("first_seen") or ""))
+        except ValueError:
+            continue
+        if first_seen < cutoff:
+            continue
+        score = entry.get("score")
+        if score is None:
+            continue
+        candidates.append(
+            {
+                "url_key": url_key,
+                "title": str(entry.get("title") or ""),
+                "url": str(entry.get("url") or ""),
+                "score": float(score),  # type: ignore[arg-type]
+                "first_seen": first_seen,
+            }
+        )
+    candidates.sort(key=lambda item: item["score"], reverse=True)
+    return candidates[: config.MAX_DAILY_ITEMS]
+
+
+def run_daily(
+    keyword: str,
+    user_id: str,
+    *,
+    model: str = "gpt-4.1-mini",
+    reference_now: datetime | None = None,
+) -> dict[str, object]:
+    """일간 파이프라인 전체를 실행하고 보고서 소재를 반환한다.
+
+    Args:
+        keyword: 사용자 관심 토픽
+        user_id: 사용자 식별자
+        model: 통합 요약에 쓸 OpenAI 모델
+        reference_now: "지금" 기준 시각(테스트용). 생략하면 실제 현재 시각.
+
+    Returns:
+        {
+          keyword, user_id, mode("daily"|"weekly"|"evergreen"), cold_start,
+          items: [ {title, summary, sources, published, score, reason, status,
+                    cluster_size} ... ]   # weekly면 {title, url, score}, evergreen이면 []
+          log: {collected, exclusions: [{stage, reason, title, url}], ...},
+          errors: [str]
+        }
+    """
+    normalized = keyword.strip()
+    if not normalized:
+        raise ValueError("키워드가 비어 있습니다.")
+    normalized_user = user_id.strip()
+    if not normalized_user:
+        raise ValueError("사용자 식별자가 비어 있습니다.")
+
+    now = reference_now or datetime.now(UTC)
+    window_hours = config.collect_window_hours()
+    log: dict[str, object] = {"exclusions": []}
+
+    # 콜드 스타트 판정은 수집 기록(first_seen 기록)이 일어나기 전에 해야 한다.
+    cold_start = not history.has_collect_history(normalized_user, normalized)
+    log["cold_start"] = cold_start
+
+    # 1. 수집 (기존 소스, 최근 N일)
+    docs, errors = collect_documents(normalized, now=now, window_hours=window_hours)
+    log["collected"] = len(docs)
+
+    # 2. 날짜 추출 (+ first_seen 기록)
+    _resolve_dates(docs, user_id=normalized_user, keyword=normalized, now=now)
+
+    # 3. 기초 필터 (스팸/짧은 글/URL 중복/수집 창 밖)
+    docs = _basic_filter(docs, now=now, window_hours=window_hours, log=log)
+    log["after_basic_filter"] = len(docs)
+
+    # 4. 임베딩 (토픽 + 문서를 한 번에)
+    daily_clusters: list[dict[str, object]] = []
+    if docs:
+        try:
+            vectors = embed_texts([normalized] + [str(doc.get("text") or "") for doc in docs])
+        except Exception as error:
+            errors.append(f"임베딩 실패: {type(error).__name__}: {error}")
+            vectors = []
+        if vectors:
+            topic_embedding, doc_embeddings = vectors[0], vectors[1:]
+
+            # 5. 유사도 필터 (MIN_SIMILARITY 미달 즉시 제외)
+            from agent.assistant.embeddings import cosine_similarity
+
+            filtered_docs: list[dict[str, object]] = []
+            filtered_embeddings: list[list[float]] = []
+            similarities: list[float] = []
+            for doc, embedding in zip(docs, doc_embeddings, strict=True):
+                sim = cosine_similarity(topic_embedding, embedding)
+                if sim < config.MIN_SIMILARITY:
+                    _exclude(log, "similarity_filter", doc, f"low_similarity({sim:.2f})")
+                    continue
+                filtered_docs.append(doc)
+                filtered_embeddings.append(embedding)
+                similarities.append(sim)
+            log["after_similarity_filter"] = len(filtered_docs)
+
+            # 6. 클러스터링 + 7. 스코어링
+            clusters = _build_clusters(
+                filtered_docs, filtered_embeddings, similarities, now=now, cold_start=cold_start
+            )
+            log["clusters"] = len(clusters)
+
+            # 수집 이력에 점수를 기록해 주간 트렌드 폴백에서 쓸 수 있게 한다.
+            for cluster in clusters:
+                for member in cluster["members"]:
+                    history.record_collected(
+                        normalized_user,
+                        normalized,
+                        str(member.get("url_key") or ""),
+                        str(member.get("title") or ""),
+                        str(member.get("url") or ""),
+                        first_seen=member.get("first_seen"),  # type: ignore[arg-type]
+                        score=member["score"]["final_score"],
+                    )
+
+            # 8. 최근 7일 보고서와 중복 검사
+            history_items = dedup.load_recent_report_items(
+                normalized_user, normalized, now=now, exclude_today=True
+            )
+            for cluster in clusters:
+                rep = cluster["representative"]
+                status, matched, sim = dedup.check_duplicate(
+                    rep["embedding"],
+                    rep.get("published") if isinstance(rep.get("published"), datetime) else None,
+                    history_items,
+                )
+                cluster["dup_status"] = status
+                if status == dedup.STATUS_DUPLICATE:
+                    matched_title = str((matched or {}).get("title") or "")
+                    _exclude(
+                        log,
+                        "dedup",
+                        rep,
+                        f"already_reported({sim:.2f}, 기존: {matched_title[:30]})",
+                    )
+
+            survivors = [c for c in clusters if c["dup_status"] != dedup.STATUS_DUPLICATE]
+
+            # 9. 임계값 판정 (미달 아이템을 억지로 채우지 않는다)
+            for cluster in survivors:
+                if cluster["final_score"] < config.PUBLISH_THRESHOLD:
+                    _exclude(
+                        log,
+                        "threshold",
+                        cluster["representative"],
+                        f"below_threshold({cluster['final_score']:.2f})",
+                    )
+            daily_clusters = sorted(
+                (c for c in survivors if c["final_score"] >= config.PUBLISH_THRESHOLD),
+                key=lambda c: c["final_score"],
+                reverse=True,
+            )[: config.MAX_DAILY_ITEMS]
+
+    # 10. 워터폴 판정과 아이템 조립
+    if daily_clusters:
+        mode = "daily"
+        items = []
+        for cluster in daily_clusters:
+            rep = cluster["representative"]
+            published = rep.get("published")
+            try:
+                summary = summarize_cluster(normalized, cluster["members"], model=model)
+            except Exception as error:
+                errors.append(f"통합 요약 실패: {type(error).__name__}: {error}")
+                summary = str(rep.get("text") or "")[:300]
+            status = "업데이트" if cluster.get("dup_status") == dedup.STATUS_UPDATE else "신규"
+            items.append(
+                {
+                    "title": str(rep.get("title") or ""),
+                    "summary": summary,
+                    "sources": [
+                        {
+                            "title": str(m.get("title") or ""),
+                            "url": str(m.get("url") or ""),
+                            "source_type": str(m.get("source_type") or ""),
+                        }
+                        for m in cluster["members"]
+                    ],
+                    "published": published.isoformat() if isinstance(published, datetime) else "",
+                    "published_method": str(rep.get("published_method") or ""),
+                    "score": round(cluster["final_score"], 4),
+                    "score_detail": rep["score"],
+                    "reason": (
+                        f"final_score {cluster['final_score']:.2f} ≥ 기준 "
+                        f"{config.PUBLISH_THRESHOLD} (클러스터 {cluster['size']}건)"
+                    ),
+                    "status": status,
+                    "cluster_size": cluster["size"],
+                    "url_key": str(rep.get("url_key") or ""),
+                    "embedding": rep["embedding"],
+                }
+            )
+        # 11. 보고서 아이템 임베딩을 중복 방지 이력에 저장 (같은 url_key는 덮어씀)
+        dedup.record_report_items(normalized_user, normalized, items, now=now)
+        # 반환 아이템에서 임베딩은 제거한다 (보고서 렌더링에 불필요).
+        for item in items:
+            item.pop("embedding", None)
+    else:
+        weekly = _weekly_trend_items(normalized_user, normalized, now=now)
+        if weekly:
+            mode = "weekly"
+            items = weekly
+        else:
+            mode = "evergreen"
+            items = []
+
+    log["mode"] = mode
+    logger.info(
+        "파이프라인 완료: keyword=%s mode=%s items=%d 제외=%d",
+        normalized,
+        mode,
+        len(items),
+        len(log["exclusions"]),  # type: ignore[arg-type]
+    )
+    return {
+        "keyword": normalized,
+        "user_id": normalized_user,
+        "mode": mode,
+        "cold_start": cold_start,
+        "items": items,
+        "log": log,
+        "errors": errors,
+    }

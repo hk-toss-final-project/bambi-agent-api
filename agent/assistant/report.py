@@ -215,3 +215,107 @@ def generate_report(
     # 실제 수집한 자료의 URL만 코드에서 직접 붙여, LLM이 URL을 지어내지 못하게 한다.
     sources = _format_sources(_collect_sources(fresh))
     return f"{body}\n{sources}".rstrip() if sources else body
+
+
+# ── 파이프라인 기반 일간 보고서 (임계값 + 워터폴) ──────────────────────────
+
+# 폴백 소재를 쓴 경우 보고서 상단에 명시하는 라벨.
+_FALLBACK_LABELS = {
+    "weekly": "오늘 신규 소식 없음 — 주간 트렌드 요약",
+    "evergreen": "오늘 신규 소식 없음 — 개념 정리",
+}
+
+_WEEKLY_SYSTEM_PROMPT = (
+    "너는 최근 일주일 수집된 이슈들로 주간 트렌드 보고서를 쓰는 한국어 비서다. "
+    "제공된 이슈 목록에 있는 내용만 사용하고, 없는 사실을 지어내지 않는다. "
+    "이슈들을 관통하는 흐름을 2~3개 문단의 줄글로 종합한다. 불릿은 쓰지 않는다."
+)
+
+_EVERGREEN_SYSTEM_PROMPT = (
+    "너는 주제의 핵심 개념과 기초 지식을 정리하는 한국어 비서다. "
+    "오늘은 새 소식이 없어 개념 딥다이브를 쓴다. 주제의 핵심 개념, 동작 원리, "
+    "왜 중요한지, 입문자가 흔히 오해하는 점을 3~4개 문단의 줄글로 설명한다. "
+    "확실하지 않은 최신 동향은 언급하지 않는다. 불릿은 쓰지 않는다."
+)
+
+
+def _format_daily_item(item: dict[str, object]) -> str:
+    """일간 아이템 하나를 (제목/통합 요약/출처/발행일/선정 사유) Markdown으로 만든다."""
+    lines = [f"## {item.get('title')}"]
+    status = str(item.get("status") or "")
+    if status == "업데이트":
+        lines.append("**[업데이트]** 이전에 다룬 소식의 후속 업데이트입니다.")
+    lines.append("")
+    lines.append(str(item.get("summary") or ""))
+    lines.append("")
+    sources = list(item.get("sources") or [])
+    if sources:
+        lines.append("**출처**")
+        for source in sources:
+            label = {"news": "뉴스", "youtube": "YouTube", "reddit": "Reddit"}.get(
+                str(source.get("source_type") or ""), "링크"
+            )
+            lines.append(f"- [{label}] [{source.get('title')}]({source.get('url')})")
+    published = str(item.get("published") or "")
+    if published:
+        lines.append(f"- 발행일: {published[:10]}")
+    reason = str(item.get("reason") or "")
+    score = item.get("score")
+    if reason:
+        lines.append(f"- 선정 사유: {reason}")
+    elif score is not None:
+        lines.append(f"- 점수: {score}")
+    return "\n".join(lines)
+
+
+def generate_daily_report(
+    pipeline_result: dict[str, object],
+    model: str = "gpt-4.1-mini",
+) -> str:
+    """파이프라인 결과로 일간 Markdown 보고서를 생성한다 (임계값 + 워터폴).
+
+    - mode="daily": 아이템별 (제목/통합 요약/출처 링크/발행일/점수·선정 사유) 섹션.
+    - mode="weekly": 상단에 폴백 라벨을 명시하고 최근 7일 최고 점수 이슈들의
+      주간 트렌드 요약으로 전환한다.
+    - mode="evergreen": 상단에 폴백 라벨을 명시하고 토픽의 핵심 개념 딥다이브로
+      전환한다.
+
+    임계값 미달인 저품질 아이템을 억지로 채워 넣지 않는다 — 아이템 수가 적으면
+    적은 대로 낸다.
+    """
+    keyword = str(pipeline_result.get("keyword") or "")
+    mode = str(pipeline_result.get("mode") or "daily")
+    items = list(pipeline_result.get("items") or [])
+
+    header = f"# {keyword} — 오늘의 브리핑"
+
+    if mode == "daily":
+        sections = [_format_daily_item(item) for item in items]
+        return "\n\n".join([header, *sections]).rstrip()
+
+    label = _FALLBACK_LABELS.get(mode, "")
+    if mode == "weekly":
+        issue_lines = "\n".join(
+            f"- {item.get('title')} (점수 {float(item.get('score') or 0):.2f})" for item in items
+        )
+        body = complete(
+            _WEEKLY_SYSTEM_PROMPT,
+            f"주제: {keyword}\n\n[최근 7일 수집된 최고 점수 이슈]\n{issue_lines}\n\n"
+            "위 이슈들의 주간 트렌드를 요약하라.",
+            model=model,
+        )
+        links = "\n".join(
+            f"- [{item.get('title')}]({item.get('url')})" for item in items if item.get("url")
+        )
+        parts = [header, f"> **{label}**", body]
+        if links:
+            parts.append(f"## 참고 이슈\n{links}")
+        return "\n\n".join(parts).rstrip()
+
+    # evergreen: 수집분이 전혀 없으므로 토픽 자체의 개념 정리를 쓴다.
+    body = complete(
+        _EVERGREEN_SYSTEM_PROMPT,
+        f"주제: {keyword}\n\n이 주제의 핵심 개념과 기초 지식을 딥다이브로 정리하라.",
+        model=model,
+    )
+    return "\n\n".join([header, f"> **{label}**", body]).rstrip()

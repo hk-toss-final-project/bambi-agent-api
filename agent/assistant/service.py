@@ -5,13 +5,18 @@
 
 각 소스는 독립적으로 실패할 수 있으므로, 한쪽이 실패해도 다른 결과는 그대로
 반환하고 실패 사유를 errors에 담는다.
+
+`assist`는 기존 웹 UI가 쓰는 소스별 나열 결과이고, `assist_daily`는 명세의
+선별 파이프라인(수집→임베딩→클러스터링→스코어링→중복 제거→임계값+워터폴)을
+거친 일간 보고서 결과다.
 """
 
 from __future__ import annotations
 
-from agent.assistant import history
+from agent.assistant import history, pipeline
 from agent.assistant.feeds import canonical_url, latest_articles
 from agent.assistant.reddit import reddit_digest
+from agent.assistant.report import generate_daily_report
 from agent.assistant.youtube import youtube_digest_for_user
 
 
@@ -89,3 +94,37 @@ def assist(
         "articles": articles,
         "errors": errors,
     }
+
+
+def assist_daily(
+    keyword: str,
+    *,
+    user_id: str,
+    model: str = "gpt-4.1-mini",
+) -> dict[str, object]:
+    """선별 파이프라인을 실행하고 일간 보고서까지 생성해 반환한다.
+
+    수집 소스는 기존 그대로 쓰되, 명세의 선별 로직(최근 N일 수집 창, 날짜 추출,
+    임베딩 유사도 필터, 클러스터링 통합 요약, 스코어링, 최근 7일 중복 제거,
+    임계값 + 워터폴 폴백)을 적용한다.
+
+    Args:
+        keyword: 사용자 관심 토픽
+        user_id: 사용자 식별자
+        model: 통합 요약·보고서 생성에 쓸 OpenAI 모델
+
+    Returns:
+        {keyword, user_id, mode, cold_start, items, report_markdown, log, errors}
+        mode는 "daily"(당일 신규) | "weekly"(주간 트렌드 폴백) | "evergreen"(개념 정리 폴백)
+    """
+    result = pipeline.run_daily(keyword, user_id, model=model)
+
+    try:
+        report_markdown = generate_daily_report(result, model=model)
+    except Exception as error:
+        report_markdown = ""
+        errors = result.setdefault("errors", [])
+        assert isinstance(errors, list)
+        errors.append(f"보고서 생성 실패: {type(error).__name__}: {error}")
+
+    return {**result, "report_markdown": report_markdown}
