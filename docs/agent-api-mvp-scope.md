@@ -11,7 +11,104 @@
 - Naver API, NewsAPI, GDELT 데이터를 정기적으로 수집한다.
 - 개인 Wiki와 최신 수집 데이터를 결합해 밤비 콘텐츠를 생성한다.
 - 생성 결과를 service-api 및 service-worker가 사용할 수 있도록 제공한다.
-- Scheduler와 Worker가 생성 Job을 Batch로 처리하고, Service Worker가 준비된 Publish Snapshot을 Batch로 가져가 service-db에 반영한다.
+- Service 스케줄러의 생성 요청(즉시 또는 `scheduled_at` 예약)을 Agent Worker가 Batch로 처리하고, Service Worker가 준비된 Publish Snapshot을 Batch로 가져가 service-db에 반영한다.
+
+## MVP 구현 현황 체크리스트
+
+> 기준: 2026-07-20. 기능 ID 스캐폴드 함수가 아니라 **실제 런타임 경로**(라우터·서비스·Worker·저장소·Agent)가
+> 동작하는지 기준으로 판정했다. 표기: `[x]` 구현 완료, `[x] ⚠️` 핵심 동작은 되지만 제약 있음,
+> `[ ] ❌` 미구현, `[ ] ➖` Agent API 범위 아님(service-worker 책임).
+>
+> **집계: 완료 54 · 부분 11 · 미구현 4 · 범위 외 2 (총 71)**
+
+### Service API 연동
+
+- [x] `SVC-001` 사용자 컨텍스트 전달 — `user_context_snapshots` 저장, `STALE_CONTEXT_VERSION` 검증
+- [x] `SVC-002` 웹 클리핑 처리 요청 — 원본·Version·Job 한 Transaction Commit 후 202
+- [x] `SVC-003` URL 처리 요청 — URL Head 저장 + `personal_wiki_url` 수집 Job 등록
+- [x] `SVC-004` 위키마킹 처리 요청 — ⚠️ Job 접수·저장만 구현, `personal_wiki_content_mark` 처리 Handler 없음
+- [x] `SVC-008` 콘텐츠 생성 요청 — `generation_requests` + `bambi_generation` Job 멱등 등록, `scheduled_at` 예약 실행 지원
+- [x] `SVC-013` Agent Job 상태 조회
+- [x] `SVC-014` Agent 결과 조회 — 미완료 시 `JOB_RESULT_NOT_READY`
+- [x] `WSE-001` 웹 클리핑 이벤트 수신 — `wiki_source_events` + Frontmatter 필드 저장
+- [x] `WSE-011` 이벤트 중복 처리 방지 — `source_event_id` 멱등, Payload 상이 시 409
+- [x] `WSE-013` 이벤트 처리 상태 관리 — Claim·완료·실패 시 Source Event 상태 동기화
+- [x] `PWIKI-006` 개인 Wiki 문서 버전 관리 — 원본 Version·Wiki Version·Build Snapshot 분리 보존
+- [x] `PWIKI-007` Wiki 문서 출처 추적 — `wiki_document_sources` 연결
+- [x] `PWIKI-011` Wiki 문서 정규화 — Frontmatter 분리 저장, LLM Wiki 구조 변환
+- [x] `DB-002` Wiki Source Event·원본 저장
+- [x] `DB-003` 개인 LLM Wiki 문서 저장
+
+### 사용자 개인 LLM Wiki
+
+- [x] `PWIKI-002` 개인 Wiki 문서 생성 — Entity·Concept·Schema 증분 생성
+- [x] `PWIKI-003` 개인 Wiki 문서 조회 — 목록·상세·Build·Graph·연결 상위 Node(top-nodes)
+- [ ] `PWIKI-005` 개인 Wiki 문서 삭제 — ❌ 삭제 API·Handler 미구현
+- [x] `PWIKI-008` Wiki 문서 중복 제거 — ⚠️ 같은 `document_key` Upsert·병합은 구현, 유사 문서 의미 판단은 LLM 프롬프트에 위임
+- [x] `PWE-001` 개인 Wiki 문서 Chunking
+- [x] `PWE-002` Chunk 저장 — `wiki_chunks` 멱등 Upsert
+- [x] `PWE-004` Embedding 생성 — Worker 경로에서 Chunk별 생성
+- [x] `PWE-005` Embedding 저장 — `wiki_embeddings` + 설정 Version
+- [x] `PRAG-003` Hybrid Search — ⚠️ FTS·키워드 검색만 결합, pgvector 의미 검색은 미연결
+- [x] `PRAG-006` 개인 Wiki Context 구성 — Bambi 입력 Context(P1, P2 참조) 조립
+- [x] `PRAG-007` Citation 연결 — `citations`에 문서 Version·Chunk 연결
+
+### DB 기반 관심사 분류
+
+- [x] `INT-001` 관심사 Topic 추출 — 활성 Wiki 문서 기반 후보 추출
+- [x] `INT-002` 관심사 Category 분류 — ⚠️ 자체 Category만 부여, 서비스 분류 체계 매핑 미정
+- [x] `INT-005` 관심사 점수 계산 — ⚠️ Wiki 기반 점수만, 사용자 행동 강도·최신성 미반영
+- [x] `INT-011` 관심사 프로필 재계산 — ⚠️ 수동 rebuild API만 있고 Wiki 변경 시 자동 재계산 없음
+
+### 외부 데이터 자동 수집
+
+- [x] `COL-002` Naver API 수집 — Adapter 구현 (자격 증명 필요)
+- [x] `COL-003` GDELT 수집
+- [x] `COL-004` NewsAPI 수집
+- [x] `GSP-004` API 응답 정규화 — Provider 공통 문서 구조로 변환
+- [x] `GSP-006` 문서 중복 제거 — URL 기준 멱등 Upsert
+- [x] `GSP-015` 개인 Wiki 자동 반영 금지 — Global Namespace 분리 저장
+- [ ] `SCH-002` Naver API 수집 스케줄 — ❌ 정기 등록 미구현 (dev API 수동 실행만 가능)
+- [ ] `SCH-003` GDELT 수집 스케줄 — ❌
+- [ ] `SCH-004` NewsAPI 수집 스케줄 — ❌ (참고: MVP 목록 외 `SCH-009` Wiki Build 조용 시간 트리거는 구현됨)
+
+### 콘텐츠 생성 에이전트 밤비
+
+- [x] `BAMBI-001` 콘텐츠 생성 요청 — 운영 등록 + dev 즉시 실행
+- [x] `BAMBI-004` 개인 Wiki 검색
+- [x] `BAMBI-005` Global Source 검색
+- [x] `BAMBI-008` 콘텐츠 요약 생성
+- [x] `BAMBI-009` 콘텐츠 본문 생성
+- [x] `BAMBI-011` 콘텐츠 Citation 생성 — P1·G1 참조 검증 포함
+- [x] `BAMBI-012` 사용자 개인화 적용 — ⚠️ 언어 반영 구현, 차단 관심사·출처 필터는 Context 저장만 되고 검색·생성에 미적용
+- [x] `BAMBI-018` 생성 콘텐츠 후보 저장 — `generation_runs`·`generated_content_candidates`
+- [x] `BAMBI-020` 콘텐츠 완료 이벤트 — ⚠️ `CONTENT_READY` Outbox 기록까지 구현, Event Bus 발행 Relay 없음
+- [x] `BAMBI-021` 자동 Wiki 편입 금지 — 생성 결과는 후보 테이블에만 저장
+
+### Worker 및 서비스 반영
+
+- [x] `WORKER-001` Global Source Collector Worker — ⚠️ 수집·저장은 dev API 동기 실행만, 상주 Worker 없음
+- [x] `WORKER-002` Personal Wiki Builder Worker — 단발·상주(Loop) 모드 CLI
+- [x] `WORKER-003` Bambi Generation Worker — 단발·상주(Loop) 모드 CLI, `SKIP LOCKED` Batch Claim (dev API와 같은 Handler 체인)
+- [ ] `SW-001` Content Ready 이벤트 수신 — ➖ service-worker(Spring) 책임, Agent API 범위 아님
+- [x] `SW-004` Publish Snapshot 조회 — 단건 조회 + Lease Batch Claim
+- [ ] `SW-007` service-db 콘텐츠 Upsert — ➖ service-worker 책임
+- [x] `SW-009` 발행 완료 ACK — 단건 + 부분 성공 Batch ACK
+- [x] `WBA-001` Incremental Wiki Build
+- [x] `WBA-003` Wiki 문서 정규화 — Build 파이프라인에 포함
+- [x] `JOB-001` Agent Job 생성 — 원본 저장과 같은 Transaction
+- [x] `JOB-002` Agent Job 조회
+- [x] `JOB-006` Agent Job 진행률 관리 — ⚠️ progress 값만 갱신(0→5→100), 단계별(정규화·Chunking·Embedding) 기록 없음
+- [x] `JOB-007` Agent Job 결과 연결 — wiki_version_id·affected_documents·chunk_count
+- [x] `JOB-010` Agent Job Idempotency
+- [x] `WC-001` Queue Job Consume — 상주 소비 루프
+- [x] `WC-002` Job Claim — `FOR UPDATE SKIP LOCKED` + Lease
+- [x] `WC-006` Retry 정책 — retryable 실패 시 지연 후 queued 복귀
+- [x] `WC-009` Idempotency 처리 — `document_kind+document_key` 등 멱등 Upsert
+- [x] `WC-013` Concurrency 제어 — ⚠️ Batch Claim 크기 설정만 있고 LLM·Embedding 동시 실행 제한은 순차 처리로 대체
+- [x] `DB-004` 개인 Wiki Chunk 저장
+- [x] `DB-005` 개인 Wiki Embedding 저장
+- [x] `DB-026` Agent Job 저장 — Claim·Lease·Attempt 이력
 
 ## 1. Service API 연동
 
