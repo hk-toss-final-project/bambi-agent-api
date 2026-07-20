@@ -1,47 +1,47 @@
 """주가/지수 차트 생성.
 
 키워드가 주식·지수를 가리키면 일별 종가 시계열을 받아와 간단한 SVG 라인 차트를
-만든다. 데이터는 무료·API 키 불필요한 Stooq CSV(https://stooq.com/q/d/l/)를 쓴다.
+만든다. 데이터는 무료·API 키 불필요한 Yahoo Finance chart API를 쓴다.
 
-네트워크 경계(_fetch_stooq_csv)를 분리해 테스트에서 대체할 수 있게 하고, 심볼 해석과
+네트워크 경계(_fetch_chart_json)를 분리해 테스트에서 대체할 수 있게 하고, 심볼 해석과
 SVG 렌더링은 순수 함수로 두어 오프라인에서 검증 가능하게 한다. 데이터를 못 받거나
 키워드가 주가 대상이 아니면 None을 반환한다(차트 없음).
 
-주의: 심볼 표기(예: 005930.KR, ^KOSPI)는 Stooq 관례를 따르며, 실제 응답은 로컬
-네트워크에서 확인해야 한다. 매칭되지 않는 키워드는 차트를 만들지 않는다.
+심볼은 Yahoo 표기를 따른다(코스피 ^KS11, 코스닥 ^KQ11, 국내 종목 <코드>.KS).
+매칭되지 않는 키워드는 차트를 만들지 않는다.
 """
 
 from __future__ import annotations
 
-# 키워드(정규화: 소문자·공백 제거) → (Stooq 심볼, 표시 이름).
+# 키워드(정규화: 소문자·공백 제거) → (Yahoo 심볼, 표시 이름).
 # 한 키워드가 여러 표기를 가지므로 별칭을 여러 개 둔다. 필요 시 확장한다.
 _SYMBOL_MAP: dict[str, tuple[str, str]] = {
-    "코스피": ("^KOSPI", "코스피"),
-    "kospi": ("^KOSPI", "코스피"),
-    "코스닥": ("^KOSDAQ", "코스닥"),
-    "kosdaq": ("^KOSDAQ", "코스닥"),
-    "삼성전자": ("005930.KR", "삼성전자"),
-    "sk하이닉스": ("000660.KR", "SK하이닉스"),
-    "하이닉스": ("000660.KR", "SK하이닉스"),
-    "네이버": ("035420.KR", "NAVER"),
-    "카카오": ("035720.KR", "카카오"),
-    "현대차": ("005380.KR", "현대차"),
-    "lg에너지솔루션": ("373220.KR", "LG에너지솔루션"),
-    "lg엔솔": ("373220.KR", "LG에너지솔루션"),
-    "나스닥": ("^NDQ", "나스닥"),
-    "nasdaq": ("^NDQ", "나스닥"),
-    "s&p500": ("^SPX", "S&P 500"),
-    "sp500": ("^SPX", "S&P 500"),
+    "코스피": ("^KS11", "코스피"),
+    "kospi": ("^KS11", "코스피"),
+    "코스닥": ("^KQ11", "코스닥"),
+    "kosdaq": ("^KQ11", "코스닥"),
+    "삼성전자": ("005930.KS", "삼성전자"),
+    "sk하이닉스": ("000660.KS", "SK하이닉스"),
+    "하이닉스": ("000660.KS", "SK하이닉스"),
+    "네이버": ("035420.KS", "NAVER"),
+    "카카오": ("035720.KS", "카카오"),
+    "현대차": ("005380.KS", "현대차"),
+    "lg에너지솔루션": ("373220.KS", "LG에너지솔루션"),
+    "lg엔솔": ("373220.KS", "LG에너지솔루션"),
+    "나스닥": ("^IXIC", "나스닥"),
+    "nasdaq": ("^IXIC", "나스닥"),
+    "s&p500": ("^GSPC", "S&P 500"),
+    "sp500": ("^GSPC", "S&P 500"),
     "다우": ("^DJI", "다우존스"),
-    "애플": ("AAPL.US", "Apple"),
-    "apple": ("AAPL.US", "Apple"),
-    "테슬라": ("TSLA.US", "Tesla"),
-    "tesla": ("TSLA.US", "Tesla"),
-    "엔비디아": ("NVDA.US", "NVIDIA"),
-    "nvidia": ("NVDA.US", "NVIDIA"),
+    "애플": ("AAPL", "Apple"),
+    "apple": ("AAPL", "Apple"),
+    "테슬라": ("TSLA", "Tesla"),
+    "tesla": ("TSLA", "Tesla"),
+    "엔비디아": ("NVDA", "NVIDIA"),
+    "nvidia": ("NVDA", "NVIDIA"),
 }
 
-_FETCH_TIMEOUT = 12.0
+_FETCH_TIMEOUT = 15.0
 _DEFAULT_DAYS = 30
 
 
@@ -59,41 +59,46 @@ def resolve_symbol(keyword: str) -> tuple[str, str] | None:
     return None
 
 
-def _fetch_stooq_csv(symbol: str) -> str:
-    """Stooq에서 일별 시세 CSV를 받아온다(네트워크 경계). 실패 시 예외."""
-    import httpx
+def _fetch_chart_json(symbol: str, range_: str = "1mo") -> dict:
+    """Yahoo Finance chart API에서 일별 시세 JSON을 받아온다(네트워크 경계).
 
-    url = f"https://stooq.com/q/d/l/?s={symbol}&i=d"
-    response = httpx.get(url, timeout=_FETCH_TIMEOUT, follow_redirects=True)
-    response.raise_for_status()
-    return response.text
-
-
-def parse_daily_closes(csv_text: str, days: int = _DEFAULT_DAYS) -> list[dict[str, object]]:
-    """Stooq CSV를 파싱해 최근 days개의 {date, close}를 반환한다.
-
-    CSV 헤더: Date,Open,High,Low,Close,Volume
+    실패 시 예외를 던진다. 브라우저형 User-Agent가 없으면 차단될 수 있어 명시한다.
     """
-    lines = [line for line in csv_text.strip().splitlines() if line]
-    if len(lines) < 2:
-        return []
-    header = [h.strip().lower() for h in lines[0].split(",")]
+    import httpx
+    from urllib.parse import quote
+
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(symbol, safe='')}"
+    response = httpx.get(
+        url,
+        params={"range": range_, "interval": "1d"},
+        headers={"User-Agent": "Mozilla/5.0 (compatible; bambi-keyword-assistant/0.1)"},
+        timeout=_FETCH_TIMEOUT,
+        follow_redirects=True,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def parse_daily_closes(payload: dict, days: int = _DEFAULT_DAYS) -> list[dict[str, object]]:
+    """Yahoo chart JSON을 파싱해 최근 days개의 {date, close}를 반환한다.
+
+    거래가 없는 날(close=null)은 건너뛴다.
+    """
+    from datetime import UTC, datetime
+
     try:
-        date_i = header.index("date")
-        close_i = header.index("close")
-    except ValueError:
+        result = payload["chart"]["result"][0]
+        timestamps = result["timestamp"]
+        closes = result["indicators"]["quote"][0]["close"]
+    except (KeyError, IndexError, TypeError):
         return []
 
     series: list[dict[str, object]] = []
-    for row in lines[1:]:
-        cols = row.split(",")
-        if len(cols) <= max(date_i, close_i):
+    for ts, close in zip(timestamps, closes):
+        if close is None:
             continue
-        try:
-            close = float(cols[close_i])
-        except ValueError:
-            continue
-        series.append({"date": cols[date_i].strip(), "close": close})
+        date = datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%d")
+        series.append({"date": date, "close": float(close)})
     return series[-days:]
 
 
@@ -150,11 +155,11 @@ def build_stock_chart(keyword: str, days: int = _DEFAULT_DAYS) -> dict[str, obje
     symbol, name = resolved
 
     try:
-        csv_text = _fetch_stooq_csv(symbol)
+        payload = _fetch_chart_json(symbol)
     except Exception:
         return None
 
-    series = parse_daily_closes(csv_text, days=days)
+    series = parse_daily_closes(payload, days=days)
     if len(series) < 2:
         return None
 

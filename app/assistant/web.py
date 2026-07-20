@@ -345,7 +345,7 @@ def _render_chart(chart: dict[str, object] | None) -> str:
     return (
         '<figure class="fig" style="margin:0 0 18px;">'
         f'{chart["chart_svg"]}'
-        f'<figcaption class="pmeta" style="margin-top:6px;">{name} ({symbol}) · 출처 Stooq 일별 종가</figcaption>'
+        f'<figcaption class="pmeta" style="margin-top:6px;">{name} ({symbol}) · 출처 Yahoo Finance 일별 종가</figcaption>'
         '</figure>'
     )
 
