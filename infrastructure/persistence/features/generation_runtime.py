@@ -136,9 +136,16 @@ async def enqueue_bambi_generation_job(
     topic: str,
     content_type: str,
     language: str | None,
+    scheduled_at: datetime | None = None,
     request_id: str,
 ) -> PersistedGenerationSubmission:
-    """최신 사용자 Context에 연결된 Bambi Job과 생성 요청을 멱등 등록한다."""
+    """최신 사용자 Context에 연결된 Bambi Job과 생성 요청을 멱등 등록한다.
+
+    scheduled_at을 지정하면 Worker Batch Claim의 `scheduled_at <= now`
+    조건에 따라 그 시각 전에는 실행되지 않는 예약 Job으로 등록한다.
+    같은 idempotency_key 재등록은 기존 Job을 재사용하며 예약 시각을
+    변경하지 않는다.
+    """
     context_cursor = await connection.execute(
         """
         SELECT id, plan, preferred_language
@@ -169,13 +176,17 @@ async def enqueue_bambi_generation_job(
             progress,
             payload,
             retryable,
-            request_id
-        ) VALUES ('SVC-008', 'bambi_generation', %s, %s, 'queued', 0, %s, true, %s)
+            request_id,
+            scheduled_at
+        ) VALUES (
+            'SVC-008', 'bambi_generation', %s, %s, 'queued', 0, %s, true, %s,
+            COALESCE(%s, clock_timestamp())
+        )
         ON CONFLICT (feature_id, COALESCE(user_id, ''), idempotency_key)
         DO NOTHING
         RETURNING id
         """,
-        (user_id, idempotency_key, Jsonb(job_payload), request_id),
+        (user_id, idempotency_key, Jsonb(job_payload), request_id, scheduled_at),
     )
     job = await job_cursor.fetchone()
     if job is None:

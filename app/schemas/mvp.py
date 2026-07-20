@@ -157,7 +157,12 @@ class GenerationRequest(ImmutableSchema):
     """밤비 개인화 콘텐츠 생성을 요청하는 모델."""
 
     idempotency_key: str = Field(
-        min_length=1, max_length=128, description="중복 생성을 방지하는 요청 키"
+        min_length=1,
+        max_length=128,
+        description=(
+            "중복 생성을 방지하는 요청 키. Service 스케줄러는 "
+            "`{schedule window}-{user_id}-{content_type}` 규칙을 권장한다."
+        ),
     )
     topic: str = Field(min_length=1, max_length=500, description="생성할 콘텐츠 주제")
     content_type: str = Field(
@@ -169,6 +174,20 @@ class GenerationRequest(ImmutableSchema):
     language: str | None = Field(
         default=None, min_length=2, max_length=16, description="요청 콘텐츠 언어"
     )
+    scheduled_at: datetime | None = Field(
+        default=None,
+        description=(
+            "Worker 실행을 예약할 시각(시간대 포함). 지정하면 그 시각 전에는 "
+            "Job이 Claim되지 않으며, 생략하면 즉시 실행 대상이 된다."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_scheduled_at_timezone(self) -> "GenerationRequest":
+        """예약 시각이 시간대 없는 값으로 들어와 모호해지는 것을 차단한다."""
+        if self.scheduled_at is not None and self.scheduled_at.tzinfo is None:
+            raise ValueError("scheduled_at은 시간대를 포함한 시각이어야 합니다.")
+        return self
 
 
 class AcceptedJobResponse(ImmutableSchema):

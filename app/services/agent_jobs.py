@@ -130,6 +130,7 @@ class AgentJobRepository(Protocol):
         topic: str,
         content_type: str,
         language: str | None,
+        scheduled_at: datetime | None,
         request_id: str,
     ) -> SubmittedGenerationJob:
         """Bambi Generation Job과 생성 요청을 멱등 저장한다."""

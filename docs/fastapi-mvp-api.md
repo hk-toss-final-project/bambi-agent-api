@@ -10,6 +10,7 @@
 - 비동기 Wiki 및 생성 요청은 필요한 입력을 PostgreSQL에 Commit한 뒤 `202 Accepted`와 `job_id`를 반환합니다.
 - 사용자 컨텍스트는 단조 증가하는 `context_version`으로 오래된 데이터 덮어쓰기를 방지합니다.
 - 웹 클리핑, URL, 위키마킹과 콘텐츠 생성은 요청별 멱등성 키로 중복 Job 생성을 방지합니다.
+- 콘텐츠 생성 트리거는 service 계층 스케줄러가 담당합니다. 사용자 지정 시각에 `POST /generations`를 호출하거나 `scheduled_at`으로 예약 등록하며, Agent는 별도의 생성 Scheduler를 두지 않습니다. Worker는 `scheduled_at`이 지난 Job만 Claim합니다.
 - Agent Worker는 Job을 Batch로 Claim하되 각 Job을 독립 실행하며, Claim 크기와 실제 LLM 호출 동시성을 분리합니다.
 - Service Worker는 준비된 Publish Snapshot을 Lease가 있는 Batch로 Claim하고 항목별 반영 결과를 부분 성공 ACK로 전달합니다.
 - 모든 오류는 `code`, `message`, `request_id`, `retryable`, `details` 필드를 가진 공통 구조로 반환합니다.
@@ -30,7 +31,7 @@
 | `POST` | `/internal/v1/users/{user_id}/wiki-sources/clippings` | `SVC-002` | `202` | 웹 클리핑 Markdown을 저장하고 Personal Wiki Builder Job을 등록합니다. |
 | `POST` | `/internal/v1/users/{user_id}/wiki-sources/urls` | `SVC-003` | `202` | URL Personal Wiki Builder Job을 등록합니다. |
 | `POST` | `/internal/v1/users/{user_id}/wiki-sources/content-marks` | `SVC-004` | `202` | 생성 콘텐츠 위키마킹 Job을 등록합니다. |
-| `POST` | `/internal/v1/users/{user_id}/generations` | `SVC-008` | `202` | 밤비 콘텐츠 생성 Job을 등록합니다. |
+| `POST` | `/internal/v1/users/{user_id}/generations` | `SVC-008` | `202` | 밤비 콘텐츠 생성 Job을 등록합니다. `scheduled_at`으로 지정 시각 실행을 예약할 수 있습니다. |
 | `GET` | `/internal/v1/jobs/{job_id}` | `SVC-013` | `200` | Job 상태와 진행률을 조회합니다. |
 | `GET` | `/internal/v1/jobs/{job_id}/result` | `SVC-014` | `200` | 완료된 Job 결과를 조회합니다. 미완료 시 `409`를 반환합니다. |
 | `GET` | `/internal/v1/users/{user_id}/wiki/graph` | `PWIKI-003` | `200` | 현재 개인 Wiki 문서와 관계 Graph를 조회합니다. |
@@ -264,7 +265,7 @@ sequenceDiagram
     participant ServiceAPI as service-api
     participant AgentAPI as agent-api
     participant AgentDB as PostgreSQL agent-db
-    participant Scheduler as agent-scheduler
+    participant ServiceScheduler as service-scheduler
     participant WikiWorker as Personal Wiki Builder
     participant GenerationWorker as Generation Worker
     participant ServiceWorker as service-worker
@@ -280,7 +281,8 @@ sequenceDiagram
     end
     ServiceAPI->>AgentAPI: 콘텐츠 Generation 요청
     AgentAPI->>AgentDB: Generation Job 생성
-    Scheduler->>AgentDB: 스케줄 대상 Job Batch 등록
+    ServiceScheduler->>AgentAPI: 사용자 지정 시각 생성 요청
+    AgentAPI->>AgentDB: scheduled_at 예약 Job 생성
     GenerationWorker->>AgentDB: Generation Job Batch Claim + Lease
     loop Claim한 생성 Job별 제한된 동시 실행
         GenerationWorker->>AgentDB: 생성 결과와 ready Snapshot 저장

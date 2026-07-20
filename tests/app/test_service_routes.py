@@ -78,6 +78,36 @@ def test_generation_job_result_flow(
     assert completed.json()["result"] == {"content_id": "content-1"}
 
 
+def test_generation_request_accepts_scheduled_time(client: TestClient) -> None:
+    """시간대를 포함한 예약 시각의 생성 요청이 정상 접수되는지 검증한다."""
+    accepted = client.post(
+        "/internal/v1/users/user-3/generations",
+        json={
+            "idempotency_key": "2026-07-21-user-3-interest_news_card",
+            "topic": "AI agent trends",
+            "scheduled_at": "2026-07-21T07:00:00+09:00",
+        },
+    )
+
+    assert accepted.status_code == 202
+    assert accepted.json()["feature_id"] == "SVC-008"
+
+
+def test_generation_request_rejects_naive_scheduled_time(client: TestClient) -> None:
+    """시간대 없는 예약 시각은 모호하므로 422 검증 오류를 반환한다."""
+    rejected = client.post(
+        "/internal/v1/users/user-3/generations",
+        json={
+            "idempotency_key": "generation-naive",
+            "topic": "AI agent trends",
+            "scheduled_at": "2026-07-21T07:00:00",
+        },
+    )
+
+    assert rejected.status_code == 422
+    assert rejected.json()["code"] == "REQUEST_VALIDATION_ERROR"
+
+
 def test_unknown_job_returns_not_found(client: TestClient) -> None:
     """존재하지 않는 Agent Job 조회가 404 공통 오류를 반환하는지 검증한다."""
     response = client.get("/internal/v1/jobs/unknown-job")

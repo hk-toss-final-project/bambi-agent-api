@@ -232,6 +232,7 @@ class PostgresAgentJobRepository:
         topic: str,
         content_type: str,
         language: str | None,
+        scheduled_at: datetime | None = None,
         request_id: str,
     ) -> SubmittedGenerationJob:
         """Bambi Generation Job과 요청을 사용자 Context에 연결해 저장한다."""
@@ -245,6 +246,7 @@ class PostgresAgentJobRepository:
                     topic=topic,
                     content_type=content_type,
                     language=language,
+                    scheduled_at=scheduled_at,
                     request_id=request_id,
                 )
                 stored = await get_agent_job(connection, job_id=submitted.job_id)

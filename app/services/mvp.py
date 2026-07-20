@@ -194,6 +194,7 @@ class AgentApiMvpService:
                     topic=payload.topic,
                     content_type=payload.content_type,
                     language=payload.language,
+                    scheduled_at=payload.scheduled_at,
                     request_id=request_id,
                 )
             )

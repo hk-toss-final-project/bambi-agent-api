@@ -218,7 +218,7 @@ COMMIT;
 
 ### Agent Job Batch Claim
 
-- Scheduler는 생성 대상자를 작은 묶음으로 순회하되 `schedule window + user_id + content_type`을 포함한 멱등성 키로 사용자별 Job을 독립 등록합니다.
+- 생성 Job 등록은 service 계층 스케줄러가 사용자 지정 시각에 SVC-008 멱등 등록(`schedule window + user_id + content_type` 키, 필요 시 `scheduled_at` 예약)으로 전달합니다. Agent Scheduler는 수집·정리 등 내부 정기 작업만 등록합니다.
 - Worker는 하나의 짧은 Transaction에서 실행 가능한 Job을 `priority, scheduled_at, created_at` 순으로 조회하고 `FOR UPDATE SKIP LOCKED LIMIT :batch_size`로 Batch Claim합니다.
 - Claim 시 `status = running`, `locked_by`, `locked_at`, `lease_expires_at`을 함께 갱신합니다. `lease_expires_at`은 기존 `0001_initial.sql`을 수정하지 않고 `0002_publish_snapshot_batches.sql`에서 `agent_jobs`에 추가합니다.
 - DB Transaction은 Claim 직후 종료하고 검색·LLM 호출·콘텐츠 생성은 Transaction 밖에서 실행합니다. 장시간 Transaction으로 Connection과 Row Lock을 점유하지 않습니다.

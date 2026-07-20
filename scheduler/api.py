@@ -14,7 +14,7 @@ from .features.collection import (
     sch_008,
 )
 from .features.wiki import sch_009, sch_010
-from .features.content import sch_011, sch_012
+from .features.content import sch_012
 from .features.embedding import sch_013
 from .features.cleanup import sch_014, sch_015
 from .features.quotas import sch_016
@@ -39,7 +39,6 @@ __all__ = [
     "sch_008",
     "sch_009",
     "sch_010",
-    "sch_011",
     "sch_012",
     "sch_013",
     "sch_014",
