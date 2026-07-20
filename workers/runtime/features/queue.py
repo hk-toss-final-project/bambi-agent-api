@@ -68,7 +68,6 @@ async def consume_personal_wiki_jobs(
     limit: int,
     lease_seconds: int,
     model: str,
-    embedding_model: str,
     interval_seconds: int = 60,
     max_batches: int | None = None,
     batch_runner: BatchRunner = run_personal_wiki_batch,
@@ -82,7 +81,6 @@ async def consume_personal_wiki_jobs(
         limit: Batch 하나가 Claim할 최대 Job 수 (WC-001 Batch 크기)
         lease_seconds: Job Lease 유지 시간(초)
         model: Personal Wiki 분류 LLM 모델
-        embedding_model: Wiki Chunk Embedding 모델
         interval_seconds: 처리할 Job이 없을 때 다음 확인까지 대기 초
         max_batches: 가져올 Batch 횟수 상한. None이면 무제한 상주
         batch_runner: Batch 한 번을 실행하는 함수 (테스트 대체용)
@@ -100,7 +98,6 @@ async def consume_personal_wiki_jobs(
             "limit": limit,
             "lease_seconds": lease_seconds,
             "model": model,
-            "embedding_model": embedding_model,
         },
         interval_seconds=interval_seconds,
         max_batches=max_batches,
@@ -167,7 +164,6 @@ async def wc_001(request: FeatureRequest) -> FeatureResult:
     limit = request.payload.get("limit", 1)
     lease_seconds = request.payload.get("lease_seconds", 600)
     model = request.payload.get("model", "gpt-4.1-mini")
-    embedding_model = request.payload.get("embedding_model", "text-embedding-3-small")
     interval_seconds = request.payload.get("interval_seconds", 0)
     max_batches = request.payload.get("max_batches", 1)
     if not isinstance(database_url, str) or not database_url:
@@ -180,15 +176,12 @@ async def wc_001(request: FeatureRequest) -> FeatureResult:
         raise ValueError("WC-001의 interval_seconds와 max_batches는 정수여야 합니다.")
     if not isinstance(model, str) or not model:
         raise ValueError("WC-001의 model은 빈 문자열이면 안 됩니다.")
-    if not isinstance(embedding_model, str) or not embedding_model:
-        raise ValueError("WC-001의 embedding_model은 빈 문자열이면 안 됩니다.")
     results = await consume_personal_wiki_jobs(
         database_url=database_url,
         worker_id=worker_id,
         limit=limit,
         lease_seconds=lease_seconds,
         model=model,
-        embedding_model=embedding_model,
         interval_seconds=interval_seconds,
         max_batches=max_batches,
     )

@@ -99,19 +99,6 @@ def test_run_personal_wiki_build_assembles_result(
         assert kwargs["job_id"] == "job-1"
         return _fake_persisted()
 
-    async def fake_chunks(connection: Any, **kwargs: Any) -> list[str]:
-        order.append("embed")
-        assert kwargs["document_version_ids"] == ["doc-version-1"]
-        return ["chunk"]
-
-    def fake_embeddings(chunks: list[str], *, model: str) -> list[str]:
-        assert model == "embed-model"
-        return ["vector"]
-
-    async def fake_persist_embeddings(connection: Any, **kwargs: Any) -> int:
-        assert kwargs["model_name"] == "embed-model"
-        return 1
-
     monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
     monkeypatch.setattr(
         agent_graph, "get_user_source_document_version_for_agent", fake_get_source
@@ -121,11 +108,6 @@ def test_run_personal_wiki_build_assembles_result(
     monkeypatch.setattr(agent_graph, "classify_source_for_wiki", fake_classify)
     monkeypatch.setattr(agent_graph, "build_wiki_plan", fake_plan)
     monkeypatch.setattr(agent_graph, "persist_wiki_build", fake_persist)
-    monkeypatch.setattr(agent_graph, "get_wiki_chunks_for_embedding", fake_chunks)
-    monkeypatch.setattr(agent_graph, "generate_wiki_embeddings", fake_embeddings)
-    monkeypatch.setattr(
-        agent_graph, "persist_wiki_embeddings", fake_persist_embeddings
-    )
 
     connection = _FakeConnection()
     result = asyncio.run(
@@ -135,16 +117,14 @@ def test_run_personal_wiki_build_assembles_result(
             source_document_version_id="source-version-1",
             job_id="job-1",
             model="test-model",
-            embedding_model="embed-model",
         )
     )
 
-    assert order == ["load_source", "classify", "plan", "persist", "embed"]
+    assert order == ["load_source", "classify", "plan", "persist"]
     assert result["source_document_id"] == "source-1"
     assert result["wiki_version_id"] == "wiki-version-1"
     assert result["chunk_count"] == 2
-    assert result["embedding_count"] == 1
-    assert result["embedding_status"] == "completed"
+    assert "embedding_count" not in result
     assert result["affected_documents"][0]["document_key"] == "entity-key"
     assert result["artifacts"]["index"] == "index"
 

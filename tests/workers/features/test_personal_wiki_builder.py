@@ -29,7 +29,6 @@ def test_run_personal_wiki_batch_delegates_to_shared_runner(
             limit=5,
             lease_seconds=600,
             model="wiki-model",
-            embedding_model="embed-model",
         )
     )
 

@@ -19,7 +19,7 @@
 > 동작하는지 기준으로 판정했다. 표기: `[x]` 구현 완료, `[x] ⚠️` 핵심 동작은 되지만 제약 있음,
 > `[ ] ❌` 미구현, `[ ] ➖` Agent API 범위 아님(service-worker 책임).
 >
-> **집계: 완료 54 · 부분 10 · 미구현 5 · 범위 외 2 (총 71)**
+> **집계: 완료 52 · 부분 10 · 미구현 7 · 범위 외 2 (총 71)**
 
 ### Service API 연동
 
@@ -47,8 +47,8 @@
 - [x] `PWIKI-008` Wiki 문서 중복 제거 — ⚠️ 같은 `document_key` Upsert·병합은 구현, 유사 문서 의미 판단은 LLM 프롬프트에 위임
 - [x] `PWE-001` 개인 Wiki 문서 Chunking
 - [x] `PWE-002` Chunk 저장 — `wiki_chunks` 멱등 Upsert
-- [x] `PWE-004` Embedding 생성 — Worker 경로에서 Chunk별 생성
-- [x] `PWE-005` Embedding 저장 — `wiki_embeddings` + 설정 Version
+- [ ] `PWE-004` Embedding 생성 — ❌ 보류(2026-07-20 결정). 활용처(Vector 검색)가 없어 실행 경로에서 제외했으며 생성 유틸(`generate_wiki_embeddings`)은 재도입 대비로 유지
+- [ ] `PWE-005` Embedding 저장 — ❌ 보류(위와 동일). `wiki_embeddings` 스키마와 저장 함수는 유지
 - [x] `PRAG-003` Hybrid Search — ⚠️ FTS·키워드 검색만 결합, pgvector 의미 검색은 미연결
 - [x] `PRAG-006` 개인 Wiki Context 구성 — Bambi 입력 Context(P1, P2 참조) 조립
 - [x] `PRAG-007` Citation 연결 — `citations`에 문서 Version·Chunk 연결

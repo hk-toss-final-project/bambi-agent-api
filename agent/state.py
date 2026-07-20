@@ -10,7 +10,6 @@ class PersonalWikiBuildState(TypedDict):
     source_document_version_id: str
     job_id: str
     model: str
-    embedding_model: str
     source: NotRequired[object]
     existing_entities: NotRequired[list[object]]
     existing_concepts: NotRequired[list[object]]
@@ -18,7 +17,6 @@ class PersonalWikiBuildState(TypedDict):
     classification: NotRequired[object]
     plan: NotRequired[object]
     persisted: NotRequired[object]
-    embedding_count: NotRequired[int]
     result: NotRequired[dict[str, object]]
 
 

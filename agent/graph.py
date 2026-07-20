@@ -18,20 +18,14 @@ from psycopg import AsyncConnection
 
 from agent.bambi.api import generate_bambi_content
 from agent.state import BambiGenerationState, PersonalWikiBuildState
-from agent.wiki_builder.api import (
-    build_wiki_plan,
-    classify_source_for_wiki,
-    generate_wiki_embeddings,
-)
+from agent.wiki_builder.api import build_wiki_plan, classify_source_for_wiki
 from infrastructure.persistence.api import (
     get_user_source_document_version_for_agent,
-    get_wiki_chunks_for_embedding,
     list_existing_wiki_entries,
     list_existing_wiki_relations,
     load_bambi_context,
     persist_bambi_generation,
     persist_wiki_build,
-    persist_wiki_embeddings,
     set_personal_wiki_scope,
 )
 
@@ -41,8 +35,10 @@ type DictRow = dict[str, Any]
 def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
     """Personal Wiki Build 노드와 엣지를 조립해 컴파일된 그래프를 반환한다.
 
-    load_source → classify → plan → persist → embed → finalize 순서로
-    원본 조회부터 Embedding 저장, Job 결과 조립까지를 한 실행 경계로 묶는다.
+    load_source → classify → plan → persist → finalize 순서로 원본
+    조회부터 문서·Chunk 저장, Job 결과 조립까지를 한 실행 경계로 묶는다.
+    Embedding 생성은 2026-07-20 결정으로 실행 경로에서 제외했으며(활용처인
+    Vector 검색 미도입), 재도입 시 persist 뒤에 embed 노드를 추가한다.
     """
 
     async def load_source(state: PersonalWikiBuildState) -> dict[str, Any]:
@@ -125,36 +121,6 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
             )
         return {"persisted": persisted}
 
-    async def embed(state: PersonalWikiBuildState) -> dict[str, Any]:
-        """생성·갱신된 문서 Version의 Chunk를 Embedding으로 저장한다."""
-        user_id = state["user_id"]
-        persisted = state["persisted"]
-        namespace_key = f"user/{user_id}"
-        async with connection.transaction():
-            await set_personal_wiki_scope(connection, user_id=user_id)
-            chunks = await get_wiki_chunks_for_embedding(
-                connection,
-                namespace_key=namespace_key,
-                document_version_ids=[
-                    document.document_version_id
-                    for document in persisted.affected_documents
-                ],
-            )
-        embedding_values = await to_thread(
-            generate_wiki_embeddings,
-            chunks,
-            model=state["embedding_model"],
-        )
-        async with connection.transaction():
-            await set_personal_wiki_scope(connection, user_id=user_id)
-            embedding_count = await persist_wiki_embeddings(
-                connection,
-                namespace_key=namespace_key,
-                model_name=state["embedding_model"],
-                values=embedding_values,
-            )
-        return {"embedding_count": embedding_count}
-
     async def finalize(state: PersonalWikiBuildState) -> dict[str, Any]:
         """Job 결과 계약에 맞는 최종 Payload를 조립한다."""
         source = state["source"]
@@ -179,8 +145,6 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
                     }
                     for document in persisted.affected_documents
                 ],
-                "embedding_status": "completed",
-                "embedding_count": state["embedding_count"],
                 "artifacts": {
                     "index": build_plan.index.content,
                     "source": build_plan.source_manifest.content,
@@ -194,14 +158,12 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
     graph.add_node("classify", classify)
     graph.add_node("plan", plan)
     graph.add_node("persist", persist)
-    graph.add_node("embed", embed)
     graph.add_node("finalize", finalize)
     graph.set_entry_point("load_source")
     graph.add_edge("load_source", "classify")
     graph.add_edge("classify", "plan")
     graph.add_edge("plan", "persist")
-    graph.add_edge("persist", "embed")
-    graph.add_edge("embed", "finalize")
+    graph.add_edge("persist", "finalize")
     graph.add_edge("finalize", END)
     return graph.compile()
 
@@ -213,7 +175,6 @@ async def run_personal_wiki_build(
     source_document_version_id: str,
     job_id: str,
     model: str = "gpt-4.1-mini",
-    embedding_model: str = "text-embedding-3-small",
 ) -> dict[str, object]:
     """Personal Wiki Build 그래프를 실행하고 Job 결과 Payload를 반환한다.
 
@@ -226,7 +187,6 @@ async def run_personal_wiki_build(
             "source_document_version_id": source_document_version_id,
             "job_id": job_id,
             "model": model,
-            "embedding_model": embedding_model,
         }
     )
     return dict(state["result"])

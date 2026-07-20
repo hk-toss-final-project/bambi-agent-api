@@ -92,7 +92,6 @@ class AgentWorkflowService:
                     source_document_version_id=source_version_id,
                     job_id=job.job_id,
                     model=self._settings.wiki_llm_model,
-                    embedding_model=self._settings.wiki_embedding_model,
                 )
             return "wiki_build", result
         if job.job_type == "bambi_generation":

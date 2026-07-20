@@ -62,7 +62,6 @@ def _parse_args() -> argparse.Namespace:
         help="Worker LLM 모델 (기본: Wiki는 WIKI_LLM_MODEL, Bambi는 BAMBI_LLM_MODEL)",
     )
     parser.add_argument("--lease-seconds", type=int, help="Job Lease 유지 시간")
-    parser.add_argument("--embedding-model", help="Wiki Chunk Embedding 모델 (personal-wiki 전용)")
     parser.add_argument(
         "--loop",
         action="store_true",
@@ -130,7 +129,6 @@ async def _run_batch_once(
             args.lease_seconds or settings.personal_wiki_job_lease_seconds
         ),
         model=args.model or settings.wiki_llm_model,
-        embedding_model=args.embedding_model or settings.wiki_embedding_model,
     )
 
 
@@ -181,7 +179,6 @@ async def _run() -> None:
             args.lease_seconds or settings.personal_wiki_job_lease_seconds
         ),
         model=args.model or settings.wiki_llm_model,
-        embedding_model=args.embedding_model or settings.wiki_embedding_model,
         interval_seconds=args.interval_seconds,
         max_batches=None,
         on_batch=on_batch,

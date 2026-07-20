@@ -96,7 +96,7 @@ Wiki 빌드와 Bambi 생성은 OpenAI를 실제 호출하므로 비용이 발생
 
 | Worker | 용도 | 모드 |
 |---|---|---|
-| `personal-wiki` | 클리핑·URL 원본을 LLM Wiki로 빌드 (Chunk·Embedding 포함) | 단발 / `--loop` 상주 |
+| `personal-wiki` | 클리핑·URL 원본을 LLM Wiki로 빌드 (Chunk 포함, Embedding은 보류) | 단발 / `--loop` 상주 |
 | `bambi-generation` | 생성 Job을 처리해 콘텐츠·발행 Snapshot 저장 | 단발 / `--loop` 상주 |
 | `global-collector` | 키워드로 외부 기사 수집 (`--keywords` 필수, Provider 기본 `gdelt,naver`) | 단발 |
 | `global-content` | 수집된 기사의 본문 확보 | 단발 |

@@ -27,7 +27,6 @@ async def _process_job(
     job: ClaimedAgentJob,
     worker_id: str,
     model: str,
-    embedding_model: str,
 ) -> dict[str, object]:
     """점유한 Personal Wiki Job 하나를 그래프로 Build하고 완료 상태로 바꾼다."""
     source_version_id = job.payload.get("source_document_version_id")
@@ -39,7 +38,6 @@ async def _process_job(
         source_document_version_id=source_version_id,
         job_id=job.job_id,
         model=model,
-        embedding_model=embedding_model,
     )
     async with connection.transaction():
         await set_system_job_scope(connection)
@@ -59,7 +57,6 @@ async def run_personal_wiki_batch(
     limit: int = 1,
     lease_seconds: int = 600,
     model: str = "gpt-4.1-mini",
-    embedding_model: str = "text-embedding-3-small",
 ) -> list[dict[str, object]]:
     """PostgreSQL에서 Personal Wiki Job Batch를 점유해 순차적으로 처리한다."""
 
@@ -72,7 +69,6 @@ async def run_personal_wiki_batch(
             job=job,
             worker_id=worker_id,
             model=model,
-            embedding_model=embedding_model,
         )
 
     return await run_job_batch(
@@ -94,9 +90,6 @@ async def worker_002(request: FeatureRequest) -> FeatureResult:
     limit = request.payload.get("limit", 1)
     lease_seconds = request.payload.get("lease_seconds", 600)
     model = request.payload.get("model", "gpt-4.1-mini")
-    embedding_model = request.payload.get(
-        "embedding_model", "text-embedding-3-small"
-    )
     if not isinstance(database_url, str) or not database_url:
         raise ValueError("WORKER-002에 database_url이 필요합니다.")
     if not isinstance(worker_id, str) or not worker_id:
@@ -105,15 +98,12 @@ async def worker_002(request: FeatureRequest) -> FeatureResult:
         raise ValueError("WORKER-002의 limit과 lease_seconds는 정수여야 합니다.")
     if not isinstance(model, str) or not model:
         raise ValueError("WORKER-002의 model은 빈 문자열이면 안 됩니다.")
-    if not isinstance(embedding_model, str) or not embedding_model:
-        raise ValueError("WORKER-002의 embedding_model은 빈 문자열이면 안 됩니다.")
     results = await run_personal_wiki_batch(
         database_url=database_url,
         worker_id=worker_id,
         limit=limit,
         lease_seconds=lease_seconds,
         model=model,
-        embedding_model=embedding_model,
     )
     return FeatureResult(
         feature_id="WORKER-002",
