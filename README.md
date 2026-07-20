@@ -4,82 +4,138 @@
 
 | | 파일 | 포트 | 상태 |
 |---|---|---|---|
-| **키워드 비서 웹 UI** | `app/assistant/main.py` | 8100 | ✅ 동작함 — 지금 실제로 쓰는 제품 |
-| Agent API | `app/main.py` | 8000 | 🚧 스캐폴드 단계 — 대부분 미구현 |
+| **Agent API + LLM Wiki Graph UI** | `app/main.py` | 8000 | ✅ MVP 핵심 파이프라인 동작 — 클리핑/URL → LLM Wiki → 관심사 → 외부 수집 → Bambi 생성 → 발행 Snapshot |
+| **키워드 비서 웹 UI** | `app/assistant/main.py` | 8100 | ✅ 동작 — 독립 실행 데모 앱 |
 
-## 키워드 비서 웹 UI (실제 제품)
+기능별 구현 상태는 [MVP 구현 현황 체크리스트](docs/agent-api-mvp-scope.md)에서 확인합니다.
 
-키워드를 입력하면 관련 YouTube 영상 자막, Reddit 게시글을 LLM으로 요약하고, 어제
-발행된 뉴스 기사를 중복 없이 모아 보여주는 브라우저용 비서입니다. 처음 조회하는
-키워드는 폭넓게 보여주고, 이미 본 영상은 다음부터 제외합니다.
+## 실행 방법
 
-```bash
-uv run uvicorn app.assistant.main:app --port 8100
-# 브라우저에서 http://localhost:8100 접속
-```
-
-자세한 동작 방식은 [키워드 비서 개발 명세](docs/keyword-assistant.md)를 참고하세요.
-
-### 두 서버 함께 실행
-
-```bash
-uv run python scripts/run_all.py
-# Agent API      : http://127.0.0.1:8000
-# 키워드 비서 UI : http://127.0.0.1:8100
-```
-
-## Agent API (스캐폴드 단계)
-
-LangGraph 기반 에이전트를 FastAPI로 제공할 예정인 백엔드 API입니다. 전체 기능
-명세 1~43절의 626개 기능을 코드 함수와 1:1로 매핑했고, 전용 MVP 문서의 71개
-구현 대상에는 함수 바로 위에 `# MVP:` 주석을 표시했습니다. **현재 라우터와 기능
-함수는 구조만 정의되어 있으며, 실제 기능 호출은 구현되지 않았습니다.**
-
-각 기능 영역의 `api.py`는 공개 facade로만 사용하며, 실제 함수는 `features/`
-구현 패키지에 역할별로 분리되어 있습니다.
-
-```bash
-uv run uvicorn app.main:app --port 8000 --reload
-```
-
-서버 실행 후 다음 API 문서를 사용할 수 있습니다.
-
-- Swagger UI: <http://127.0.0.1:8000/docs>
-- ReDoc: <http://127.0.0.1:8000/redoc>
-- OpenAPI JSON: <http://127.0.0.1:8000/openapi.json>
-
-Swagger UI는 최초 접속 시 시스템 테마를 따르며, 우측 상단 버튼으로 다크·라이트
-모드를 전환할 수 있습니다. 선택한 테마는 브라우저에 저장됩니다.
-
-내부 인증이 적용되기 전까지 API 문서를 외부 네트워크에 노출하지 마세요.
-문서 노출이 필요 없는 환경에서는 `DOCS_ENABLED=false`로 비활성화할 수 있습니다.
-
-로컬 PostgreSQL과 pgvector는 [database/README.md](database/README.md)의 안내에
-따라 Docker Compose로 실행합니다. (키워드 비서 UI만 쓸 경우에는 필요 없습니다.)
-
-### Agent API 문서
-
-- [전체 기능 명세](docs/agent-api-feature-spec.md)
-- [MVP 개발 범위](docs/agent-api-mvp-scope.md)
-- [FastAPI MVP API 설계](docs/fastapi-mvp-api.md)
-- [Service 연동 가이드 (service-api·service-worker)](docs/service-integration-guide.md)
-- [Agent DB 설계](docs/agent-db-design.md)
-- [Agent DB 테이블 카탈로그](docs/agent-db-table-catalog.md)
-- [Agent DB 컬럼 사전](docs/agent-db-column-dictionary.md)
-- [프로젝트 구조와 기능 파일 매핑](docs/project-structure.md)
-
-## 시작하기
+### 0. 공통 준비
 
 ```bash
 uv sync
 cp .env.example .env
 ```
 
-`.env`를 열어 최소한 아래 값을 채웁니다.
+`.env`에서 최소한 아래 값을 채웁니다.
 
-- **`OPENAI_API_KEY`**: 키워드 비서의 자막·게시글·기사 요약에 필요합니다 (필수).
-- `AGENT_DATABASE_URL`, `VECTOR_STORE_URL`, `QUEUE_URL` 등: Agent API 백엔드용입니다.
+- **`OPENAI_API_KEY`** — Wiki 빌드·Bambi 생성·키워드 비서 요약에 필요 (필수)
+- `AGENT_DATABASE_URL`, `AGENT_DB_PASSWORD` — Agent API·Worker용.
   키워드 비서 UI만 쓸 경우 비워둬도 됩니다.
+- `ENABLE_DEV_AGENT_API=true` — Swagger 개발 실행 API(`/internal/v1/dev/**`)
+  활성화. 로컬 개발 시 권장합니다.
+
+### 1. PostgreSQL 실행 (Agent API 선행 조건)
+
+```bash
+docker compose up -d
+```
+
+시작 시 Migration과 개발 Seed(`mock-clipping-user` 데이터 포함)가 자동
+적용됩니다. 자세한 절차는 [database/README.md](database/README.md)를
+참고하세요. 키워드 비서 UI만 쓸 경우에는 필요 없습니다.
+
+### 2. Agent API 서버 + Swagger
+
+```bash
+uv run uvicorn app.main:app --port 8000 --reload
+```
+
+- Swagger UI: <http://127.0.0.1:8000/docs> — 우측 상단 버튼으로 다크·라이트
+  모드를 전환할 수 있고, 선택한 테마는 브라우저에 저장됩니다.
+- ReDoc: <http://127.0.0.1:8000/redoc> · OpenAPI JSON: <http://127.0.0.1:8000/openapi.json>
+- `APP_ENV=local`(또는 `test`) + `ENABLE_DEV_AGENT_API=true`면 `dev-*` 태그의
+  개발 실행 API가 함께 등록됩니다. 단계별 사용법은
+  [Swagger 개발 테스트 가이드](docs/swagger-dev-guide.md)를 따라가세요.
+- 내부 인증이 적용되기 전까지 API와 문서를 외부 네트워크에 노출하지 마세요.
+  문서가 필요 없는 환경에서는 `DOCS_ENABLED=false`로 비활성화할 수 있습니다.
+
+### 3. LLM Wiki Graph UI
+
+Agent API 서버(8000)에 내장된 개인 지식 그래프 시각화 페이지입니다.
+
+```text
+http://127.0.0.1:8000/wiki-graph?user_id={user_id}
+예) http://127.0.0.1:8000/wiki-graph?user_id=mock-clipping-user   ← 개발 Seed 사용자
+```
+
+- Entity(초록)·Concept(보라) Node 그래프, 검색·종류 필터, 확대·이동·Node
+  Drag와 Markdown 상세 보기를 제공합니다.
+- PostgreSQL이 필요하며, Wiki가 생성된 사용자만 그래프가 표시됩니다.
+- 인증 없는 내부 개발 도구이므로 외부에 노출하지 마세요. 실제 서비스 화면은
+  `GET /internal/v1/users/{user_id}/wiki/graph` JSON API를 소비해 프론트엔드가
+  직접 렌더링합니다 ([Service 연동 가이드](docs/service-integration-guide.md) §3.6).
+
+### 4. 키워드 비서 웹 UI
+
+키워드를 입력하면 관련 YouTube 영상 자막, Reddit 게시글을 LLM으로 요약하고,
+어제 발행된 뉴스 기사를 중복 없이 모아 브리핑으로 보여주는 독립 앱입니다.
+처음 조회하는 키워드는 폭넓게 보여주고, 이미 본 영상은 다음부터 제외합니다.
+
+```bash
+uv run uvicorn app.assistant.main:app --port 8100
+# 브라우저에서 http://localhost:8100 접속
+```
+
+PostgreSQL 없이 동작하며 `OPENAI_API_KEY`만 필요합니다. 동작 방식은
+[키워드 비서 개발 명세](docs/keyword-assistant.md)를 참고하세요.
+
+### 5. 두 서버 함께 실행
+
+```bash
+uv run python scripts/run_all.py
+# Agent API + Wiki Graph UI : http://127.0.0.1:8000
+# 키워드 비서 UI            : http://127.0.0.1:8100
+```
+
+### 6. Worker 실행
+
+등록된 Agent Job(Wiki 빌드, Bambi 생성)과 외부 수집을 처리하는 CLI입니다.
+Wiki 빌드와 Bambi 생성은 OpenAI를 실제 호출하므로 비용이 발생합니다.
+
+| Worker | 용도 | 모드 |
+|---|---|---|
+| `personal-wiki` | 클리핑·URL 원본을 LLM Wiki로 빌드 (Chunk·Embedding 포함) | 단발 / `--loop` 상주 |
+| `bambi-generation` | 생성 Job을 처리해 콘텐츠·발행 Snapshot 저장 | 단발 / `--loop` 상주 |
+| `global-collector` | 키워드로 외부 기사 수집 (`--keywords` 필수, Provider 기본 `gdelt,naver`) | 단발 |
+| `global-content` | 수집된 기사의 본문 확보 | 단발 |
+
+```bash
+# 단발: 대기 Job 한 Batch를 처리하고 종료
+uv run python -m workers.main --worker personal-wiki
+uv run python -m workers.main --worker bambi-generation
+
+# 상주: Job이 생기면 자동 처리 (없으면 60초 간격으로 확인)
+uv run python -m workers.main --worker bambi-generation --loop
+
+# 외부 기사 수집 → 본문 확보
+uv run python -m workers.main --worker global-collector --keywords "AI 에이전트,개인화"
+uv run python -m workers.main --worker global-content
+```
+
+`--limit`, `--lease-seconds`, `--model`, `--interval-seconds`(상주 모드) 옵션으로
+Batch 크기와 실행을 조정합니다. 상주 Worker는 `scheduled_at`이 도래한 Job만
+Claim하므로 예약 생성 요청은 지정 시각에 처리됩니다.
+
+## 구조
+
+Agent API는 전체 기능 명세 1~43절의 기능 ID를 코드 함수와 1:1로 매핑하고,
+전용 MVP 문서의 구현 대상 함수 위에 `# MVP:` 주석을 표시합니다. 각 기능
+영역의 `api.py`는 공개 facade로만 사용하며, 실제 구현은 `features/` 패키지에
+역할별로 분리되어 있습니다.
+
+## Agent API 문서
+
+- [전체 기능 명세](docs/agent-api-feature-spec.md)
+- [MVP 개발 범위와 구현 현황 체크리스트](docs/agent-api-mvp-scope.md)
+- [FastAPI MVP API 설계](docs/fastapi-mvp-api.md)
+- [Swagger 개발 테스트 가이드](docs/swagger-dev-guide.md)
+- [Service 연동 가이드 (service-api·service-worker)](docs/service-integration-guide.md)
+- [Agent DB 설계](docs/agent-db-design.md)
+- [Agent DB 테이블 카탈로그](docs/agent-db-table-catalog.md)
+- [Agent DB 컬럼 사전](docs/agent-db-column-dictionary.md)
+- [프로젝트 구조와 기능 파일 매핑](docs/project-structure.md)
 
 ## 검증
 
