@@ -3,7 +3,11 @@
 구현 모듈의 기능 함수를 안정적인 import 경로로 다시 노출한다.
 """
 
-from .features.global_source_collector import worker_001
+from .features.global_source_collector import (
+    run_global_source_collection_batch,
+    worker_001,
+)
+from .features.global_content_fetcher import run_global_content_fetch_batch
 from .features.personal_wiki_builder import run_personal_wiki_batch, worker_002
 from .features.bambi_generation import run_bambi_generation_batch, worker_003
 from .features.content_quality import worker_004

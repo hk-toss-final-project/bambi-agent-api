@@ -31,6 +31,8 @@ from .features.personal_wiki import (
     set_personal_wiki_scope,
 )
 from .features.global_source import (
+    GlobalArticleToFetch,
+    claim_global_articles_for_fetch,
     db_008,
     db_009,
     db_010,
@@ -38,6 +40,9 @@ from .features.global_source import (
     db_012,
     db_013,
     db_014,
+    mark_global_article_fetch_failed,
+    persist_collected_articles,
+    save_fetched_article_content,
 )
 from .features.generation import db_015, db_016, db_017, db_018, db_019, db_020
 from .features.recommendation import db_021
