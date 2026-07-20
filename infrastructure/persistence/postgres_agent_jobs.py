@@ -29,6 +29,7 @@ from infrastructure.persistence.api import (
     fail_agent_job,
     get_agent_job,
     enqueue_bambi_generation_job,
+    list_runnable_agent_jobs,
     load_bambi_context,
     mark_url_source_event,
     register_url_and_enqueue,
@@ -278,6 +279,20 @@ class PostgresAgentJobRepository:
                     lease_seconds=lease_seconds,
                 )
         return self._to_claimed_record(claimed) if claimed is not None else None
+
+    async def list_runnable_jobs(
+        self, *, job_type: str, user_id: str | None = None, limit: int
+    ) -> list[str]:
+        """실행 가능한 대기·Lease 만료 Job ID를 시스템 Scope로 조회한다."""
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await set_system_job_scope(connection)
+                return await list_runnable_agent_jobs(
+                    connection,
+                    job_type=job_type,
+                    user_id=user_id,
+                    limit=limit,
+                )
 
     async def save_fetched_url(
         self,

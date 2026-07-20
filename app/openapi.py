@@ -54,6 +54,10 @@ DEVELOPMENT_OPENAPI_TAGS = [
         "name": "dev-scenarios",
         "description": "원본 저장부터 Bambi 콘텐츠까지 전체 흐름을 한 요청으로 실행합니다.",
     },
+    {
+        "name": "dev-workers",
+        "description": "대기 중인 수집·빌드 Job을 Worker 방식 Batch로 즉시 실행합니다.",
+    },
 ]
 
 

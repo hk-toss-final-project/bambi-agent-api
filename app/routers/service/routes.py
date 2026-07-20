@@ -32,6 +32,7 @@ from app.schemas.wiki import (
     WikiDocumentDetailResponse,
     WikiDocumentListResponse,
     WikiGraphResponse,
+    WikiTopNodesResponse,
 )
 from app.services.mvp import AgentApiMvpService
 from app.services.wiki_graph import WikiGraphService
@@ -143,6 +144,24 @@ async def get_personal_wiki_graph(
 ) -> WikiGraphResponse:
     """[PWIKI-003] 현재 Entity·Concept 문서와 관계 Graph를 조회한다."""
     return await service.get_graph(user_id, _request_id(request))
+
+
+@router.get(
+    "/users/{user_id}/wiki/graph/top-nodes",
+    response_model=WikiTopNodesResponse,
+    operation_id="pwiki_003_top_nodes",
+    summary="개인 Wiki 연결 상위 Node 조회",
+)
+async def list_top_connected_wiki_nodes(
+    user_id: UserId,
+    request: Request,
+    limit: Annotated[
+        int, Query(ge=1, le=100, description="반환할 최대 Node 수")
+    ] = 10,
+    service: WikiGraphService = Depends(get_wiki_graph_service),
+) -> WikiTopNodesResponse:
+    """[PWIKI-003] 연결 Edge가 많은 순서대로 Entity·Concept Node를 조회한다."""
+    return await service.get_top_nodes(user_id, _request_id(request), limit=limit)
 
 
 @router.get(

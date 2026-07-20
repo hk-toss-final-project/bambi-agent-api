@@ -72,13 +72,75 @@ class _FakeGraphRepository:
         }
 
 
-def _graph_client() -> TestClient:
+class _FakeRankedGraphRepository:
+    """연결 수가 서로 다른 세 Node를 뒤섞인 순서로 반환하는 Graph 대역."""
+
+    async def get_graph(self, user_id: str) -> Mapping[str, object]:
+        """연결 상위 정렬 검증용 Wiki Graph를 반환한다."""
+        updated_at = datetime(2026, 7, 19, tzinfo=UTC)
+
+        def _node(
+            node_id: str, kind: str, key: str, title: str, degree: int
+        ) -> dict[str, object]:
+            """검증에 필요한 필드만 다른 Graph Node를 만든다."""
+            return {
+                "id": node_id,
+                "document_kind": kind,
+                "document_key": key,
+                "title": title,
+                "subtype": "product" if kind == "entity" else "method",
+                "summary": f"{title} 요약",
+                "aliases": [],
+                "file_path": f"{kind}s/{key}.md",
+                "version": 1,
+                "updated_at": updated_at,
+                "markdown": f"## {title}",
+                "degree": degree,
+            }
+
+        return {
+            "user_id": user_id,
+            "namespace_key": f"user/{user_id}",
+            "wiki_version": 5,
+            "generated_at": updated_at,
+            "stats": {
+                "node_count": 3,
+                "edge_count": 2,
+                "entity_count": 2,
+                "concept_count": 1,
+                "orphan_count": 0,
+            },
+            "nodes": [
+                _node("concept-b", "concept", "나-개념", "나 개념", 1),
+                _node("entity-c", "entity", "다-엔티티", "다 엔티티", 1),
+                _node("entity-a", "entity", "가-엔티티", "가 엔티티", 2),
+            ],
+            "edges": [
+                {
+                    "id": "entity-a:applies_concept:concept-b",
+                    "source": "entity-a",
+                    "target": "concept-b",
+                    "relation_type": "applies_concept",
+                    "metadata": {},
+                },
+                {
+                    "id": "entity-a:entity_relation:entity-c",
+                    "source": "entity-a",
+                    "target": "entity-c",
+                    "relation_type": "entity_relation",
+                    "metadata": {},
+                },
+            ],
+        }
+
+
+def _graph_client(repository: object | None = None) -> TestClient:
     """가짜 Graph 저장소가 연결된 FastAPI TestClient를 만든다."""
     settings = Settings(app_name="Wiki Graph Test", environment="test")
     container = AppContainer(
         settings=settings,
         mvp_service=AgentApiMvpService(),
-        wiki_graph_service=WikiGraphService(_FakeGraphRepository()),
+        wiki_graph_service=WikiGraphService(repository or _FakeGraphRepository()),
     )
     return TestClient(create_app(settings, container))
 
@@ -98,6 +160,35 @@ def test_wiki_graph_api_returns_nodes_edges_and_stats() -> None:
 def test_wiki_graph_api_requires_database_service(client: TestClient) -> None:
     """DB가 없는 Runtime은 Graph 조회 성공 대신 SERVICE_NOT_READY를 반환한다."""
     response = client.get("/internal/v1/users/user-1/wiki/graph")
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "SERVICE_NOT_READY"
+
+
+def test_wiki_top_nodes_api_sorts_by_degree_and_limits() -> None:
+    """상위 Node API가 연결 수 내림차순 정렬과 limit을 적용하는지 검증한다."""
+    with _graph_client(_FakeRankedGraphRepository()) as client:
+        response = client.get(
+            "/internal/v1/users/user-1/wiki/graph/top-nodes",
+            params={"limit": 2},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["feature_id"] == "PWIKI-003"
+    assert body["total_node_count"] == 3
+    assert [item["document_id"] for item in body["items"]] == [
+        "entity-a",
+        "concept-b",
+    ]
+    assert [item["rank"] for item in body["items"]] == [1, 2]
+    assert body["items"][0]["degree"] == 2
+    assert "markdown" not in body["items"][0]
+
+
+def test_wiki_top_nodes_api_requires_database_service(client: TestClient) -> None:
+    """DB가 없는 Runtime은 상위 Node 조회에 SERVICE_NOT_READY를 반환한다."""
+    response = client.get("/internal/v1/users/user-1/wiki/graph/top-nodes")
 
     assert response.status_code == 503
     assert response.json()["code"] == "SERVICE_NOT_READY"

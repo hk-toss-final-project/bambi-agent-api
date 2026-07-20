@@ -21,9 +21,18 @@ from app.dependencies import (
 from app.exceptions import AgentApiError, ErrorDetail
 from app.schemas.development import (
     DevelopmentJobRunResponse,
+    DevelopmentWorkerRunResponse,
+    InsightGenerationRequest,
+    InsightGenerationResponse,
+    LatestNewsWorkerRunRequest,
+    LatestNewsWorkerRunResponse,
+    PendingWikiBuildRunRequest,
     SourceToContentScenarioRequest,
     SourceToContentScenarioResponse,
+    UrlCollectionWorkerRunRequest,
     WikiBuildRunRequest,
+    WikiKeywordLatestInformationRequest,
+    WikiKeywordLatestInformationResponse,
 )
 from app.schemas.interests import InterestProfileResponse, InterestRebuildRequest
 from app.schemas.latest_information import (
@@ -70,6 +79,22 @@ router = APIRouter(dependencies=[Depends(require_development_access)])
 JobId = Annotated[str, Path(min_length=1, max_length=128, description="Agent Job ID")]
 UserId = Annotated[str, Path(min_length=1, max_length=128, description="사용자 ID")]
 
+NOT_IMPLEMENTED_NOTE = (
+    "키워드 비서 웹 UI(app/assistant)에 구현된 동작을 Agent API로 옮기기 전까지 "
+    "`501 NOT_IMPLEMENTED`를 반환하는 계약 선점용 API입니다."
+)
+
+
+def _not_implemented(feature_name: str) -> AgentApiError:
+    """Swagger 계약만 공개된 미구현 개발 API의 공통 오류를 만든다."""
+    return AgentApiError(
+        status.HTTP_501_NOT_IMPLEMENTED,
+        ErrorDetail(
+            code="NOT_IMPLEMENTED",
+            message=f"{feature_name} API는 아직 구현되지 않았습니다.",
+        ),
+    )
+
 
 @router.post(
     "/jobs/{job_id}/run",
@@ -104,6 +129,106 @@ async def run_personal_wiki_build(
         expected_job_type="personal_wiki_build",
         expected_user_id=user_id,
     )
+
+
+@router.post(
+    "/users/{user_id}/wiki-builds/run-pending",
+    response_model=DevelopmentWorkerRunResponse,
+    tags=["dev-wiki"],
+    operation_id="dev_run_pending_wiki_builds",
+    summary="대기 중 Wiki Build Job Batch 실행",
+)
+async def run_pending_wiki_builds(
+    user_id: UserId,
+    payload: PendingWikiBuildRunRequest,
+    service: AgentWorkflowService = Depends(get_agent_workflow_service),
+) -> DevelopmentWorkerRunResponse:
+    """DB에 저장된 클리핑·URL 원본의 대기 Wiki Build Job을 모아 즉시 실행한다."""
+    return await service.run_pending_jobs(
+        job_type="personal_wiki_build",
+        user_id=user_id,
+        limit=payload.limit,
+    )
+
+
+@router.post(
+    "/workers/url-collections/run",
+    response_model=DevelopmentWorkerRunResponse,
+    tags=["dev-workers"],
+    operation_id="dev_run_url_collection_worker",
+    summary="URL 수집 Worker 즉시 실행",
+)
+async def run_url_collection_worker(
+    payload: UrlCollectionWorkerRunRequest,
+    service: AgentWorkflowService = Depends(get_agent_workflow_service),
+) -> DevelopmentWorkerRunResponse:
+    """등록된 URL 원본의 대기 수집 Job을 Worker 방식 Batch로 실행한다.
+
+    각 URL은 Jina Reader로 본문을 수집해 원본 Version으로 저장하고, 내용이
+    변경된 경우 후속 Wiki Build Job을 함께 등록한다.
+    """
+    return await service.run_pending_jobs(
+        job_type="personal_wiki_url",
+        user_id=payload.user_id,
+        limit=payload.limit,
+    )
+
+
+@router.post(
+    "/workers/latest-news/run",
+    response_model=LatestNewsWorkerRunResponse,
+    tags=["dev-workers"],
+    operation_id="dev_run_latest_news_worker",
+    summary="[미구현] 최신 뉴스 수집 Worker 실행",
+    description=(
+        "키워드로 외부 뉴스 API를 호출해 최신 기사를 수집하고 Global 문서로 "
+        f"저장하는 Worker 계약입니다. {NOT_IMPLEMENTED_NOTE}"
+    ),
+)
+async def run_latest_news_worker(
+    payload: LatestNewsWorkerRunRequest,
+) -> LatestNewsWorkerRunResponse:
+    """[미구현] 최신 뉴스 수집 Worker 계약. 현재는 501을 반환한다."""
+    raise _not_implemented("최신 뉴스 수집 Worker")
+
+
+@router.post(
+    "/users/{user_id}/wiki-keyword-latest-information",
+    response_model=WikiKeywordLatestInformationResponse,
+    tags=["dev-global"],
+    operation_id="dev_search_wiki_keyword_latest_information",
+    summary="[미구현] Wiki 상위 Node 키워드 최신 정보 검색·저장",
+    description=(
+        "사용자 LLM Wiki에서 연결이 많은 Node 순서로 키워드를 만들고, 그 "
+        "키워드로 최신 정보를 검색해 Global 문서로 저장하는 계약입니다. "
+        f"{NOT_IMPLEMENTED_NOTE}"
+    ),
+)
+async def search_wiki_keyword_latest_information(
+    user_id: UserId,
+    payload: WikiKeywordLatestInformationRequest,
+) -> WikiKeywordLatestInformationResponse:
+    """[미구현] 연결 상위 Node 키워드 최신 정보 검색 계약. 현재는 501을 반환한다."""
+    raise _not_implemented("Wiki 키워드 최신 정보 검색")
+
+
+@router.post(
+    "/users/{user_id}/insight-generations",
+    response_model=InsightGenerationResponse,
+    tags=["dev-bambi"],
+    operation_id="dev_generate_insight_content",
+    summary="[미구현] Wiki·최신 정보 요약·인사이트 생성",
+    description=(
+        "사용자 LLM Wiki와 저장된 최신 정보를 함께 사용해 요약과 인사이트를 "
+        f"담은 콘텐츠를 생성하는 계약입니다. {NOT_IMPLEMENTED_NOTE}"
+    ),
+)
+async def generate_insight_content(
+    user_id: UserId,
+    payload: InsightGenerationRequest,
+) -> InsightGenerationResponse:
+    """[미구현] Wiki·최신 정보 요약·인사이트 생성 계약. 현재는 501을 반환한다."""
+    raise _not_implemented("요약·인사이트 콘텐츠 생성")
 
 
 @router.post(

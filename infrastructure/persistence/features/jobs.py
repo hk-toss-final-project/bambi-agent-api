@@ -193,6 +193,58 @@ async def get_agent_job(
     )
 
 
+async def list_runnable_agent_jobs(
+    connection: AsyncConnection[DictRow],
+    *,
+    job_type: str,
+    user_id: str | None = None,
+    limit: int,
+) -> list[str]:
+    """실행 가능한 상태의 Agent Job ID를 우선순위 순서로 조회한다.
+
+    Worker Batch Claim과 같은 조건(queued 또는 Lease가 만료된 running,
+    scheduled_at 도래, 시도 횟수 여유)을 사용하되 Lock 없이 ID만 반환한다.
+    실제 점유는 claim_agent_job_by_id가 수행하므로 조회 후 다른 Worker가
+    먼저 가져가도 안전하다.
+
+    Args:
+        connection: 시스템 Scope가 설정된 DB 연결
+        job_type: 조회할 Job 유형 (예: personal_wiki_build, personal_wiki_url)
+        user_id: 특정 사용자의 Job만 조회할 때 지정
+        limit: 반환할 최대 Job 수
+
+    Returns:
+        priority, scheduled_at, created_at 순으로 정렬된 Job ID 목록
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("Job 조회 limit은 1에서 100 사이여야 합니다.")
+    params: list[object] = [job_type]
+    user_filter = ""
+    if user_id is not None:
+        user_filter = "AND user_id = %s"
+        params.append(user_id)
+    params.append(limit)
+    cursor = await connection.execute(
+        f"""
+        SELECT id
+        FROM agent.agent_jobs
+        WHERE job_type = %s
+          {user_filter}
+          AND scheduled_at <= clock_timestamp()
+          AND attempt_count < max_attempts
+          AND (
+                status = 'queued'
+                OR (status = 'running' AND lease_expires_at < clock_timestamp())
+          )
+        ORDER BY priority DESC, scheduled_at, created_at, id
+        LIMIT %s
+        """,
+        params,
+    )
+    rows = await cursor.fetchall()
+    return [str(row["id"]) for row in rows]
+
+
 async def claim_agent_job_by_id(
     connection: AsyncConnection[DictRow],
     *,

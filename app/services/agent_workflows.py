@@ -17,6 +17,8 @@ from app.exceptions import AgentApiError, ErrorDetail
 from app.schemas.development import (
     DevelopmentJobRunResponse,
     DevelopmentRunStage,
+    DevelopmentWorkerJobResult,
+    DevelopmentWorkerRunResponse,
 )
 from app.services.agent_jobs import AgentJobRepository, ClaimedJobRecord
 from infrastructure.sources.connectors.api import (
@@ -216,4 +218,73 @@ class AgentWorkflowService:
                 )
             ],
             result=result,
+        )
+
+    async def run_pending_jobs(
+        self,
+        *,
+        job_type: str,
+        user_id: str | None = None,
+        limit: int = 10,
+    ) -> DevelopmentWorkerRunResponse:
+        """실행 가능한 Job Batch를 조회해 순서대로 실행하고 집계를 반환한다.
+
+        운영 Worker와 같은 실행 가능 조건(queued 또는 Lease 만료, scheduled_at
+        도래)으로 Job을 조회하되, 각 Job은 run_job과 동일한 Claim·Handler·완료
+        경로로 한 건씩 실행한다. 다른 Worker가 먼저 점유한 Job은 Batch를
+        중단하지 않고 skipped로 기록한다.
+
+        Args:
+            job_type: 실행할 Job 유형 (personal_wiki_build, personal_wiki_url 등)
+            user_id: 특정 사용자의 Job만 실행할 때 지정
+            limit: 한 번에 실행할 최대 Job 수
+
+        Returns:
+            Job별 실행 결과와 완료·실패·건너뜀 집계
+        """
+        started_at = datetime.now(UTC)
+        started = monotonic()
+        job_ids = await self._repository.list_runnable_jobs(
+            job_type=job_type, user_id=user_id, limit=limit
+        )
+        items: list[DevelopmentWorkerJobResult] = []
+        for job_id in job_ids:
+            try:
+                run = await self.run_job(
+                    job_id,
+                    expected_job_type=job_type,
+                    expected_user_id=user_id,
+                )
+            except AgentApiError as error:
+                items.append(
+                    DevelopmentWorkerJobResult(
+                        job_id=job_id,
+                        status="skipped",
+                        error_code=error.detail.code,
+                    )
+                )
+                continue
+            error_code: str | None = None
+            if run.status == "failed" and run.stages:
+                failed_code = run.stages[-1].result.get("error_code")
+                error_code = str(failed_code) if failed_code else None
+            items.append(
+                DevelopmentWorkerJobResult(
+                    job_id=job_id,
+                    status=run.status,
+                    error_code=error_code,
+                    run=run,
+                )
+            )
+        return DevelopmentWorkerRunResponse(
+            run_id=str(uuid4()),
+            job_type=job_type,
+            user_id=user_id,
+            started_at=started_at,
+            duration_ms=int((monotonic() - started) * 1000),
+            pending_count=len(job_ids),
+            completed_count=sum(1 for item in items if item.status == "completed"),
+            failed_count=sum(1 for item in items if item.status == "failed"),
+            skipped_count=sum(1 for item in items if item.status == "skipped"),
+            items=items,
         )
