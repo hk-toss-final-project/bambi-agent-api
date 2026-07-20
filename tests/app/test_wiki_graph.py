@@ -8,7 +8,6 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.dependencies import AppContainer
 from app.main import create_app
-from app.services.mvp import AgentApiMvpService
 from app.services.wiki_graph import WikiGraphService
 
 
@@ -139,7 +138,6 @@ def _graph_client(repository: object | None = None) -> TestClient:
     settings = Settings(app_name="Wiki Graph Test", environment="test")
     container = AppContainer(
         settings=settings,
-        mvp_service=AgentApiMvpService(),
         wiki_graph_service=WikiGraphService(repository or _FakeGraphRepository()),
     )
     return TestClient(create_app(settings, container))

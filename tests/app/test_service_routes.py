@@ -1,10 +1,17 @@
 """Service API 연동 FastAPI MVP 엔드포인트를 검증한다."""
 
-import asyncio
-
 from fastapi.testclient import TestClient
 
-from app.services.mvp import AgentApiMvpService
+from tests.conftest import InMemoryAgentJobRepository
+
+
+def _put_context(client: TestClient, user_id: str, version: int = 1) -> None:
+    """생성 요청의 전제인 사용자 컨텍스트를 등록한다."""
+    response = client.put(
+        f"/internal/v1/users/{user_id}/context",
+        json={"context_version": version, "plan": "free"},
+    )
+    assert response.status_code == 200
 
 
 def test_user_context_upsert_rejects_stale_version(client: TestClient) -> None:
@@ -54,9 +61,10 @@ def test_web_clipping_request_is_idempotent(client: TestClient) -> None:
 
 
 def test_generation_job_result_flow(
-    client: TestClient, mvp_service: AgentApiMvpService
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
 ) -> None:
     """생성 Job이 접수되고 완료 전후의 결과 조회 상태가 달라지는지 검증한다."""
+    _put_context(client, "user-2")
     accepted = client.post(
         "/internal/v1/users/user-2/generations",
         json={
@@ -67,7 +75,7 @@ def test_generation_job_result_flow(
     )
     job_id = accepted.json()["job_id"]
     pending = client.get(f"/internal/v1/jobs/{job_id}/result")
-    asyncio.run(mvp_service.complete_job(job_id, {"content_id": "content-1"}))
+    agent_jobs_fake.finish_job(job_id, {"content_id": "content-1"})
     completed = client.get(f"/internal/v1/jobs/{job_id}/result")
 
     assert accepted.status_code == 202
@@ -78,8 +86,34 @@ def test_generation_job_result_flow(
     assert completed.json()["result"] == {"content_id": "content-1"}
 
 
+def test_content_mark_returns_not_implemented(client: TestClient) -> None:
+    """위키마킹 접수가 Handler 구현 전까지 명시적 501을 반환하는지 검증한다."""
+    response = client.post(
+        "/internal/v1/users/user-1/wiki-sources/content-marks",
+        json={"source_event_id": "mark-1", "content_id": "content-1"},
+    )
+
+    assert response.status_code == 501
+    assert response.json()["code"] == "NOT_IMPLEMENTED"
+
+
+def test_generation_requires_user_context(client: TestClient) -> None:
+    """컨텍스트가 없는 사용자의 생성 요청은 409로 거부되는지 검증한다."""
+    rejected = client.post(
+        "/internal/v1/users/no-context-user/generations",
+        json={
+            "idempotency_key": "generation-no-context",
+            "topic": "AI agent trends",
+        },
+    )
+
+    assert rejected.status_code == 409
+    assert rejected.json()["code"] == "USER_CONTEXT_REQUIRED"
+
+
 def test_generation_request_accepts_scheduled_time(client: TestClient) -> None:
     """시간대를 포함한 예약 시각의 생성 요청이 정상 접수되는지 검증한다."""
+    _put_context(client, "user-3")
     accepted = client.post(
         "/internal/v1/users/user-3/generations",
         json={

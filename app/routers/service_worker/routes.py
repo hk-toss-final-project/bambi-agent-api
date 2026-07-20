@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path
 
-from app.dependencies import get_mvp_service
+from app.dependencies import get_publish_snapshot_service
 from app.schemas.mvp import (
     PublishAckRequest,
     PublishAckResponse,
@@ -14,7 +14,7 @@ from app.schemas.mvp import (
     PublishBatchClaimResponse,
     PublishSnapshotResponse,
 )
-from app.services.mvp import AgentApiMvpService
+from app.services.publish_snapshots import PublishSnapshotService
 
 router = APIRouter(tags=["service-worker"])
 
@@ -27,7 +27,7 @@ router = APIRouter(tags=["service-worker"])
 )
 async def get_publish_snapshot(
     content_id: Annotated[str, Path(min_length=1, max_length=128)],
-    service: AgentApiMvpService = Depends(get_mvp_service),
+    service: PublishSnapshotService = Depends(get_publish_snapshot_service),
 ) -> PublishSnapshotResponse:
     """[SW-004] service-db 저장에 사용할 최신 Publish Snapshot을 반환한다."""
     return await service.get_publish_snapshot(content_id)
@@ -45,7 +45,7 @@ async def get_publish_snapshot(
 )
 async def claim_publish_snapshot_batch(
     payload: PublishBatchClaimRequest,
-    service: AgentApiMvpService = Depends(get_mvp_service),
+    service: PublishSnapshotService = Depends(get_publish_snapshot_service),
 ) -> PublishBatchClaimResponse:
     """[SW-004] 준비된 Publish Snapshot을 Lease와 함께 Batch Claim한다."""
     return await service.claim_publish_snapshot_batch(payload)
@@ -60,7 +60,7 @@ async def claim_publish_snapshot_batch(
 async def acknowledge_publish(
     content_id: Annotated[str, Path(min_length=1, max_length=128)],
     payload: PublishAckRequest,
-    service: AgentApiMvpService = Depends(get_mvp_service),
+    service: PublishSnapshotService = Depends(get_publish_snapshot_service),
 ) -> PublishAckResponse:
     """[SW-009] Service Worker의 service-db 반영 결과를 Agent API에 기록한다."""
     return await service.acknowledge_publish(content_id, payload)
@@ -79,7 +79,7 @@ async def acknowledge_publish(
 async def acknowledge_publish_snapshot_batch(
     batch_id: Annotated[str, Path(min_length=1, max_length=64)],
     payload: PublishBatchAckRequest,
-    service: AgentApiMvpService = Depends(get_mvp_service),
+    service: PublishSnapshotService = Depends(get_publish_snapshot_service),
 ) -> PublishBatchAckResponse:
     """[SW-009] Publish Snapshot Batch의 부분 성공 ACK를 기록한다."""
     return await service.acknowledge_publish_snapshot_batch(batch_id, payload)

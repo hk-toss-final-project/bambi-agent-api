@@ -8,7 +8,6 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.dependencies import AppContainer
 from app.main import create_app
-from app.services.mvp import AgentApiMvpService
 from app.services.wiki_documents import WikiDocumentService
 
 
@@ -112,7 +111,6 @@ def _client() -> TestClient:
     settings = Settings(environment="test")
     container = AppContainer(
         settings=settings,
-        mvp_service=AgentApiMvpService(),
         wiki_document_service=WikiDocumentService(_FakeWikiDocumentRepository()),
     )
     return TestClient(create_app(settings, container))

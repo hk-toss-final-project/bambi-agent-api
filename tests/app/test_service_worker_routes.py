@@ -6,11 +6,11 @@ from datetime import UTC, datetime, timedelta
 from fastapi.testclient import TestClient
 
 from app.schemas.mvp import PublishSnapshotResponse
-from app.services.mvp import AgentApiMvpService
+from app.services.publish_snapshots import PublishSnapshotService
 
 
 def _save_snapshots(
-    service: AgentApiMvpService, count: int = 3
+    service: PublishSnapshotService, count: int = 3
 ) -> list[PublishSnapshotResponse]:
     """Batch API 테스트에 사용할 생성 시각 순 Snapshot을 저장한다."""
     base_time = datetime(2026, 7, 13, tzinfo=UTC)
@@ -33,7 +33,7 @@ def _save_snapshots(
 
 
 def test_publish_snapshot_and_ack_flow(
-    client: TestClient, mvp_service: AgentApiMvpService
+    client: TestClient, publish_service: PublishSnapshotService
 ) -> None:
     """최신 Snapshot을 조회하고 일치하는 발행 ACK를 반영하는지 검증한다."""
     snapshot = PublishSnapshotResponse(
@@ -46,7 +46,7 @@ def test_publish_snapshot_and_ack_flow(
         body="Generated body",
         created_at=datetime.now(UTC),
     )
-    asyncio.run(mvp_service.save_publish_snapshot(snapshot))
+    asyncio.run(publish_service.save_publish_snapshot(snapshot))
 
     fetched = client.get("/internal/v1/publish-snapshots/content-1")
     acknowledged = client.post(
@@ -62,7 +62,7 @@ def test_publish_snapshot_and_ack_flow(
 
 
 def test_publish_ack_rejects_snapshot_mismatch(
-    client: TestClient, mvp_service: AgentApiMvpService
+    client: TestClient, publish_service: PublishSnapshotService
 ) -> None:
     """버전이나 Hash가 다른 발행 ACK가 충돌 응답을 반환하는지 검증한다."""
     snapshot = PublishSnapshotResponse(
@@ -75,7 +75,7 @@ def test_publish_ack_rejects_snapshot_mismatch(
         body="Body",
         created_at=datetime.now(UTC),
     )
-    asyncio.run(mvp_service.save_publish_snapshot(snapshot))
+    asyncio.run(publish_service.save_publish_snapshot(snapshot))
 
     response = client.post(
         "/internal/v1/publish-snapshots/content-2/ack",
@@ -95,10 +95,10 @@ def test_unknown_publish_snapshot_returns_not_found(client: TestClient) -> None:
 
 
 def test_claim_publish_snapshot_batch_returns_full_payload_in_order(
-    client: TestClient, mvp_service: AgentApiMvpService
+    client: TestClient, publish_service: PublishSnapshotService
 ) -> None:
     """Batch Claim이 생성 시각 순으로 제한된 전체 Snapshot을 반환하는지 검증한다."""
-    _save_snapshots(mvp_service)
+    _save_snapshots(publish_service)
 
     first = client.post(
         "/internal/v1/publish-snapshot-batches/claim",
@@ -133,10 +133,10 @@ def test_claim_publish_snapshot_batch_returns_full_payload_in_order(
 
 
 def test_batch_ack_supports_partial_results_and_idempotency(
-    client: TestClient, mvp_service: AgentApiMvpService
+    client: TestClient, publish_service: PublishSnapshotService
 ) -> None:
     """Batch ACK가 성공·재시도·최종 실패와 중복 요청을 처리하는지 검증한다."""
-    snapshots = _save_snapshots(mvp_service, count=3)
+    snapshots = _save_snapshots(publish_service, count=3)
     claimed = client.post(
         "/internal/v1/publish-snapshot-batches/claim",
         json={"worker_id": "worker-ack", "limit": 10, "lease_seconds": 120},
@@ -191,10 +191,10 @@ def test_batch_ack_supports_partial_results_and_idempotency(
 
 
 def test_batch_ack_rejects_different_worker(
-    client: TestClient, mvp_service: AgentApiMvpService
+    client: TestClient, publish_service: PublishSnapshotService
 ) -> None:
     """Batch를 점유하지 않은 Worker의 ACK를 충돌로 거부하는지 검증한다."""
-    snapshot = _save_snapshots(mvp_service, count=1)[0]
+    snapshot = _save_snapshots(publish_service, count=1)[0]
     claimed = client.post(
         "/internal/v1/publish-snapshot-batches/claim",
         json={"worker_id": "worker-owner"},
@@ -220,10 +220,10 @@ def test_batch_ack_rejects_different_worker(
 
 
 def test_batch_ack_validates_failed_item_fields(
-    client: TestClient, mvp_service: AgentApiMvpService
+    client: TestClient, publish_service: PublishSnapshotService
 ) -> None:
     """실패 Batch ACK에 retryable과 failure_reason을 필수로 요구하는지 검증한다."""
-    snapshot = _save_snapshots(mvp_service, count=1)[0]
+    snapshot = _save_snapshots(publish_service, count=1)[0]
     claimed = client.post(
         "/internal/v1/publish-snapshot-batches/claim",
         json={"worker_id": "worker-validation"},

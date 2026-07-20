@@ -19,14 +19,14 @@
 > 동작하는지 기준으로 판정했다. 표기: `[x]` 구현 완료, `[x] ⚠️` 핵심 동작은 되지만 제약 있음,
 > `[ ] ❌` 미구현, `[ ] ➖` Agent API 범위 아님(service-worker 책임).
 >
-> **집계: 완료 54 · 부분 11 · 미구현 4 · 범위 외 2 (총 71)**
+> **집계: 완료 54 · 부분 10 · 미구현 5 · 범위 외 2 (총 71)**
 
 ### Service API 연동
 
 - [x] `SVC-001` 사용자 컨텍스트 전달 — `user_context_snapshots` 저장, `STALE_CONTEXT_VERSION` 검증
 - [x] `SVC-002` 웹 클리핑 처리 요청 — 원본·Version·Job 한 Transaction Commit 후 202
 - [x] `SVC-003` URL 처리 요청 — URL Head 저장 + `personal_wiki_url` 수집 Job 등록
-- [x] `SVC-004` 위키마킹 처리 요청 — ⚠️ Job 접수·저장만 구현, `personal_wiki_content_mark` 처리 Handler 없음
+- [ ] `SVC-004` 위키마킹 처리 요청 — ❌ `personal_wiki_content_mark` Handler 미구현. 인메모리 유령 접수를 제거하고 접수 API가 명시적 `501`을 반환하도록 정리(2026-07-20 리팩토링)
 - [x] `SVC-008` 콘텐츠 생성 요청 — `generation_requests` + `bambi_generation` Job 멱등 등록, `scheduled_at` 예약 실행 지원
 - [x] `SVC-013` Agent Job 상태 조회
 - [x] `SVC-014` Agent 결과 조회 — 미완료 시 `JOB_RESULT_NOT_READY`

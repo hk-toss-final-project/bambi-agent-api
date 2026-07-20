@@ -120,14 +120,11 @@ async def request_content_mark(
     request: Request,
     service: AgentApiMvpService = Depends(get_mvp_service),
 ) -> AcceptedJobResponse:
-    """[SVC-004] 위키마킹한 생성 콘텐츠를 Personal Wiki Builder Job으로 등록한다."""
-    return await service.enqueue_job(
-        feature_id="SVC-004",
-        job_type="personal_wiki_content_mark",
+    """[SVC-004] 위키마킹 접수. 처리 Handler 구현 전까지 501을 반환한다."""
+    return await service.submit_content_mark(
         user_id=user_id,
-        idempotency_key=payload.source_event_id,
+        payload=payload,
         request_id=_request_id(request),
-        payload=payload.model_dump(mode="json"),
     )
 
 

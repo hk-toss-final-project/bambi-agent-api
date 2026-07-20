@@ -1,7 +1,8 @@
-"""Publish Snapshot 저장소 계약과 인메모리 구현.
+"""Publish Snapshot 저장소 계약, 인메모리 구현과 애플리케이션 서비스.
 
 Service Worker용 Snapshot 조회·ACK 로직이 저장 방식에 의존하지 않도록
-애플리케이션 서비스에서 사용하는 저장소 경계를 정의한다.
+저장소 경계를 정의하고, 저장소 오류를 API 공통 오류로 변환하는
+PublishSnapshotService를 제공한다.
 """
 
 from asyncio import Lock
@@ -10,8 +11,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import uuid4
 
+from fastapi import status
+
+from app.exceptions import AgentApiError, ErrorDetail
 from app.schemas.mvp import (
     PublishAckRequest,
+    PublishAckResponse,
     PublishBatchAckItemRequest,
     PublishBatchAckItemResponse,
     PublishBatchAckRequest,
@@ -340,3 +345,109 @@ class InMemoryPublishSnapshotRepository:
             version=item.version,
             result=result,
         )
+class PublishSnapshotService:
+    """발행 Snapshot 조회·Claim·ACK를 실행하고 저장소 오류를 API 오류로 변환한다."""
+
+    def __init__(self, repository: PublishSnapshotRepository) -> None:
+        """발행 Snapshot 저장소를 주입한다."""
+        self._repository = repository
+
+    async def save_publish_snapshot(self, snapshot: PublishSnapshotResponse) -> None:
+        """Bambi Worker가 생성한 최신 발행 Snapshot을 저장한다."""
+        try:
+            await self._repository.save(snapshot)
+        except StalePublishSnapshotError as exc:
+            raise AgentApiError(
+                status.HTTP_409_CONFLICT,
+                ErrorDetail(
+                    code="STALE_SNAPSHOT_VERSION",
+                    message="현재보다 새로운 Snapshot 버전이 필요합니다.",
+                ),
+            ) from exc
+
+    async def get_publish_snapshot(self, content_id: str) -> PublishSnapshotResponse:
+        """Service Worker가 저장할 최신 발행 Snapshot을 반환한다."""
+        if snapshot := await self._repository.get_latest(content_id):
+            return snapshot
+        raise AgentApiError(
+            status.HTTP_404_NOT_FOUND,
+            ErrorDetail(
+                code="PUBLISH_SNAPSHOT_NOT_FOUND",
+                message="발행 Snapshot을 찾을 수 없습니다.",
+            ),
+        )
+
+    async def acknowledge_publish(
+        self, content_id: str, payload: PublishAckRequest
+    ) -> PublishAckResponse:
+        """Snapshot 버전과 Hash를 확인한 뒤 Service Worker의 발행 ACK를 기록한다."""
+        try:
+            acknowledged_at = await self._repository.acknowledge(content_id, payload)
+        except PublishSnapshotNotFoundError as exc:
+            raise AgentApiError(
+                status.HTTP_404_NOT_FOUND,
+                ErrorDetail(
+                    code="PUBLISH_SNAPSHOT_NOT_FOUND",
+                    message="발행 Snapshot을 찾을 수 없습니다.",
+                ),
+            ) from exc
+        except PublishSnapshotMismatchError as exc:
+            raise AgentApiError(
+                status.HTTP_409_CONFLICT,
+                ErrorDetail(
+                    code="PUBLISH_SNAPSHOT_MISMATCH",
+                    message="ACK의 Snapshot 버전 또는 Hash가 일치하지 않습니다.",
+                ),
+            ) from exc
+        return PublishAckResponse(
+            content_id=content_id,
+            version=payload.version,
+            status=payload.status,
+            acknowledged_at=acknowledged_at,
+        )
+
+    async def claim_publish_snapshot_batch(
+        self, payload: PublishBatchClaimRequest
+    ) -> PublishBatchClaimResponse:
+        """Service Worker가 처리할 Publish Snapshot Batch를 Lease와 함께 반환한다."""
+        return await self._repository.claim_batch(payload)
+
+    async def acknowledge_publish_snapshot_batch(
+        self, batch_id: str, payload: PublishBatchAckRequest
+    ) -> PublishBatchAckResponse:
+        """Service Worker의 항목별 Batch 발행 결과를 저장소에 반영한다."""
+        try:
+            return await self._repository.acknowledge_batch(batch_id, payload)
+        except PublishBatchNotFoundError as exc:
+            raise AgentApiError(
+                status.HTTP_404_NOT_FOUND,
+                ErrorDetail(
+                    code="PUBLISH_BATCH_NOT_FOUND",
+                    message="Publish Snapshot Batch를 찾을 수 없습니다.",
+                ),
+            ) from exc
+        except PublishBatchOwnershipMismatchError as exc:
+            raise AgentApiError(
+                status.HTTP_409_CONFLICT,
+                ErrorDetail(
+                    code="PUBLISH_BATCH_OWNERSHIP_MISMATCH",
+                    message="Batch를 Claim한 Worker와 ACK Worker가 다릅니다.",
+                ),
+            ) from exc
+        except PublishBatchLeaseExpiredError as exc:
+            raise AgentApiError(
+                status.HTTP_409_CONFLICT,
+                ErrorDetail(
+                    code="PUBLISH_BATCH_LEASE_EXPIRED",
+                    message="Batch Lease가 만료되어 ACK를 반영할 수 없습니다.",
+                    retryable=True,
+                ),
+            ) from exc
+        except PublishSnapshotMismatchError as exc:
+            raise AgentApiError(
+                status.HTTP_409_CONFLICT,
+                ErrorDetail(
+                    code="PUBLISH_SNAPSHOT_MISMATCH",
+                    message="ACK 항목의 Snapshot 버전 또는 Hash가 일치하지 않습니다.",
+                ),
+            ) from exc

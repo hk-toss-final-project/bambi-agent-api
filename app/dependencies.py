@@ -7,6 +7,10 @@ from fastapi import Depends, Request, status
 from app.config import Settings
 from app.exceptions import AgentApiError, ErrorDetail
 from app.services.mvp import AgentApiMvpService
+from app.services.publish_snapshots import (
+    InMemoryPublishSnapshotRepository,
+    PublishSnapshotService,
+)
 from app.services.agent_workflows import AgentWorkflowService
 from app.services.interests import InterestService
 from app.services.generated_content import GeneratedContentService
@@ -37,6 +41,7 @@ class AppContainer:
     llm_provider: object | None = None
     embedding_provider: object | None = None
     mvp_service: AgentApiMvpService | None = None
+    publish_snapshot_service: PublishSnapshotService | None = None
     wiki_graph_service: WikiGraphService | None = None
     wiki_document_service: WikiDocumentService | None = None
     agent_workflow_service: AgentWorkflowService | None = None
@@ -54,7 +59,6 @@ class AppContainer:
             await self.wiki_graph_repository.startup()
         if self.agent_job_repository is not None:
             await self.agent_job_repository.startup()
-        self.mvp_service = self.mvp_service or AgentApiMvpService()
         self.ready = True
 
     async def shutdown(self) -> None:
@@ -77,7 +81,8 @@ def create_container(settings: Settings) -> AppContainer:
         )
         agent_job_repository = PostgresAgentJobRepository(settings.agent_database_url)
         interest_service = InterestService(wiki_graph_repository)
-        mvp_service = AgentApiMvpService(database, agent_job_repository)
+        mvp_service = AgentApiMvpService(agent_job_repository)
+        publish_snapshot_service = PublishSnapshotService(database)
         workflow_service = AgentWorkflowService(agent_job_repository, settings)
         latest_information_service = LatestInformationService(
             wiki_graph_repository,
@@ -90,6 +95,7 @@ def create_container(settings: Settings) -> AppContainer:
             wiki_graph_repository=wiki_graph_repository,
             agent_job_repository=agent_job_repository,
             mvp_service=mvp_service,
+            publish_snapshot_service=publish_snapshot_service,
             wiki_graph_service=WikiGraphService(wiki_graph_repository),
             wiki_document_service=WikiDocumentService(wiki_graph_repository),
             agent_workflow_service=workflow_service,
@@ -103,7 +109,12 @@ def create_container(settings: Settings) -> AppContainer:
                 latest_information_service,
             ),
         )
-    return AppContainer(settings=settings, mvp_service=AgentApiMvpService())
+    return AppContainer(
+        settings=settings,
+        publish_snapshot_service=PublishSnapshotService(
+            InMemoryPublishSnapshotRepository()
+        ),
+    )
 
 
 def get_container(request: Request) -> AppContainer:
@@ -116,8 +127,31 @@ def get_mvp_service(
 ) -> AgentApiMvpService:
     """MVP API 요청 처리에 사용할 애플리케이션 서비스를 반환한다."""
     if container.mvp_service is None:
-        raise RuntimeError("MVP 서비스가 초기화되지 않았습니다.")
+        raise AgentApiError(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            ErrorDetail(
+                code="SERVICE_NOT_READY",
+                message="사용자 원본·Job 저장소가 준비되지 않았습니다.",
+                retryable=True,
+            ),
+        )
     return container.mvp_service
+
+
+def get_publish_snapshot_service(
+    container: AppContainer = Depends(get_container),
+) -> PublishSnapshotService:
+    """발행 Snapshot 조회·Claim·ACK 서비스를 반환한다."""
+    if container.publish_snapshot_service is None:
+        raise AgentApiError(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            ErrorDetail(
+                code="SERVICE_NOT_READY",
+                message="발행 Snapshot 저장소가 준비되지 않았습니다.",
+                retryable=True,
+            ),
+        )
+    return container.publish_snapshot_service
 
 
 def get_wiki_graph_service(
