@@ -21,10 +21,10 @@ class EmbeddingClient(Protocol):
 
 
 def _default_client(model: str) -> EmbeddingClient:
-    """지정한 모델의 1536차원 OpenAI Embedding Client를 만든다."""
-    from langchain_openai import OpenAIEmbeddings
+    """공유 캐시에서 1536차원 OpenAI Embedding Client를 가져온다."""
+    from agent.llm.api import get_embedding_client
 
-    return OpenAIEmbeddings(model=model, dimensions=1536)
+    return get_embedding_client(model, dimensions=1536)
 
 
 def generate_wiki_embeddings(

@@ -3,7 +3,10 @@
 구현 모듈의 기능 함수를 안정적인 import 경로로 다시 노출한다.
 """
 
+from .features.client import LlmCompletion, complete, complete_with_usage
 from .features.completion import llm_001, llm_002, llm_003
+from .features.embedding_client import embed_texts, get_embedding_client
+from .features.parsing import strip_json_fence
 from .features.tools import llm_004, llm_005
 from .features.routing import llm_006, llm_007, llm_008, llm_019
 from .features.budgets import llm_009

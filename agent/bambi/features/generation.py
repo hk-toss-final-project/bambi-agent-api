@@ -9,7 +9,7 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 
-from agent.assistant.summarize import complete
+from agent.llm.api import complete, strip_json_fence
 
 # 하위 호환 재노출: 기존 generation.BambiContextDocument 등 사용처를 유지한다.
 from shared.bambi_models import BambiContextDocument, GeneratedBambiContent
@@ -21,15 +21,6 @@ _CITATION_REF = re.compile(r"\[([PG]\d+)\]")
 _MAX_CONTEXT_CHARS = 16000
 
 
-def _strip_json_fence(value: str) -> str:
-    """LLM JSON 응답을 감싼 Markdown 코드 Fence를 제거한다."""
-    text = value.strip()
-    if text.startswith("```"):
-        text = text.removeprefix("```json").removeprefix("```").strip()
-        text = text.removesuffix("```").strip()
-    return text
-
-
 def parse_bambi_generation(
     raw_response: str,
     *,
@@ -37,7 +28,7 @@ def parse_bambi_generation(
 ) -> GeneratedBambiContent:
     """LLM JSON을 파싱하고 존재하지 않는 Citation 참조를 차단한다."""
     try:
-        payload = json.loads(_strip_json_fence(raw_response))
+        payload = json.loads(strip_json_fence(raw_response))
     except json.JSONDecodeError as error:
         raise ValueError(f"Bambi 생성 응답이 JSON 형식이 아닙니다: {error}") from error
     if not isinstance(payload, dict):

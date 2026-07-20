@@ -12,7 +12,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from pathlib import Path
 
-from agent.assistant.summarize import complete
+from agent.llm.api import complete, strip_json_fence
 from agent.wiki_builder.models import (
     ConceptClassification,
     EntityClassification,
@@ -78,15 +78,6 @@ def _format_existing_entries(entries: Sequence[ExistingWikiEntry]) -> str:
     return "\n".join(lines)
 
 
-def _strip_json_fence(raw: str) -> str:
-    """LLM이 JSON을 Markdown 코드펜스로 감싼 경우 외곽을 제거한다."""
-    text = raw.strip()
-    if text.startswith("```"):
-        text = text.removeprefix("```json").removeprefix("```").strip()
-        text = text.removesuffix("```").strip()
-    return text
-
-
 def _validated_subtype(value: object, allowed: set[str]) -> str:
     """LLM이 반환한 subtype을 허용 목록으로 제한한다."""
     subtype = str(value or "other").strip().lower()
@@ -149,7 +140,7 @@ def parse_wiki_classification(
     raw_response: str, *, source_content: str | None = None
 ) -> WikiClassification:
     """LLM의 JSON 응답을 개인 지식 Wiki 분류 결과로 파싱한다."""
-    text = _strip_json_fence(raw_response)
+    text = strip_json_fence(raw_response)
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as error:

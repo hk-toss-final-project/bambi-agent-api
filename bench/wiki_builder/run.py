@@ -21,8 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from langchain_openai import ChatOpenAI
-
+from agent.llm.api import complete_with_usage
 from agent.wiki_builder.features import classification
 
 ROOT = Path(__file__).resolve().parent
@@ -135,15 +134,18 @@ def main() -> None:
     """전체 케이스를 실행하고 선별 없이 Markdown 결과 파일을 작성한다."""
     args = _args()
     usage = Usage()
-    client = ChatOpenAI(model=args.model, temperature=0)
 
     def tracked_complete(system_prompt: str, user_prompt: str, model: str) -> str:
-        """LLM 응답 내용과 Usage Metadata를 함께 수집한다."""
-        response = client.invoke([("system", system_prompt), ("human", user_prompt)])
-        metadata = response.usage_metadata or {}
-        usage.input_tokens += int(metadata.get("input_tokens", 0))
-        usage.output_tokens += int(metadata.get("output_tokens", 0))
-        return str(response.content).strip()
+        """공유 LLM 경계로 호출하고 반환된 토큰 사용량을 누적한다."""
+        completion = complete_with_usage(
+            system_prompt,
+            user_prompt,
+            model=args.model,
+            temperature=0,
+        )
+        usage.input_tokens += completion.input_tokens
+        usage.output_tokens += completion.output_tokens
+        return completion.text
 
     original_complete = classification.complete
     classification.complete = tracked_complete
