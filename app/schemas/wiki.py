@@ -79,6 +79,34 @@ class WikiGraphResponse(WikiGraphSchema):
     edges: list[WikiGraphEdge] = Field(description="현재 Wiki 문서 관계 목록")
 
 
+class WikiTopNode(WikiGraphSchema):
+    """연결 Edge 수 기준으로 정렬된 Wiki 문서 Node 요약."""
+
+    rank: int = Field(ge=1, description="연결 수 기준 순위. 1이 가장 많이 연결된 Node")
+    document_id: str = Field(description="Wiki 문서 UUID")
+    document_kind: Literal["entity", "concept"] = Field(description="Wiki 문서 종류")
+    document_key: str = Field(description="사용자 Namespace 안의 논리 문서 Key")
+    title: str = Field(description="Wiki 문서 제목")
+    subtype: str = Field(description="Entity 또는 Concept 세부 유형")
+    degree: int = Field(ge=0, description="현재 Graph에서 연결된 Edge 개수")
+    summary: str | None = Field(default=None, description="Wiki 문서 요약")
+    aliases: list[str] = Field(default_factory=list, description="문서 별칭 목록")
+    file_path: str = Field(description="Obsidian Vault 호환 문서 경로")
+
+
+class WikiTopNodesResponse(WikiGraphSchema):
+    """연결이 많은 순서로 정렬한 개인 Wiki Node 목록."""
+
+    feature_id: str = Field(default="PWIKI-003", description="명세 기능 ID")
+    user_id: str = Field(description="조회 대상 사용자 ID")
+    namespace_key: str = Field(description="조회한 사용자 Wiki Namespace")
+    wiki_version: int | None = Field(
+        default=None, ge=1, description="현재 활성 Wiki Build Version"
+    )
+    total_node_count: int = Field(ge=0, description="현재 Graph의 전체 Node 수")
+    items: list[WikiTopNode] = Field(description="연결 수 내림차순 상위 Node 목록")
+
+
 WikiDocumentKind = Literal["document", "entity", "concept", "schema"]
 
 

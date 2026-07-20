@@ -145,6 +145,12 @@ class AgentJobRepository(Protocol):
         """실행 가능한 Job을 지정한 Worker가 Lease로 점유한다."""
         ...
 
+    async def list_runnable_jobs(
+        self, *, job_type: str, user_id: str | None = None, limit: int
+    ) -> list[str]:
+        """실행 가능한 상태의 Agent Job ID 목록을 조회한다."""
+        ...
+
     async def save_fetched_url(
         self,
         *,

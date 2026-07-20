@@ -1,6 +1,7 @@
 """개발 API와 Worker가 공유하는 Agent Job 실행기를 검증한다."""
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from app.config import Settings
@@ -157,3 +158,63 @@ def test_run_bambi_job_calls_generation_handler() -> None:
     assert response.stages[0].name == "bambi_generation"
     assert response.result["content_candidate_id"] == "candidate-1"
     assert repository.completed == response.result
+
+
+class _FakeBatchRepository(_FakeAgentRepository):
+    """대기 Job 두 개 중 하나만 점유를 허용하는 Batch Repository 대역."""
+
+    def __init__(self) -> None:
+        """Wiki Build Job 두 개와 목록 조회 조건 기록을 준비한다."""
+        super().__init__("personal_wiki_build")
+        self.listed: tuple[str, str | None, int] | None = None
+
+    async def list_runnable_jobs(
+        self, *, job_type: str, user_id: str | None = None, limit: int
+    ) -> list[str]:
+        """조회 조건을 기록하고 고정 Job ID 두 개를 반환한다."""
+        self.listed = (job_type, user_id, limit)
+        return ["job-1", "job-2"]
+
+    async def get_job(self, job_id: str) -> AgentJobRecord | None:
+        """두 Job 모두 실행 대기 상태 레코드를 반환한다."""
+        if job_id in {"job-1", "job-2"}:
+            return replace(self.record, job_id=job_id)
+        return None
+
+    async def claim_job(
+        self, *, job_id: str, worker_id: str, lease_seconds: int
+    ) -> ClaimedJobRecord | None:
+        """job-1만 점유를 허용하고 job-2는 경합 상태로 만든다."""
+        if job_id != "job-1":
+            return None
+        return await super().claim_job(
+            job_id=job_id, worker_id=worker_id, lease_seconds=lease_seconds
+        )
+
+
+def test_run_pending_jobs_aggregates_batch_results() -> None:
+    """대기 Job Batch 실행이 완료와 건너뜀을 항목별로 집계하는지 검증한다."""
+    repository = _FakeBatchRepository()
+    service = AgentWorkflowService(
+        repository,  # type: ignore[arg-type]
+        Settings(environment="test", dev_agent_timeout_seconds=30),
+    )
+
+    response = asyncio.run(
+        service.run_pending_jobs(
+            job_type="personal_wiki_build", user_id="user-1", limit=5
+        )
+    )
+
+    assert repository.listed == ("personal_wiki_build", "user-1", 5)
+    assert response.job_type == "personal_wiki_build"
+    assert response.pending_count == 2
+    assert response.completed_count == 1
+    assert response.failed_count == 0
+    assert response.skipped_count == 1
+    assert response.items[0].status == "completed"
+    assert response.items[0].run is not None
+    assert response.items[0].run.result["wiki_version_id"] == "wiki-version-1"
+    assert response.items[1].status == "skipped"
+    assert response.items[1].error_code == "JOB_NOT_RUNNABLE"
+    assert response.items[1].run is None

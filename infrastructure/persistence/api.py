@@ -55,6 +55,7 @@ from .features.jobs import (
     enqueue_url_collection_job,
     fail_agent_job,
     get_agent_job,
+    list_runnable_agent_jobs,
     release_user_wiki_build_jobs,
     set_system_job_scope,
 )
