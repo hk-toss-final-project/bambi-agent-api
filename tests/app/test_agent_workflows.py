@@ -1,13 +1,29 @@
 """개발 API와 Worker가 공유하는 Agent Job 실행기를 검증한다."""
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Any
 
 from app.config import Settings
 from app.services.agent_jobs import AgentJobRecord, ClaimedJobRecord
 from app.services.agent_workflows import AgentWorkflowService
 from infrastructure.sources.connectors.api import JinaReadResult
+
+
+class _RecordingRunner:
+    """그래프 실행 인자를 기록하고 고정 결과를 반환하는 러너 대역."""
+
+    def __init__(self, result: dict[str, object]) -> None:
+        self._result = result
+        self.calls: list[dict[str, Any]] = []
+
+    async def __call__(self, connection: Any, **kwargs: Any) -> dict[str, object]:
+        """호출 연결과 키워드 인자를 기록하고 고정 결과를 반환한다."""
+        self.calls.append({"connection": connection, **kwargs})
+        return dict(self._result)
 
 
 class _FakeAgentRepository:
@@ -39,16 +55,21 @@ class _FakeAgentRepository:
         self, *, job_id: str, worker_id: str, lease_seconds: int
     ) -> ClaimedJobRecord | None:
         """고정 Job을 한 번 점유한 결과를 반환한다."""
-        payload = (
-            {
+        if self.record.job_type == "personal_wiki_url":
+            payload: dict[str, object] = {
                 "url": "https://example.com",
                 "source_document_id": "source-1",
                 "source_event_id": "event-1",
                 "source_event_row_id": "event-row-1",
             }
-            if self.record.job_type == "personal_wiki_url"
-            else {"source_document_version_id": "source-version-1"}
-        )
+        elif self.record.job_type == "bambi_generation":
+            payload = {
+                "topic": "개인화",
+                "content_type": "article",
+                "language": "ko",
+            }
+        else:
+            payload = {"source_document_version_id": "source-version-1"}
         return ClaimedJobRecord(
             job_id=job_id,
             user_id="user-1",
@@ -67,17 +88,10 @@ class _FakeAgentRepository:
             "unchanged": False,
         }
 
-    async def build_personal_wiki(self, **_: object) -> dict[str, object]:
-        """결정적인 Wiki Build 결과를 반환한다."""
-        return {"wiki_version_id": "wiki-version-1", "chunk_count": 3}
-
-    async def build_bambi_content(self, **_: object) -> dict[str, object]:
-        """결정적인 Bambi 콘텐츠 저장 결과를 반환한다."""
-        return {
-            "content_candidate_id": "candidate-1",
-            "content_id": "content-1",
-            "title": "생성 제목",
-        }
+    @asynccontextmanager
+    async def acquire_connection(self) -> AsyncIterator[object]:
+        """그래프 실행에 빌려줄 연결 대역을 반환한다."""
+        yield "fake-connection"
 
     async def complete_job(self, **kwargs: object) -> None:
         """완료 결과를 테스트 상태에 기록한다."""
@@ -117,12 +131,14 @@ def test_run_url_job_returns_followup_wiki_job() -> None:
     assert repository.completed == response.result
 
 
-def test_run_wiki_job_calls_personal_wiki_handler() -> None:
-    """Wiki Job 실행이 증분 Builder 결과를 완료 상태로 저장하는지 검증한다."""
+def test_run_wiki_job_invokes_wiki_graph_runner() -> None:
+    """Wiki Job 실행이 빌린 연결로 그래프 러너를 호출하고 완료 저장하는지 검증한다."""
     repository = _FakeAgentRepository("personal_wiki_build")
+    runner = _RecordingRunner({"wiki_version_id": "wiki-version-1", "chunk_count": 3})
     service = AgentWorkflowService(
         repository,  # type: ignore[arg-type]
         Settings(environment="test", dev_agent_timeout_seconds=30),
+        wiki_runner=runner,
     )
 
     response = asyncio.run(
@@ -136,14 +152,27 @@ def test_run_wiki_job_calls_personal_wiki_handler() -> None:
     assert response.status == "completed"
     assert response.stages[0].name == "wiki_build"
     assert response.result["wiki_version_id"] == "wiki-version-1"
+    call = runner.calls[0]
+    assert call["connection"] == "fake-connection"
+    assert call["source_document_version_id"] == "source-version-1"
+    assert call["user_id"] == "user-1"
+    assert call["job_id"] == "job-1"
 
 
-def test_run_bambi_job_calls_generation_handler() -> None:
-    """Bambi Job 실행이 검색·생성·영속화 Handler 결과를 완료 처리하는지 검증한다."""
+def test_run_bambi_job_invokes_generation_graph_runner() -> None:
+    """Bambi Job 실행이 Payload 인자로 생성 그래프를 호출하고 완료 처리하는지 검증한다."""
     repository = _FakeAgentRepository("bambi_generation")
+    runner = _RecordingRunner(
+        {
+            "content_candidate_id": "candidate-1",
+            "content_id": "content-1",
+            "title": "생성 제목",
+        }
+    )
     service = AgentWorkflowService(
         repository,  # type: ignore[arg-type]
         Settings(environment="test", dev_agent_timeout_seconds=30),
+        bambi_runner=runner,
     )
 
     response = asyncio.run(
@@ -158,6 +187,10 @@ def test_run_bambi_job_calls_generation_handler() -> None:
     assert response.stages[0].name == "bambi_generation"
     assert response.result["content_candidate_id"] == "candidate-1"
     assert repository.completed == response.result
+    call = runner.calls[0]
+    assert call["topic"] == "개인화"
+    assert call["content_type"] == "article"
+    assert call["attempt_number"] == 1
 
 
 class _FakeBatchRepository(_FakeAgentRepository):
@@ -198,6 +231,9 @@ def test_run_pending_jobs_aggregates_batch_results() -> None:
     service = AgentWorkflowService(
         repository,  # type: ignore[arg-type]
         Settings(environment="test", dev_agent_timeout_seconds=30),
+        wiki_runner=_RecordingRunner(
+            {"wiki_version_id": "wiki-version-1", "chunk_count": 3}
+        ),
     )
 
     response = asyncio.run(

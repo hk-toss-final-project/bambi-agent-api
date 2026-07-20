@@ -1,27 +1,21 @@
 """PostgreSQL Bambi Generation Worker.
 
-Lease로 점유한 bambi_generation Job을 각각 독립적으로 실행하고,
-개인 Wiki·Global 최신 문서 검색 Context로 콘텐츠를 생성해
-생성 Run·후보·Citation·Publish Snapshot(ready)·Outbox까지 저장한다.
-개발 API(`/dev/.../bambi-generations`)와 같은 Handler 체인을 사용한다.
+Lease로 점유한 bambi_generation Job을 LangGraph 오케스트레이션
+(agent.graph.run_bambi_generation)으로 실행해 검색·생성·영속화까지
+저장한다. 개발 API(`/dev/.../bambi-generations`)와 같은 그래프를 사용한다.
 """
 
-from asyncio import to_thread
-from time import monotonic
 from typing import Any
 
 from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 
-from agent.bambi.api import generate_bambi_content
+from agent.graph import run_bambi_generation
 from infrastructure.persistence.api import (
     ClaimedAgentJob,
     claim_runnable_agent_jobs,
     complete_agent_job,
     fail_agent_job,
-    load_bambi_context,
-    persist_bambi_generation,
-    set_personal_wiki_scope,
     set_system_job_scope,
 )
 from shared.contracts import FeatureRequest, FeatureResult
@@ -36,45 +30,22 @@ async def _process_job(
     worker_id: str,
     model: str,
 ) -> dict[str, object]:
-    """점유한 Bambi Job 하나를 생성·저장하고 완료 상태로 바꾼다.
-
-    검색과 결과 저장은 각각 짧은 Transaction으로 분리하고, LLM 호출은
-    Transaction 밖에서 실행해 Connection과 Row Lock을 길게 잡지 않는다.
-    """
+    """점유한 Bambi Job 하나를 그래프로 생성·저장하고 완료 상태로 바꾼다."""
     topic = str(job.payload.get("topic") or "").strip()
     content_type = str(job.payload.get("content_type") or "").strip()
     language = str(job.payload.get("language") or "ko").strip()
     if not topic or not content_type:
         raise ValueError("Bambi Job Payload에 topic과 content_type이 필요합니다.")
-    async with connection.transaction():
-        await set_personal_wiki_scope(connection, user_id=job.user_id)
-        contexts = await load_bambi_context(
-            connection,
-            user_id=job.user_id,
-            query=topic,
-        )
-    started = monotonic()
-    generated = await to_thread(
-        generate_bambi_content,
+    result = await run_bambi_generation(
+        connection,
+        user_id=job.user_id,
+        job_id=job.job_id,
+        attempt_number=job.attempt_number,
         topic=topic,
         content_type=content_type,
         language=language,
-        contexts=contexts,
         model=model,
     )
-    latency_ms = int((monotonic() - started) * 1000)
-    async with connection.transaction():
-        await set_personal_wiki_scope(connection, user_id=job.user_id)
-        result = await persist_bambi_generation(
-            connection,
-            job_id=job.job_id,
-            user_id=job.user_id,
-            attempt_number=job.attempt_number,
-            content_type=content_type,
-            generated=generated,
-            contexts=contexts,
-            latency_ms=latency_ms,
-        )
     async with connection.transaction():
         await set_system_job_scope(connection)
         await complete_agent_job(

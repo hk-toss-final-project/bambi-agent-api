@@ -1,19 +1,19 @@
 """PostgreSQL 기반 사용자 원본·Agent Job Repository.
 
-Service API의 원본 접수와 Job 조회, 개발 실행기의 Lease·완료·실패 처리 및
-Personal Wiki Build에 하나의 연결 Pool을 제공한다.
+Service API의 원본 접수와 Job 조회, 개발 실행기·Worker의 Lease·완료·실패
+처리에 하나의 연결 Pool을 제공한다. LLM 오케스트레이션(그래프 실행)은
+이 계층의 책임이 아니며, acquire_connection으로 연결만 빌려준다.
 """
 
-import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import date, datetime
-from time import monotonic
 from typing import Any
 
+from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-from agent.bambi.api import generate_bambi_content
-from agent.wiki_builder.api import build_incremental_wiki
 from app.services.agent_jobs import (
     AgentJobRecord,
     ClaimedJobRecord,
@@ -30,14 +30,12 @@ from infrastructure.persistence.api import (
     get_agent_job,
     enqueue_bambi_generation_job,
     list_runnable_agent_jobs,
-    load_bambi_context,
     mark_url_source_event,
     register_url_and_enqueue,
     save_user_url_document_version,
     save_web_clipping_and_enqueue,
     set_personal_wiki_scope,
     set_system_job_scope,
-    persist_bambi_generation,
     upsert_user_context_snapshot,
 )
 
@@ -352,86 +350,17 @@ class PostgresAgentJobRepository:
             "unchanged": False,
         }
 
-    async def build_personal_wiki(
-        self, *, job: ClaimedJobRecord, model: str
-    ) -> dict[str, object]:
-        """점유한 Job Payload의 원본 Version으로 증분 Wiki Build를 실행한다."""
-        source_version_id = str(
-            job.payload.get("source_document_version_id") or ""
-        )
-        if not source_version_id:
-            raise ValueError("Wiki Build Job Payload에 원본 Version ID가 없습니다.")
-        async with self._pool.connection() as connection:
-            persisted, plan = await build_incremental_wiki(
-                connection,
-                user_id=job.user_id,
-                source_document_version_id=source_version_id,
-                job_id=job.job_id,
-                model=model,
-            )
-        return {
-            "wiki_version_id": persisted.wiki_version_id,
-            "wiki_version": persisted.wiki_version,
-            "chunk_count": persisted.chunk_count,
-            "affected_documents": [
-                {
-                    "document_id": document.document_id,
-                    "document_version_id": document.document_version_id,
-                    "document_kind": document.document_kind,
-                    "document_key": document.document_key,
-                    "file_path": document.file_path,
-                    "version": document.version,
-                    "action": document.action,
-                }
-                for document in persisted.affected_documents
-            ],
-            "artifacts": {
-                "index": plan.index.content,
-                "source": plan.source_manifest.content,
-                "log": plan.log_entry.content,
-            },
-        }
+    @asynccontextmanager
+    async def acquire_connection(
+        self,
+    ) -> AsyncIterator[AsyncConnection[DictRow]]:
+        """그래프 실행 등 외부 오케스트레이션에 Pool 연결을 빌려준다.
 
-    async def build_bambi_content(
-        self, *, job: ClaimedJobRecord, model: str
-    ) -> dict[str, object]:
-        """개인·Global 문서를 검색해 Bambi 콘텐츠를 생성하고 영속화한다."""
-        topic = str(job.payload.get("topic") or "").strip()
-        content_type = str(job.payload.get("content_type") or "").strip()
-        language = str(job.payload.get("language") or "ko").strip()
-        if not topic or not content_type:
-            raise ValueError("Bambi Job Payload에 topic과 content_type이 필요합니다.")
+        Repository가 오케스트레이션을 소유하지 않도록, 연결 수명만 관리하고
+        Transaction 경계는 빌려간 쪽(agent 그래프 노드)이 소유한다.
+        """
         async with self._pool.connection() as connection:
-            async with connection.transaction():
-                await set_personal_wiki_scope(connection, user_id=job.user_id)
-                contexts = await load_bambi_context(
-                    connection,
-                    user_id=job.user_id,
-                    query=topic,
-                )
-        started = monotonic()
-        generated = await asyncio.to_thread(
-            generate_bambi_content,
-            topic=topic,
-            content_type=content_type,
-            language=language,
-            contexts=contexts,
-            model=model,
-        )
-        latency_ms = int((monotonic() - started) * 1000)
-        async with self._pool.connection() as connection:
-            async with connection.transaction():
-                await set_personal_wiki_scope(connection, user_id=job.user_id)
-                return await persist_bambi_generation(
-                    connection,
-                    job_id=job.job_id,
-                    user_id=job.user_id,
-                    attempt_number=job.attempt_number,
-                    content_type=content_type,
-                    generated=generated,
-                    contexts=contexts,
-                    latency_ms=latency_ms,
-                )
+            yield connection
 
     async def complete_job(
         self,

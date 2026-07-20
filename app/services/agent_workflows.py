@@ -1,17 +1,19 @@
 """개발 API와 운영 Worker가 공유할 Agent Job 실행기.
 
-Job 유형에 따라 URL 수집 또는 Personal Wiki Build Handler를 호출하고,
-Lease·완료·실패 상태를 저장한 뒤 Swagger용 단계 결과를 반환한다.
+Job 유형에 따라 URL 수집 또는 LangGraph 오케스트레이션(Wiki Build,
+Bambi Generation)을 실행하고, Lease·완료·실패 상태를 저장한 뒤
+Swagger용 단계 결과를 반환한다.
 """
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from time import monotonic
 from uuid import uuid4
 
 from fastapi import status
 
+from agent.graph import run_bambi_generation, run_personal_wiki_build
 from app.config import Settings
 from app.exceptions import AgentApiError, ErrorDetail
 from app.schemas.development import (
@@ -28,6 +30,8 @@ from infrastructure.sources.connectors.api import (
 )
 
 type UrlFetcher = Callable[[str], JinaReadResult]
+type WikiRunner = Callable[..., Awaitable[dict[str, object]]]
+type BambiRunner = Callable[..., Awaitable[dict[str, object]]]
 
 
 def _parse_published_at(value: str | None) -> datetime | None:
@@ -50,14 +54,18 @@ class AgentWorkflowService:
         settings: Settings,
         *,
         url_fetcher: UrlFetcher = fetch_url_via_jina,
+        wiki_runner: WikiRunner = run_personal_wiki_build,
+        bambi_runner: BambiRunner = run_bambi_generation,
     ) -> None:
-        """Job 저장소, 모델 설정과 URL 수집기를 주입한다."""
+        """Job 저장소, 모델 설정, URL 수집기와 그래프 실행기를 주입한다."""
         self._repository = repository
         self._settings = settings
         self._url_fetcher = url_fetcher
+        self._wiki_runner = wiki_runner
+        self._bambi_runner = bambi_runner
 
     async def _dispatch(self, job: ClaimedJobRecord) -> tuple[str, dict[str, object]]:
-        """Job 유형에 맞는 URL 수집 또는 Wiki Build Handler를 실행한다."""
+        """Job 유형에 맞는 URL 수집 또는 LangGraph 오케스트레이션을 실행한다."""
         if job.job_type == "personal_wiki_url":
             url = str(job.payload.get("url") or "")
             if not url:
@@ -72,16 +80,38 @@ class AgentWorkflowService:
             )
             return "url_collection", result
         if job.job_type == "personal_wiki_build":
-            result = await self._repository.build_personal_wiki(
-                job=job,
-                model=self._settings.wiki_llm_model,
+            source_version_id = str(
+                job.payload.get("source_document_version_id") or ""
             )
+            if not source_version_id:
+                raise ValueError("Wiki Build Job Payload에 원본 Version ID가 없습니다.")
+            async with self._repository.acquire_connection() as connection:
+                result = await self._wiki_runner(
+                    connection,
+                    user_id=job.user_id,
+                    source_document_version_id=source_version_id,
+                    job_id=job.job_id,
+                    model=self._settings.wiki_llm_model,
+                    embedding_model=self._settings.wiki_embedding_model,
+                )
             return "wiki_build", result
         if job.job_type == "bambi_generation":
-            result = await self._repository.build_bambi_content(
-                job=job,
-                model=self._settings.bambi_llm_model,
-            )
+            topic = str(job.payload.get("topic") or "").strip()
+            content_type = str(job.payload.get("content_type") or "").strip()
+            language = str(job.payload.get("language") or "ko").strip()
+            if not topic or not content_type:
+                raise ValueError("Bambi Job Payload에 topic과 content_type이 필요합니다.")
+            async with self._repository.acquire_connection() as connection:
+                result = await self._bambi_runner(
+                    connection,
+                    user_id=job.user_id,
+                    job_id=job.job_id,
+                    attempt_number=job.attempt_number,
+                    topic=topic,
+                    content_type=content_type,
+                    language=language,
+                    model=self._settings.bambi_llm_model,
+                )
             return "bambi_generation", result
         raise ValueError(f"개발 실행기가 지원하지 않는 Job 유형입니다: {job.job_type}")
 

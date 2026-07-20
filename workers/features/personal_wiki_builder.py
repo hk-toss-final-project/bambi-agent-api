@@ -1,51 +1,26 @@
 """PostgreSQL Personal Wiki Builder Worker.
 
-Lease로 점유한 personal_wiki_build Job을 각각 독립적으로 실행하고,
-클리핑 원문을 개인 지식 Wiki 문서·Chunk·Build Snapshot으로 저장한다.
+Lease로 점유한 personal_wiki_build Job을 LangGraph 오케스트레이션
+(agent.graph.run_personal_wiki_build)으로 실행하고, 클리핑 원문을
+개인 지식 Wiki 문서·Chunk·Embedding·Build Snapshot으로 저장한다.
 """
 
-from asyncio import to_thread
 from typing import Any
 
 from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 
-from agent.wiki_builder.api import build_incremental_wiki, generate_wiki_embeddings
+from agent.graph import run_personal_wiki_build
 from infrastructure.persistence.api import (
     ClaimedAgentJob,
     claim_personal_wiki_jobs,
     complete_agent_job,
     fail_agent_job,
-    get_wiki_chunks_for_embedding,
-    persist_wiki_embeddings,
-    set_personal_wiki_scope,
     set_system_job_scope,
 )
 from shared.contracts import FeatureRequest, FeatureResult
 
 type DictRow = dict[str, Any]
-
-
-def _job_result(
-    job: ClaimedAgentJob,
-    *,
-    wiki_version_id: str,
-    wiki_version: int,
-    chunk_count: int,
-    affected_documents: list[dict[str, object]],
-    embedding_count: int,
-) -> dict[str, object]:
-    """MVP Job 완료 계약에 맞는 Personal Wiki 결과 Payload를 만든다."""
-    return {
-        "source_document_id": job.payload.get("source_document_id"),
-        "source_document_version_id": job.payload.get("source_document_version_id"),
-        "wiki_version_id": wiki_version_id,
-        "wiki_version": wiki_version,
-        "affected_documents": affected_documents,
-        "chunk_count": chunk_count,
-        "embedding_status": "completed",
-        "embedding_count": embedding_count,
-    }
 
 
 async def _process_job(
@@ -56,59 +31,17 @@ async def _process_job(
     model: str,
     embedding_model: str,
 ) -> dict[str, object]:
-    """점유한 Personal Wiki Job 하나를 Build하고 완료 상태로 바꾼다."""
+    """점유한 Personal Wiki Job 하나를 그래프로 Build하고 완료 상태로 바꾼다."""
     source_version_id = job.payload.get("source_document_version_id")
     if not isinstance(source_version_id, str) or not source_version_id:
         raise ValueError("Job Payload에 source_document_version_id가 없습니다.")
-    persisted, _plan = await build_incremental_wiki(
+    result = await run_personal_wiki_build(
         connection,
         user_id=job.user_id,
         source_document_version_id=source_version_id,
         job_id=job.job_id,
         model=model,
-    )
-    async with connection.transaction():
-        await set_personal_wiki_scope(connection, user_id=job.user_id)
-        chunks = await get_wiki_chunks_for_embedding(
-            connection,
-            namespace_key=f"user/{job.user_id}",
-            document_version_ids=[
-                document.document_version_id
-                for document in persisted.affected_documents
-            ],
-        )
-    embedding_values = await to_thread(
-        generate_wiki_embeddings,
-        chunks,
-        model=embedding_model,
-    )
-    async with connection.transaction():
-        await set_personal_wiki_scope(connection, user_id=job.user_id)
-        embedding_count = await persist_wiki_embeddings(
-            connection,
-            namespace_key=f"user/{job.user_id}",
-            model_name=embedding_model,
-            values=embedding_values,
-        )
-    affected = [
-        {
-            "document_id": document.document_id,
-            "document_version_id": document.document_version_id,
-            "document_kind": document.document_kind,
-            "document_key": document.document_key,
-            "file_path": document.file_path,
-            "version": document.version,
-            "action": document.action,
-        }
-        for document in persisted.affected_documents
-    ]
-    result = _job_result(
-        job,
-        wiki_version_id=persisted.wiki_version_id,
-        wiki_version=persisted.wiki_version,
-        chunk_count=persisted.chunk_count,
-        affected_documents=affected,
-        embedding_count=embedding_count,
+        embedding_model=embedding_model,
     )
     async with connection.transaction():
         await set_system_job_scope(connection)

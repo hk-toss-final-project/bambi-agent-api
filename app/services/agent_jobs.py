@@ -4,9 +4,10 @@ FastAPI 서비스가 PostgreSQL 구현 세부사항을 알지 않도록 원본 �
 개발용 동기 실행에 필요한 데이터 객체와 Repository Protocol을 정의한다.
 """
 
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,16 +165,8 @@ class AgentJobRepository(Protocol):
         """URL 수집 결과를 원본 Version으로 저장하고 Wiki Job을 등록한다."""
         ...
 
-    async def build_personal_wiki(
-        self, *, job: ClaimedJobRecord, model: str
-    ) -> dict[str, object]:
-        """점유한 Wiki Job의 원본으로 증분 Wiki Build를 실행한다."""
-        ...
-
-    async def build_bambi_content(
-        self, *, job: ClaimedJobRecord, model: str
-    ) -> dict[str, object]:
-        """개인·Global Context로 Bambi 콘텐츠를 생성하고 저장한다."""
+    def acquire_connection(self) -> AbstractAsyncContextManager[Any]:
+        """오케스트레이션 그래프 실행에 사용할 DB 연결을 빌려준다."""
         ...
 
     async def complete_job(
