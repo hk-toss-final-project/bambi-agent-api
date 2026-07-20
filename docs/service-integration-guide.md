@@ -126,9 +126,10 @@ flowchart LR
 
 ### 3.7 연동 보류 항목
 
-- **위키마킹** (`POST .../wiki-sources/content-marks`): 접수 API는 있으나
-  처리 Handler가 미구현이라 Job이 대기 상태로만 남습니다. Handler 구현
-  전까지 연동을 보류하세요.
+- **위키마킹** (`POST .../wiki-sources/content-marks`): 처리 Handler가
+  미구현이라 현재 `501 NOT_IMPLEMENTED`를 반환합니다(2026-07-20부터,
+  이전의 "접수만 되는 유령 Job" 동작을 정리). Handler 구현 전까지 연동을
+  보류하세요.
 
 ## 4. service-worker가 구현할 것 — 발행 폴링 루프
 
