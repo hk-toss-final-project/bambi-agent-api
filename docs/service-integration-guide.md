@@ -1,0 +1,206 @@
+# Service 연동 가이드 (service-api · service-worker)
+
+> 기준: 2026-07-20. Spring 계층(service-api, service-worker)이 Agent API와
+> 연동할 때 구현해야 할 항목을 정리한 인수인계 문서입니다. 상세 계약은
+> [fastapi-mvp-api.md](fastapi-mvp-api.md), 실행 확인은 로컬 Swagger
+> (<http://127.0.0.1:8000/docs>)를 참고합니다.
+
+## 1. 아키텍처 원칙 — 호출 방향
+
+```mermaid
+flowchart LR
+    extension["Browser Extension"] -->|사용자 인증| serviceApi["service-api"]
+    serviceApi -->|"동기 HTTP 호출"| agentApi["agent-api"]
+    serviceScheduler["service 스케줄러"] -->|"지정 시각 생성 요청"| agentApi
+    serviceWorker["service-worker"] -->|"Snapshot Batch Claim/ACK (Pull)"| agentApi
+    serviceWorker --> serviceDb[("service-db")]
+    agentApi -.->|"호출 없음"| serviceApi
+```
+
+- 의존성은 **서비스 → 에이전트 단방향**입니다. agent-api는 service 계층을
+  절대 호출하지 않으며, 콘텐츠 전달도 service-worker가 **폴링으로 가져가는
+  Pull 방식**입니다.
+- 따라서 service 쪽에 "agent가 호출할 수신 엔드포인트"를 만들 필요가 없습니다.
+
+## 2. 공통 규약
+
+| 항목 | 내용 |
+|---|---|
+| Base Path | `/internal/v1` (`API_PREFIX`로 변경 가능) |
+| 인증 | 현재 없음 — **내부 네트워크 전제**. 배포 전 내부 인증 방식 협의 필요 |
+| 추적 헤더 | `X-Request-ID`, `X-Trace-ID` 전달 권장 (누락 시 agent가 생성) |
+| 비동기 계약 | 쓰기 요청은 DB Commit 후 `202 Accepted` + `job_id` 반환. 완료 여부는 Job 조회로 확인 |
+| 오류 구조 | 모든 오류는 `{code, message, request_id, retryable, details}` 공통 JSON |
+| 멱등성 | 클리핑·URL은 `source_event_id`, 생성은 `idempotency_key`로 중복 방지. 같은 키 재요청은 기존 결과를 반환 |
+
+## 3. service-api가 구현할 것
+
+### 3.1 사용자 컨텍스트 동기화 (최우선 — 다른 기능의 전제)
+
+`PUT /internal/v1/users/{user_id}/context`
+
+| 필드 | 필수 | 설명 |
+|---|---|---|
+| `context_version` | O | **단조 증가 정수.** 같거나 작은 버전은 `409 STALE_CONTEXT_VERSION` |
+| `plan` | O | `free` \| `paid` |
+| `preferred_language` | X | 기본 `ko` |
+| `personalization_enabled` | X | 기본 `true` |
+| `blocked_interest_ids` | X | 차단 관심사 ID 목록 |
+| `blocked_source_ids` | X | 차단 Source ID 목록 |
+
+- 호출 시점: **회원가입 직후 1회(필수)** + 플랜·언어·차단 설정 변경 시마다.
+- ⚠️ 컨텍스트가 없는 사용자의 생성 요청은 `409 USER_CONTEXT_REQUIRED`로
+  거부됩니다. 가입 플로우에 반드시 포함하세요.
+- ⚠️ `blocked_*_ids`의 ID 체계(무엇의 ID인지)는 아직 양팀 미합의 상태입니다.
+  합의 전까지 agent는 저장만 하고 필터링에 사용하지 않습니다(§7 참고).
+
+### 3.2 웹 클리핑 중계
+
+`POST /internal/v1/users/{user_id}/wiki-sources/clippings` — Extension의
+사용자 인증을 service-api가 처리한 뒤 이 내부 경로로 중계합니다.
+
+| 필드 | 필수 | 설명 |
+|---|---|---|
+| `source_event_id` | O | 사용자 안에서 유일한 멱등 키 (1~128자) |
+| `source` | O | 원문 URL (`url` 별칭도 허용) |
+| `title` | O | 1~500자 |
+| `content` | O | Markdown 본문. **요청 전체 2 MiB 제한** (`413 CLIPPING_CONTENT_TOO_LARGE`) |
+| `author`, `published`, `created`, `description`, `tags`, `occurred_at`, `memo` | X | 메타데이터 |
+
+- 응답: `202` + `job_id`, `source_document_id`, `source_document_version_id`.
+- 같은 `source_event_id` + 같은 Payload 재요청 → 기존 결과 반환 (새 Row 없음).
+  같은 키 + **다른** Payload → `409 CLIPPING_SOURCE_EVENT_CONFLICT`.
+- 202는 "원문과 Job이 영속 저장됨"이지 "Wiki 생성 완료"가 아닙니다.
+
+### 3.3 URL 등록
+
+`POST /internal/v1/users/{user_id}/wiki-sources/urls`
+
+| 필드 | 필수 | 설명 |
+|---|---|---|
+| `source_event_id` | O | 멱등 키 |
+| `url` | O | 수집할 URL (Jina Reader로 본문 수집) |
+| `occurred_at`, `memo` | X | 메타데이터 |
+
+### 3.4 콘텐츠 생성 요청 + 사용자 지정 시간 스케줄러
+
+`POST /internal/v1/users/{user_id}/generations`
+
+| 필드 | 필수 | 설명 |
+|---|---|---|
+| `idempotency_key` | O | **`{schedule window}-{user_id}-{content_type}` 규칙 권장** (예: `2026-07-21-user-1-interest_news_card`). 스케줄러 재시도·중복 실행에도 Job이 한 번만 생김 |
+| `topic` | O | 생성 주제 (1~500자) |
+| `content_type` | X | 기본 `interest_news_card` |
+| `language` | X | 생략 시 컨텍스트의 선호 언어 사용 |
+| `scheduled_at` | X | 실행 예약 시각. **시간대 필수** (`2026-07-21T07:00:00+09:00`). 시간대 없으면 `422`. 생략 시 즉시 실행 대상 |
+
+**사용자 지정 시간 스케줄은 service 쪽 책임입니다** (2026-07-20 결정 —
+사용자 설정의 원천이 service-db이기 때문). 구현 방식은 둘 중 선택:
+
+1. **정시 호출**: service 스케줄러(`@Scheduled` 등)가 사용자 지정 시각에
+   이 API를 호출 (`scheduled_at` 생략)
+2. **사전 예약**: 미리 호출하되 `scheduled_at`에 실행 시각 지정 — Agent
+   Worker가 그 시각 전에는 Job을 집지 않음
+
+같은 `idempotency_key` 재등록은 기존 Job을 재사용하며 예약 시각을 바꾸지
+않습니다. 시각 변경이 필요하면 새 window 키로 등록하세요.
+
+### 3.5 Job 상태·결과 폴링
+
+| Method / Path | 용도 |
+|---|---|
+| `GET /internal/v1/jobs/{job_id}` | 상태(`queued`/`running`/`completed`/`failed`/`cancelled`)와 진행률 |
+| `GET /internal/v1/jobs/{job_id}/result` | 완료 결과. 미완료 시 `409 JOB_RESULT_NOT_READY` |
+
+### 3.6 조회 API (화면 데이터)
+
+별도 등록 없이 바로 호출 가능한 읽기 계약입니다.
+
+| Path | 내용 |
+|---|---|
+| `GET /users/{user_id}/wiki/documents` (+`/{document_id}`) | Wiki 문서 목록·상세(Markdown 포함) |
+| `GET /users/{user_id}/wiki/graph` | Entity·Concept 관계 그래프 (Node·Edge·통계) |
+| `GET /users/{user_id}/wiki/graph/top-nodes?limit=10` | 연결 많은 순 상위 Node (rank·degree 포함 경량 응답) |
+| `GET /users/{user_id}/interests` | 활성 관심 키워드 (topic·score·evidence) |
+| `GET /users/{user_id}/generated-contents` (+`/{candidate_id}`) | 생성 콘텐츠 목록·상세(본문·Citation) |
+
+### 3.7 연동 보류 항목
+
+- **위키마킹** (`POST .../wiki-sources/content-marks`): 접수 API는 있으나
+  처리 Handler가 미구현이라 Job이 대기 상태로만 남습니다. Handler 구현
+  전까지 연동을 보류하세요.
+
+## 4. service-worker가 구현할 것 — 발행 폴링 루프
+
+생성 완료 콘텐츠를 service-db로 옮기는 유일한 경로입니다. **10~30초 주기의
+폴링 루프** 하나면 됩니다 (이벤트 수신은 MVP 이후 지연 최적화로 추가 예정).
+
+```text
+loop (10~30초):
+  1. POST /internal/v1/publish-snapshot-batches/claim
+     { "worker_id": "service-worker-01", "limit": 50, "lease_seconds": 120 }
+  2. items가 비어 있으면 다음 주기까지 대기
+  3. 각 item을 content_id + version 키로 service-db에 멱등 Upsert
+     (항목별 독립 Transaction — Batch 전체를 한 Transaction으로 묶지 않기)
+  4. POST /internal/v1/publish-snapshot-batches/{batch_id}/ack
+     처리 끝난 항목만 담아 부분 성공 ACK
+```
+
+### Claim 응답
+
+`batch_id`, `lease_expires_at`과 함께 각 item에 **전체 Payload**(content_id,
+user_id, version, snapshot_hash, title, summary, body, citations)가 포함되므로
+추가 조회 없이 바로 Upsert할 수 있습니다. 처리할 것이 없으면 `items=[]`.
+
+### ACK 규칙
+
+| 필드 | 설명 |
+|---|---|
+| `worker_id` | Claim 때와 동일해야 함 (`409 PUBLISH_BATCH_OWNERSHIP_MISMATCH`) |
+| `items[].status` | `published` \| `failed` |
+| `items[].retryable` | 실패 시 필수 — `true`면 Backoff 후 `ready` 복귀, `false`면 최종 `failed` |
+| `items[].snapshot_hash` | Claim 응답 값 그대로 — 불일치 시 `409 PUBLISH_SNAPSHOT_MISMATCH` |
+
+- ACK에 넣지 않은 항목은 Lease 만료 후 자동으로 다시 Claim 대상이 됩니다 —
+  처리 중 Worker가 죽어도 유실 없음.
+- 같은 batch_id·항목 재-ACK는 이전 결과를 반환하며 이력을 중복 생성하지
+  않습니다. 즉 **ACK 재시도는 안전**합니다.
+- Lease 만료 후 ACK는 `409 PUBLISH_BATCH_LEASE_EXPIRED` — 해당 Batch는
+  버리고 다음 Claim부터 다시 처리하면 됩니다.
+
+## 5. 오류 코드 요약
+
+| Code | HTTP | 서비스 쪽 대응 |
+|---|---:|---|
+| `REQUEST_VALIDATION_ERROR` | 422 | 요청 형식 수정 (details에 필드별 사유) |
+| `USER_CONTEXT_REQUIRED` | 409 | 컨텍스트 먼저 PUT 후 재시도 |
+| `STALE_CONTEXT_VERSION` | 409 | 더 큰 `context_version`으로 재전송 |
+| `CLIPPING_CONTENT_TOO_LARGE` | 413 | 2 MiB 초과 — 사용자에게 안내 |
+| `CLIPPING_SOURCE_EVENT_CONFLICT` | 409 | 같은 이벤트 키에 다른 내용 — 새 키 발급 |
+| `JOB_NOT_FOUND` | 404 | job_id 확인 |
+| `JOB_RESULT_NOT_READY` | 409 | 잠시 후 재조회 |
+| `PUBLISH_SNAPSHOT_MISMATCH` | 409 | Claim 응답의 version·hash로 재검증 |
+| `PUBLISH_BATCH_OWNERSHIP_MISMATCH` | 409 | worker_id 확인 |
+| `PUBLISH_BATCH_LEASE_EXPIRED` | 409 | Batch 폐기 후 재-Claim |
+| `SERVICE_NOT_READY` | 503 | retryable — Backoff 후 재시도 |
+| `INTERNAL_SERVER_ERROR` | 500 | retryable — Backoff 후 재시도 |
+
+## 6. 권장 구현 순서
+
+- [ ] 1. 사용자 컨텍스트 동기화 (가입 훅 + 설정 변경 훅) — §3.1
+- [ ] 2. 클리핑·URL 중계 (Extension 경로 연결) — §3.2, §3.3
+- [ ] 3. Job 상태 폴링과 화면 조회 API 연동 — §3.5, §3.6
+- [ ] 4. 콘텐츠 생성 요청 + 지정 시간 스케줄러 — §3.4
+- [ ] 5. service-worker 발행 폴링 루프 — §4
+
+1~2만 되면 "클리핑 → Wiki" 흐름이, 4~5까지 되면 "생성 → 사용자 피드"까지
+전체 루프가 완성됩니다.
+
+## 7. 양팀이 함께 결정할 항목
+
+| 항목 | 내용 | 시점 |
+|---|---|---|
+| 내부 인증 | 현재 무인증. 공유 시크릿 헤더 vs 네트워크 격리 | 배포 전 필수 |
+| 차단 ID 매핑 | `blocked_interest_ids`·`blocked_source_ids`가 무엇의 ID인지 (키워드 문자열 / 도메인 / agent 관심사 UUID) — 확정돼야 agent가 검색·생성 필터에 반영 | 개인화 고도화 전 |
+| 회원 탈퇴 삭제 | 탈퇴 시 agent 데이터(클리핑 원문·Wiki) 삭제 API — agent 쪽 미구현 | 서비스 오픈 전 |
+| `CONTENT_READY` 이벤트 | 폴링 지연을 줄이는 Push 신호 (Outbox 기록까지는 구현됨) | MVP 이후 |
