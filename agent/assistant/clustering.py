@@ -19,9 +19,15 @@ def greedy_clusters(
 ) -> list[list[int]]:
     """임베딩 목록을 그리디 방식으로 클러스터링해 인덱스 그룹을 반환한다.
 
-    각 문서를 순서대로 보며, 기존 클러스터의 시드(첫 문서)와의 코사인 유사도가
+    각 문서를 순서대로 보며, 기존 클러스터의 **어느 멤버와든** 코사인 유사도가
     threshold 이상이면 그 클러스터에 편입하고, 아니면 새 클러스터를 만든다.
-    시드 비교 방식이라 결과가 입력 순서에 대해 결정적이다.
+    입력 순서에 대해 결정적이다.
+
+    시드(첫 문서)와만 비교하지 않는 이유: 같은 사건을 다룬 기사라도 표현이
+    조금씩 달라 A-B 0.70, B-C 0.70인데 A-C는 0.60인 경우가 흔하다. 시드 비교로는
+    C가 떨어져 나가 같은 사건이 여러 클러스터로 쪼개진다. 실측('코스피' 26건)에서
+    시드 비교는 매도 사이드카 관련 기사를 3~4건짜리 클러스터 둘로 갈랐지만,
+    멤버 전체와 비교하면 7건짜리 하나로 올바르게 묶였다.
 
     Args:
         embeddings: 문서 임베딩 목록
@@ -35,8 +41,10 @@ def greedy_clusters(
     for index, embedding in enumerate(embeddings):
         placed = False
         for cluster in clusters:
-            seed = embeddings[cluster[0]]
-            if cosine_similarity(seed, embedding) >= cutoff:
+            if any(
+                cosine_similarity(embeddings[member], embedding) >= cutoff
+                for member in cluster
+            ):
                 cluster.append(index)
                 placed = True
                 break

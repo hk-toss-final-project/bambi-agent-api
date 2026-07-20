@@ -73,6 +73,10 @@ def _news_documents(keyword: str, now: datetime) -> list[dict[str, object]]:
                 "text": f"{title}\n{snippet}".strip(),
                 "published_ts": entry.get("published_ts", 0),
                 "published_raw": entry.get("published", ""),
+                # url은 Google News 리다이렉트 주소라 도메인이 전부 news.google.com이다.
+                # 소스 신뢰도는 원본 발행처 URL로 판정해야 한다.
+                "source_url": entry.get("source_url", ""),
+                "source_name": entry.get("source_name", ""),
             }
         )
     return docs
@@ -385,16 +389,29 @@ def run_daily(
         if vectors:
             topic_embedding, doc_embeddings = vectors[0], vectors[1:]
 
-            # 5. 유사도 필터 (MIN_SIMILARITY 미달 즉시 제외)
+            # 5. 유사도 필터 (이번 실행 최고 유사도에 상대적인 컷)
             from agent.assistant.embeddings import cosine_similarity
+
+            scored = [
+                (doc, embedding, cosine_similarity(topic_embedding, embedding))
+                for doc, embedding in zip(docs, doc_embeddings, strict=True)
+            ]
+            # 컷을 이번 실행의 최고 유사도로부터 계산한다. 키워드마다 유사도 스케일이
+            # 달라 고정 임계값으로는 어떤 키워드가 통째로 탈락하기 때문이다.
+            sim_cutoff = config.similarity_cutoff(max(s for _, _, s in scored))
+            log["similarity_cutoff"] = round(sim_cutoff, 4)
 
             filtered_docs: list[dict[str, object]] = []
             filtered_embeddings: list[list[float]] = []
             similarities: list[float] = []
-            for doc, embedding in zip(docs, doc_embeddings, strict=True):
-                sim = cosine_similarity(topic_embedding, embedding)
-                if sim < config.MIN_SIMILARITY:
-                    _exclude(log, "similarity_filter", doc, f"low_similarity({sim:.2f})")
+            for doc, embedding, sim in scored:
+                if sim < sim_cutoff:
+                    _exclude(
+                        log,
+                        "similarity_filter",
+                        doc,
+                        f"low_similarity({sim:.2f} < {sim_cutoff:.2f})",
+                    )
                     continue
                 filtered_docs.append(doc)
                 filtered_embeddings.append(embedding)
@@ -444,19 +461,24 @@ def run_daily(
             survivors = [c for c in clusters if c["dup_status"] != dedup.STATUS_DUPLICATE]
 
             # 9. 임계값 판정 (미달 아이템을 억지로 채우지 않는다)
-            for cluster in survivors:
-                if cluster["final_score"] < config.PUBLISH_THRESHOLD:
-                    _exclude(
-                        log,
-                        "threshold",
-                        cluster["representative"],
-                        f"below_threshold({cluster['final_score']:.2f})",
-                    )
-            daily_clusters = sorted(
-                (c for c in survivors if c["final_score"] >= config.PUBLISH_THRESHOLD),
-                key=lambda c: c["final_score"],
-                reverse=True,
-            )[: config.MAX_DAILY_ITEMS]
+            # 유사도와 같은 이유로 상대 기준을 쓴다. final_score는 similarity를
+            # 곱해 만들므로 유사도 스케일 차이를 그대로 물려받기 때문이다.
+            if survivors:
+                pub_cutoff = config.publish_cutoff(max(c["final_score"] for c in survivors))
+                log["publish_cutoff"] = round(pub_cutoff, 4)
+                for cluster in survivors:
+                    if cluster["final_score"] < pub_cutoff:
+                        _exclude(
+                            log,
+                            "threshold",
+                            cluster["representative"],
+                            f"below_threshold({cluster['final_score']:.2f} < {pub_cutoff:.2f})",
+                        )
+                daily_clusters = sorted(
+                    (c for c in survivors if c["final_score"] >= pub_cutoff),
+                    key=lambda c: c["final_score"],
+                    reverse=True,
+                )[: config.MAX_DAILY_ITEMS]
 
     # 10. 워터폴 판정과 아이템 조립
     if daily_clusters:
@@ -489,7 +511,7 @@ def run_daily(
                     "score_detail": rep["score"],
                     "reason": (
                         f"final_score {cluster['final_score']:.2f} ≥ 기준 "
-                        f"{config.PUBLISH_THRESHOLD} (클러스터 {cluster['size']}건)"
+                        f"{log.get('publish_cutoff')} (클러스터 {cluster['size']}건)"
                     ),
                     "status": status,
                     "cluster_size": cluster["size"],

@@ -57,8 +57,8 @@ def fetch_feed_entries(feed_url: str) -> list[dict[str, object]]:
     """RSS 피드를 파싱해 항목 목록을 반환한다.
 
     Returns:
-        {title, link, summary, published, published_ts} 딕셔너리 리스트
-        (published_ts는 정렬용 정수 타임스탬프, 없으면 0)
+        {title, link, summary, published, published_ts, source_url, source_name}
+        딕셔너리 리스트 (published_ts는 정렬용 정수 타임스탬프, 없으면 0)
     """
     import calendar
 
@@ -69,6 +69,7 @@ def fetch_feed_entries(feed_url: str) -> list[dict[str, object]]:
     for entry in parsed.entries:
         published_struct = entry.get("published_parsed")
         published_ts = calendar.timegm(published_struct) if published_struct else 0
+        source_url, source_name = _extract_source(entry)
         entries.append(
             {
                 "title": entry.get("title", ""),
@@ -76,9 +77,31 @@ def fetch_feed_entries(feed_url: str) -> list[dict[str, object]]:
                 "summary": entry.get("summary", ""),
                 "published": entry.get("published", ""),
                 "published_ts": published_ts,
+                "source_url": source_url,
+                "source_name": source_name,
             }
         )
     return entries
+
+
+def _extract_source(entry: object) -> tuple[str, str]:
+    """RSS 항목에서 원본 발행처의 URL과 이름을 뽑는다. 없으면 빈 문자열.
+
+    Google News RSS의 link는 자기네 리다이렉트 주소(news.google.com/rss/articles/...)
+    라서, 도메인만 보면 모든 기사가 news.google.com이 된다. 그러면 소스 신뢰도
+    테이블(config.SOURCE_WEIGHTS)이 한 건도 매칭되지 않아 전부 기본 가중치를 받는다.
+    Google News는 원본 발행처를 <source url="..."> 요소로 따로 주므로, 여기서
+    진짜 언론사 도메인을 확보한다. 추가 HTTP 요청이 필요 없다.
+
+    Returns:
+        (발행처 URL, 발행처 이름). 예: ("https://www.chosun.com", "조선일보")
+    """
+    source = entry.get("source") if hasattr(entry, "get") else None
+    if not source:
+        return "", ""
+    if hasattr(source, "get"):
+        return str(source.get("href") or ""), str(source.get("title") or "")
+    return "", ""
 
 
 def deduplicate(entries: list[dict[str, object]]) -> list[dict[str, object]]:

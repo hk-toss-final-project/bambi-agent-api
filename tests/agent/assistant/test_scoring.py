@@ -82,14 +82,71 @@ def test_score_document_combines_components() -> None:
     assert result["final_score"] == pytest.approx(0.9 * 1.0 * 1.0 * 1.1)
 
 
+def test_score_document_prefers_source_url_over_redirect() -> None:
+    """뉴스 문서는 Google News 리다이렉트 url이 아니라 원본 발행처로 가중치를 매긴다."""
+    doc = {
+        "title": "코스피 급락",
+        "url": "https://news.google.com/rss/articles/CBMiabc123",
+        "source_url": "https://www.chosun.com",
+        "published": _NOW,
+    }
+    result = scoring.score_document(doc, 0.5, now=_NOW)
+
+    # source_url이 없었다면 news.google.com → 미등록 기본값(0.5)을 받았을 것이다.
+    assert result["source_weight"] == 0.8
+
+
+def test_score_document_falls_back_to_url_without_source() -> None:
+    """source_url이 없는 문서(YouTube·Reddit)는 기존대로 url로 가중치를 매긴다."""
+    doc = {"title": "영상", "url": "https://www.youtube.com/watch?v=x", "published": _NOW}
+    assert scoring.score_document(doc, 0.5, now=_NOW)["source_weight"] == 0.6
+
+
+def test_similarity_cutoff_scales_with_best_match() -> None:
+    """유사도 컷은 이번 실행 최고 유사도에 비례해 움직인다."""
+    # 유사도가 높게 형성되는 키워드일수록 컷도 함께 올라간다.
+    assert config.similarity_cutoff(0.48) == pytest.approx(0.48 * config.SIMILARITY_RATIO)
+    assert config.similarity_cutoff(0.40) == pytest.approx(0.40 * config.SIMILARITY_RATIO)
+    assert config.similarity_cutoff(0.48) > config.similarity_cutoff(0.40)
+
+
+def test_similarity_cutoff_never_below_floor() -> None:
+    """수집 결과가 통째로 무관하면 절대 하한이 걸린다."""
+    # 최고 유사도가 0.1이면 상대 컷은 0.075지만, 하한 아래로는 내려가지 않는다.
+    assert config.similarity_cutoff(0.1) == config.SIMILARITY_FLOOR
+
+
+def test_publish_cutoff_scales_with_best_score() -> None:
+    """발행 컷도 이번 실행 최고 점수에 상대적으로 정해진다."""
+    assert config.publish_cutoff(0.30) == pytest.approx(0.30 * config.PUBLISH_RATIO)
+    assert config.publish_cutoff(0.01) == config.PUBLISH_FLOOR
+
+
+def test_realistic_news_score_passes_publish_cutoff() -> None:
+    """실측 수준의 뉴스 문서가 발행 컷을 통과한다 (회귀 방지).
+
+    수정 전에는 유사도 0.6·점수 0.5라는 고정 임계값이 실제 분포(유사도 최대
+    0.475, 점수 최대 0.357)보다 높아 어떤 문서도 통과할 수 없었다.
+    """
+    doc = {
+        "title": "코스피 급락",
+        "url": "https://news.google.com/rss/articles/CBMiabc123",
+        "source_url": "https://www.chosun.com",
+        "published": _NOW - timedelta(hours=6),
+    }
+    score = scoring.score_document(doc, 0.45, now=_NOW)["final_score"]
+
+    assert score >= config.publish_cutoff(score)
+
+
 def test_config_env_override(monkeypatch) -> None:
     """설정값은 같은 이름의 환경변수로 오버라이드할 수 있다."""
     monkeypatch.setenv("COLLECT_WINDOW_DAYS", "5")
-    monkeypatch.setenv("MIN_SIMILARITY", "0.7")
+    monkeypatch.setenv("SIMILARITY_FLOOR", "0.7")
     try:
         importlib.reload(config)
         assert config.COLLECT_WINDOW_DAYS == 5
-        assert config.MIN_SIMILARITY == 0.7
+        assert config.SIMILARITY_FLOOR == 0.7
         assert config.collect_window_hours() == 120.0
     finally:
         monkeypatch.undo()

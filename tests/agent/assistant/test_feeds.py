@@ -32,6 +32,22 @@ def test_build_news_feed_url_encodes_keyword() -> None:
     assert "%EC" in url or "+" in url  # 한글이 인코딩됨
 
 
+def test_extract_source_reads_publisher_from_rss() -> None:
+    """RSS의 <source> 요소에서 원본 발행처 URL과 이름을 뽑는다.
+
+    Google News의 link는 자기네 리다이렉트 주소라 발행처를 알 수 없고, 이 필드가
+    유일하게 진짜 언론사 도메인을 알려준다.
+    """
+    entry = {"source": {"href": "https://www.chosun.com", "title": "조선일보"}}
+    assert feeds._extract_source(entry) == ("https://www.chosun.com", "조선일보")
+
+
+def test_extract_source_returns_empty_when_absent() -> None:
+    """<source>가 없는 피드 항목은 빈 문자열을 반환한다 (예외를 내지 않는다)."""
+    assert feeds._extract_source({}) == ("", "")
+    assert feeds._extract_source({"source": None}) == ("", "")
+
+
 def test_canonical_url_strips_query_and_fragment() -> None:
     """query와 fragment를 제거하고 host를 소문자화한다."""
     assert feeds.canonical_url("https://A.com/news/1?utm=x#top") == "https://a.com/news/1"

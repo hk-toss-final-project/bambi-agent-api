@@ -19,14 +19,21 @@ _TEXT_A2 = "전고체 배터리 양산 발표를 다룬 후속 보도"
 _TEXT_B = "전고체 관련 학회 발표 소식 정리"
 _TEXT_C = "무관한 게임 신작 출시 소식 안내"
 
-# 토픽 [1,0] 기준: A류 cos≈0.994(동일 이슈 클러스터), B cos≈0.707(별도 클러스터),
-# C cos≈0.110(유사도 미달 제외).
+# 토픽 [1,0,0] 기준 코사인 유사도:
+#   A1≈0.46, A2≈0.45 (서로 cos≈1.0 → 동일 이슈 클러스터)
+#   B ≈0.40 (A와 cos≈0.18 → 별도 클러스터)
+#   C ≈0.11 (유사도 컷 미달 → 제외)
+#
+# 실제 임베딩(text-embedding-3-small)에서 짧은 키워드와 문서의 유사도는 0.3~0.5
+# 좁은 범위에 몰린다. 유사도 컷이 최고값에 상대적이므로, 픽스처도 그 분포를
+# 따라야 실제 동작을 검증할 수 있다. 2차원으로는 관련 문서끼리 항상 cos>0.8이
+# 되어 클러스터가 분리되지 않으므로 3차원을 쓴다.
 _VECTORS = {
-    _TOPIC: [1.0, 0.0],
-    _TEXT_A1: [0.9, 0.1],
-    _TEXT_A2: [0.9, 0.1],
-    _TEXT_B: [0.5, 0.5],
-    _TEXT_C: [0.1, 0.9],
+    _TOPIC: [1.0, 0.0, 0.0],
+    _TEXT_A1: [0.46, 0.888, 0.0],
+    _TEXT_A2: [0.45, 0.893, 0.0],
+    _TEXT_B: [0.40, 0.0, 0.9165],
+    _TEXT_C: [0.11, 0.0, 0.9939],
 }
 
 
@@ -88,7 +95,7 @@ def test_daily_mode_selects_clusters_above_threshold(monkeypatch) -> None:
     assert len(top["sources"]) == 2                      # 출처 링크는 클러스터 전체
     assert top["summary"] == "통합 인사이트"              # 개별 요약이 아닌 통합 요약
     assert top["status"] == "신규"
-    assert top["score"] == pytest.approx(0.9939 * 1.0 * 0.8 * 1.1, abs=1e-3)
+    assert top["score"] == pytest.approx(0.46 * 1.0 * 0.8 * 1.1, abs=1e-3)
     assert top["published"].startswith("2026-07-20")
 
     # 유사도 미달 문서는 사유와 함께 로그에 남는다.
@@ -102,7 +109,7 @@ def test_duplicate_cluster_is_excluded(monkeypatch) -> None:
     _patch_collect(monkeypatch, _make_docs)
     dedup.record_report_items(
         "minji", _TOPIC,
-        [{"url_key": "https://old.com/1", "title": "어제 보고", "embedding": [0.9, 0.1]}],
+        [{"url_key": "https://old.com/1", "title": "어제 보고", "embedding": [0.46, 0.888, 0.0]}],
         now=_NOW - timedelta(days=1),
     )
 
@@ -111,6 +118,60 @@ def test_duplicate_cluster_is_excluded(monkeypatch) -> None:
     assert result["mode"] == "daily"
     assert [item["title"] for item in result["items"]] == ["전고체 학회 소식"]
     assert any(e["stage"] == "dedup" for e in result["log"]["exclusions"])
+
+
+def test_similarity_cutoff_adapts_to_keyword_scale(monkeypatch) -> None:
+    """유사도 컷은 고정값이 아니라 이번 실행 최고 유사도에 맞춰 움직인다.
+
+    전체 유사도가 낮게 형성되는 키워드(긴 키워드 등)에서도 상위 문서는 살아남아야
+    한다. 고정 임계값이던 때는 이런 키워드가 통째로 탈락했다.
+    """
+    _seed_collect_history()
+    # 유사도가 낮게 형성되는 키워드 상황 (실측: 긴 키워드일수록 최고값이 낮다).
+    # 최고 0.35 — 옛 고정 임계값 0.6이었다면 4건 전부 탈락했을 분포다.
+    low = {
+        _TOPIC: [1.0, 0.0, 0.0],
+        _TEXT_A1: [0.35, 0.9367, 0.0],
+        _TEXT_A2: [0.34, 0.9404, 0.0],
+        _TEXT_B: [0.30, 0.0, 0.9539],
+        _TEXT_C: [0.05, 0.0, 0.9987],
+    }
+    monkeypatch.setattr(pipeline, "embed_texts", lambda texts, model=None: [low[t] for t in texts])
+    _patch_collect(monkeypatch, _make_docs)
+
+    result = pipeline.run_daily(_TOPIC, "minji", reference_now=_NOW)
+
+    # 컷이 최고값(0.35)에 맞춰 내려가 상위 문서가 살아남는다.
+    assert result["mode"] == "daily"
+    assert result["items"]
+    assert result["log"]["similarity_cutoff"] < 0.35
+    # 무관 문서(0.05)는 여전히 걸러진다 — 컷이 내려가도 하한은 지킨다.
+    assert any(e["stage"] == "similarity_filter" for e in result["log"]["exclusions"])
+
+
+def test_similarity_floor_blocks_wholly_irrelevant_results(monkeypatch) -> None:
+    """수집 결과가 통째로 무관하면 절대 하한이 걸려 아무것도 선정하지 않는다.
+
+    상대 컷만 쓰면 "가장 덜 무관한 문서"가 항상 통과해버린다. 하한이 이를 막고,
+    이 경우 보고서는 근거 없이 생성되지 않는다.
+    """
+    _seed_collect_history()
+    irrelevant = {
+        _TOPIC: [1.0, 0.0, 0.0],
+        _TEXT_A1: [0.10, 0.995, 0.0],
+        _TEXT_A2: [0.09, 0.996, 0.0],
+        _TEXT_B: [0.08, 0.0, 0.997],
+        _TEXT_C: [0.05, 0.0, 0.9987],
+    }
+    monkeypatch.setattr(
+        pipeline, "embed_texts", lambda texts, model=None: [irrelevant[t] for t in texts]
+    )
+    _patch_collect(monkeypatch, _make_docs)
+
+    result = pipeline.run_daily(_TOPIC, "minji", reference_now=_NOW)
+
+    assert result["mode"] != "daily"
+    assert result["log"]["after_similarity_filter"] == 0
 
 
 def test_waterfall_weekly_trend_when_no_daily_items(monkeypatch) -> None:
@@ -142,17 +203,31 @@ def test_waterfall_evergreen_when_nothing_collected(monkeypatch) -> None:
 
 
 def test_cold_start_uses_neutral_freshness(monkeypatch) -> None:
-    """콜드 스타트에서는 신선도를 0.5로 고정해 점수를 계산한다."""
+    """콜드 스타트에서는 신선도를 중립값 0.5로 고정해 점수를 계산한다."""
     _patch_collect(monkeypatch, _make_docs)
 
     result = pipeline.run_daily(_TOPIC, "minji", reference_now=_NOW)
 
     assert result["cold_start"] is True
-    # A1: 0.994 × 0.5(중립) × 0.8 × 1.1 ≈ 0.437 → 임계값 0.5 미달
+    # A1: 0.46 × 0.5(중립) × 0.8 × 1.1 ≈ 0.202
     recorded = history.get_collected_entries("minji", _TOPIC)
-    assert recorded["https://www.hankyung.com/2026/07/a1"]["score"] == pytest.approx(0.437, abs=1e-3)
-    assert result["mode"] != "daily"  # 전부 미달이라 당일 모드가 아니다
-    assert any(e["stage"] == "threshold" for e in result["log"]["exclusions"])
+    assert recorded["https://www.hankyung.com/2026/07/a1"]["score"] == pytest.approx(0.202, abs=1e-3)
+
+
+def test_cold_start_still_produces_daily_items(monkeypatch) -> None:
+    """콜드 스타트여도 아이템이 선정된다 (회귀 방지).
+
+    발행 컷이 고정값 0.5이던 때는 중립 신선도(0.5)가 곱해지는 콜드 스타트에서
+    어떤 문서도 그 값에 닿지 못해, 처음 조회하는 키워드는 항상 0건이 되고
+    근거 없는 폴백 경로로 빠졌다. 컷이 상대값이 되면서 해소된 동작이다.
+    """
+    _patch_collect(monkeypatch, _make_docs)
+
+    result = pipeline.run_daily(_TOPIC, "minji", reference_now=_NOW)
+
+    assert result["cold_start"] is True
+    assert result["mode"] == "daily"
+    assert result["items"]
 
 
 def test_same_day_rerun_is_idempotent(monkeypatch) -> None:

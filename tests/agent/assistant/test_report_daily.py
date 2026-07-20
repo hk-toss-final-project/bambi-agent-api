@@ -66,11 +66,19 @@ def test_weekly_fallback_has_label_and_issue_links(monkeypatch) -> None:
     assert "이슈1" in captured["user"]  # 이슈 목록이 프롬프트에 들어간다
 
 
-def test_evergreen_fallback_has_label(monkeypatch) -> None:
-    """에버그린 폴백은 '개념 정리' 라벨을 명시하고 딥다이브 본문을 쓴다."""
-    monkeypatch.setattr(report, "complete", lambda s, u, model="gpt-4.1-mini": "개념 딥다이브 본문")
+def test_no_evidence_does_not_call_llm(monkeypatch) -> None:
+    """근거를 한 건도 수집하지 못하면 LLM을 호출하지 않고 본문을 생성하지 않는다.
+
+    수정 전에는 이 경로에서 LLM이 모델 내부 지식으로 본문을 써서, 출처 없는
+    내용이 근거 기반 브리핑과 똑같은 모양으로 나갔다(환각 위험).
+    """
+
+    def fail(*args, **kwargs):
+        raise AssertionError("근거가 없는데 LLM을 호출했다")
+
+    monkeypatch.setattr(report, "complete", fail)
 
     result = report.generate_daily_report(_daily_result([], mode="evergreen"))
 
-    assert "오늘 신규 소식 없음 — 개념 정리" in result
-    assert "개념 딥다이브 본문" in result
+    assert "오늘 신규 소식 없음" in result
+    assert "본문을 생성하지 않았습니다" in result

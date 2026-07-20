@@ -102,6 +102,8 @@ def score_document(
     """문서 하나의 점수 구성 요소와 final_score를 계산해 딕셔너리로 반환한다.
 
     doc은 {title, url, published(datetime|None)} 키를 가진 문서 딕셔너리다.
+    source_url(원본 발행처 URL)이 있으면 소스 가중치는 그쪽을 우선한다 — 뉴스
+    문서의 url은 Google News 리다이렉트 주소라 발행처를 판별할 수 없기 때문이다.
 
     Returns:
         {content_type, similarity, freshness, source_weight, cluster_boost, final_score}
@@ -114,7 +116,7 @@ def score_document(
         now=now,
         cold_start=cold_start,
     )
-    weight = source_weight(str(doc.get("url") or ""))
+    weight = source_weight(str(doc.get("source_url") or doc.get("url") or ""))
     return {
         "content_type": content_type,
         "similarity": similarity,
