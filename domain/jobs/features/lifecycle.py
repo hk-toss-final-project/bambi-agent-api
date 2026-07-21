@@ -4,6 +4,7 @@ JOB-001, JOB-002, JOB-003, JOB-004 기능의 실제 구현 위치를 제공한�
 """
 
 from shared.contracts import FeatureRequest, FeatureResult
+from shared.feature_runtime import execute_feature_implementation
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
@@ -12,7 +13,7 @@ async def job_001(request: FeatureRequest) -> FeatureResult:
 
     비동기 Agent 작업을 생성하고 Queue에 등록한다.
     """
-    raise NotImplementedError("[JOB-001] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="JOB-001")
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
@@ -21,7 +22,7 @@ async def job_002(request: FeatureRequest) -> FeatureResult:
 
     작업의 상태와 진행률을 조회한다.
     """
-    raise NotImplementedError("[JOB-002] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="JOB-002")
 
 
 async def job_003(request: FeatureRequest) -> FeatureResult:

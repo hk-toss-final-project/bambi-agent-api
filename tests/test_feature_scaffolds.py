@@ -9,6 +9,7 @@ FEATURE_SPEC = ROOT / "docs" / "agent-api-feature-spec.md"
 MVP_SPEC = ROOT / "docs" / "agent-api-mvp-scope.md"
 SECTION_PATTERN = re.compile(r"^## (\d+)\.")
 TABLE_ID_PATTERN = re.compile(r"^\| ([A-Z][A-Z0-9-]+) \|")
+CHECKED_MVP_PATTERN = re.compile(r"^- \[x\] `([A-Z][A-Z0-9-]+)`")
 FUNCTION_PATTERN = re.compile(r"^[a-z][a-z0-9]*_\d{3}$")
 KOREAN_PATTERN = re.compile(r"[가-힣]")
 
@@ -35,6 +36,15 @@ def read_mvp_feature_ids() -> set[str]:
         for line in MVP_SPEC.read_text(encoding="utf-8").splitlines()
         if (match := TABLE_ID_PATTERN.match(line))
         if match.group(1) != "ID"
+    }
+
+
+def read_checked_mvp_feature_ids() -> set[str]:
+    """MVP 체크리스트에서 구현 완료로 표시된 기능 ID를 읽는다."""
+    return {
+        match.group(1)
+        for line in MVP_SPEC.read_text(encoding="utf-8").splitlines()
+        if (match := CHECKED_MVP_PATTERN.match(line))
     }
 
 
@@ -198,6 +208,35 @@ def test_feature_modules_do_not_import_their_api_facade() -> None:
                 raise AssertionError(f"구현 모듈의 facade 역참조: {path}")
 
 
+def test_external_modules_do_not_import_feature_implementation_modules() -> None:
+    """외부 계층이 features 구현 파일을 건너뛰어 직접 참조하지 않는지 검증한다."""
+    source_roots = (
+        ROOT / "app",
+        ROOT / "agent",
+        ROOT / "domain",
+        ROOT / "infrastructure",
+        ROOT / "workers",
+        ROOT / "scheduler",
+        ROOT / "mcp_server",
+        ROOT / "shared",
+    )
+    for source_root in source_roots:
+        for path in source_root.rglob("*.py"):
+            relative_parts = path.relative_to(ROOT).parts
+            if "features" in relative_parts or path.name == "api.py":
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in tree.body:
+                if isinstance(node, ast.ImportFrom):
+                    module = node.module or ""
+                    if module == "features" or ".features" in module:
+                        raise AssertionError(f"facade를 우회한 구현 import: {path}")
+                if isinstance(node, ast.Import) and any(
+                    ".features" in alias.name for alias in node.names
+                ):
+                    raise AssertionError(f"facade를 우회한 구현 import: {path}")
+
+
 def test_mvp_comments_match_dedicated_scope() -> None:
     """MVP 주석이 전용 MVP 범위 문서의 기능 ID와 정확히 일치하는지 검증한다."""
     marked: set[str] = set()
@@ -217,17 +256,9 @@ def test_feature_functions_have_korean_docstrings() -> None:
         )
 
 
-def test_feature_functions_are_unimplemented_stubs() -> None:
-    """구현 완료 표시 기능과 나머지 스텁의 상태가 명시적으로 일치하는지 검증한다."""
-    implemented = {
-        "PWIKI-003",
-        "SCH-009",
-        "WBA-001",
-        "WC-001",
-        "WORKER-001",
-        "WORKER-002",
-        "WORKER-003",
-    }
+def test_feature_implementation_status_matches_mvp_checklist() -> None:
+    """완료 체크 기능만 실행 가능하고 나머지는 명시적 스텁인지 검증한다."""
+    implemented = read_checked_mvp_feature_ids() | {"SCH-009"}
     for feature_id, (path, node, _) in discover_feature_functions().items():
         if feature_id in implemented:
             assert not is_not_implemented_stub(node), f"구현이 필요한 함수: {feature_id} ({path})"

@@ -14,6 +14,8 @@ from uuid import uuid4
 from fastapi import status
 
 from agent.graph import run_bambi_generation, run_personal_wiki_build
+from agent.bambi.api import bambi_001
+from agent.wiki_builder.api import wba_001
 from app.config import Settings
 from app.exceptions import AgentApiError, ErrorDetail
 from app.schemas.development import (
@@ -28,6 +30,7 @@ from infrastructure.sources.connectors.api import (
     JinaReadResult,
     fetch_url_via_jina,
 )
+from shared.contracts import FeatureRequest
 
 type UrlFetcher = Callable[[str], JinaReadResult]
 type WikiRunner = Callable[..., Awaitable[dict[str, object]]]
@@ -86,14 +89,23 @@ class AgentWorkflowService:
             if not source_version_id:
                 raise ValueError("Wiki Build Job Payload에 원본 Version ID가 없습니다.")
             async with self._repository.acquire_connection() as connection:
-                result = await self._wiki_runner(
-                    connection,
-                    user_id=job.user_id,
-                    source_document_version_id=source_version_id,
-                    job_id=job.job_id,
-                    model=self._settings.wiki_llm_model,
+                feature_result = await wba_001(
+                    FeatureRequest(
+                        request_id=job.job_id,
+                        actor_id="development-agent-workflow",
+                        user_id=job.user_id,
+                        payload={
+                            "implementation": lambda: self._wiki_runner(
+                                connection,
+                                user_id=job.user_id,
+                                source_document_version_id=source_version_id,
+                                job_id=job.job_id,
+                                model=self._settings.wiki_llm_model,
+                            )
+                        },
+                    )
                 )
-            return "wiki_build", result
+            return "wiki_build", dict(feature_result.data)
         if job.job_type == "bambi_generation":
             topic = str(job.payload.get("topic") or "").strip()
             content_type = str(job.payload.get("content_type") or "").strip()
@@ -101,17 +113,26 @@ class AgentWorkflowService:
             if not topic or not content_type:
                 raise ValueError("Bambi Job Payload에 topic과 content_type이 필요합니다.")
             async with self._repository.acquire_connection() as connection:
-                result = await self._bambi_runner(
-                    connection,
-                    user_id=job.user_id,
-                    job_id=job.job_id,
-                    attempt_number=job.attempt_number,
-                    topic=topic,
-                    content_type=content_type,
-                    language=language,
-                    model=self._settings.bambi_llm_model,
+                feature_result = await bambi_001(
+                    FeatureRequest(
+                        request_id=job.job_id,
+                        actor_id="development-agent-workflow",
+                        user_id=job.user_id,
+                        payload={
+                            "implementation": lambda: self._bambi_runner(
+                                connection,
+                                user_id=job.user_id,
+                                job_id=job.job_id,
+                                attempt_number=job.attempt_number,
+                                topic=topic,
+                                content_type=content_type,
+                                language=language,
+                                model=self._settings.bambi_llm_model,
+                            )
+                        },
+                    )
                 )
-            return "bambi_generation", result
+            return "bambi_generation", dict(feature_result.data)
         raise ValueError(f"개발 실행기가 지원하지 않는 Job 유형입니다: {job.job_type}")
 
     async def run_job(

@@ -10,6 +10,7 @@ from typing import Any
 from psycopg import AsyncConnection
 
 from agent.graph import run_personal_wiki_build
+from agent.wiki_builder.api import wba_001
 from infrastructure.persistence.api import (
     ClaimedAgentJob,
     complete_agent_job,
@@ -32,13 +33,23 @@ async def _process_job(
     source_version_id = job.payload.get("source_document_version_id")
     if not isinstance(source_version_id, str) or not source_version_id:
         raise ValueError("Job Payload에 source_document_version_id가 없습니다.")
-    result = await run_personal_wiki_build(
-        connection,
-        user_id=job.user_id,
-        source_document_version_id=source_version_id,
-        job_id=job.job_id,
-        model=model,
+    feature_result = await wba_001(
+        FeatureRequest(
+            request_id=job.job_id,
+            actor_id=worker_id,
+            user_id=job.user_id,
+            payload={
+                "implementation": lambda: run_personal_wiki_build(
+                    connection,
+                    user_id=job.user_id,
+                    source_document_version_id=source_version_id,
+                    job_id=job.job_id,
+                    model=model,
+                )
+            },
+        )
     )
+    result = dict(feature_result.data)
     async with connection.transaction():
         await set_system_job_scope(connection)
         await complete_agent_job(

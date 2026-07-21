@@ -8,6 +8,8 @@ from fastapi import status
 from agent.wiki_builder.api import InterestCandidate, extract_interest_candidates
 from app.exceptions import AgentApiError, ErrorDetail
 from app.schemas.interests import InterestProfileResponse
+from domain.interests.api import int_001, int_002, int_005, int_011
+from shared.contracts import FeatureRequest
 
 
 class InterestRepository(Protocol):
@@ -41,6 +43,21 @@ class InterestService:
 
     async def rebuild(self, user_id: str, *, limit: int) -> InterestProfileResponse:
         """현재 Wiki 문서에서 관심 후보를 계산해 새 Profile로 활성화한다."""
+        result = await int_011(
+            FeatureRequest(
+                request_id=f"interest-rebuild:{user_id}",
+                actor_id="interest-service",
+                user_id=user_id,
+                payload={"implementation": lambda: self._rebuild(user_id, limit=limit)},
+            )
+        )
+        response = result.data.get("result")
+        if not isinstance(response, InterestProfileResponse):
+            raise RuntimeError("INT-011이 관심사 프로필 응답을 반환하지 않았습니다.")
+        return response
+
+    async def _rebuild(self, user_id: str, *, limit: int) -> InterestProfileResponse:
+        """관심사 추출·분류·점수 계산 결과를 저장소에 반영한다."""
         source = await self._repository.load_interest_documents(user_id)
         wiki_version_id = source.get("wiki_version_id")
         documents = source.get("documents")
@@ -53,7 +70,46 @@ class InterestService:
                 ),
             )
         document_rows = documents if isinstance(documents, list) else []
-        candidates = extract_interest_candidates(document_rows, limit=limit)
+        extraction = await int_001(
+            FeatureRequest(
+                request_id=f"interest-extraction:{user_id}",
+                actor_id="interest-service",
+                user_id=user_id,
+                payload={
+                    "implementation": lambda: extract_interest_candidates(
+                        document_rows, limit=limit
+                    )
+                },
+            )
+        )
+        candidates_value = extraction.data.get("result")
+        if not isinstance(candidates_value, list) or not all(
+            isinstance(candidate, InterestCandidate) for candidate in candidates_value
+        ):
+            raise RuntimeError("INT-001이 관심사 후보 목록을 반환하지 않았습니다.")
+        classified = await int_002(
+            FeatureRequest(
+                request_id=f"interest-classification:{user_id}",
+                actor_id="interest-service",
+                user_id=user_id,
+                payload={"implementation": lambda: candidates_value},
+            )
+        )
+        scored = await int_005(
+            FeatureRequest(
+                request_id=f"interest-scoring:{user_id}",
+                actor_id="interest-service",
+                user_id=user_id,
+                payload={
+                    "implementation": lambda: classified.data.get("result", [])
+                },
+            )
+        )
+        candidates = scored.data.get("result")
+        if not isinstance(candidates, list) or not all(
+            isinstance(candidate, InterestCandidate) for candidate in candidates
+        ):
+            raise RuntimeError("INT-005가 점수화된 관심사 후보를 반환하지 않았습니다.")
         payload = await self._repository.save_interest_profile(
             user_id,
             wiki_version_id=wiki_version_id,

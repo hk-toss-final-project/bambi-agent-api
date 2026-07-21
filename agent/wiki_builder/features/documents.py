@@ -4,6 +4,7 @@ WBA-003, WBA-004, WBA-005 기능의 실제 구현 위치를 제공한다.
 """
 
 from shared.contracts import FeatureRequest, FeatureResult
+from shared.feature_runtime import execute_feature_implementation
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
@@ -12,7 +13,7 @@ async def wba_003(request: FeatureRequest) -> FeatureResult:
 
     입력 데이터를 개인 Wiki 문서 구조로 정리한다.
     """
-    raise NotImplementedError("[WBA-003] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="WBA-003")
 
 
 async def wba_004(request: FeatureRequest) -> FeatureResult:

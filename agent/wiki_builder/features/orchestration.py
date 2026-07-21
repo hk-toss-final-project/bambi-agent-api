@@ -24,6 +24,7 @@ from infrastructure.persistence.api import (
 )
 
 from shared.contracts import FeatureRequest, FeatureResult
+from shared.feature_runtime import execute_feature_implementation
 
 type DictRow = dict[str, Any]
 type WikiClassifier = Callable[..., WikiClassification]
@@ -111,6 +112,8 @@ async def wba_001(request: FeatureRequest) -> FeatureResult:
 
     새로 추가된 사용자 데이터만 개인 Wiki에 반영한다.
     """
+    if callable(request.payload.get("implementation")):
+        return await execute_feature_implementation(request, feature_id="WBA-001")
     connection = request.payload.get("connection")
     source_document_version_id = request.payload.get("source_document_version_id")
     job_id = request.payload.get("job_id")

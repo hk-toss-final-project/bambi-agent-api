@@ -4,6 +4,7 @@ SVC-002, SVC-003, SVC-004, SVC-005, SVC-006, SVC-007 기능의 실제 구현 위
 """
 
 from shared.contracts import FeatureRequest, FeatureResult
+from shared.feature_runtime import execute_feature_implementation
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
@@ -12,7 +13,7 @@ async def svc_002(request: FeatureRequest) -> FeatureResult:
 
     클리핑 데이터를 개인 Wiki 처리 작업으로 전달한다.
     """
-    raise NotImplementedError("[SVC-002] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="SVC-002")
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
@@ -21,7 +22,7 @@ async def svc_003(request: FeatureRequest) -> FeatureResult:
 
     입력된 URL을 개인 Wiki 처리 작업으로 전달한다.
     """
-    raise NotImplementedError("[SVC-003] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="SVC-003")
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.

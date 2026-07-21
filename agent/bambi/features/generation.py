@@ -14,6 +14,7 @@ from agent.llm.api import complete, strip_json_fence
 # 하위 호환 재노출: 기존 generation.BambiContextDocument 등 사용처를 유지한다.
 from shared.bambi_models import BambiContextDocument, GeneratedBambiContent
 from shared.contracts import FeatureRequest, FeatureResult
+from shared.feature_runtime import execute_feature_implementation
 
 _PROMPT_PATH = Path(__file__).parents[2] / "prompts" / "templates" / "bambi_system.md"
 _SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8").strip()
@@ -110,7 +111,7 @@ async def bambi_008(request: FeatureRequest) -> FeatureResult:
 
     피드와 미리보기에 사용할 요약을 생성한다.
     """
-    raise NotImplementedError("[BAMBI-008] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="BAMBI-008")
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
@@ -119,7 +120,7 @@ async def bambi_009(request: FeatureRequest) -> FeatureResult:
 
     플랜과 유형에 맞는 본문을 생성한다.
     """
-    raise NotImplementedError("[BAMBI-009] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="BAMBI-009")
 
 
 async def bambi_010(request: FeatureRequest) -> FeatureResult:

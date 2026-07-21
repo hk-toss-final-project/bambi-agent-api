@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from agent import graph as agent_graph
+from shared.contracts import FeatureResult
 
 
 class _FakeConnection:
@@ -93,11 +94,15 @@ def test_run_personal_wiki_build_assembles_result(
         assert kwargs["classification"] == "classification"
         return plan
 
-    async def fake_persist(connection: Any, **kwargs: Any) -> SimpleNamespace:
+    async def fake_pwiki_002(request: Any) -> FeatureResult:
+        """PWIKI-002 facade 호출을 기록하고 저장 결과를 반환한다."""
         order.append("persist")
-        assert kwargs["plan"] is plan
-        assert kwargs["job_id"] == "job-1"
-        return _fake_persisted()
+        assert request.payload["plan"] is plan
+        assert request.payload["job_id"] == "job-1"
+        return FeatureResult(
+            feature_id="PWIKI-002",
+            data={"persisted": _fake_persisted()},
+        )
 
     monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
     monkeypatch.setattr(
@@ -107,7 +112,7 @@ def test_run_personal_wiki_build_assembles_result(
     monkeypatch.setattr(agent_graph, "list_existing_wiki_relations", fake_relations)
     monkeypatch.setattr(agent_graph, "classify_source_for_wiki", fake_classify)
     monkeypatch.setattr(agent_graph, "build_wiki_plan", fake_plan)
-    monkeypatch.setattr(agent_graph, "persist_wiki_build", fake_persist)
+    monkeypatch.setattr(agent_graph, "pwiki_002", fake_pwiki_002)
 
     connection = _FakeConnection()
     result = asyncio.run(

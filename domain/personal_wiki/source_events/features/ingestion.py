@@ -4,6 +4,7 @@ WSE-001, WSE-002, WSE-003, WSE-004, WSE-005, WSE-006, WSE-007, WSE-008 기능의
 """
 
 from shared.contracts import FeatureRequest, FeatureResult
+from shared.feature_runtime import execute_feature_implementation
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
@@ -12,7 +13,7 @@ async def wse_001(request: FeatureRequest) -> FeatureResult:
 
     사용자가 클리핑한 데이터를 개인 Wiki 반영 후보로 수신한다.
     """
-    raise NotImplementedError("[WSE-001] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="WSE-001")
 
 
 async def wse_002(request: FeatureRequest) -> FeatureResult:

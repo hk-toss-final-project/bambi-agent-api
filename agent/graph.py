@@ -16,18 +16,31 @@ from typing import Any
 from langgraph.graph import END, StateGraph
 from psycopg import AsyncConnection
 
-from agent.bambi.api import generate_bambi_content
+from agent.bambi.api import (
+    bambi_004,
+    bambi_005,
+    bambi_008,
+    bambi_009,
+    bambi_011,
+    bambi_012,
+    bambi_018,
+    bambi_020,
+    bambi_021,
+    generate_bambi_content,
+)
 from agent.state import BambiGenerationState, PersonalWikiBuildState
-from agent.wiki_builder.api import build_wiki_plan, classify_source_for_wiki
+from agent.wiki_builder.api import build_wiki_plan, classify_source_for_wiki, wba_003
+from domain.personal_wiki.documents.api import pwiki_002
+from domain.personal_wiki.retrieval.api import prag_003, prag_006, prag_007
 from infrastructure.persistence.api import (
     get_user_source_document_version_for_agent,
     list_existing_wiki_entries,
     list_existing_wiki_relations,
     load_bambi_context,
     persist_bambi_generation,
-    persist_wiki_build,
     set_personal_wiki_scope,
 )
+from shared.contracts import FeatureRequest
 
 type DictRow = dict[str, Any]
 
@@ -94,31 +107,53 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
     async def plan(state: PersonalWikiBuildState) -> dict[str, Any]:
         """분류 결과와 기존 Wiki 상태로 Build 계획을 만든다."""
         source = state["source"]
-        build_plan = build_wiki_plan(
-            source_title=source.title,
-            source_url=source.canonical_url,
-            source_tags=source.tags,
-            source_content_hash=source.content_hash,
-            source_size_bytes=len(source.raw_content.encode("utf-8")),
-            classification=state["classification"],
-            existing_entities=state["existing_entities"],
-            existing_concepts=state["existing_concepts"],
-            generated_at=datetime.now(UTC).isoformat(),
-            model=state["model"],
-            existing_relations=state["existing_relations"],
+        normalized = await wba_003(
+            FeatureRequest(
+                request_id=state["job_id"],
+                actor_id="personal-wiki-builder",
+                user_id=state["user_id"],
+                payload={
+                    "implementation": lambda: build_wiki_plan(
+                        source_title=source.title,
+                        source_url=source.canonical_url,
+                        source_tags=source.tags,
+                        source_content_hash=source.content_hash,
+                        source_size_bytes=len(source.raw_content.encode("utf-8")),
+                        classification=state["classification"],
+                        existing_entities=state["existing_entities"],
+                        existing_concepts=state["existing_concepts"],
+                        generated_at=datetime.now(UTC).isoformat(),
+                        model=state["model"],
+                        existing_relations=state["existing_relations"],
+                    )
+                },
+            )
         )
+        build_plan = normalized.data.get("result")
+        if build_plan is None:
+            raise RuntimeError("WBA-003이 Wiki Build 계획을 반환하지 않았습니다.")
         return {"plan": build_plan}
 
     async def persist(state: PersonalWikiBuildState) -> dict[str, Any]:
         """계획된 문서·관계·Chunk·Build Snapshot을 저장 Transaction으로 기록한다."""
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=state["user_id"])
-            persisted = await persist_wiki_build(
-                connection,
-                source=state["source"],
-                plan=state["plan"],
-                job_id=state["job_id"],
+            feature_result = await pwiki_002(
+                FeatureRequest(
+                    request_id=state["job_id"],
+                    actor_id="personal-wiki-builder",
+                    user_id=state["user_id"],
+                    payload={
+                        "connection": connection,
+                        "source": state["source"],
+                        "plan": state["plan"],
+                        "job_id": state["job_id"],
+                    },
+                )
             )
+            persisted = feature_result.data.get("persisted")
+            if persisted is None:
+                raise RuntimeError("PWIKI-002가 Wiki 저장 결과를 반환하지 않았습니다.")
         return {"persisted": persisted}
 
     async def finalize(state: PersonalWikiBuildState) -> dict[str, Any]:
@@ -202,24 +237,98 @@ def build_bambi_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         """개인 Wiki와 Global 최신 문서 Context를 조회 Transaction으로 읽는다."""
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=state["user_id"])
-            contexts = await load_bambi_context(
-                connection,
-                user_id=state["user_id"],
-                query=state["topic"],
+            hybrid = await prag_003(
+                FeatureRequest(
+                    request_id=state["job_id"],
+                    actor_id="bambi-generation-graph",
+                    user_id=state["user_id"],
+                    payload={
+                        "implementation": lambda: load_bambi_context(
+                            connection,
+                            user_id=state["user_id"],
+                            query=state["topic"],
+                        )
+                    },
+                )
             )
+        contextualized = await prag_006(
+            FeatureRequest(
+                request_id=state["job_id"],
+                actor_id="bambi-generation-graph",
+                user_id=state["user_id"],
+                payload={"implementation": lambda: hybrid.data.get("result", [])},
+            )
+        )
+        personal = await bambi_004(
+            FeatureRequest(
+                request_id=state["job_id"],
+                actor_id="bambi-generation-graph",
+                user_id=state["user_id"],
+                payload={
+                    "implementation": lambda: contextualized.data.get("result", [])
+                },
+            )
+        )
+        combined = await bambi_005(
+            FeatureRequest(
+                request_id=state["job_id"],
+                actor_id="bambi-generation-graph",
+                user_id=state["user_id"],
+                payload={"implementation": lambda: personal.data.get("result", [])},
+            )
+        )
+        personalized = await bambi_012(
+            FeatureRequest(
+                request_id=state["job_id"],
+                actor_id="bambi-generation-graph",
+                user_id=state["user_id"],
+                payload={"implementation": lambda: combined.data.get("result", [])},
+            )
+        )
+        contexts = personalized.data.get("result")
+        if not isinstance(contexts, list):
+            raise RuntimeError("BAMBI 검색 기능이 Context 목록을 반환하지 않았습니다.")
         return {"contexts": contexts}
 
     async def generate(state: BambiGenerationState) -> dict[str, Any]:
         """Transaction 밖에서 LLM 생성을 실행하고 지연 시간을 기록한다."""
         started = monotonic()
-        generated = await to_thread(
-            generate_bambi_content,
-            topic=state["topic"],
-            content_type=state["content_type"],
-            language=state["language"],
-            contexts=state["contexts"],
-            model=state["model"],
+        summary = await bambi_008(
+            FeatureRequest(
+                request_id=state["job_id"],
+                actor_id="bambi-generation-graph",
+                user_id=state["user_id"],
+                payload={
+                    "implementation": lambda: to_thread(
+                        generate_bambi_content,
+                        topic=state["topic"],
+                        content_type=state["content_type"],
+                        language=state["language"],
+                        contexts=state["contexts"],
+                        model=state["model"],
+                    )
+                },
+            )
         )
+        body = await bambi_009(
+            FeatureRequest(
+                request_id=state["job_id"],
+                actor_id="bambi-generation-graph",
+                user_id=state["user_id"],
+                payload={"implementation": lambda: summary.data.get("result")},
+            )
+        )
+        cited = await bambi_011(
+            FeatureRequest(
+                request_id=state["job_id"],
+                actor_id="bambi-generation-graph",
+                user_id=state["user_id"],
+                payload={"implementation": lambda: body.data.get("result")},
+            )
+        )
+        generated = cited.data.get("result")
+        if generated is None:
+            raise RuntimeError("BAMBI 생성 기능이 콘텐츠를 반환하지 않았습니다.")
         return {
             "generated": generated,
             "latency_ms": int((monotonic() - started) * 1000),
@@ -229,17 +338,50 @@ def build_bambi_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         """생성 Run·후보·Citation·Snapshot·Outbox를 저장 Transaction으로 기록한다."""
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=state["user_id"])
-            result = await persist_bambi_generation(
-                connection,
-                job_id=state["job_id"],
-                user_id=state["user_id"],
-                attempt_number=state["attempt_number"],
-                content_type=state["content_type"],
-                generated=state["generated"],
-                contexts=state["contexts"],
-                latency_ms=state["latency_ms"],
+            citations = await prag_007(
+                FeatureRequest(
+                    request_id=state["job_id"],
+                    actor_id="bambi-generation-graph",
+                    user_id=state["user_id"],
+                    payload={
+                        "implementation": lambda: persist_bambi_generation(
+                            connection,
+                            job_id=state["job_id"],
+                            user_id=state["user_id"],
+                            attempt_number=state["attempt_number"],
+                            content_type=state["content_type"],
+                            generated=state["generated"],
+                            contexts=state["contexts"],
+                            latency_ms=state["latency_ms"],
+                        )
+                    },
+                )
             )
-        return {"result": dict(result)}
+            persisted = await bambi_018(
+                FeatureRequest(
+                    request_id=state["job_id"],
+                    actor_id="bambi-generation-graph",
+                    user_id=state["user_id"],
+                    payload={"implementation": lambda: dict(citations.data)},
+                )
+            )
+        completed = await bambi_020(
+            FeatureRequest(
+                request_id=state["job_id"],
+                actor_id="bambi-generation-graph",
+                user_id=state["user_id"],
+                payload={"implementation": lambda: dict(persisted.data)},
+            )
+        )
+        safeguarded = await bambi_021(
+            FeatureRequest(
+                request_id=state["job_id"],
+                actor_id="bambi-generation-graph",
+                user_id=state["user_id"],
+                payload={"implementation": lambda: dict(completed.data)},
+            )
+        )
+        return {"result": dict(safeguarded.data)}
 
     graph = StateGraph(BambiGenerationState)
     graph.add_node("load_context", load_context)

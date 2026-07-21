@@ -9,6 +9,7 @@ from typing import Any
 
 from psycopg import AsyncConnection
 
+from agent.bambi.api import bambi_001
 from agent.graph import run_bambi_generation
 from infrastructure.persistence.api import (
     ClaimedAgentJob,
@@ -34,16 +35,26 @@ async def _process_job(
     language = str(job.payload.get("language") or "ko").strip()
     if not topic or not content_type:
         raise ValueError("Bambi Job Payload에 topic과 content_type이 필요합니다.")
-    result = await run_bambi_generation(
-        connection,
-        user_id=job.user_id,
-        job_id=job.job_id,
-        attempt_number=job.attempt_number,
-        topic=topic,
-        content_type=content_type,
-        language=language,
-        model=model,
+    feature_result = await bambi_001(
+        FeatureRequest(
+            request_id=job.job_id,
+            actor_id=worker_id,
+            user_id=job.user_id,
+            payload={
+                "implementation": lambda: run_bambi_generation(
+                    connection,
+                    user_id=job.user_id,
+                    job_id=job.job_id,
+                    attempt_number=job.attempt_number,
+                    topic=topic,
+                    content_type=content_type,
+                    language=language,
+                    model=model,
+                )
+            },
+        )
     )
+    result = dict(feature_result.data)
     async with connection.transaction():
         await set_system_job_scope(connection)
         await complete_agent_job(

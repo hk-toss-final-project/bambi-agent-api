@@ -3,7 +3,12 @@
 PWIKI-002, PWIKI-004, PWIKI-005 기능의 실제 구현 위치를 제공한다.
 """
 
+from infrastructure.persistence.api import (
+    UserSourceDocumentForAgent,
+    persist_wiki_build,
+)
 from shared.contracts import FeatureRequest, FeatureResult
+from shared.wiki_models import WikiBuildPlan
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
@@ -12,7 +17,28 @@ async def pwiki_002(request: FeatureRequest) -> FeatureResult:
 
     사용자가 선택한 데이터를 Wiki 문서로 변환한다.
     """
-    raise NotImplementedError("[PWIKI-002] 기능 구현이 필요합니다.")
+    connection = request.payload.get("connection")
+    source = request.payload.get("source")
+    plan = request.payload.get("plan")
+    job_id = request.payload.get("job_id")
+    if connection is None or not hasattr(connection, "execute"):
+        raise ValueError("PWIKI-002에 DB connection이 필요합니다.")
+    if not isinstance(source, UserSourceDocumentForAgent):
+        raise ValueError("PWIKI-002에 사용자 원본 Version이 필요합니다.")
+    if not isinstance(plan, WikiBuildPlan):
+        raise ValueError("PWIKI-002에 Wiki Build 계획이 필요합니다.")
+    if not isinstance(job_id, str) or not job_id:
+        raise ValueError("PWIKI-002에 job_id가 필요합니다.")
+    persisted = await persist_wiki_build(
+        connection,  # type: ignore[arg-type]
+        source=source,
+        plan=plan,
+        job_id=job_id,
+    )
+    return FeatureResult(
+        feature_id="PWIKI-002",
+        data={"persisted": persisted},
+    )
 
 
 async def pwiki_004(request: FeatureRequest) -> FeatureResult:

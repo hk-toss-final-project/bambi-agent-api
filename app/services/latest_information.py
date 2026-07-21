@@ -16,7 +16,12 @@ from infrastructure.sources.connectors.api import (
     LatestProviderError,
     NaverNewsProvider,
     NewsApiProvider,
+    col_002,
+    col_003,
+    col_004,
 )
+from infrastructure.sources.processing.api import gsp_004, gsp_006, gsp_015
+from shared.contracts import FeatureRequest
 
 
 class LatestInformationRepository(Protocol):
@@ -90,16 +95,76 @@ class LatestInformationService:
         for provider_name in payload.providers:
             try:
                 provider = self._provider_factory(provider_name)
-                articles = await provider.search(
-                    query=query,
-                    limit=payload.limit_per_provider,
-                    language=payload.language,
+                connector = {
+                    "naver": col_002,
+                    "gdelt": col_003,
+                    "newsapi": col_004,
+                }.get(provider_name)
+                if connector is None:
+                    raise LatestProviderError(
+                        provider_name,
+                        "unsupported_provider",
+                        "지원하지 않는 Provider입니다.",
+                    )
+                feature_result = await connector(
+                    FeatureRequest(
+                        request_id=f"latest-information:{user_id}:{provider_name}",
+                        actor_id="latest-information-service",
+                        user_id=user_id,
+                        payload={
+                            "implementation": lambda: provider.search(
+                                query=query,
+                                limit=payload.limit_per_provider,
+                                language=payload.language,
+                            )
+                        },
+                    )
                 )
-                saved = await self._repository.save_latest_articles(
-                    provider=provider_name,
-                    query=query,
-                    articles=articles,
+                articles_value = feature_result.data.get("result")
+                if not isinstance(articles_value, list) or not all(
+                    isinstance(article, LatestArticle) for article in articles_value
+                ):
+                    raise RuntimeError(
+                        f"{feature_result.feature_id}가 정규화된 기사 목록을 반환하지 않았습니다."
+                    )
+                normalized = await gsp_004(
+                    FeatureRequest(
+                        request_id=f"latest-normalization:{user_id}:{provider_name}",
+                        actor_id="latest-information-service",
+                        user_id=user_id,
+                        payload={"implementation": lambda: articles_value},
+                    )
                 )
+                articles = normalized.data.get("result")
+                if not isinstance(articles, list):
+                    raise RuntimeError("GSP-004가 정규화된 기사 목록을 반환하지 않았습니다.")
+                deduplicated = await gsp_006(
+                    FeatureRequest(
+                        request_id=f"latest-deduplication:{user_id}:{provider_name}",
+                        actor_id="latest-information-service",
+                        user_id=user_id,
+                        payload={
+                            "implementation": lambda: self._repository.save_latest_articles(
+                                provider=provider_name,
+                                query=query,
+                                articles=articles,
+                            )
+                        },
+                    )
+                )
+                isolated = await gsp_015(
+                    FeatureRequest(
+                        request_id=f"latest-isolation:{user_id}:{provider_name}",
+                        actor_id="latest-information-service",
+                        user_id=user_id,
+                        payload={
+                            "implementation": lambda: deduplicated.data.get("result", [])
+                        },
+                    )
+                )
+                saved = isolated.data.get("result")
+                if not isinstance(saved, list):
+                    raise RuntimeError("GSP-015가 Global 문서 목록을 반환하지 않았습니다.")
                 items.extend(saved)
             except LatestProviderError as error:
                 failures.append(

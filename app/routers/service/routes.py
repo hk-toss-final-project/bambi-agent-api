@@ -1,6 +1,6 @@
 """Service API가 호출하는 FastAPI MVP 내부 라우터."""
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, TypeVar, cast
 
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 
@@ -34,19 +34,42 @@ from app.schemas.wiki import (
     WikiGraphResponse,
     WikiTopNodesResponse,
 )
+from app.routers.service.api import (
+    svc_001,
+    svc_002,
+    svc_003,
+    svc_008,
+    svc_013,
+    svc_014,
+)
 from app.services.mvp import AgentApiMvpService
 from app.services.wiki_graph import WikiGraphService
 from app.services.wiki_documents import WikiDocumentService
 from app.services.interests import InterestService
 from app.services.generated_content import GeneratedContentService
+from shared.contracts import FeatureRequest, FeatureResult
 
 router = APIRouter(tags=["service-api"])
 UserId = Annotated[str, Path(min_length=1, max_length=128, description="사용자 ID")]
+ResponseT = TypeVar("ResponseT")
 
 
 def _request_id(request: Request) -> str:
     """추적 미들웨어가 생성한 Request ID를 반환한다."""
     return request.state.request_id
+
+
+def _feature_response(
+    result: FeatureResult,
+    response_type: type[ResponseT],
+) -> ResponseT:
+    """기능 결과에 담긴 FastAPI 응답 객체를 타입 검증해 반환한다."""
+    response = result.data.get("result")
+    if not isinstance(response, response_type):
+        raise RuntimeError(
+            f"{result.feature_id}가 예상 응답 {response_type.__name__}을 반환하지 않았습니다."
+        )
+    return cast(ResponseT, response)
 
 
 @router.put(
@@ -62,7 +85,20 @@ async def upsert_user_context(
     service: AgentApiMvpService = Depends(get_mvp_service),
 ) -> UserContextResponse:
     """[SVC-001] Service의 최신 사용자 설정을 Agent 컨텍스트에 반영한다."""
-    return await service.upsert_user_context(user_id, payload, _request_id(request))
+    request_id = _request_id(request)
+    result = await svc_001(
+        FeatureRequest(
+            request_id=request_id,
+            actor_id="service-api",
+            user_id=user_id,
+            payload={
+                "implementation": lambda: service.upsert_user_context(
+                    user_id, payload, request_id
+                )
+            },
+        )
+    )
+    return _feature_response(result, UserContextResponse)
 
 
 @router.post(
@@ -79,11 +115,22 @@ async def request_web_clipping(
     service: AgentApiMvpService = Depends(get_mvp_service),
 ) -> AcceptedJobResponse:
     """[SVC-002] 웹 클리핑을 Personal Wiki Builder Job으로 등록한다."""
-    return await service.submit_web_clipping(
-        user_id=user_id,
-        payload=payload,
-        request_id=_request_id(request),
+    request_id = _request_id(request)
+    result = await svc_002(
+        FeatureRequest(
+            request_id=request_id,
+            actor_id="service-api",
+            user_id=user_id,
+            payload={
+                "implementation": lambda: service.submit_web_clipping(
+                    user_id=user_id,
+                    payload=payload,
+                    request_id=request_id,
+                )
+            },
+        )
     )
+    return _feature_response(result, AcceptedJobResponse)
 
 
 @router.post(
@@ -100,11 +147,22 @@ async def request_url_wiki_source(
     service: AgentApiMvpService = Depends(get_mvp_service),
 ) -> AcceptedJobResponse:
     """[SVC-003] 사용자 입력 URL을 Personal Wiki Builder Job으로 등록한다."""
-    return await service.submit_url_source(
-        user_id=user_id,
-        payload=payload,
-        request_id=_request_id(request),
+    request_id = _request_id(request)
+    result = await svc_003(
+        FeatureRequest(
+            request_id=request_id,
+            actor_id="service-api",
+            user_id=user_id,
+            payload={
+                "implementation": lambda: service.submit_url_source(
+                    user_id=user_id,
+                    payload=payload,
+                    request_id=request_id,
+                )
+            },
+        )
     )
+    return _feature_response(result, AcceptedJobResponse)
 
 
 @router.post(
@@ -281,11 +339,22 @@ async def request_generation(
     service: AgentApiMvpService = Depends(get_mvp_service),
 ) -> AcceptedJobResponse:
     """[SVC-008] 밤비 개인화 콘텐츠 생성 Job을 등록한다."""
-    return await service.submit_generation(
-        user_id=user_id,
-        payload=payload,
-        request_id=_request_id(request),
+    request_id = _request_id(request)
+    result = await svc_008(
+        FeatureRequest(
+            request_id=request_id,
+            actor_id="service-api",
+            user_id=user_id,
+            payload={
+                "implementation": lambda: service.submit_generation(
+                    user_id=user_id,
+                    payload=payload,
+                    request_id=request_id,
+                )
+            },
+        )
     )
+    return _feature_response(result, AcceptedJobResponse)
 
 
 @router.get(
@@ -296,10 +365,18 @@ async def request_generation(
 )
 async def get_job_status(
     job_id: Annotated[str, Path(min_length=1, max_length=128)],
+    request: Request,
     service: AgentApiMvpService = Depends(get_mvp_service),
 ) -> JobStatusResponse:
     """[SVC-013] Agent Job의 현재 상태와 진행률을 조회한다."""
-    return await service.get_job(job_id)
+    result = await svc_013(
+        FeatureRequest(
+            request_id=_request_id(request),
+            actor_id="service-api",
+            payload={"implementation": lambda: service.get_job(job_id)},
+        )
+    )
+    return _feature_response(result, JobStatusResponse)
 
 
 @router.get(
@@ -310,7 +387,15 @@ async def get_job_status(
 )
 async def get_job_result(
     job_id: Annotated[str, Path(min_length=1, max_length=128)],
+    request: Request,
     service: AgentApiMvpService = Depends(get_mvp_service),
 ) -> JobResultResponse:
     """[SVC-014] 완료된 Agent Job의 기능별 결과를 조회한다."""
-    return await service.get_job_result(job_id)
+    result = await svc_014(
+        FeatureRequest(
+            request_id=_request_id(request),
+            actor_id="service-api",
+            payload={"implementation": lambda: service.get_job_result(job_id)},
+        )
+    )
+    return _feature_response(result, JobResultResponse)

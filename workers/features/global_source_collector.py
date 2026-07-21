@@ -18,10 +18,14 @@ from infrastructure.persistence.api import (
 )
 from infrastructure.sources.connectors.api import (
     GdeltNewsProvider,
+    LatestArticle,
     LatestInformationProvider,
     LatestProviderError,
     NaverNewsProvider,
+    col_002,
+    col_003,
 )
+from infrastructure.sources.processing.api import gsp_004, gsp_006, gsp_015
 from shared.contracts import FeatureRequest, FeatureResult
 
 type DictRow = dict[str, Any]
@@ -111,19 +115,64 @@ async def run_global_source_collection_batch(
                     naver_client_secret=naver_client_secret,
                     gdelt_base_url=gdelt_base_url,
                 )
-                articles = await provider.search(
-                    query=query,
-                    limit=limit_per_provider,
-                    language=language,
-                )
-                async with connection.transaction():
-                    await set_system_job_scope(connection)
-                    saved = await persist_collected_articles(
-                        connection,
-                        provider=provider_name,
-                        query=query,
-                        articles=articles,
+                connector = col_002 if provider_name == "naver" else col_003
+                feature_result = await connector(
+                    FeatureRequest(
+                        request_id=f"global-source-collector:{provider_name}",
+                        actor_id="global-source-collector",
+                        payload={
+                            "implementation": lambda: provider.search(
+                                query=query,
+                                limit=limit_per_provider,
+                                language=language,
+                            )
+                        },
                     )
+                )
+                articles_value = feature_result.data.get("result")
+                if not isinstance(articles_value, list) or not all(
+                    isinstance(article, LatestArticle) for article in articles_value
+                ):
+                    raise RuntimeError(
+                        f"{feature_result.feature_id}가 정규화된 기사 목록을 반환하지 않았습니다."
+                    )
+                normalized = await gsp_004(
+                    FeatureRequest(
+                        request_id=f"global-normalization:{provider_name}",
+                        actor_id="global-source-collector",
+                        payload={"implementation": lambda: articles_value},
+                    )
+                )
+                articles = normalized.data.get("result")
+                if not isinstance(articles, list):
+                    raise RuntimeError("GSP-004가 정규화된 기사 목록을 반환하지 않았습니다.")
+
+                async def persist_articles() -> dict[str, int]:
+                    """정규화된 기사를 Global Namespace에 멱등 저장한다."""
+                    async with connection.transaction():
+                        await set_system_job_scope(connection)
+                        return await persist_collected_articles(
+                            connection,
+                            provider=provider_name,
+                            query=query,
+                            articles=articles,
+                        )
+
+                deduplicated = await gsp_006(
+                    FeatureRequest(
+                        request_id=f"global-deduplication:{provider_name}",
+                        actor_id="global-source-collector",
+                        payload={"implementation": persist_articles},
+                    )
+                )
+                isolated = await gsp_015(
+                    FeatureRequest(
+                        request_id=f"global-isolation:{provider_name}",
+                        actor_id="global-source-collector",
+                        payload={"implementation": lambda: dict(deduplicated.data)},
+                    )
+                )
+                saved = dict(isolated.data)
             except LatestProviderError as error:
                 results.append(
                     {

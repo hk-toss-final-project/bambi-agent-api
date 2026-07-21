@@ -15,6 +15,7 @@ from asyncio import sleep
 from collections.abc import Awaitable, Callable
 
 from shared.contracts import FeatureRequest, FeatureResult
+from shared.feature_runtime import execute_feature_implementation
 from workers.api import run_bambi_generation_batch, run_personal_wiki_batch
 
 type BatchResults = list[dict[str, object]]
@@ -166,17 +167,30 @@ async def wc_001(request: FeatureRequest) -> FeatureResult:
     model = request.payload.get("model", "gpt-4.1-mini")
     interval_seconds = request.payload.get("interval_seconds", 0)
     max_batches = request.payload.get("max_batches", 1)
+    job_type = request.payload.get("job_type", "personal_wiki_build")
+    on_batch = request.payload.get("on_batch")
     if not isinstance(database_url, str) or not database_url:
         raise ValueError("WC-001에 database_url이 필요합니다.")
     if not isinstance(worker_id, str) or not worker_id:
         raise ValueError("WC-001에 worker_id가 필요합니다.")
     if not isinstance(limit, int) or not isinstance(lease_seconds, int):
         raise ValueError("WC-001의 limit과 lease_seconds는 정수여야 합니다.")
-    if not isinstance(interval_seconds, int) or not isinstance(max_batches, int):
-        raise ValueError("WC-001의 interval_seconds와 max_batches는 정수여야 합니다.")
+    if not isinstance(interval_seconds, int):
+        raise ValueError("WC-001의 interval_seconds는 정수여야 합니다.")
+    if max_batches is not None and not isinstance(max_batches, int):
+        raise ValueError("WC-001의 max_batches는 정수 또는 None이어야 합니다.")
     if not isinstance(model, str) or not model:
         raise ValueError("WC-001의 model은 빈 문자열이면 안 됩니다.")
-    results = await consume_personal_wiki_jobs(
+    if job_type not in ("personal_wiki_build", "bambi_generation"):
+        raise ValueError("WC-001이 지원하지 않는 job_type입니다.")
+    if on_batch is not None and not callable(on_batch):
+        raise ValueError("WC-001의 on_batch는 호출 가능해야 합니다.")
+    consumer = (
+        consume_bambi_generation_jobs
+        if job_type == "bambi_generation"
+        else consume_personal_wiki_jobs
+    )
+    results = await consumer(
         database_url=database_url,
         worker_id=worker_id,
         limit=limit,
@@ -184,6 +198,7 @@ async def wc_001(request: FeatureRequest) -> FeatureResult:
         model=model,
         interval_seconds=interval_seconds,
         max_batches=max_batches,
+        on_batch=on_batch,  # type: ignore[arg-type]
     )
     return FeatureResult(
         feature_id="WC-001",
@@ -197,4 +212,4 @@ async def wc_002(request: FeatureRequest) -> FeatureResult:
 
     하나의 Worker가 작업을 점유한다.
     """
-    raise NotImplementedError("[WC-002] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="WC-002")

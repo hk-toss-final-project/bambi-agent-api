@@ -23,7 +23,7 @@ from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
 from shared.hashing import compute_content_hash
-from infrastructure.sources.connectors.features.latest import LatestArticle
+from infrastructure.sources.connectors.api import LatestArticle
 from shared.contracts import FeatureRequest, FeatureResult
 
 type DictRow = dict[str, Any]

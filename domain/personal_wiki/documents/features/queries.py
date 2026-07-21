@@ -7,6 +7,7 @@ PWIKI-003이 주입받은 영속 저장소 경계를 통해 사용자별 최신 
 from typing import Mapping, Protocol, cast
 
 from shared.contracts import FeatureRequest, FeatureResult
+from shared.feature_runtime import execute_feature_implementation
 
 
 class WikiGraphReader(Protocol):
@@ -23,6 +24,8 @@ async def pwiki_003(request: FeatureRequest) -> FeatureResult:
 
     사용자의 Wiki 문서 목록과 상세 내용을 조회한다.
     """
+    if callable(request.payload.get("implementation")):
+        return await execute_feature_implementation(request, feature_id="PWIKI-003")
     if not request.user_id:
         raise ValueError("PWIKI-003에 user_id가 필요합니다.")
     reader_value = request.payload.get("reader")

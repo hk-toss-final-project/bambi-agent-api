@@ -9,6 +9,8 @@ from app.schemas.generated_content import (
     GeneratedContentDetailResponse,
     GeneratedContentListResponse,
 )
+from agent.bambi.api import bambi_018
+from shared.contracts import FeatureRequest
 
 
 class GeneratedContentRepository(Protocol):
@@ -38,17 +40,37 @@ class GeneratedContentService:
         self, user_id: str, *, limit: int, offset: int
     ) -> GeneratedContentListResponse:
         """사용자 생성 후보 목록을 검증해 반환한다."""
-        payload = await self._repository.list_generated_contents(
-            user_id, limit=limit, offset=offset
+        result = await bambi_018(
+            FeatureRequest(
+                request_id=f"generated-contents:list:{user_id}",
+                actor_id="generated-content-service",
+                user_id=user_id,
+                payload={
+                    "implementation": lambda: self._repository.list_generated_contents(
+                        user_id, limit=limit, offset=offset
+                    )
+                },
+            )
         )
-        return GeneratedContentListResponse.model_validate(payload)
+        return GeneratedContentListResponse.model_validate(result.data)
 
     async def get_content(
         self, user_id: str, candidate_id: str
     ) -> GeneratedContentDetailResponse:
         """생성 후보 상세를 반환하고 다른 사용자 후보는 숨긴다."""
-        payload = await self._repository.get_generated_content(user_id, candidate_id)
-        if payload is None:
+        result = await bambi_018(
+            FeatureRequest(
+                request_id=f"generated-contents:detail:{candidate_id}",
+                actor_id="generated-content-service",
+                user_id=user_id,
+                payload={
+                    "implementation": lambda: self._repository.get_generated_content(
+                        user_id, candidate_id
+                    )
+                },
+            )
+        )
+        if result.data.get("result") is None and set(result.data) == {"result"}:
             raise AgentApiError(
                 status.HTTP_404_NOT_FOUND,
                 ErrorDetail(
@@ -56,4 +78,4 @@ class GeneratedContentService:
                     message="생성 콘텐츠를 찾을 수 없습니다.",
                 ),
             )
-        return GeneratedContentDetailResponse.model_validate(payload)
+        return GeneratedContentDetailResponse.model_validate(result.data)

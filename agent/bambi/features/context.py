@@ -4,6 +4,7 @@ BAMBI-003, BAMBI-012 기능의 실제 구현 위치를 제공한다.
 """
 
 from shared.contracts import FeatureRequest, FeatureResult
+from shared.feature_runtime import execute_feature_implementation
 
 
 async def bambi_003(request: FeatureRequest) -> FeatureResult:
@@ -20,4 +21,4 @@ async def bambi_012(request: FeatureRequest) -> FeatureResult:
 
     관심사, 언어, 비선호 설정을 반영한다.
     """
-    raise NotImplementedError("[BAMBI-012] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="BAMBI-012")

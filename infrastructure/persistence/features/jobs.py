@@ -12,6 +12,7 @@ from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
 from shared.contracts import FeatureRequest, FeatureResult
+from shared.feature_runtime import execute_feature_implementation
 
 type DictRow = dict[str, Any]
 
@@ -734,4 +735,4 @@ async def db_026(request: FeatureRequest) -> FeatureResult:
 
     비동기 작업 상태와 결과를 저장한다.
     """
-    raise NotImplementedError("[DB-026] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="DB-026")

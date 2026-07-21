@@ -4,6 +4,7 @@ INT-005, INT-006, INT-008, INT-009 기능의 실제 구현 위치를 제공한�
 """
 
 from shared.contracts import FeatureRequest, FeatureResult
+from shared.feature_runtime import execute_feature_implementation
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
@@ -12,7 +13,7 @@ async def int_005(request: FeatureRequest) -> FeatureResult:
 
     사용자 행동 강도와 최신성을 기반으로 점수를 계산한다.
     """
-    raise NotImplementedError("[INT-005] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="INT-005")
 
 
 async def int_006(request: FeatureRequest) -> FeatureResult:

@@ -12,6 +12,7 @@ from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
 from shared.contracts import FeatureRequest, FeatureResult
+from shared.feature_runtime import execute_feature_implementation
 from shared.hashing import compute_content_hash
 from shared.wiki_models import (
     ExistingWikiEntry,
@@ -29,7 +30,7 @@ async def db_002(request: FeatureRequest) -> FeatureResult:
 
     개인 Wiki 반영의 근거가 되는 이벤트를 저장한다.
     """
-    raise NotImplementedError("[DB-002] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="DB-002")
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
@@ -38,7 +39,7 @@ async def db_003(request: FeatureRequest) -> FeatureResult:
 
     사용자별 Wiki 문서와 버전을 저장한다.
     """
-    raise NotImplementedError("[DB-003] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="DB-003")
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
@@ -47,7 +48,7 @@ async def db_004(request: FeatureRequest) -> FeatureResult:
 
     개인 Wiki 검색용 Chunk를 저장한다.
     """
-    raise NotImplementedError("[DB-004] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="DB-004")
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
@@ -56,7 +57,7 @@ async def db_005(request: FeatureRequest) -> FeatureResult:
 
     개인 Wiki의 Vector 데이터를 저장한다.
     """
-    raise NotImplementedError("[DB-005] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="DB-005")
 
 
 async def db_006(request: FeatureRequest) -> FeatureResult:
