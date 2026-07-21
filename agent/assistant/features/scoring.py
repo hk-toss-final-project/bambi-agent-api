@@ -20,7 +20,7 @@ import re
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
-from agent.assistant import config
+from agent.assistant.features import config
 
 # 제목에 이 패턴이 보이면 에버그린(개념/튜토리얼) 콘텐츠로 분류한다.
 # 소스 기반 1차 분류를 보완하는 가벼운 휴리스틱이며, 필요해지면 LLM 분류로 교체한다.

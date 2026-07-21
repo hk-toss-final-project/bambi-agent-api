@@ -174,6 +174,15 @@ DATA_DIR: Path = Path(
 )
 
 
+def collect_window_days() -> int:
+    """수집 창 일수를 반환한다.
+
+    상수를 직접 import하면 환경변수 오버라이드 후 모듈을 reload해도 호출자 쪽
+    값이 갱신되지 않으므로, 외부에는 이 함수로 노출한다.
+    """
+    return COLLECT_WINDOW_DAYS
+
+
 def collect_window_hours() -> float:
     """수집 창을 시간 단위로 반환한다 (COLLECT_WINDOW_DAYS × 24)."""
     return COLLECT_WINDOW_DAYS * 24.0

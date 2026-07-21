@@ -2,8 +2,8 @@
 
 import pytest
 
-from agent.assistant import clustering
-from agent.assistant.embeddings import cosine_similarity
+from agent.assistant.features import clustering
+from agent.assistant.features.embeddings import cosine_similarity
 
 
 def test_cosine_similarity_basic() -> None:

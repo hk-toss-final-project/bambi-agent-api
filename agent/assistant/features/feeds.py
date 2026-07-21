@@ -225,7 +225,7 @@ def _article_full_text(entry: dict[str, object], content: str | None) -> str:
 
 def _summarize_article(title: str, content: str, model: str) -> str:
     """기사 본문을 메뉴·광고를 무시하고 한 문장으로 요약한다."""
-    from agent.assistant.summarize import summarize_text
+    from agent.assistant.features.summarize import summarize_text
 
     return summarize_text(
         content,

@@ -1,0 +1,15 @@
+{"id":"001","input":{"topic":"전고체 배터리","attempts":["전고체 배터리"]},"expected":{"must_contain_any":["전고체","배터리","solid-state","전해질","이차전지"],"max_chars":40},"note":"정상: 구체적 기술 키워드"}
+{"id":"002","input":{"topic":"커피","attempts":["커피"]},"expected":{"must_contain_any":["커피","원두","coffee","카페","아라비카","로스팅"],"max_chars":40},"note":"넓고 모호한 일상어 — 곁다리 결과가 많아 좁혀야 한다"}
+{"id":"003","input":{"topic":"온디바이스 npu 컴파일러","attempts":["온디바이스 npu 컴파일러"]},"expected":{"must_contain_any":["npu","온디바이스","컴파일러","ai 반도체","엣지","툴체인","sdk"],"max_chars":50},"note":"너무 좁은 복합어 — 살짝 넓혀야 결과가 나온다"}
+{"id":"004","input":{"topic":"코스피","attempts":["코스피","코스피 지수"]},"expected":{"must_contain_any":["코스피","kospi","증시","주가","증권","시황"],"forbidden":["코스피 지수"],"max_chars":40},"note":"이미 두 개 시도 — 셋째는 앞의 것과 달라야 한다"}
+{"id":"005","input":{"topic":"사과","attempts":["사과"]},"expected":{"must_contain_any":["사과","apple","과일","농산물","산지","작황","가격"],"max_chars":40},"note":"중의어(과일/사죄) — 한쪽으로 구체화해야 한다"}
+{"id":"006","input":{"topic":"LLM 파인튜닝","attempts":["LLM 파인튜닝"]},"expected":{"must_contain_any":["llm","파인튜닝","fine-tuning","미세조정","lora","언어모델","sft"],"max_chars":50},"note":"한영 혼용 키워드"}
+{"id":"007","input":{"topic":"quantum computing","attempts":["quantum computing"]},"expected":{"must_contain_any":["quantum","양자","큐비트","qubit","컴퓨팅"],"max_chars":50},"note":"영문 키워드 — 한글 표기로 바꾸는 것도 유효"}
+{"id":"008","input":{"topic":"삼성전자 HBM","attempts":["삼성전자 HBM"]},"expected":{"must_contain_any":["삼성","hbm","메모리","반도체","고대역폭","d램","dram"],"max_chars":50},"note":"고유명사 + 제품명"}
+{"id":"009","input":{"topic":"인공지능 반도체 수출 규제 동향 분석","attempts":["인공지능 반도체 수출 규제 동향 분석"]},"expected":{"must_contain_any":["반도체","수출","규제","ai","인공지능","제재"],"max_chars":40},"note":"지나치게 긴 문장형 키워드 — 짧게 줄여야 한다"}
+{"id":"010","input":{"topic":"청년 주택 정책","attempts":["청년 주택 정책","청년 전세"]},"expected":{"must_contain_any":["청년","주택","전세","임대","부동산","정책","월세"],"forbidden":["청년 전세"],"max_chars":40},"note":"정책 도메인 + 이미 시도 2건"}
+{"id":"011","input":{"topic":"K","attempts":["K"]},"expected":{"must_contain_any":["k"],"max_chars":40},"note":"경계: 한 글자 키워드 — 무엇이든 확장이 필요하다"}
+{"id":"012","input":{"topic":"기후변화 대응","attempts":["기후변화 대응","탄소중립"]},"expected":{"must_contain_any":["기후","탄소","온실가스","환경","넷제로","배출"],"forbidden":["탄소중립"],"max_chars":40},"note":"이미 상위 개념까지 시도함"}
+{"id":"013","input":{"topic":"전기차 충전 인프라","attempts":["전기차 충전 인프라"]},"expected":{"must_contain_any":["전기차","충전","ev","인프라","충전소","배터리"],"max_chars":50},"note":"정상: 산업 인프라 키워드"}
+{"id":"014","input":{"topic":"개발자 번아웃","attempts":["개발자 번아웃"]},"expected":{"must_contain_any":["개발자","번아웃","burnout","이직","근무","노동","it"],"max_chars":40},"note":"뉴스가 적은 소프트한 주제"}
+{"id":"015","input":{"topic":"루닛 인사이트","attempts":["루닛 인사이트","루닛"]},"expected":{"must_contain_any":["루닛","lunit","의료ai","의료 ai","영상","판독","헬스케어"],"forbidden":["루닛"],"max_chars":50},"note":"소형 기업 고유명사 + 이미 축약형 시도"}

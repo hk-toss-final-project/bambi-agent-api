@@ -1,6 +1,6 @@
 """주가 차트(stocks) 검증. 네트워크(Yahoo Finance)는 mock으로 대체한다."""
 
-from agent.assistant import stocks
+from agent.assistant.features import stocks
 
 # 2026-07-13 ~ 07-15 (UTC) 일별 종가 3개. 중간에 거래 없는 날(None)을 섞는다.
 _PAYLOAD = {

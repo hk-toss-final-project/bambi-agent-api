@@ -1,6 +1,6 @@
 """노출 이력 저장소(history) 검증. 실제 데이터 파일을 건드리지 않도록 임시 경로를 쓴다."""
 
-from agent.assistant import history
+from agent.assistant.features import history
 
 
 def test_record_and_get_watched_ids(tmp_path, monkeypatch) -> None:

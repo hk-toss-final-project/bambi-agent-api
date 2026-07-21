@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from agent.assistant.summarize import complete
+from agent.assistant.features.summarize import complete
 
 # ①settings 기본값. user_context_snapshots 어댑터가 붙기 전까지 사용한다.
 _DEFAULT_SETTINGS: dict[str, object] = {

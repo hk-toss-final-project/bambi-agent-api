@@ -118,7 +118,11 @@ def discover_facade_exports() -> dict[str, Path]:
 
 
 def discover_facade_all_names() -> set[str]:
-    """모든 api.py의 __all__에 등록된 공개 함수 이름을 찾는다."""
+    """모든 api.py의 __all__에 등록된 기능 ID 형식 이름을 찾는다.
+
+    명세 1~43절 기능 영역이 아닌 기능 영역(예: 키워드 비서)의 facade는 기능 ID
+    형식이 아닌 이름을 노출하므로, 기능 ID 정합성 검증에서는 제외한다.
+    """
     names: set[str] = set()
     for path in discover_api_facades():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -133,7 +137,11 @@ def discover_facade_all_names() -> set[str]:
             if not isinstance(node.value, (ast.List, ast.Tuple)):
                 raise AssertionError(f"정적 __all__ 목록이 아님: {path}")
             for item in node.value.elts:
-                if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                if (
+                    isinstance(item, ast.Constant)
+                    and isinstance(item.value, str)
+                    and FUNCTION_PATTERN.match(item.value)
+                ):
                     names.add(item.value)
     return names
 
@@ -156,10 +164,16 @@ def test_every_runtime_feature_has_exactly_one_scaffold() -> None:
     assert actual == expected
 
 
+# 명세 1~43절 기능 영역 facade 43개에, 기능 ID 체계 밖의 기능 영역 facade를 더한 수.
+# 키워드 비서(agent/assistant)는 별도 제품 라인이라 기능 ID를 부여하지 않지만,
+# "구현은 features/, 공개는 api.py" 구조 규칙은 동일하게 따른다.
+EXPECTED_API_FACADES = 44
+
+
 def test_api_facades_export_every_runtime_feature() -> None:
     """모든 기능 함수가 정확히 하나의 api.py facade에서 공개되는지 검증한다."""
     expected = read_runtime_feature_ids()
-    assert len(discover_api_facades()) == 43
+    assert len(discover_api_facades()) == EXPECTED_API_FACADES
     assert set(discover_facade_exports()) == expected
     assert discover_facade_all_names() == {
         feature_id.lower().replace("-", "_") for feature_id in expected

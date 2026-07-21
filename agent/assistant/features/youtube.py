@@ -14,8 +14,8 @@ from __future__ import annotations
 import re
 import time
 
-from agent.assistant import history
-from agent.assistant.summarize import summarize_text
+from agent.assistant.features import history
+from agent.assistant.features.summarize import summarize_text
 
 # 자막 조회 시 선호하는 언어 순서. 한국어 우선, 없으면 영어를 시도한다.
 _PREFERRED_LANGUAGES = ("ko", "en")

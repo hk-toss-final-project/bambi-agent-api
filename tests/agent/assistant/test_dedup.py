@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from agent.assistant import dedup
+from agent.assistant.features import dedup
 
 _NOW = datetime(2026, 7, 20, 9, 0, tzinfo=UTC)
 

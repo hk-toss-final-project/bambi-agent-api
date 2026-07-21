@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from agent.assistant import config, scoring
+from agent.assistant.features import config, scoring
 
 _NOW = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
 

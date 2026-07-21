@@ -9,8 +9,8 @@
 
 from __future__ import annotations
 
-from agent.assistant import config
-from agent.assistant.embeddings import cosine_similarity
+from agent.assistant.features import config
+from agent.assistant.features.embeddings import cosine_similarity
 
 
 def greedy_clusters(

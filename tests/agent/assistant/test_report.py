@@ -1,6 +1,6 @@
 """개인화 보고서 생성(report) 검증. 실제 LLM은 호출하지 않는다."""
 
-from agent.assistant import report
+from agent.assistant.features import report
 
 
 def test_build_report_context_fills_defaults() -> None:

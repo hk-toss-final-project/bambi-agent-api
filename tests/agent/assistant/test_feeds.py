@@ -4,14 +4,14 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from agent.assistant import feeds
+from agent.assistant.features import feeds
 
 
 @pytest.fixture(autouse=True)
 def _mock_llm_summary(monkeypatch):
     """기사 요약 LLM 호출을 결정적 mock으로 대체해 실제 호출을 막는다."""
     monkeypatch.setattr(
-        "agent.assistant.summarize.summarize_text",
+        "agent.assistant.features.summarize.summarize_text",
         lambda text, instruction, model="gpt-4.1-mini": f"요약<{text[:20]}>",
     )
 

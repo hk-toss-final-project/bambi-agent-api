@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from agent.assistant import dates
+from agent.assistant.features import dates
 
 
 def test_pub_ts_has_top_priority() -> None:

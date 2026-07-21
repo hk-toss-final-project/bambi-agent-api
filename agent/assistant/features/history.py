@@ -22,7 +22,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from agent.assistant import config
+from agent.assistant.features import config
 
 # 이력 파일이 저장될 디렉터리. 경로 계산은 config에 모아 두고(중복 제거),
 # 필요하면 ASSISTANT_DATA_DIR 환경변수로 옮긴다.

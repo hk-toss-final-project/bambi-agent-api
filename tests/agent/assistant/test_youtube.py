@@ -2,7 +2,7 @@
 
 import pytest
 
-from agent.assistant import youtube
+from agent.assistant.features import youtube
 
 
 @pytest.fixture(autouse=True)
@@ -112,7 +112,7 @@ def test_filter_recent_videos_excludes_unparseable_and_old() -> None:
 
 def test_digest_for_user_applies_recency_on_first_visit(monkeypatch) -> None:
     """시청 이력이 없는 첫 조회도 최근(48시간 이내) 영상만 남기고 오래된 영상은 제외한다."""
-    from agent.assistant import history
+    from agent.assistant.features import history
 
     monkeypatch.setattr(history, "get_watched_video_ids", lambda user_id, keyword: set())
     monkeypatch.setattr(
@@ -148,7 +148,7 @@ def test_summarize_videos_with_delay_sleeps_between_but_not_before_first(monkeyp
 
 def test_digest_for_user_excludes_watched_on_return_visit(monkeypatch) -> None:
     """시청 이력이 있으면 최근 영상 중 이미 본 영상을 제외한다."""
-    from agent.assistant import history
+    from agent.assistant.features import history
 
     monkeypatch.setattr(history, "get_watched_video_ids", lambda user_id, keyword: {"v1"})
     monkeypatch.setattr(

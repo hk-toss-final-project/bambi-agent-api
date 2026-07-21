@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from agent.assistant import dedup, history, pipeline
+from agent.assistant.features import dedup, history, pipeline
 
 _NOW = datetime(2026, 7, 20, 9, 0, tzinfo=UTC)
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 
-from agent.assistant import config
+from agent.assistant.features import config
 
 # OpenAIEmbeddings 클라이언트를 모델별로 한 번만 생성해 재사용한다.
 _clients: dict[str, object] = {}

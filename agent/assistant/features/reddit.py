@@ -26,8 +26,8 @@ import time
 from datetime import datetime
 from urllib.parse import quote_plus
 
-from agent.assistant import feeds
-from agent.assistant.summarize import summarize_text
+from agent.assistant.features import feeds
+from agent.assistant.features.summarize import summarize_text
 
 _SEARCH_RSS_URL = "https://www.reddit.com/search.rss"
 # Reddit이 User-Agent 없는 요청을 더 쉽게 차단/제한하므로 고유 User-Agent를 명시한다.

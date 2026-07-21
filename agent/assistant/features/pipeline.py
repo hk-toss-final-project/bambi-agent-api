@@ -20,12 +20,12 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
-from agent.assistant import clustering, config, dedup, feeds, history, reddit, scoring, youtube
-from agent.assistant.dates import extract_published
-from agent.assistant.embeddings import embed_texts
-from agent.assistant.summarize import complete
+from agent.assistant.features import clustering, config, dedup, feeds, history, reddit, scoring, youtube
+from agent.assistant.features.dates import extract_published
+from agent.assistant.features.embeddings import embed_texts
+from agent.assistant.features.summarize import complete
 
-logger = logging.getLogger("agent.assistant.pipeline")
+logger = logging.getLogger("agent.assistant.features.pipeline")
 
 # 수집 단계에서 소스별로 확보할 후보 풀 크기.
 _NEWS_POOL = 30
@@ -133,19 +133,29 @@ def _reddit_documents(keyword: str, now: datetime, window_hours: float) -> list[
     return docs
 
 
+# 수집을 시도하는 소스 수(뉴스·YouTube·Reddit). "몇 개가 실패했는지"를 판단할 때
+# 분모로 쓴다. 소스를 늘리면 이 값도 함께 늘어난다.
+SOURCE_COUNT = 3
+
+
 def collect_documents(
     keyword: str,
     *,
     now: datetime,
     window_hours: float,
-) -> tuple[list[dict[str, object]], list[str]]:
+) -> tuple[list[dict[str, object]], list[dict[str, str]]]:
     """세 소스(뉴스·YouTube·Reddit)에서 후보 문서를 모은다.
 
-    소스별 실패를 격리해, 한 소스가 실패해도 나머지 문서는 그대로 반환하고
-    실패 사유를 errors에 담는다.
+    소스별 실패를 격리해, 한 소스가 실패해도 나머지 문서는 그대로 반환한다.
+    실패는 사람이 읽는 문자열이 아니라 {source, error} 구조로 돌려준다 — 호출자가
+    "외부 장애인지, 검색어가 나쁜 건지"를 문자열 파싱 없이 판정할 수 있어야
+    재시도 여부를 올바르게 정할 수 있기 때문이다.
+
+    Returns:
+        (문서 목록, 실패 목록[{source, error}])
     """
     docs: list[dict[str, object]] = []
-    errors: list[str] = []
+    failures: list[dict[str, str]] = []
     collectors = (
         ("뉴스", lambda: _news_documents(keyword, now)),
         ("YouTube", lambda: _youtube_documents(keyword, now, window_hours)),
@@ -155,8 +165,8 @@ def collect_documents(
         try:
             docs.extend(collector())
         except Exception as error:
-            errors.append(f"{label} 수집 실패: {type(error).__name__}: {error}")
-    return docs, errors
+            failures.append({"source": label, "error": f"{type(error).__name__}: {error}"})
+    return docs, failures
 
 
 def _resolve_dates(
@@ -375,7 +385,14 @@ def run_daily(
     log["cold_start"] = cold_start
 
     # 1. 수집 (기존 소스, 최근 N일). 검색은 query로, 채점은 topic(normalized) 기준.
-    docs, errors = collect_documents(query, now=now, window_hours=window_hours)
+    docs, source_failures = collect_documents(query, now=now, window_hours=window_hours)
+    # 실패는 구조(log)와 사람이 읽는 문장(errors) 양쪽에 남긴다. 앞의 것은 재시도
+    # 판정용, 뒤의 것은 화면 표시용이다.
+    errors = [
+        f"{failure['source']} 수집 실패: {failure['error']}" for failure in source_failures
+    ]
+    log["source_attempted"] = SOURCE_COUNT
+    log["source_failures"] = [failure["source"] for failure in source_failures]
     log["collected"] = len(docs)
 
     # 2. 날짜 추출 (+ first_seen 기록)
@@ -391,13 +408,16 @@ def run_daily(
         try:
             vectors = embed_texts([normalized] + [str(doc.get("text") or "") for doc in docs])
         except Exception as error:
+            # 임베딩(OpenAI) 장애도 "검색어가 나쁨"이 아니라 외부 장애다. 재시도
+            # 판정이 문자열을 파싱하지 않도록 구조화된 플래그로도 남긴다.
+            log["embedding_failed"] = True
             errors.append(f"임베딩 실패: {type(error).__name__}: {error}")
             vectors = []
         if vectors:
             topic_embedding, doc_embeddings = vectors[0], vectors[1:]
 
             # 5. 유사도 필터 (이번 실행 최고 유사도에 상대적인 컷)
-            from agent.assistant.embeddings import cosine_similarity
+            from agent.assistant.features.embeddings import cosine_similarity
 
             scored = [
                 (doc, embedding, cosine_similarity(topic_embedding, embedding))

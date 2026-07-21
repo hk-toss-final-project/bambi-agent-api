@@ -1,6 +1,6 @@
 """파이프라인 기반 일간 보고서(generate_daily_report) 검증. 실제 LLM은 호출하지 않는다."""
 
-from agent.assistant import report
+from agent.assistant.features import report
 
 
 def _daily_result(items: list[dict[str, object]], mode: str = "daily") -> dict[str, object]:

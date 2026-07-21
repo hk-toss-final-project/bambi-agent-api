@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from agent.assistant import reddit
+from agent.assistant.features import reddit
 
 # 최신성 필터(48시간) 검증에 쓰는 고정 기준 시각.
 _NOW = datetime(2026, 7, 14, 9, 0, tzinfo=UTC)

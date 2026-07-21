@@ -32,7 +32,7 @@ def test_render_markdown_blockquote_becomes_banner() -> None:
 
 def test_friendly_reason_translates_known_codes() -> None:
     """제외 사유 원인 코드를 일반인이 읽을 수 있는 한국어 문장으로 바꾼다."""
-    from agent.assistant import config
+    from agent.assistant.features import config
     from app.assistant.web import _friendly_reason
 
     outside_window = _friendly_reason("outside_window")
@@ -56,17 +56,44 @@ def test_friendly_reason_falls_back_to_raw_code_when_unknown() -> None:
     assert _friendly_reason("brand_new_reason_code") == "brand_new_reason_code"
 
 
-def test_render_agent_section_shows_labeled_trace_and_attempts() -> None:
-    """에이전트 판단 과정 섹션은 각 단계 라벨을 굵게, 시도한 검색어를 화살표로 보여준다."""
+def _trace_event(node, status, **extra) -> dict:
+    """구조화된 trace 이벤트 하나를 만든다(렌더링 테스트용)."""
+    event = {
+        "node": node,
+        "status": status,
+        "reason": "",
+        "query": "",
+        "errors": [],
+        "duration_ms": 0,
+        "message": "",
+    }
+    event.update(extra)
+    return event
+
+
+def test_render_agent_section_shows_structured_trace() -> None:
+    """구조화 trace의 라벨·상태 뱃지·원인 코드·소요 시간·오류를 렌더링한다."""
     from app.assistant.web import _render_agent_section
 
     result = {
         "agent_trace": [
-            "검색어 계획: 주제 '전고체'로 1차 검색을 시작합니다.",
-            "수집·선별: 검색어 '전고체' → 수집 3건 중 1건 제외, 모드 'weekly'로 판정, 선정 0건.",
-            "판단(1차 시도): 당일 신규 아이템이 없습니다(모드 'weekly'). 재시도 여지가 남아(2회) 검색어를 재구성해 다시 시도합니다.",
-            "검색어 재구성: '전고체' → LLM 제안 '전고체 배터리 양산'로 바꿔 다시 검색합니다.",
-            "보고서 작성: 'daily' 모드로 브리핑을 생성했습니다.",
+            _trace_event(
+                "plan", "ok", message="검색어 계획: 주제 '전고체'로 1차 검색을 시작합니다."
+            ),
+            _trace_event(
+                "select",
+                "retry",
+                reason="low_relevance",
+                duration_ms=1200,
+                message="판단(1차 시도): 관련도가 기준에 못 미쳤습니다. 재구성합니다.",
+            ),
+            _trace_event(
+                "select",
+                "failed",
+                reason="provider_failure",
+                errors=["뉴스 수집 실패: TimeoutError"],
+                message="수집·선별: 실패했습니다.",
+            ),
         ],
         "attempts": ["전고체", "전고체 배터리 양산"],
     }
@@ -75,10 +102,22 @@ def test_render_agent_section_shows_labeled_trace_and_attempts() -> None:
 
     assert "⓪ 에이전트 판단 과정" in html_out
     assert "<strong>검색어 계획:</strong>" in html_out
-    assert "<strong>판단(1차 시도):</strong>" in html_out
-    assert "<strong>검색어 재구성:</strong>" in html_out
-    assert "재시도 여지가 남아(2회)" in html_out
+    assert "재시도" in html_out and "trace-retry" in html_out  # 상태 뱃지
+    assert "원인 low_relevance" in html_out
+    assert "1200ms" in html_out
+    assert "뉴스 수집 실패: TimeoutError" in html_out           # 이벤트별 오류 노출
     assert "<code>전고체</code> → <code>전고체 배터리 양산</code>" in html_out
+
+
+def test_render_agent_section_tolerates_plain_string_trace() -> None:
+    """구조화 이전 형식(문자열) trace가 들어와도 깨지지 않는다."""
+    from app.assistant.web import _render_agent_section
+
+    html_out = _render_agent_section(
+        {"agent_trace": ["검색어 계획: 주제 '전고체'로 시작합니다."], "attempts": ["전고체"]}
+    )
+
+    assert "<strong>검색어 계획:</strong>" in html_out
 
 
 def test_render_agent_section_omits_attempts_line_when_single_try() -> None:
@@ -86,7 +125,7 @@ def test_render_agent_section_omits_attempts_line_when_single_try() -> None:
     from app.assistant.web import _render_agent_section
 
     result = {
-        "agent_trace": ["검색어 계획: 주제 '전고체'로 1차 검색을 시작합니다."],
+        "agent_trace": [_trace_event("plan", "ok", message="검색어 계획: 시작합니다.")],
         "attempts": ["전고체"],
     }
 

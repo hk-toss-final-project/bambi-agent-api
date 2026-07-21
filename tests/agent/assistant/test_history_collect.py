@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from agent.assistant import history
+from agent.assistant.features import history
 
 _NOW = datetime(2026, 7, 20, 9, 0, tzinfo=UTC)
 

@@ -21,8 +21,8 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 
-from agent.assistant import config
-from agent.assistant.embeddings import cosine_similarity
+from agent.assistant.features import config
+from agent.assistant.features.embeddings import cosine_similarity
 
 # 이력 파일이 저장될 디렉터리. history와 같은 config.DATA_DIR을 공유한다.
 _DATA_DIR = config.DATA_DIR

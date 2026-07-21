@@ -15,11 +15,11 @@
 
 from __future__ import annotations
 
-from agent.assistant import graph, history, pipeline
-from agent.assistant.feeds import canonical_url, latest_articles
-from agent.assistant.reddit import reddit_digest
-from agent.assistant.report import generate_daily_report
-from agent.assistant.youtube import youtube_digest_for_user
+from agent.assistant.features import graph, history, pipeline
+from agent.assistant.features.feeds import canonical_url, latest_articles
+from agent.assistant.features.reddit import reddit_digest
+from agent.assistant.features.report import generate_daily_report
+from agent.assistant.features.youtube import youtube_digest_for_user
 
 
 def assist(

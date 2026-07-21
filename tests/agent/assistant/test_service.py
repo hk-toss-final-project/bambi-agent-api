@@ -2,7 +2,7 @@
 
 import pytest
 
-from agent.assistant import service
+from agent.assistant.features import service
 
 
 def test_assist_daily_agent_delegates_to_graph(monkeypatch) -> None:
