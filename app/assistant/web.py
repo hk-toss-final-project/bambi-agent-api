@@ -16,12 +16,15 @@
 from __future__ import annotations
 
 import html
+import re
+from collections.abc import Callable
 
 from fastapi import APIRouter, Form
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse
 
-from agent.assistant.service import assist_daily
+from agent.assistant import config
+from agent.assistant.service import assist_daily_agent
 
 assistant_router = APIRouter(tags=["assistant"])
 
@@ -58,6 +61,9 @@ _PAGE_STYLE = """
   .metaline { font-size:.82rem; color:#8a8a92; margin:.2rem 0; }
   .srclist { margin:.4rem 0 0; padding-left:1.1rem; font-size:.88rem; }
   .srclist li { margin:.15rem 0; }
+  .trace li { margin:.4rem 0; line-height:1.5; }
+  .trace li strong { color:#3a44b0; }
+  code { background:#eef0f3; padding:.05rem .35rem; border-radius:5px; font-size:.85em; }
   .stype { color:#8a8a92; font-size:.78rem; }
   details { margin-top:.8rem; }
   summary { cursor:pointer; font-size:.9rem; color:#6a6a72; }
@@ -97,6 +103,44 @@ _STAGE_LABELS = {
     "dedup": "중복 검사",
     "threshold": "임계값",
 }
+
+# pipeline._exclude가 남기는 원인 코드(예: "outside_window", "low_similarity(0.42 < 0.50)")를
+# 사람이 읽는 한국어 문장으로 바꾼다. (정규식, 설명 생성 함수) 순서 목록이며, 위에서부터 매칭한다.
+_REASON_RULES: list[tuple[re.Pattern[str], Callable[[re.Match[str]], str]]] = [
+    (re.compile(r"^no_url$"), lambda m: "링크 정보가 없는 항목이라 제외"),
+    (re.compile(r"^duplicate_url$"), lambda m: "같은 링크가 중복 수집돼 제외"),
+    (re.compile(r"^url_already_collected$"), lambda m: "예전에 이미 수집한 링크라 제외(재수집 안 함)"),
+    (re.compile(r"^too_short$"), lambda m: "본문이 너무 짧아 분석할 내용이 없어 제외"),
+    (
+        re.compile(r"^outside_window$"),
+        lambda m: f"발행일이 수집 기간(최근 {config.COLLECT_WINDOW_DAYS}일)보다 오래돼 제외",
+    ),
+    (
+        re.compile(r"^low_similarity\(([\d.]+)\s*<\s*([\d.]+)\)$"),
+        lambda m: f"키워드와 관련성이 낮아 제외 (관련도 {m.group(1)} · 이번 검색 기준 {m.group(2)} 미달)",
+    ),
+    (
+        re.compile(r"^already_reported\(([\d.]+),\s*기존:\s*(.+)\)$"),
+        lambda m: f"최근 보고서에 이미 실은 소식과 비슷해 제외 (유사도 {m.group(1)} · 이전 글 “{m.group(2)}”)",
+    ),
+    (
+        re.compile(r"^below_threshold\(([\d.]+)\s*<\s*([\d.]+)\)$"),
+        lambda m: f"점수가 이번 검색 기준({m.group(2)})에 못 미쳐 제외 (점수 {m.group(1)})",
+    ),
+]
+
+
+def _friendly_reason(reason: str) -> str:
+    """제외 사유 원인 코드를 사람이 읽는 한국어 문장으로 바꾼다.
+
+    매칭되는 규칙이 없으면(알려지지 않은 신규 사유) 원문 코드를 그대로 보여준다
+    (숨기지 않고 그대로 노출해, 새 사유가 생겨도 조용히 사라지지 않게 한다).
+    """
+    for pattern, describe in _REASON_RULES:
+        match = pattern.match(reason)
+        if match:
+            return describe(match)
+    return reason
 
 
 def _form_html(user_id: str = "") -> str:
@@ -255,7 +299,7 @@ def _render_exclusions(log: dict[str, object]) -> str:
     rows = []
     for entry in exclusions:
         stage = _STAGE_LABELS.get(str(entry.get("stage") or ""), str(entry.get("stage") or ""))
-        reason = html.escape(str(entry.get("reason") or ""))
+        reason = html.escape(_friendly_reason(str(entry.get("reason") or "")))
         title = html.escape(str(entry.get("title") or "")[:60])
         rows.append(
             f"<tr><td>{html.escape(stage)}</td><td>{reason}</td><td>{title}</td></tr>"
@@ -308,6 +352,44 @@ def _render_pipeline_section(result: dict[str, object]) -> str:
     )
 
 
+def _render_trace_step(step: object) -> str:
+    """trace 문장 하나를 '라벨: 본문' 형태로 나눠, 라벨을 굵게 렌더링한다.
+
+    각 노드가 "검색어 계획: ...", "판단(1차 시도): ..."처럼 첫 콜론 앞에 자기
+    역할을 붙여 trace를 남기므로, 그 라벨만 굵게 하면 훑어보기 쉬워진다.
+    """
+    text = str(step)
+    label, sep, body = text.partition(": ")
+    if not sep:
+        return f"<li>{html.escape(text)}</li>"
+    return f"<li><strong>{html.escape(label)}:</strong> {html.escape(body)}</li>"
+
+
+def _render_agent_section(result: dict[str, object]) -> str:
+    """⓪ 에이전트 판단 과정 섹션을 만든다(검색어 계획·재구성·재시도 판단·보고 결정 흐름).
+
+    각 단계가 무엇을, 왜 했는지(예: 어떤 검색어로 바뀌었는지, 재시도할지 말지
+    근거가 무엇인지)를 노드가 남긴 문장 그대로 순서대로 보여준다. 검색어를 한
+    번도 재구성하지 않았으면(1회 시도로 끝) "시도한 검색어" 줄은 생략한다.
+    """
+    trace = list(result.get("agent_trace") or [])
+    if not trace:
+        return ""
+    attempts = list(result.get("attempts") or [])
+    steps = "".join(_render_trace_step(step) for step in trace)
+    tried = ""
+    if len(attempts) > 1:
+        chips = " → ".join(f"<code>{html.escape(str(q))}</code>" for q in attempts)
+        tried = f'<p class="metaline">시도한 검색어: {chips}</p>'
+    return (
+        '<div class="section">'
+        '<div class="sec-title">⓪ 에이전트 판단 과정</div>'
+        f"{tried}"
+        f'<ol class="srclist trace">{steps}</ol>'
+        "</div>"
+    )
+
+
 def _render_report_section(result: dict[str, object]) -> str:
     """② 보고서 섹션을 만든다(워터폴 판정 결과 Markdown 렌더링)."""
     body = str(result.get("report_markdown") or "")
@@ -338,6 +420,7 @@ def _render_results(result: dict[str, object]) -> str:
 <h1>🔎 “{keyword}” 브리핑</h1>
 <p><a href="{back_link}">← 다른 키워드로 검색</a></p>
 {errors_html}
+{_render_agent_section(result)}
 {_render_pipeline_section(result)}
 {_render_report_section(result)}
 """
@@ -345,6 +428,6 @@ def _render_results(result: dict[str, object]) -> str:
 
 @assistant_router.post("/search", response_class=HTMLResponse)
 async def assistant_search(user_id: str = Form(...), keyword: str = Form(...)) -> str:
-    """키워드로 선별 파이프라인을 실행하고 수집·선별 내역과 보고서를 함께 보여준다."""
-    result = await run_in_threadpool(assist_daily, keyword, user_id=user_id)
+    """키워드로 리서치 에이전트를 실행하고 판단 과정·수집 내역·보고서를 함께 보여준다."""
+    result = await run_in_threadpool(assist_daily_agent, keyword, user_id=user_id)
     return _render_results(result)

@@ -24,6 +24,26 @@ def test_summarize_video_summarizes_when_transcript_exists(monkeypatch) -> None:
     assert result["url"] == "https://youtu.be/abc123"
 
 
+def test_search_videos_handles_none_result_without_error(monkeypatch) -> None:
+    """youtubesearchpython이 {'result': None}을 줘도 예외 없이 빈 목록을 반환한다.
+
+    이전에는 raw.get('result', [])가 키는 있고 값이 None일 때 기본값을 쓰지 않아
+    'NoneType' object is not iterable로 죽었다(검색 결과가 없는 키워드에서 재현됨).
+    """
+    import youtubesearchpython
+
+    class _FakeVideosSearch:
+        def __init__(self, keyword, limit=4):
+            pass
+
+        def result(self):
+            return {"result": None}
+
+    monkeypatch.setattr(youtubesearchpython, "VideosSearch", _FakeVideosSearch)
+
+    assert youtube.search_videos("결과없는키워드") == []
+
+
 def test_summarize_video_notes_missing_transcript(monkeypatch) -> None:
     """자막이 없으면 요약 대신 안내 문구를 넣는다."""
     monkeypatch.setattr(youtube, "fetch_transcript", lambda vid, languages=("ko", "en"): None)

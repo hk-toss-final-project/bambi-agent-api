@@ -107,8 +107,11 @@ def search_videos(keyword: str, limit: int = 4) -> list[dict[str, object]]:
     from youtubesearchpython import VideosSearch
 
     raw = VideosSearch(keyword, limit=limit).result()
+    # raw.get("result", [])는 키가 아예 없을 때만 기본값을 쓴다. 검색 결과가 없거나
+    # youtubesearchpython 내부에서 오류가 나면 키는 있고 값이 None인 응답을 주므로,
+    # `or []`로 None 값 자체를 걸러야 순회 시 TypeError가 나지 않는다.
     videos: list[dict[str, object]] = []
-    for item in raw.get("result", []):
+    for item in raw.get("result") or []:
         video_id = item.get("id")
         videos.append(
             {

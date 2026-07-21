@@ -334,14 +334,19 @@ def run_daily(
     *,
     model: str = "gpt-4.1-mini",
     reference_now: datetime | None = None,
+    search_query: str | None = None,
 ) -> dict[str, object]:
     """일간 파이프라인 전체를 실행하고 보고서 소재를 반환한다.
 
     Args:
-        keyword: 사용자 관심 토픽
+        keyword: 사용자 관심 토픽. 이력·중복 제거의 키이자 유사도 채점 기준이다.
         user_id: 사용자 식별자
         model: 통합 요약에 쓸 OpenAI 모델
         reference_now: "지금" 기준 시각(테스트용). 생략하면 실제 현재 시각.
+        search_query: 수집기(뉴스·YouTube·Reddit)에 실제로 던질 검색어. 생략하면
+            keyword를 그대로 쓴다. 에이전트가 결과가 빈약할 때 검색어를 재구성해
+            넘기더라도, 이력·중복·유사도는 여전히 keyword(토픽) 기준으로 판단해
+            개인화·중복 방지 일관성이 유지된다(검색만 넓히고 채점은 토픽 기준).
 
     Returns:
         {
@@ -358,17 +363,19 @@ def run_daily(
     normalized_user = user_id.strip()
     if not normalized_user:
         raise ValueError("사용자 식별자가 비어 있습니다.")
+    # 수집에 쓸 검색어는 토픽과 다를 수 있다(에이전트 재구성). 비면 토픽으로 되돌린다.
+    query = (search_query or "").strip() or normalized
 
     now = reference_now or datetime.now(UTC)
     window_hours = config.collect_window_hours()
-    log: dict[str, object] = {"exclusions": []}
+    log: dict[str, object] = {"exclusions": [], "search_query": query}
 
     # 콜드 스타트 판정은 수집 기록(first_seen 기록)이 일어나기 전에 해야 한다.
     cold_start = not history.has_collect_history(normalized_user, normalized)
     log["cold_start"] = cold_start
 
-    # 1. 수집 (기존 소스, 최근 N일)
-    docs, errors = collect_documents(normalized, now=now, window_hours=window_hours)
+    # 1. 수집 (기존 소스, 최근 N일). 검색은 query로, 채점은 topic(normalized) 기준.
+    docs, errors = collect_documents(query, now=now, window_hours=window_hours)
     log["collected"] = len(docs)
 
     # 2. 날짜 추출 (+ first_seen 기록)

@@ -30,6 +30,76 @@ def test_render_markdown_blockquote_becomes_banner() -> None:
     assert "&gt;" not in html_out  # 인용 마커가 그대로 노출되지 않는다
 
 
+def test_friendly_reason_translates_known_codes() -> None:
+    """제외 사유 원인 코드를 일반인이 읽을 수 있는 한국어 문장으로 바꾼다."""
+    from agent.assistant import config
+    from app.assistant.web import _friendly_reason
+
+    outside_window = _friendly_reason("outside_window")
+    assert "수집 기간" in outside_window
+    assert f"{config.COLLECT_WINDOW_DAYS}일" in outside_window
+    assert "관련성" in _friendly_reason("low_similarity(0.42 < 0.50)")
+    assert "0.42" in _friendly_reason("low_similarity(0.42 < 0.50)")
+    assert "이미 실은 소식" in _friendly_reason("already_reported(0.91, 기존: 어제 보고한 기사)")
+    assert "못 미쳐" in _friendly_reason("below_threshold(0.31 < 0.45)")
+    assert "0.31" in _friendly_reason("below_threshold(0.31 < 0.45)")
+    assert "중복" in _friendly_reason("duplicate_url")
+    assert "재수집" in _friendly_reason("url_already_collected")
+    assert "짧아" in _friendly_reason("too_short")
+    assert "링크 정보가 없는" in _friendly_reason("no_url")
+
+
+def test_friendly_reason_falls_back_to_raw_code_when_unknown() -> None:
+    """알려지지 않은 새 사유 코드는 원문을 그대로 보여준다(조용히 사라지지 않게)."""
+    from app.assistant.web import _friendly_reason
+
+    assert _friendly_reason("brand_new_reason_code") == "brand_new_reason_code"
+
+
+def test_render_agent_section_shows_labeled_trace_and_attempts() -> None:
+    """에이전트 판단 과정 섹션은 각 단계 라벨을 굵게, 시도한 검색어를 화살표로 보여준다."""
+    from app.assistant.web import _render_agent_section
+
+    result = {
+        "agent_trace": [
+            "검색어 계획: 주제 '전고체'로 1차 검색을 시작합니다.",
+            "수집·선별: 검색어 '전고체' → 수집 3건 중 1건 제외, 모드 'weekly'로 판정, 선정 0건.",
+            "판단(1차 시도): 당일 신규 아이템이 없습니다(모드 'weekly'). 재시도 여지가 남아(2회) 검색어를 재구성해 다시 시도합니다.",
+            "검색어 재구성: '전고체' → LLM 제안 '전고체 배터리 양산'로 바꿔 다시 검색합니다.",
+            "보고서 작성: 'daily' 모드로 브리핑을 생성했습니다.",
+        ],
+        "attempts": ["전고체", "전고체 배터리 양산"],
+    }
+
+    html_out = _render_agent_section(result)
+
+    assert "⓪ 에이전트 판단 과정" in html_out
+    assert "<strong>검색어 계획:</strong>" in html_out
+    assert "<strong>판단(1차 시도):</strong>" in html_out
+    assert "<strong>검색어 재구성:</strong>" in html_out
+    assert "재시도 여지가 남아(2회)" in html_out
+    assert "<code>전고체</code> → <code>전고체 배터리 양산</code>" in html_out
+
+
+def test_render_agent_section_omits_attempts_line_when_single_try() -> None:
+    """재구성이 없었으면(1회 시도) '시도한 검색어' 줄을 생략한다."""
+    from app.assistant.web import _render_agent_section
+
+    result = {
+        "agent_trace": ["검색어 계획: 주제 '전고체'로 1차 검색을 시작합니다."],
+        "attempts": ["전고체"],
+    }
+
+    assert "시도한 검색어" not in _render_agent_section(result)
+
+
+def test_render_agent_section_empty_when_no_trace() -> None:
+    """trace가 없으면 섹션 자체를 렌더링하지 않는다."""
+    from app.assistant.web import _render_agent_section
+
+    assert _render_agent_section({}) == ""
+
+
 def test_form_page_renders() -> None:
     """루트 페이지는 사용자·키워드 입력 폼을 반환한다."""
     client = TestClient(create_web_app())
@@ -83,7 +153,7 @@ def test_search_renders_both_sections(monkeypatch) -> None:
         "report_markdown": "# 전고체 — 오늘의 브리핑\n\n## 전고체 양산 발표\n\n요약 본문.",
     }
 
-    monkeypatch.setattr(web_module, "assist_daily", lambda keyword, *, user_id: fake_result)
+    monkeypatch.setattr(web_module, "assist_daily_agent", lambda keyword, *, user_id: fake_result)
 
     client = TestClient(create_web_app())
     response = client.post("/search", data={"user_id": "minji", "keyword": "전고체"})
@@ -116,7 +186,7 @@ def test_search_shows_fallback_mode(monkeypatch) -> None:
         "report_markdown": "# 전고체 — 오늘의 브리핑\n\n> **오늘 신규 소식 없음 — 주간 트렌드 요약**\n\n트렌드 본문.",
     }
 
-    monkeypatch.setattr(web_module, "assist_daily", lambda keyword, *, user_id: fake_result)
+    monkeypatch.setattr(web_module, "assist_daily_agent", lambda keyword, *, user_id: fake_result)
 
     client = TestClient(create_web_app())
     response = client.post("/search", data={"user_id": "minji", "keyword": "전고체"})

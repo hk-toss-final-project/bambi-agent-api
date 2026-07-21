@@ -8,12 +8,14 @@
 
 `assist`는 기존 웹 UI가 쓰는 소스별 나열 결과이고, `assist_daily`는 명세의
 선별 파이프라인(수집→임베딩→클러스터링→스코어링→중복 제거→임계값+워터폴)을
-거친 일간 보고서 결과다.
+거친 일간 보고서 결과다. `assist_daily_agent`는 그 파이프라인을 도구로 감싼
+리서치 에이전트(graph)를 실행해, 결과가 빈약하면 검색어를 재구성해 다시
+시도하는 판단까지 포함한 결과다.
 """
 
 from __future__ import annotations
 
-from agent.assistant import history, pipeline
+from agent.assistant import graph, history, pipeline
 from agent.assistant.feeds import canonical_url, latest_articles
 from agent.assistant.reddit import reddit_digest
 from agent.assistant.report import generate_daily_report
@@ -128,3 +130,26 @@ def assist_daily(
         errors.append(f"보고서 생성 실패: {type(error).__name__}: {error}")
 
     return {**result, "report_markdown": report_markdown}
+
+
+def assist_daily_agent(
+    keyword: str,
+    *,
+    user_id: str,
+    model: str = "gpt-4.1-mini",
+) -> dict[str, object]:
+    """리서치 에이전트를 실행해 일간 보고서를 생성한다.
+
+    `assist_daily`와 결과 형태(mode·items·report_markdown·log·errors)는 같되,
+    수집 결과가 빈약할 때 에이전트가 검색어를 재구성해 다시 시도한다. 어떤 판단을
+    했는지는 agent_trace, 시도한 검색어는 attempts로 함께 반환한다.
+
+    Args:
+        keyword: 사용자 관심 토픽
+        user_id: 사용자 식별자
+        model: 재구성·요약·보고서 생성에 쓸 OpenAI 모델
+
+    Returns:
+        assist_daily 결과 + {agent_trace: [str], attempts: [str]}
+    """
+    return graph.run_agent(keyword, user_id, model=model)

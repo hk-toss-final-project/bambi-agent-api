@@ -245,6 +245,35 @@ def test_same_day_rerun_is_idempotent(monkeypatch) -> None:
     assert len(data["minji"][_TOPIC]) == 2
 
 
+def test_search_query_drives_collection_but_topic_drives_scoring(monkeypatch) -> None:
+    """search_query는 수집에만 쓰고, 이력·유사도 채점은 여전히 토픽(keyword) 기준이다.
+
+    에이전트가 검색어를 재구성해 넘겨도 개인화·중복 방지 축(토픽)은 흔들리지
+    않아야 한다.
+    """
+    _seed_collect_history()
+    captured: dict[str, object] = {}
+
+    def spy_collect(kw, *, now, window_hours):
+        captured["collect_query"] = kw
+        return _make_docs(), []
+
+    def spy_embed(texts, model=None):
+        captured["embed_target"] = texts[0]  # 유사도 기준이 되는 첫 텍스트
+        return [_VECTORS[t] for t in texts]
+
+    monkeypatch.setattr(pipeline, "collect_documents", spy_collect)
+    monkeypatch.setattr(pipeline, "embed_texts", spy_embed)
+
+    result = pipeline.run_daily(_TOPIC, "minji", reference_now=_NOW, search_query="전고체 배터리 양산")
+
+    assert captured["collect_query"] == "전고체 배터리 양산"  # 수집은 재구성 검색어로
+    assert captured["embed_target"] == _TOPIC                 # 채점은 토픽으로
+    assert result["log"]["search_query"] == "전고체 배터리 양산"
+    # 이력은 토픽(_TOPIC) 키 아래에 기록된다(재구성 검색어 아래가 아님).
+    assert history.get_collected_entries("minji", _TOPIC)
+
+
 def test_next_day_skips_already_collected_urls(monkeypatch) -> None:
     """다음 날 같은 URL이 다시 오면 재수집하지 않고 제외한다 (수집 이력 활용)."""
     _seed_collect_history()
