@@ -15,7 +15,6 @@ from app.schemas.wiki import (
     WikiDocumentListResponse,
 )
 from domain.personal_wiki.documents.api import pwiki_003, pwiki_006
-from shared.contracts import FeatureRequest
 
 
 class WikiDocumentRepository(Protocol):
@@ -62,39 +61,26 @@ class WikiDocumentService:
     ) -> WikiDocumentListResponse:
         """사용자 Namespace의 현재 Wiki 문서 목록을 검증해 반환한다."""
         result = await pwiki_003(
-            FeatureRequest(
-                request_id=f"wiki-documents:list:{user_id}",
-                actor_id="wiki-document-service",
-                user_id=user_id,
-                payload={
-                    "implementation": lambda: self._repository.list_documents(
-                        user_id,
-                        document_kind=document_kind,
-                        limit=limit,
-                        offset=offset,
-                    )
-                },
-            )
+            self._repository,
+            user_id,
+            operation="list",
+            document_kind=document_kind,
+            limit=limit,
+            offset=offset,
         )
-        return WikiDocumentListResponse.model_validate(result.data)
+        return WikiDocumentListResponse.model_validate(result)
 
     async def get_document(
         self, user_id: str, document_id: str
     ) -> WikiDocumentDetailResponse:
         """현재 Wiki 문서 상세를 반환하고 다른 사용자 문서는 숨긴다."""
         result = await pwiki_003(
-            FeatureRequest(
-                request_id=f"wiki-documents:detail:{document_id}",
-                actor_id="wiki-document-service",
-                user_id=user_id,
-                payload={
-                    "implementation": lambda: self._repository.get_document(
-                        user_id, document_id
-                    )
-                },
-            )
+            self._repository,
+            user_id,
+            operation="detail",
+            document_id=document_id,
         )
-        if result.data.get("result") is None and set(result.data) == {"result"}:
+        if result is None:
             raise AgentApiError(
                 status.HTTP_404_NOT_FOUND,
                 ErrorDetail(
@@ -102,25 +88,14 @@ class WikiDocumentService:
                     message="개인 Wiki 문서를 찾을 수 없습니다.",
                 ),
             )
-        return WikiDocumentDetailResponse.model_validate(result.data)
+        return WikiDocumentDetailResponse.model_validate(result)
 
     async def get_wiki_version(
         self, user_id: str, wiki_version_id: str
     ) -> WikiBuildDetailResponse:
         """Wiki Build Snapshot을 반환하고 다른 사용자 Build는 숨긴다."""
-        result = await pwiki_006(
-            FeatureRequest(
-                request_id=f"wiki-versions:detail:{wiki_version_id}",
-                actor_id="wiki-document-service",
-                user_id=user_id,
-                payload={
-                    "implementation": lambda: self._repository.get_wiki_version(
-                        user_id, wiki_version_id
-                    )
-                },
-            )
-        )
-        if result.data.get("result") is None and set(result.data) == {"result"}:
+        result = await pwiki_006(self._repository, user_id, wiki_version_id)
+        if result is None:
             raise AgentApiError(
                 status.HTTP_404_NOT_FOUND,
                 ErrorDetail(
@@ -128,4 +103,4 @@ class WikiDocumentService:
                     message="개인 Wiki Build를 찾을 수 없습니다.",
                 ),
             )
-        return WikiBuildDetailResponse.model_validate(result.data)
+        return WikiBuildDetailResponse.model_validate(result)

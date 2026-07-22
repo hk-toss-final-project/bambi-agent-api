@@ -1,19 +1,35 @@
-"""기능 구현 모듈.
+"""Global Source 기사 정규화 기능과 언어 감지 Scaffold."""
 
-GSP-004, GSP-005 기능의 실제 구현 위치를 제공한다.
-"""
+from collections.abc import Sequence
+from dataclasses import replace
 
+from infrastructure.sources.connectors.api import LatestArticle
 from shared.contracts import FeatureRequest, FeatureResult
-from shared.feature_runtime import execute_feature_implementation
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def gsp_004(request: FeatureRequest) -> FeatureResult:
+async def gsp_004(articles: Sequence[LatestArticle]) -> list[LatestArticle]:
     """[GSP-004] API 응답 정규화.
 
     Source별 응답을 공통 문서 구조로 변환한다.
     """
-    return await execute_feature_implementation(request, feature_id="GSP-004")
+    normalized: list[LatestArticle] = []
+    for article in articles:
+        url = article.url.strip()
+        if not url:
+            continue
+        normalized.append(
+            replace(
+                article,
+                provider=article.provider.strip(),
+                title=article.title.strip(),
+                url=url,
+                description=article.description.strip(),
+                source_name=(article.source_name or "").strip() or None,
+                language=(article.language or "").strip() or None,
+            )
+        )
+    return normalized
 
 
 async def gsp_005(request: FeatureRequest) -> FeatureResult:

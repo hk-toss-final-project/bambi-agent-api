@@ -5,7 +5,7 @@
 """
 
 from asyncio import to_thread
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -24,10 +24,10 @@ from infrastructure.persistence.api import (
 )
 
 from shared.contracts import FeatureRequest, FeatureResult
-from shared.feature_runtime import execute_feature_implementation
 
 type DictRow = dict[str, Any]
 type WikiClassifier = Callable[..., WikiClassification]
+type WikiBuildRunner = Callable[..., Awaitable[dict[str, object]]]
 
 
 async def build_incremental_wiki(
@@ -107,58 +107,33 @@ async def build_incremental_wiki(
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def wba_001(request: FeatureRequest) -> FeatureResult:
+async def wba_001(
+    runner: WikiBuildRunner,
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    source_document_version_id: str,
+    job_id: str,
+    model: str = "gpt-4.1-mini",
+) -> dict[str, object]:
     """[WBA-001] Incremental Wiki Build.
 
     새로 추가된 사용자 데이터만 개인 Wiki에 반영한다.
     """
-    if callable(request.payload.get("implementation")):
-        return await execute_feature_implementation(request, feature_id="WBA-001")
-    connection = request.payload.get("connection")
-    source_document_version_id = request.payload.get("source_document_version_id")
-    job_id = request.payload.get("job_id")
-    model = request.payload.get("model", "gpt-4.1-mini")
-    if connection is None or not hasattr(connection, "execute"):
-        raise ValueError("WBA-001에 DB connection이 필요합니다.")
-    if not request.user_id:
+    if not user_id:
         raise ValueError("WBA-001에 user_id가 필요합니다.")
-    if not isinstance(source_document_version_id, str) or not source_document_version_id:
+    if not source_document_version_id:
         raise ValueError("WBA-001에 source_document_version_id가 필요합니다.")
-    if not isinstance(job_id, str) or not job_id:
+    if not job_id:
         raise ValueError("WBA-001에 job_id가 필요합니다.")
-    if not isinstance(model, str) or not model:
+    if not model:
         raise ValueError("WBA-001의 model은 빈 문자열이면 안 됩니다.")
-    persisted, plan = await build_incremental_wiki(
-        connection,  # type: ignore[arg-type]
-        user_id=request.user_id,
+    return await runner(
+        connection,
+        user_id=user_id,
         source_document_version_id=source_document_version_id,
         job_id=job_id,
         model=model,
-    )
-    return FeatureResult(
-        feature_id="WBA-001",
-        data={
-            "wiki_version_id": persisted.wiki_version_id,
-            "wiki_version": persisted.wiki_version,
-            "chunk_count": persisted.chunk_count,
-            "affected_documents": [
-                {
-                    "document_id": document.document_id,
-                    "document_version_id": document.document_version_id,
-                    "document_kind": document.document_kind,
-                    "document_key": document.document_key,
-                    "file_path": document.file_path,
-                    "version": document.version,
-                    "action": document.action,
-                }
-                for document in persisted.affected_documents
-            ],
-            "artifacts": {
-                "index": plan.index.content,
-                "source": plan.source_manifest.content,
-                "log": plan.log_entry.content,
-            },
-        },
     )
 
 

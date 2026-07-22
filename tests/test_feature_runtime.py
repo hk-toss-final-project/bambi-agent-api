@@ -1,7 +1,8 @@
-"""완료된 명세 기능 facade의 공통 실행 위임 계약을 검증한다."""
+"""Bambi 호환 공통 실행기와 타입 기반 facade 전환 경계를 검증한다."""
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 import pytest
 
@@ -17,69 +18,12 @@ from agent.bambi.api import (
     bambi_020,
     bambi_021,
 )
-from agent.wiki_builder.api import wba_001, wba_003
-from app.routers.service.api import (
-    svc_001,
-    svc_002,
-    svc_003,
-    svc_008,
-    svc_013,
-    svc_014,
-)
-from app.routers.service_worker.api import sw_004, sw_009
-from domain.interests.api import int_001, int_002, int_005, int_011
-from domain.jobs.api import job_001, job_002, job_006, job_007, job_010
-from domain.personal_wiki.documents.api import (
-    pwiki_003,
-    pwiki_006,
-    pwiki_007,
-    pwiki_008,
-    pwiki_011,
-)
-from domain.personal_wiki.embeddings.api import pwe_001, pwe_002
-from domain.personal_wiki.retrieval.api import prag_003, prag_006, prag_007
-from domain.personal_wiki.source_events.api import wse_001, wse_011, wse_013
-from infrastructure.persistence.api import db_002, db_003, db_004, db_005, db_026
-from infrastructure.sources.connectors.api import col_002, col_003, col_004
-from infrastructure.sources.processing.api import gsp_004, gsp_006, gsp_015
 from shared.contracts import FeatureRequest, FeatureResult
 from shared.feature_runtime import execute_feature_implementation
-from workers.runtime.api import wc_002, wc_006, wc_009, wc_013
 
 type FeatureDelegate = Callable[[FeatureRequest], Awaitable[FeatureResult]]
 
 DELEGATED_FEATURES: tuple[tuple[str, FeatureDelegate], ...] = (
-    ("SVC-001", svc_001),
-    ("SVC-002", svc_002),
-    ("SVC-003", svc_003),
-    ("SVC-008", svc_008),
-    ("SVC-013", svc_013),
-    ("SVC-014", svc_014),
-    ("SW-004", sw_004),
-    ("SW-009", sw_009),
-    ("WSE-001", wse_001),
-    ("WSE-011", wse_011),
-    ("WSE-013", wse_013),
-    ("PWIKI-003", pwiki_003),
-    ("PWIKI-006", pwiki_006),
-    ("PWIKI-007", pwiki_007),
-    ("PWIKI-008", pwiki_008),
-    ("PWIKI-011", pwiki_011),
-    ("PWE-001", pwe_001),
-    ("PWE-002", pwe_002),
-    ("PRAG-003", prag_003),
-    ("PRAG-006", prag_006),
-    ("PRAG-007", prag_007),
-    ("INT-001", int_001),
-    ("INT-002", int_002),
-    ("INT-005", int_005),
-    ("INT-011", int_011),
-    ("COL-002", col_002),
-    ("COL-003", col_003),
-    ("COL-004", col_004),
-    ("GSP-004", gsp_004),
-    ("GSP-006", gsp_006),
-    ("GSP-015", gsp_015),
     ("BAMBI-001", bambi_001),
     ("BAMBI-004", bambi_004),
     ("BAMBI-005", bambi_005),
@@ -90,22 +34,6 @@ DELEGATED_FEATURES: tuple[tuple[str, FeatureDelegate], ...] = (
     ("BAMBI-018", bambi_018),
     ("BAMBI-020", bambi_020),
     ("BAMBI-021", bambi_021),
-    ("WBA-001", wba_001),
-    ("WBA-003", wba_003),
-    ("JOB-001", job_001),
-    ("JOB-002", job_002),
-    ("JOB-006", job_006),
-    ("JOB-007", job_007),
-    ("JOB-010", job_010),
-    ("WC-002", wc_002),
-    ("WC-006", wc_006),
-    ("WC-009", wc_009),
-    ("WC-013", wc_013),
-    ("DB-002", db_002),
-    ("DB-003", db_003),
-    ("DB-004", db_004),
-    ("DB-005", db_005),
-    ("DB-026", db_026),
 )
 
 
@@ -125,6 +53,21 @@ def test_completed_delegate_executes_injected_implementation(
     )
 
     assert result == FeatureResult(feature_id=feature_id, data={"value": feature_id})
+
+
+def test_generic_executor_is_limited_to_excluded_bambi_features() -> None:
+    """공통 구현 주입 실행기가 제외 대상 Bambi 밖에서 사용되지 않는지 검증한다."""
+    root = Path(__file__).resolve().parents[1]
+    source_roots = ("app", "agent", "domain", "infrastructure", "workers", "scheduler")
+    offending: list[str] = []
+    for source_root in source_roots:
+        for path in (root / source_root).rglob("*.py"):
+            relative = path.relative_to(root)
+            if relative.parts[:2] == ("agent", "bambi"):
+                continue
+            if "execute_feature_implementation" in path.read_text(encoding="utf-8"):
+                offending.append(str(relative))
+    assert offending == []
 
 
 def test_feature_runtime_awaits_async_scalar_result() -> None:

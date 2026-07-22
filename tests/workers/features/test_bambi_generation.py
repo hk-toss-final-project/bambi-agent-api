@@ -5,7 +5,6 @@ from typing import Any
 
 import pytest
 
-from shared.contracts import FeatureRequest
 from workers.features import bambi_generation
 from workers.features.bambi_generation import worker_003
 
@@ -17,6 +16,7 @@ def test_run_bambi_generation_batch_delegates_to_shared_runner(
     captured: dict[str, Any] = {}
 
     async def fake_run_job_batch(**kwargs: Any) -> list[dict[str, object]]:
+        """공통 Batch 러너 호출 인자를 기록하고 고정 결과를 반환한다."""
         captured.update(kwargs)
         return [{"job_id": "bambi-job-1", "status": "completed"}]
 
@@ -41,11 +41,5 @@ def test_run_bambi_generation_batch_delegates_to_shared_runner(
 
 def test_worker_003_requires_database_url() -> None:
     """WORKER-003이 DB 연결 없이 호출되면 명확한 검증 오류를 낸다."""
-    request = FeatureRequest(
-        request_id="request-1",
-        actor_id="bambi-worker",
-        payload={"worker_id": "worker-1"},
-    )
-
     with pytest.raises(ValueError, match="database_url"):
-        asyncio.run(worker_003(request))
+        asyncio.run(worker_003(database_url="", worker_id="worker-1"))

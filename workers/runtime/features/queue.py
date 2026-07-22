@@ -13,10 +13,15 @@ import sys
 import traceback
 from asyncio import sleep
 from collections.abc import Awaitable, Callable
+from typing import Any
 
-from shared.contracts import FeatureRequest, FeatureResult
-from shared.feature_runtime import execute_feature_implementation
-from workers.api import run_bambi_generation_batch, run_personal_wiki_batch
+from psycopg import AsyncConnection
+
+from infrastructure.persistence.api import (
+    ClaimAgentJobsCommand,
+    ClaimedAgentJob,
+    db_026,
+)
 
 type BatchResults = list[dict[str, object]]
 type BatchRunner = Callable[..., Awaitable[BatchResults]]
@@ -71,7 +76,7 @@ async def consume_personal_wiki_jobs(
     model: str,
     interval_seconds: int = 60,
     max_batches: int | None = None,
-    batch_runner: BatchRunner = run_personal_wiki_batch,
+    batch_runner: BatchRunner | None = None,
     on_batch: BatchObserver | None = None,
 ) -> BatchResults:
     """실행 가능한 Personal Wiki Job Batch를 반복해서 가져와 처리한다.
@@ -91,6 +96,10 @@ async def consume_personal_wiki_jobs(
         max_batches 상한 안에서 처리한 Job 결과 누적 목록.
         상주 모드에서는 메모리 누적을 피하기 위해 빈 목록을 유지한다.
     """
+    if batch_runner is None:
+        from workers.api import run_personal_wiki_batch
+
+        batch_runner = run_personal_wiki_batch
     return await _consume_job_batches(
         batch_runner=batch_runner,
         runner_kwargs={
@@ -115,7 +124,7 @@ async def consume_bambi_generation_jobs(
     model: str,
     interval_seconds: int = 60,
     max_batches: int | None = None,
-    batch_runner: BatchRunner = run_bambi_generation_batch,
+    batch_runner: BatchRunner | None = None,
     on_batch: BatchObserver | None = None,
 ) -> BatchResults:
     """실행 가능한 Bambi Generation Job Batch를 반복해서 가져와 처리한다.
@@ -138,6 +147,10 @@ async def consume_bambi_generation_jobs(
         max_batches 상한 안에서 처리한 Job 결과 누적 목록.
         상주 모드에서는 메모리 누적을 피하기 위해 빈 목록을 유지한다.
     """
+    if batch_runner is None:
+        from workers.api import run_bambi_generation_batch
+
+        batch_runner = run_bambi_generation_batch
     return await _consume_job_batches(
         batch_runner=batch_runner,
         runner_kwargs={
@@ -154,43 +167,37 @@ async def consume_bambi_generation_jobs(
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def wc_001(request: FeatureRequest) -> FeatureResult:
+async def wc_001(
+    *,
+    database_url: str,
+    worker_id: str,
+    limit: int = 1,
+    lease_seconds: int = 600,
+    model: str = "gpt-4.1-mini",
+    interval_seconds: int = 0,
+    max_batches: int | None = 1,
+    job_type: str = "personal_wiki_build",
+    on_batch: BatchObserver | None = None,
+) -> BatchResults:
     """[WC-001] Queue Job Consume.
 
     설정된 Batch 크기만큼 실행 가능한 Personal Wiki 작업을 가져온다.
     max_batches 횟수만큼 Batch를 소비하고 처리 결과를 반환한다.
     """
-    database_url = request.payload.get("database_url")
-    worker_id = request.payload.get("worker_id", request.actor_id or "personal-wiki-worker")
-    limit = request.payload.get("limit", 1)
-    lease_seconds = request.payload.get("lease_seconds", 600)
-    model = request.payload.get("model", "gpt-4.1-mini")
-    interval_seconds = request.payload.get("interval_seconds", 0)
-    max_batches = request.payload.get("max_batches", 1)
-    job_type = request.payload.get("job_type", "personal_wiki_build")
-    on_batch = request.payload.get("on_batch")
-    if not isinstance(database_url, str) or not database_url:
+    if not database_url:
         raise ValueError("WC-001에 database_url이 필요합니다.")
-    if not isinstance(worker_id, str) or not worker_id:
+    if not worker_id:
         raise ValueError("WC-001에 worker_id가 필요합니다.")
-    if not isinstance(limit, int) or not isinstance(lease_seconds, int):
-        raise ValueError("WC-001의 limit과 lease_seconds는 정수여야 합니다.")
-    if not isinstance(interval_seconds, int):
-        raise ValueError("WC-001의 interval_seconds는 정수여야 합니다.")
-    if max_batches is not None and not isinstance(max_batches, int):
-        raise ValueError("WC-001의 max_batches는 정수 또는 None이어야 합니다.")
-    if not isinstance(model, str) or not model:
+    if not model:
         raise ValueError("WC-001의 model은 빈 문자열이면 안 됩니다.")
     if job_type not in ("personal_wiki_build", "bambi_generation"):
         raise ValueError("WC-001이 지원하지 않는 job_type입니다.")
-    if on_batch is not None and not callable(on_batch):
-        raise ValueError("WC-001의 on_batch는 호출 가능해야 합니다.")
     consumer = (
         consume_bambi_generation_jobs
         if job_type == "bambi_generation"
         else consume_personal_wiki_jobs
     )
-    results = await consumer(
+    return await consumer(
         database_url=database_url,
         worker_id=worker_id,
         limit=limit,
@@ -198,18 +205,32 @@ async def wc_001(request: FeatureRequest) -> FeatureResult:
         model=model,
         interval_seconds=interval_seconds,
         max_batches=max_batches,
-        on_batch=on_batch,  # type: ignore[arg-type]
-    )
-    return FeatureResult(
-        feature_id="WC-001",
-        data={"batches": max_batches, "processed": len(results), "results": results},
+        on_batch=on_batch,
     )
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def wc_002(request: FeatureRequest) -> FeatureResult:
+async def wc_002(
+    connection: AsyncConnection[dict[str, Any]],
+    *,
+    job_type: str,
+    worker_id: str,
+    limit: int,
+    lease_seconds: int,
+) -> list[ClaimedAgentJob]:
     """[WC-002] Job Claim.
 
     하나의 Worker가 작업을 점유한다.
     """
-    return await execute_feature_implementation(request, feature_id="WC-002")
+    result = await db_026(
+        connection,
+        ClaimAgentJobsCommand(
+            job_type=job_type,
+            worker_id=worker_id,
+            limit=limit,
+            lease_seconds=lease_seconds,
+        ),
+    )
+    if not isinstance(result, list):
+        raise RuntimeError("DB-026이 Claim된 Job 목록을 반환하지 않았습니다.")
+    return result

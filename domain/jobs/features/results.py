@@ -1,16 +1,12 @@
-"""기능 구현 모듈.
+"""Agent Job 완료 결과 연결 기능 구현."""
 
-JOB-007 기능의 실제 구현 위치를 제공한다.
-"""
-
-from shared.contracts import FeatureRequest, FeatureResult
-from shared.feature_runtime import execute_feature_implementation
+from collections.abc import Mapping
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def job_007(request: FeatureRequest) -> FeatureResult:
+async def job_007(result: Mapping[str, object]) -> dict[str, object]:
     """[JOB-007] Agent Job 결과 연결.
 
     완료된 작업과 결과 데이터를 연결한다.
     """
-    return await execute_feature_implementation(request, feature_id="JOB-007")
+    return dict(result)

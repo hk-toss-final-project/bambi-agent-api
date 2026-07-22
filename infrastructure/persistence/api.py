@@ -13,7 +13,6 @@ from .features.personal_wiki import (
     WikiChunkForEmbedding,
     WikiEmbeddingValue,
     chunk_wiki_markdown,
-    db_002,
     db_003,
     db_004,
     db_005,
@@ -48,8 +47,11 @@ from .features.generation import db_015, db_016, db_017, db_018, db_019, db_020
 from .features.recommendation import db_021
 from .features.configuration import db_022, db_023, db_024, db_025
 from .features.jobs import (
+    ClaimAgentJobsCommand,
     ClaimedAgentJob,
+    CompleteAgentJobCommand,
     EnqueuedWikiBuildJob,
+    FailAgentJobCommand,
     StoredAgentJob,
     claim_agent_job_by_id,
     claim_personal_wiki_jobs,
@@ -67,6 +69,7 @@ from .features.jobs import (
 )
 from .features.source_ingestion import (
     PersistedSourceSubmission,
+    db_002,
     register_url_and_enqueue,
     save_web_clipping_and_enqueue,
 )

@@ -8,8 +8,8 @@ from typing import Any
 from pytest import MonkeyPatch
 
 from domain.personal_wiki.documents.features import commands
+from infrastructure.persistence import api as persistence_api
 from infrastructure.persistence.api import UserSourceDocumentForAgent
-from shared.contracts import FeatureRequest
 from shared.wiki_models import GeneratedArtifact, WikiBuildPlan, WikiDocumentPlan
 
 
@@ -81,24 +81,17 @@ def test_pwiki_002_delegates_to_persistence_facade(
         captured.update(kwargs)
         return persisted
 
-    monkeypatch.setattr(commands, "persist_wiki_build", fake_persist)
+    monkeypatch.setattr(persistence_api, "db_003", fake_persist)
     result = asyncio.run(
         commands.pwiki_002(
-            FeatureRequest(
-                request_id="request-1",
-                user_id="user-1",
-                payload={
-                    "connection": connection,
-                    "source": source,
-                    "plan": plan,
-                    "job_id": "job-1",
-                },
-            )
+            connection,  # type: ignore[arg-type]
+            source=source,
+            plan=plan,
+            job_id="job-1",
         )
     )
 
-    assert result.feature_id == "PWIKI-002"
-    assert result.data["persisted"] is persisted
+    assert result is persisted
     assert captured == {
         "connection": connection,
         "source": source,

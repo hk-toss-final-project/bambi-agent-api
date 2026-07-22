@@ -8,7 +8,6 @@ from typing import Mapping, Protocol
 
 from app.schemas.wiki import WikiGraphResponse, WikiTopNode, WikiTopNodesResponse
 from domain.personal_wiki.documents.api import pwiki_003
-from shared.contracts import FeatureRequest
 
 
 class WikiGraphRepository(Protocol):
@@ -29,16 +28,9 @@ class WikiGraphService:
     async def get_graph(self, user_id: str, request_id: str) -> WikiGraphResponse:
         """사용자 Graph를 조회하고 Pydantic 응답으로 검증한다."""
         result = await pwiki_003(
-            FeatureRequest(
-                request_id=request_id,
-                actor_id="service-api",
-                user_id=user_id,
-                payload={"reader": self._repository},
-            )
+            self._repository, user_id, operation="graph"
         )
-        return WikiGraphResponse.model_validate(
-            {"feature_id": result.feature_id, **dict(result.data)}
-        )
+        return WikiGraphResponse.model_validate(result)
 
     async def get_top_nodes(
         self, user_id: str, request_id: str, *, limit: int

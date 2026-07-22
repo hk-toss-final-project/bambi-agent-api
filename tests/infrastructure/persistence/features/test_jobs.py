@@ -23,6 +23,7 @@ class _FakeCursor:
     """fetchone·fetchall을 지원하는 결정적 Cursor Test Double."""
 
     def __init__(self, rows: list[dict[str, Any]]) -> None:
+        """순서대로 반환할 Row를 보관한다."""
         self._rows = rows
 
     async def fetchone(self) -> dict[str, Any] | None:
@@ -38,6 +39,7 @@ class _FakeConnection:
     """SQL 실행 내역과 순서별 응답을 기록하는 Connection Test Double."""
 
     def __init__(self, responses: list[list[dict[str, Any]]]) -> None:
+        """순서별 응답과 빈 SQL 실행 내역을 초기화한다."""
         self._responses = responses
         self.executed: list[tuple[str, tuple[Any, ...] | None]] = []
 
@@ -180,7 +182,7 @@ def test_claim_agent_job_by_id_records_dev_lease_and_attempt() -> None:
 
     assert claimed is not None
     assert claimed.job_type == "personal_wiki_url"
-    assert connection.executed[0][1] == ("dev-api:run-1", 180, "job-1")
+    assert connection.executed[0][1] == ("dev-api:run-1", 180, 5, "job-1")
     assert "agent.agent_job_attempts" in connection.executed[1][0]
 
 

@@ -1,20 +1,27 @@
-"""관심사 애플리케이션 서비스의 facade 실행 경계를 검증한다."""
+"""관심사 애플리케이션 서비스와 INT facade의 연동을 검증한다."""
 
 import asyncio
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 
-from agent.wiki_builder.api import InterestCandidate
+import pytest
+
+from app.exceptions import AgentApiError
 from app.services.interests import InterestService
+from shared.wiki_models import InterestCandidate
 
 
 class _FakeInterestRepository:
     """결정적인 Wiki 문서와 저장 결과를 반환하는 관심사 저장소 대역."""
 
+    def __init__(self, *, wiki_version_id: object = "wiki-version-1") -> None:
+        """활성 Wiki Version 존재 여부를 구성한다."""
+        self._wiki_version_id = wiki_version_id
+
     async def load_interest_documents(self, user_id: str) -> Mapping[str, object]:
         """관심사 추출에 사용할 활성 Wiki 문서 한 건을 반환한다."""
         return {
-            "wiki_version_id": "wiki-version-1",
+            "wiki_version_id": self._wiki_version_id,
             "documents": [
                 {
                     "document_id": "document-1",
@@ -60,8 +67,8 @@ class _FakeInterestRepository:
         return None
 
 
-def test_rebuild_runs_interest_feature_facades() -> None:
-    """관심사 재계산 결과가 추출·분류·점수 facade를 거쳐 저장된다."""
+def test_rebuild_runs_int_011_and_validates_response() -> None:
+    """관심사 재계산이 INT-011 facade를 거쳐 검증된 응답을 만드는지 검증한다."""
     service = InterestService(_FakeInterestRepository())
 
     result = asyncio.run(service.rebuild("user-1", limit=5))
@@ -70,3 +77,13 @@ def test_rebuild_runs_interest_feature_facades() -> None:
     assert result.user_id == "user-1"
     assert result.wiki_version_id == "wiki-version-1"
     assert result.interests[0].topic == "LangGraph Agent"
+
+
+def test_rebuild_maps_missing_active_wiki_to_conflict() -> None:
+    """활성 Wiki가 없으면 도메인 오류를 409 API 오류로 변환하는지 검증한다."""
+    service = InterestService(_FakeInterestRepository(wiki_version_id=None))
+
+    with pytest.raises(AgentApiError) as raised:
+        asyncio.run(service.rebuild("user-1", limit=5))
+    assert raised.value.status_code == 409
+    assert raised.value.detail.code == "ACTIVE_WIKI_REQUIRED"

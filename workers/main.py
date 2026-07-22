@@ -17,7 +17,6 @@ from workers.api import (
     worker_003,
 )
 from workers.runtime.api import wc_001
-from shared.contracts import FeatureRequest, FeatureResult
 
 
 def _parse_args() -> argparse.Namespace:
@@ -74,16 +73,6 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _feature_results(result: FeatureResult) -> list[dict[str, object]]:
-    """Worker 기능 결과에서 Job 결과 목록을 타입 검증해 꺼낸다."""
-    values = result.data.get("results")
-    if not isinstance(values, list) or not all(
-        isinstance(value, dict) for value in values
-    ):
-        raise RuntimeError(f"{result.feature_id}가 Worker 결과 목록을 반환하지 않았습니다.")
-    return values
-
-
 async def _run_batch_once(
     args: argparse.Namespace, settings: Settings, worker_id: str
 ) -> list[dict[str, object]]:
@@ -104,61 +93,40 @@ async def _run_batch_once(
             if settings.naver_client_secret
             else None
         )
-        result = await worker_001(
-            FeatureRequest(
-                request_id=f"worker-{worker_id}",
-                actor_id=worker_id,
-                payload={
-                    "database_url": settings.agent_database_url,
-                    "keywords": keywords,
-                    "providers": providers,
-                    "limit_per_provider": args.limit_per_provider,
-                    "language": args.language,
-                    "naver_client_id": settings.naver_client_id,
-                    "naver_client_secret": naver_secret,
-                    "gdelt_base_url": settings.gdelt_base_url,
-                },
-            )
+        return await worker_001(
+            database_url=settings.agent_database_url,
+            keywords=keywords,
+            providers=providers,
+            limit_per_provider=args.limit_per_provider,
+            language=args.language,
+            naver_client_id=settings.naver_client_id,
+            naver_client_secret=naver_secret,
+            gdelt_base_url=settings.gdelt_base_url,
         )
-        return _feature_results(result)
     if args.worker == "global-content":
         return await run_global_content_fetch_batch(
             database_url=settings.agent_database_url,
             limit=args.limit or settings.personal_wiki_worker_batch_size,
         )
     if args.worker == "bambi-generation":
-        result = await worker_003(
-            FeatureRequest(
-                request_id=f"worker-{worker_id}",
-                actor_id=worker_id,
-                payload={
-                    "database_url": settings.agent_database_url,
-                    "worker_id": worker_id,
-                    "limit": args.limit or settings.personal_wiki_worker_batch_size,
-                    "lease_seconds": (
-                        args.lease_seconds or settings.personal_wiki_job_lease_seconds
-                    ),
-                    "model": args.model or settings.bambi_llm_model,
-                },
-            )
+        return await worker_003(
+            database_url=settings.agent_database_url,
+            worker_id=worker_id,
+            limit=args.limit or settings.personal_wiki_worker_batch_size,
+            lease_seconds=(
+                args.lease_seconds or settings.personal_wiki_job_lease_seconds
+            ),
+            model=args.model or settings.bambi_llm_model,
         )
-        return _feature_results(result)
-    result = await worker_002(
-        FeatureRequest(
-            request_id=f"worker-{worker_id}",
-            actor_id=worker_id,
-            payload={
-                "database_url": settings.agent_database_url,
-                "worker_id": worker_id,
-                "limit": args.limit or settings.personal_wiki_worker_batch_size,
-                "lease_seconds": (
-                    args.lease_seconds or settings.personal_wiki_job_lease_seconds
-                ),
-                "model": args.model or settings.wiki_llm_model,
-            },
-        )
+    return await worker_002(
+        database_url=settings.agent_database_url,
+        worker_id=worker_id,
+        limit=args.limit or settings.personal_wiki_worker_batch_size,
+        lease_seconds=(
+            args.lease_seconds or settings.personal_wiki_job_lease_seconds
+        ),
+        model=args.model or settings.wiki_llm_model,
     )
-    return _feature_results(result)
 
 
 async def _run() -> None:
@@ -183,48 +151,36 @@ async def _run() -> None:
         results = await _run_batch_once(args, settings, worker_id)
         print(json.dumps(results, ensure_ascii=False, indent=2, default=str))
         return
+
     def on_batch(results: list[dict[str, object]]) -> None:
         """결과가 있는 Batch를 JSON Line으로 출력한다."""
         print(json.dumps(results, ensure_ascii=False, default=str), flush=True)
+
     if args.worker == "bambi-generation":
         await wc_001(
-            FeatureRequest(
-                request_id=f"worker-loop-{worker_id}",
-                actor_id=worker_id,
-                payload={
-                    "database_url": settings.agent_database_url,
-                    "worker_id": worker_id,
-                    "limit": args.limit or settings.personal_wiki_worker_batch_size,
-                    "lease_seconds": (
-                        args.lease_seconds or settings.personal_wiki_job_lease_seconds
-                    ),
-                    "model": args.model or settings.bambi_llm_model,
-                    "interval_seconds": args.interval_seconds,
-                    "max_batches": None,
-                    "job_type": "bambi_generation",
-                    "on_batch": on_batch,
-                },
-            )
+            database_url=settings.agent_database_url,
+            worker_id=worker_id,
+            limit=args.limit or settings.personal_wiki_worker_batch_size,
+            lease_seconds=(
+                args.lease_seconds or settings.personal_wiki_job_lease_seconds
+            ),
+            model=args.model or settings.bambi_llm_model,
+            interval_seconds=args.interval_seconds,
+            max_batches=None,
+            job_type="bambi_generation",
+            on_batch=on_batch,
         )
         return
     await wc_001(
-        FeatureRequest(
-            request_id=f"worker-loop-{worker_id}",
-            actor_id=worker_id,
-            payload={
-                "database_url": settings.agent_database_url,
-                "worker_id": worker_id,
-                "limit": args.limit or settings.personal_wiki_worker_batch_size,
-                "lease_seconds": (
-                    args.lease_seconds or settings.personal_wiki_job_lease_seconds
-                ),
-                "model": args.model or settings.wiki_llm_model,
-                "interval_seconds": args.interval_seconds,
-                "max_batches": None,
-                "job_type": "personal_wiki_build",
-                "on_batch": on_batch,
-            },
-        )
+        database_url=settings.agent_database_url,
+        worker_id=worker_id,
+        limit=args.limit or settings.personal_wiki_worker_batch_size,
+        lease_seconds=(args.lease_seconds or settings.personal_wiki_job_lease_seconds),
+        model=args.model or settings.wiki_llm_model,
+        interval_seconds=args.interval_seconds,
+        max_batches=None,
+        job_type="personal_wiki_build",
+        on_batch=on_batch,
     )
 
 

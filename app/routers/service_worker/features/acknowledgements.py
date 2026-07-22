@@ -1,19 +1,45 @@
-"""기능 구현 모듈.
+"""Service Worker Publish Snapshot ACK 기능과 미구현 실패 전달 Scaffold."""
 
-SW-009, SW-010 기능의 실제 구현 위치를 제공한다.
-"""
+from typing import Protocol
 
+from app.schemas.mvp import (
+    PublishAckRequest,
+    PublishAckResponse,
+    PublishBatchAckRequest,
+    PublishBatchAckResponse,
+)
 from shared.contracts import FeatureRequest, FeatureResult
-from shared.feature_runtime import execute_feature_implementation
+
+
+class PublishAcknowledgementService(Protocol):
+    """단건·Batch Publish Snapshot ACK에 필요한 서비스 경계."""
+
+    async def acknowledge_publish(
+        self, content_id: str, payload: PublishAckRequest
+    ) -> PublishAckResponse:
+        """단건 Publish Snapshot의 반영 결과를 기록한다."""
+        ...
+
+    async def acknowledge_publish_snapshot_batch(
+        self, batch_id: str, payload: PublishBatchAckRequest
+    ) -> PublishBatchAckResponse:
+        """Publish Snapshot Batch의 항목별 반영 결과를 기록한다."""
+        ...
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def sw_009(request: FeatureRequest) -> FeatureResult:
+async def sw_009(
+    service: PublishAcknowledgementService,
+    target_id: str,
+    payload: PublishAckRequest | PublishBatchAckRequest,
+) -> PublishAckResponse | PublishBatchAckResponse:
     """[SW-009] 발행 완료 ACK.
 
     service-db 반영 완료를 Agent API에 알린다.
     """
-    return await execute_feature_implementation(request, feature_id="SW-009")
+    if isinstance(payload, PublishAckRequest):
+        return await service.acknowledge_publish(target_id, payload)
+    return await service.acknowledge_publish_snapshot_batch(target_id, payload)
 
 
 async def sw_010(request: FeatureRequest) -> FeatureResult:

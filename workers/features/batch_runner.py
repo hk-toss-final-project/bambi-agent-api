@@ -14,10 +14,9 @@ from psycopg.rows import dict_row
 
 from infrastructure.persistence.api import (
     ClaimedAgentJob,
-    claim_runnable_agent_jobs,
-    fail_agent_job,
     set_system_job_scope,
 )
+from workers.runtime.api import wc_002, wc_006, wc_013
 
 type DictRow = dict[str, Any]
 type JobProcessor = Callable[
@@ -49,7 +48,7 @@ async def record_job_failure(
     try:
         async with connection.transaction():
             await set_system_job_scope(connection)
-            next_status = await fail_agent_job(
+            next_status = await wc_006(
                 connection,
                 job=job,
                 worker_id=worker_id,
@@ -98,31 +97,27 @@ async def run_job_batch(
     try:
         async with connection.transaction():
             await set_system_job_scope(connection)
-            jobs = await claim_runnable_agent_jobs(
+            jobs = await wc_002(
                 connection,
                 job_type=job_type,
                 worker_id=worker_id,
                 limit=limit,
                 lease_seconds=lease_seconds,
             )
-        results: list[dict[str, object]] = []
-        for job in jobs:
+        async def process_claimed_job(job: ClaimedAgentJob) -> dict[str, object]:
+            """점유한 Job 하나를 실행하고 완료·실패 결과로 변환한다."""
             try:
                 result = await process(connection, job)
             except Exception as error:
-                results.append(
-                    await record_job_failure(
-                        connection,
-                        job=job,
-                        worker_id=worker_id,
-                        error=error,
-                        error_code_prefix=error_code_prefix,
-                    )
+                return await record_job_failure(
+                    connection,
+                    job=job,
+                    worker_id=worker_id,
+                    error=error,
+                    error_code_prefix=error_code_prefix,
                 )
-            else:
-                results.append(
-                    {"job_id": job.job_id, "status": "completed", **result}
-                )
-        return results
+            return {"job_id": job.job_id, "status": "completed", **result}
+
+        return await wc_013(jobs, process_claimed_job)
     finally:
         await connection.close()

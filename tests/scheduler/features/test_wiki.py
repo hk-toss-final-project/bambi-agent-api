@@ -6,13 +6,13 @@ from typing import Any
 import pytest
 
 from scheduler.features.wiki import sch_009
-from shared.contracts import FeatureRequest
 
 
 class _FakeCursor:
     """fetchall을 지원하는 결정적 Cursor Test Double."""
 
     def __init__(self, rows: list[dict[str, Any]]) -> None:
+        """조회 시 반환할 고정 Row 목록을 보관한다."""
         self._rows = rows
 
     async def fetchall(self) -> list[dict[str, Any]]:
@@ -24,6 +24,7 @@ class _FakeConnection:
     """SQL 실행 내역과 순서별 응답을 기록하는 Connection Test Double."""
 
     def __init__(self, responses: list[list[dict[str, Any]]]) -> None:
+        """순서별 응답과 빈 SQL 실행 내역을 초기화한다."""
         self._responses = responses
         self.executed: list[tuple[str, tuple[Any, ...] | None]] = []
 
@@ -42,21 +43,16 @@ def test_sch_009_defers_pending_jobs_with_policy_minutes() -> None:
 
     result = asyncio.run(
         sch_009(
-            FeatureRequest(
-                request_id="test-sch-009",
-                user_id="user-1",
-                payload={
-                    "connection": connection,
-                    "action": "defer",
-                    "quiet_minutes": 10,
-                    "max_wait_minutes": 30,
-                },
-            )
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            action="defer",
+            quiet_minutes=10,
+            max_wait_minutes=30,
         )
     )
 
-    assert result.feature_id == "SCH-009"
-    assert result.data == {"action": "defer", "affected_jobs": 2}
+    assert result.action == "defer"
+    assert result.affected_jobs == 2
     assert connection.executed[0][1] == ("user-1", 30, 10)
 
 
@@ -66,15 +62,14 @@ def test_sch_009_releases_pending_jobs_for_forced_build() -> None:
 
     result = asyncio.run(
         sch_009(
-            FeatureRequest(
-                request_id="test-sch-009",
-                user_id="user-1",
-                payload={"connection": connection, "action": "release"},
-            )
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            action="release",
         )
     )
 
-    assert result.data == {"action": "release", "affected_jobs": 1}
+    assert result.action == "release"
+    assert result.affected_jobs == 1
     assert "scheduled_at = clock_timestamp()" in connection.executed[0][0]
 
 
@@ -85,42 +80,31 @@ def test_sch_009_validates_required_inputs() -> None:
     with pytest.raises(ValueError, match="connection"):
         asyncio.run(
             sch_009(
-                FeatureRequest(
-                    request_id="test-sch-009", user_id="user-1", payload={}
-                )
+                None,  # type: ignore[arg-type]
+                user_id="user-1",
             )
         )
     with pytest.raises(ValueError, match="user_id"):
         asyncio.run(
             sch_009(
-                FeatureRequest(
-                    request_id="test-sch-009",
-                    user_id="",
-                    payload={"connection": connection},
-                )
+                connection,  # type: ignore[arg-type]
+                user_id="",
             )
         )
     with pytest.raises(ValueError, match="action"):
         asyncio.run(
             sch_009(
-                FeatureRequest(
-                    request_id="test-sch-009",
-                    user_id="user-1",
-                    payload={"connection": connection, "action": "rebuild"},
-                )
+                connection,  # type: ignore[arg-type]
+                user_id="user-1",
+                action="rebuild",  # type: ignore[arg-type]
             )
         )
     with pytest.raises(ValueError, match="허용 범위"):
         asyncio.run(
             sch_009(
-                FeatureRequest(
-                    request_id="test-sch-009",
-                    user_id="user-1",
-                    payload={
-                        "connection": connection,
-                        "quiet_minutes": -1,
-                        "max_wait_minutes": 30,
-                    },
-                )
+                connection,  # type: ignore[arg-type]
+                user_id="user-1",
+                quiet_minutes=-1,
+                max_wait_minutes=30,
             )
         )

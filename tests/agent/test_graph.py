@@ -9,13 +9,13 @@ from typing import Any
 import pytest
 
 from agent import graph as agent_graph
-from shared.contracts import FeatureResult
 
 
 class _FakeConnection:
     """transaction 문맥만 제공하는 Connection Test Double."""
 
     def __init__(self) -> None:
+        """Transaction 진입 횟수를 0으로 초기화한다."""
         self.transactions = 0
 
     @asynccontextmanager
@@ -71,38 +71,43 @@ def test_run_personal_wiki_build_assembles_result(
     )
 
     async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """테스트에서 DB 사용자 Scope 설정을 생략한다."""
         return None
 
     async def fake_get_source(connection: Any, **kwargs: Any) -> SimpleNamespace:
+        """원본 조회 순서를 기록하고 고정 원본을 반환한다."""
         order.append("load_source")
         return _fake_source()
 
     async def fake_entries(connection: Any, **kwargs: Any) -> list[object]:
+        """기존 Wiki 문서가 없는 상태를 반환한다."""
         return []
 
     async def fake_relations(connection: Any, **kwargs: Any) -> list[object]:
+        """기존 Wiki 관계가 없는 상태를 반환한다."""
         return []
 
     def fake_classify(**kwargs: Any) -> str:
+        """분류 입력을 검증하고 고정 분류 결과를 반환한다."""
         order.append("classify")
         assert kwargs["source_title"] == "원본 제목"
         assert kwargs["model"] == "test-model"
         return "classification"
 
-    def fake_plan(**kwargs: Any) -> SimpleNamespace:
+    async def fake_wba_003(**kwargs: Any) -> SimpleNamespace:
+        """WBA-003 계획 함수 호출을 기록하고 고정 계획을 반환한다."""
         order.append("plan")
         assert kwargs["classification"] == "classification"
         return plan
 
-    async def fake_pwiki_002(request: Any) -> FeatureResult:
+    async def fake_pwiki_002(
+        connection: Any, **kwargs: Any
+    ) -> SimpleNamespace:
         """PWIKI-002 facade 호출을 기록하고 저장 결과를 반환한다."""
         order.append("persist")
-        assert request.payload["plan"] is plan
-        assert request.payload["job_id"] == "job-1"
-        return FeatureResult(
-            feature_id="PWIKI-002",
-            data={"persisted": _fake_persisted()},
-        )
+        assert kwargs["plan"] is plan
+        assert kwargs["job_id"] == "job-1"
+        return _fake_persisted()
 
     monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
     monkeypatch.setattr(
@@ -111,7 +116,7 @@ def test_run_personal_wiki_build_assembles_result(
     monkeypatch.setattr(agent_graph, "list_existing_wiki_entries", fake_entries)
     monkeypatch.setattr(agent_graph, "list_existing_wiki_relations", fake_relations)
     monkeypatch.setattr(agent_graph, "classify_source_for_wiki", fake_classify)
-    monkeypatch.setattr(agent_graph, "build_wiki_plan", fake_plan)
+    monkeypatch.setattr(agent_graph, "wba_003", fake_wba_003)
     monkeypatch.setattr(agent_graph, "pwiki_002", fake_pwiki_002)
 
     connection = _FakeConnection()
@@ -141,20 +146,28 @@ def test_run_bambi_generation_chains_search_generate_persist(
     order: list[str] = []
 
     async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """테스트에서 DB 사용자 Scope 설정을 생략한다."""
         return None
 
-    async def fake_load_context(connection: Any, **kwargs: Any) -> list[str]:
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[str]:
+        """PRAG-003 검색 호출을 기록하고 고정 Context를 반환한다."""
         order.append("load_context")
         assert kwargs["query"] == "개인화"
         return ["context-1"]
 
+    async def fake_prag_006(contexts: list[str]) -> list[str]:
+        """검색 Context를 변경 없이 반환한다."""
+        return contexts
+
     def fake_generate(**kwargs: Any) -> str:
+        """생성 입력을 검증하고 고정 콘텐츠를 반환한다."""
         order.append("generate")
         assert kwargs["contexts"] == ["context-1"]
         assert kwargs["language"] == "ko"
         return "generated"
 
-    async def fake_persist(connection: Any, **kwargs: Any) -> dict[str, object]:
+    async def fake_prag_007(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """PRAG-007 저장 호출을 기록하고 고정 결과를 반환한다."""
         order.append("persist")
         assert kwargs["generated"] == "generated"
         assert kwargs["attempt_number"] == 2
@@ -162,9 +175,10 @@ def test_run_bambi_generation_chains_search_generate_persist(
         return {"content_candidate_id": "candidate-1"}
 
     monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
-    monkeypatch.setattr(agent_graph, "load_bambi_context", fake_load_context)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
     monkeypatch.setattr(agent_graph, "generate_bambi_content", fake_generate)
-    monkeypatch.setattr(agent_graph, "persist_bambi_generation", fake_persist)
+    monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
 
     connection = _FakeConnection()
     result = asyncio.run(

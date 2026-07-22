@@ -25,6 +25,7 @@ from app.schemas.development import (
     DevelopmentWorkerRunResponse,
 )
 from app.services.agent_jobs import AgentJobRepository, ClaimedJobRecord
+from domain.jobs.api import job_007
 from infrastructure.sources.connectors.api import (
     JinaReadError,
     JinaReadResult,
@@ -89,23 +90,15 @@ class AgentWorkflowService:
             if not source_version_id:
                 raise ValueError("Wiki Build Job Payload에 원본 Version ID가 없습니다.")
             async with self._repository.acquire_connection() as connection:
-                feature_result = await wba_001(
-                    FeatureRequest(
-                        request_id=job.job_id,
-                        actor_id="development-agent-workflow",
-                        user_id=job.user_id,
-                        payload={
-                            "implementation": lambda: self._wiki_runner(
-                                connection,
-                                user_id=job.user_id,
-                                source_document_version_id=source_version_id,
-                                job_id=job.job_id,
-                                model=self._settings.wiki_llm_model,
-                            )
-                        },
-                    )
+                result = await wba_001(
+                    self._wiki_runner,
+                    connection,
+                    user_id=job.user_id,
+                    source_document_version_id=source_version_id,
+                    job_id=job.job_id,
+                    model=self._settings.wiki_llm_model,
                 )
-            return "wiki_build", dict(feature_result.data)
+            return "wiki_build", result
         if job.job_type == "bambi_generation":
             topic = str(job.payload.get("topic") or "").strip()
             content_type = str(job.payload.get("content_type") or "").strip()
@@ -207,11 +200,13 @@ class AgentWorkflowService:
         try:
             async with asyncio.timeout(self._settings.dev_agent_timeout_seconds):
                 stage_name, result = await self._dispatch(claimed)
+                linked_result = await job_007(result)
                 await self._repository.complete_job(
                     job=claimed,
                     worker_id=worker_id,
-                    result=result,
+                    result=linked_result,
                 )
+                result = linked_result
         except Exception as error:
             retryable = isinstance(error, (JinaReadError, TimeoutError))
             if isinstance(error, JinaReadError):

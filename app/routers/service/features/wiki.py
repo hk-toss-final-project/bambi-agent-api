@@ -1,28 +1,63 @@
-"""기능 구현 모듈.
+"""Service 개인 Wiki 원천 접수 기능 구현과 미구현 기능 Scaffold."""
 
-SVC-002, SVC-003, SVC-004, SVC-005, SVC-006, SVC-007 기능의 실제 구현 위치를 제공한다.
-"""
+from typing import Protocol
 
+from app.schemas.mvp import (
+    AcceptedJobResponse,
+    UrlWikiSourceRequest,
+    WebClippingRequest,
+)
 from shared.contracts import FeatureRequest, FeatureResult
-from shared.feature_runtime import execute_feature_implementation
+
+
+class WikiSourceSubmissionService(Protocol):
+    """개인 Wiki 원천 접수에 필요한 애플리케이션 서비스 경계."""
+
+    async def submit_web_clipping(
+        self, *, user_id: str, payload: WebClippingRequest, request_id: str
+    ) -> AcceptedJobResponse:
+        """웹 클리핑 원천을 Wiki 처리 작업으로 접수한다."""
+        ...
+
+    async def submit_url_source(
+        self, *, user_id: str, payload: UrlWikiSourceRequest, request_id: str
+    ) -> AcceptedJobResponse:
+        """URL 원천을 Wiki 처리 작업으로 접수한다."""
+        ...
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def svc_002(request: FeatureRequest) -> FeatureResult:
+async def svc_002(
+    service: WikiSourceSubmissionService,
+    *,
+    user_id: str,
+    payload: WebClippingRequest,
+    request_id: str,
+) -> AcceptedJobResponse:
     """[SVC-002] 웹 클리핑 처리 요청.
 
     클리핑 데이터를 개인 Wiki 처리 작업으로 전달한다.
     """
-    return await execute_feature_implementation(request, feature_id="SVC-002")
+    return await service.submit_web_clipping(
+        user_id=user_id, payload=payload, request_id=request_id
+    )
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def svc_003(request: FeatureRequest) -> FeatureResult:
+async def svc_003(
+    service: WikiSourceSubmissionService,
+    *,
+    user_id: str,
+    payload: UrlWikiSourceRequest,
+    request_id: str,
+) -> AcceptedJobResponse:
     """[SVC-003] URL 처리 요청.
 
     입력된 URL을 개인 Wiki 처리 작업으로 전달한다.
     """
-    return await execute_feature_implementation(request, feature_id="SVC-003")
+    return await service.submit_url_source(
+        user_id=user_id, payload=payload, request_id=request_id
+    )
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.

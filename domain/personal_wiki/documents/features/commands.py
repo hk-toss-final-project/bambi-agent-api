@@ -3,41 +3,43 @@
 PWIKI-002, PWIKI-004, PWIKI-005 기능의 실제 구현 위치를 제공한다.
 """
 
-from infrastructure.persistence.api import (
-    UserSourceDocumentForAgent,
-    persist_wiki_build,
-)
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from psycopg import AsyncConnection
+
 from shared.contracts import FeatureRequest, FeatureResult
 from shared.wiki_models import WikiBuildPlan
 
+if TYPE_CHECKING:
+    from infrastructure.persistence.api import (
+        PersistedWikiBuild,
+        UserSourceDocumentForAgent,
+    )
+
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def pwiki_002(request: FeatureRequest) -> FeatureResult:
+async def pwiki_002(
+    connection: AsyncConnection[dict[str, Any]],
+    *,
+    source: UserSourceDocumentForAgent,
+    plan: WikiBuildPlan,
+    job_id: str,
+) -> PersistedWikiBuild:
     """[PWIKI-002] 개인 Wiki 문서 생성.
 
     사용자가 선택한 데이터를 Wiki 문서로 변환한다.
     """
-    connection = request.payload.get("connection")
-    source = request.payload.get("source")
-    plan = request.payload.get("plan")
-    job_id = request.payload.get("job_id")
-    if connection is None or not hasattr(connection, "execute"):
-        raise ValueError("PWIKI-002에 DB connection이 필요합니다.")
-    if not isinstance(source, UserSourceDocumentForAgent):
-        raise ValueError("PWIKI-002에 사용자 원본 Version이 필요합니다.")
-    if not isinstance(plan, WikiBuildPlan):
-        raise ValueError("PWIKI-002에 Wiki Build 계획이 필요합니다.")
-    if not isinstance(job_id, str) or not job_id:
+    if not job_id:
         raise ValueError("PWIKI-002에 job_id가 필요합니다.")
-    persisted = await persist_wiki_build(
-        connection,  # type: ignore[arg-type]
+    from infrastructure.persistence.api import db_003
+
+    return await db_003(
+        connection,
         source=source,
         plan=plan,
         job_id=job_id,
-    )
-    return FeatureResult(
-        feature_id="PWIKI-002",
-        data={"persisted": persisted},
     )
 
 

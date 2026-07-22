@@ -9,7 +9,11 @@ from .features.graph import int_003, int_004
 from .features.scoring import int_005, int_006, int_008, int_009
 from .features.evidence import int_007
 from .features.versioning import int_010
-from .features.recalculation import int_011
+from .features.recalculation import (
+    ActiveWikiRequiredError,
+    InterestProfileRepository,
+    int_011,
+)
 
 __all__ = [
     "int_001",

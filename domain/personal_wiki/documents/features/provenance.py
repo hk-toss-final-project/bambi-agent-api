@@ -1,16 +1,31 @@
-"""기능 구현 모듈.
+"""개인 Wiki 문서 Version과 원본 Version 출처 연결 기능 구현."""
 
-PWIKI-007 기능의 실제 구현 위치를 제공한다.
-"""
+from typing import Any
 
-from shared.contracts import FeatureRequest, FeatureResult
-from shared.feature_runtime import execute_feature_implementation
+from psycopg import AsyncConnection
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def pwiki_007(request: FeatureRequest) -> FeatureResult:
+async def pwiki_007(
+    connection: AsyncConnection[dict[str, Any]],
+    *,
+    wiki_document_version_id: object,
+    source_document_version_id: str,
+    namespace_key: str,
+) -> None:
     """[PWIKI-007] Wiki 문서 출처 추적.
 
     클리핑, URL, 위키마킹 등 문서 유입 경로를 기록한다.
     """
-    return await execute_feature_implementation(request, feature_id="PWIKI-007")
+    await connection.execute(
+        """
+        INSERT INTO agent.wiki_document_sources (
+            wiki_document_version_id,
+            source_document_version_id,
+            namespace_key,
+            relation_type
+        ) VALUES (%s, %s, %s, 'source')
+        ON CONFLICT DO NOTHING
+        """,
+        (wiki_document_version_id, source_document_version_id, namespace_key),
+    )

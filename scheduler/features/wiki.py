@@ -6,6 +6,11 @@ SCH-009는 수집으로 누적된 personal_wiki_build Job의 실행 시각을
 조용 시간(quiet window)과 최대 대기시간 정책으로 조정한다.
 """
 
+from dataclasses import dataclass
+from typing import Any, Literal
+
+from psycopg import AsyncConnection
+
 from infrastructure.persistence.api import (
     defer_user_wiki_build_jobs,
     release_user_wiki_build_jobs,
@@ -13,7 +18,22 @@ from infrastructure.persistence.api import (
 from shared.contracts import FeatureRequest, FeatureResult
 
 
-async def sch_009(request: FeatureRequest) -> FeatureResult:
+@dataclass(frozen=True, slots=True)
+class WikiScheduleResult:
+    """SCH-009 Wiki Build 실행 시각 조정 결과."""
+
+    action: Literal["defer", "release"]
+    affected_jobs: int
+
+
+async def sch_009(
+    connection: AsyncConnection[dict[str, Any]],
+    *,
+    user_id: str,
+    action: Literal["defer", "release"] = "defer",
+    quiet_minutes: int = 10,
+    max_wait_minutes: int = 30,
+) -> WikiScheduleResult:
     """[SCH-009] 사용자 Wiki 재구성 스케줄.
 
     변경이 누적된 사용자의 대기 Wiki Build Job 실행 시각을 조정한다.
@@ -21,36 +41,27 @@ async def sch_009(request: FeatureRequest) -> FeatureResult:
     Job 기준 max_wait_minutes를 넘지 않게 하고, "release"면 사용자의
     강제 실행 요청으로 모든 대기 Job을 즉시 실행 가능하게 만든다.
     """
-    connection = request.payload.get("connection")
-    action = request.payload.get("action", "defer")
-    quiet_minutes = request.payload.get("quiet_minutes", 10)
-    max_wait_minutes = request.payload.get("max_wait_minutes", 30)
     if connection is None or not hasattr(connection, "execute"):
         raise ValueError("SCH-009에 DB connection이 필요합니다.")
-    if not request.user_id:
+    if not user_id:
         raise ValueError("SCH-009에 user_id가 필요합니다.")
     if action not in ("defer", "release"):
         raise ValueError("SCH-009의 action은 defer 또는 release여야 합니다.")
-    if not isinstance(quiet_minutes, int) or not isinstance(max_wait_minutes, int):
-        raise ValueError("SCH-009의 대기시간 설정은 분 단위 정수여야 합니다.")
     if quiet_minutes < 0 or max_wait_minutes < 1:
         raise ValueError("SCH-009의 대기시간 설정이 허용 범위를 벗어났습니다.")
     if action == "defer":
         affected = await defer_user_wiki_build_jobs(
             connection,
-            user_id=request.user_id,
+            user_id=user_id,
             quiet_minutes=quiet_minutes,
             max_wait_minutes=max_wait_minutes,
         )
     else:
         affected = await release_user_wiki_build_jobs(
             connection,
-            user_id=request.user_id,
+            user_id=user_id,
         )
-    return FeatureResult(
-        feature_id="SCH-009",
-        data={"action": action, "affected_jobs": affected},
-    )
+    return WikiScheduleResult(action=action, affected_jobs=affected)
 
 
 async def sch_010(request: FeatureRequest) -> FeatureResult:

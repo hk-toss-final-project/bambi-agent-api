@@ -5,7 +5,6 @@ from typing import Any
 
 import pytest
 
-from shared.contracts import FeatureRequest
 from workers.runtime.features.queue import (
     consume_bambi_generation_jobs,
     consume_personal_wiki_jobs,
@@ -17,6 +16,7 @@ class _FakeBatchRunner:
     """호출 순서별로 고정된 Batch 결과를 돌려주는 실행기 Test Double."""
 
     def __init__(self, batches: list[list[dict[str, object]]]) -> None:
+        """순서별 Batch 결과와 빈 호출 내역을 초기화한다."""
         self._batches = batches
         self.calls: list[dict[str, Any]] = []
 
@@ -140,6 +140,7 @@ class _FlakyBatchRunner:
     """첫 호출은 예외를 던지고 이후에는 고정 결과를 반환하는 Test Double."""
 
     def __init__(self, batches: list[list[dict[str, object]]]) -> None:
+        """실패 후 반환할 Batch와 호출 횟수를 초기화한다."""
         self._batches = batches
         self.calls = 0
 
@@ -177,10 +178,7 @@ def test_wc_001_requires_database_url() -> None:
     with pytest.raises(ValueError, match="database_url"):
         asyncio.run(
             wc_001(
-                FeatureRequest(
-                    request_id="test-wc-001",
-                    user_id="user-1",
-                    payload={"worker_id": "worker-1"},
-                )
+                database_url="",
+                worker_id="worker-1",
             )
         )

@@ -1,19 +1,22 @@
-"""기능 구현 모듈.
+"""Worker Job 순차 실행 제어 기능과 외부 API Rate Limit Scaffold."""
 
-WC-013, WC-014 기능의 실제 구현 위치를 제공한다.
-"""
+from collections.abc import Awaitable, Callable, Sequence
 
 from shared.contracts import FeatureRequest, FeatureResult
-from shared.feature_runtime import execute_feature_implementation
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def wc_013(request: FeatureRequest) -> FeatureResult:
+async def wc_013[ItemT, ResultT](
+    items: Sequence[ItemT], processor: Callable[[ItemT], Awaitable[ResultT]]
+) -> list[ResultT]:
     """[WC-013] Concurrency 제어.
 
     작업 유형별 동시 실행 수를 제한한다.
     """
-    return await execute_feature_implementation(request, feature_id="WC-013")
+    results: list[ResultT] = []
+    for item in items:
+        results.append(await processor(item))
+    return results
 
 
 async def wc_014(request: FeatureRequest) -> FeatureResult:

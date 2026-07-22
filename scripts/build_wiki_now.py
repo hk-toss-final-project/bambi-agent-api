@@ -24,7 +24,6 @@ from psycopg.rows import dict_row
 from app.config import load_settings
 from infrastructure.persistence.api import set_personal_wiki_scope
 from scheduler.api import sch_009
-from shared.contracts import FeatureRequest
 from workers.api import run_personal_wiki_batch
 
 type DictRow = dict[str, Any]
@@ -42,15 +41,13 @@ async def release_pending_jobs(database_url: str, user_id: str) -> int:
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=user_id)
             result = await sch_009(
-                FeatureRequest(
-                    request_id=f"build-wiki-now-{user_id}",
-                    user_id=user_id,
-                    payload={"connection": connection, "action": "release"},
-                )
+                connection,
+                user_id=user_id,
+                action="release",
             )
     finally:
         await connection.close()
-    return int(result.data["affected_jobs"])
+    return result.affected_jobs
 
 
 async def run_until_drained(

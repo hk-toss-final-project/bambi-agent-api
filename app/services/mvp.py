@@ -26,6 +26,8 @@ from app.services.agent_jobs import (
     SubmittedGenerationJob,
     SubmittedSourceJob,
 )
+from domain.jobs.api import job_002
+from domain.personal_wiki.source_events.api import wse_001, wse_011
 from infrastructure.persistence.api import (
     StaleContextVersionError,
     UserContextRequiredError,
@@ -79,6 +81,8 @@ class AgentApiMvpService:
         request_id: str,
     ) -> AcceptedJobResponse:
         """클리핑 원본·Version·Wiki Build Job을 PostgreSQL에 영속화한다."""
+        payload = await wse_001(payload)
+        await wse_011(user_id, payload.source_event_id)
         submission = await self._agent_jobs.submit_web_clipping(
             user_id=user_id,
             source_event_id=payload.source_event_id,
@@ -212,7 +216,7 @@ class AgentApiMvpService:
 
     async def get_job(self, job_id: str) -> JobStatusResponse:
         """식별자에 해당하는 Agent Job 상태를 조회한다."""
-        record = await self._agent_jobs.get_job(job_id)
+        record = await job_002(self._agent_jobs, job_id)
         if record is not None:
             return self._job_status_response(record)
         raise AgentApiError(
@@ -222,7 +226,7 @@ class AgentApiMvpService:
 
     async def get_job_result(self, job_id: str) -> JobResultResponse:
         """완료된 Agent Job의 결과를 반환하고 미완료 상태는 충돌로 알린다."""
-        record = await self._agent_jobs.get_job(job_id)
+        record = await job_002(self._agent_jobs, job_id)
         if record is None:
             raise AgentApiError(
                 status.HTTP_404_NOT_FOUND,

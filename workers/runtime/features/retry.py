@@ -1,19 +1,44 @@
-"""기능 구현 모듈.
+"""Worker Job 재시도 적용 기능과 Backoff·DLQ Scaffold."""
 
-WC-006, WC-007, WC-008 기능의 실제 구현 위치를 제공한다.
-"""
+from typing import Any
 
+from psycopg import AsyncConnection
+
+from infrastructure.persistence.api import (
+    ClaimedAgentJob,
+    FailAgentJobCommand,
+    db_026,
+)
 from shared.contracts import FeatureRequest, FeatureResult
-from shared.feature_runtime import execute_feature_implementation
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def wc_006(request: FeatureRequest) -> FeatureResult:
+async def wc_006(
+    connection: AsyncConnection[dict[str, Any]],
+    *,
+    job: ClaimedAgentJob,
+    worker_id: str,
+    error_code: str,
+    error_message: str,
+    retryable: bool,
+) -> str:
     """[WC-006] Retry 정책.
 
     재시도 가능한 오류에 재처리 정책을 적용한다.
     """
-    return await execute_feature_implementation(request, feature_id="WC-006")
+    result = await db_026(
+        connection,
+        FailAgentJobCommand(
+            job=job,
+            worker_id=worker_id,
+            error_code=error_code,
+            error_message=error_message,
+            retryable=retryable,
+        ),
+    )
+    if not isinstance(result, str):
+        raise RuntimeError("DB-026이 Job 실패 후 상태를 반환하지 않았습니다.")
+    return result
 
 
 async def wc_007(request: FeatureRequest) -> FeatureResult:

@@ -5,12 +5,7 @@
 
 from .features.orchestration import build_incremental_wiki, wba_001, wba_002
 from .features.documents import wba_003, wba_004, wba_005
-from .features.interests import (
-    InterestCandidate,
-    extract_interest_candidates,
-    wba_006,
-    wba_007,
-)
+from .features.interests import wba_006, wba_007
 from .features.summaries import wba_008, wba_009, wba_010
 from .features.embeddings import generate_wiki_embeddings, wba_011
 from .features.versioning import wba_012, wba_013

@@ -1,16 +1,15 @@
-"""기능 구현 모듈.
+"""Agent Job 멱등성 Key 생성 기능 구현."""
 
-JOB-010 기능의 실제 구현 위치를 제공한다.
-"""
-
-from shared.contracts import FeatureRequest, FeatureResult
-from shared.feature_runtime import execute_feature_implementation
+from collections.abc import Sequence
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def job_010(request: FeatureRequest) -> FeatureResult:
+async def job_010(parts: Sequence[str]) -> str:
     """[JOB-010] Agent Job Idempotency.
 
     동일 요청으로 작업이 중복 실행되지 않도록 한다.
     """
-    return await execute_feature_implementation(request, feature_id="JOB-010")
+    normalized = [part.strip() for part in parts]
+    if not normalized or any(not part for part in normalized):
+        raise ValueError("JOB-010 멱등성 Key 구성 값은 비어 있을 수 없습니다.")
+    return ":".join(normalized)

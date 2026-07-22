@@ -13,7 +13,7 @@ from .features.collection import (
     sch_007,
     sch_008,
 )
-from .features.wiki import sch_009, sch_010
+from .features.wiki import WikiScheduleResult, sch_009, sch_010
 from .features.content import sch_012
 from .features.embedding import sch_013
 from .features.cleanup import sch_014, sch_015

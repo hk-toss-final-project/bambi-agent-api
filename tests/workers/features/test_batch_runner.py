@@ -15,6 +15,7 @@ class _FakeCursor:
     """fetchone·fetchall을 지원하는 결정적 Cursor Test Double."""
 
     def __init__(self, rows: list[dict[str, Any]]) -> None:
+        """순서대로 반환할 Row를 보관한다."""
         self._rows = rows
 
     async def fetchone(self) -> dict[str, Any] | None:
@@ -30,6 +31,7 @@ class _FakeConnection:
     """transaction·close와 순서별 응답을 흉내 내는 Connection Test Double."""
 
     def __init__(self, responses: list[list[dict[str, Any]]] | None = None) -> None:
+        """순서별 응답과 연결 상태를 초기화한다."""
         self._responses = list(responses or [])
         self.executed: list[tuple[str, tuple[Any, ...] | None]] = []
         self.closed = False
@@ -124,14 +126,17 @@ def test_run_job_batch_processes_each_job_and_isolates_failures(
     claimed = [_job("job-1"), _job("job-2")]
 
     async def fake_scope(conn: Any) -> None:
+        """테스트에서 DB 시스템 Scope 설정을 생략한다."""
         return None
 
     async def fake_claim(conn: Any, **kwargs: Any) -> list[ClaimedAgentJob]:
+        """Claim 인자를 검증하고 준비된 Job 목록을 반환한다."""
         assert kwargs["job_type"] == "bambi_generation"
         assert kwargs["worker_id"] == "worker-1"
         return claimed
 
     async def fake_fail(conn: Any, **kwargs: Any) -> str:
+        """Job 실패 후 재시도 대기 상태를 반환한다."""
         return "queued"
 
     async def process(conn: Any, job: ClaimedAgentJob) -> dict[str, object]:
@@ -142,8 +147,8 @@ def test_run_job_batch_processes_each_job_and_isolates_failures(
 
     monkeypatch.setattr(batch_runner, "AsyncConnection", _FakeAsyncConnection)
     monkeypatch.setattr(batch_runner, "set_system_job_scope", fake_scope)
-    monkeypatch.setattr(batch_runner, "claim_runnable_agent_jobs", fake_claim)
-    monkeypatch.setattr(batch_runner, "fail_agent_job", fake_fail)
+    monkeypatch.setattr(batch_runner, "wc_002", fake_claim)
+    monkeypatch.setattr(batch_runner, "wc_006", fake_fail)
 
     results = asyncio.run(
         batch_runner.run_job_batch(

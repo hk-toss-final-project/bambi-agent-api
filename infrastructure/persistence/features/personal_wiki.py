@@ -3,6 +3,8 @@
 DB-002, DB-003, DB-004, DB-005, DB-006, DB-007 기능의 실제 구현 위치를 제공한다.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from collections.abc import Sequence
@@ -11,8 +13,11 @@ from typing import Any
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
+# 하위 호환 재노출: 기존 persistence.api의 Chunk 유틸 import 경로를 유지한다.
+from domain.personal_wiki.embeddings.api import chunk_wiki_markdown, pwe_001, pwe_002
+from domain.personal_wiki.documents.api import pwiki_007, pwiki_008
+from domain.personal_wiki.source_events.api import wse_013
 from shared.contracts import FeatureRequest, FeatureResult
-from shared.feature_runtime import execute_feature_implementation
 from shared.hashing import compute_content_hash
 from shared.wiki_models import (
     ExistingWikiEntry,
@@ -25,39 +30,76 @@ type DictRow = dict[str, Any]
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def db_002(request: FeatureRequest) -> FeatureResult:
-    """[DB-002] Wiki Source Event 저장.
-
-    개인 Wiki 반영의 근거가 되는 이벤트를 저장한다.
-    """
-    return await execute_feature_implementation(request, feature_id="DB-002")
-
-
-# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def db_003(request: FeatureRequest) -> FeatureResult:
+async def db_003(
+    connection: AsyncConnection[DictRow],
+    *,
+    source: UserSourceDocumentForAgent,
+    plan: WikiBuildPlan,
+    job_id: str,
+) -> PersistedWikiBuild:
     """[DB-003] 개인 Wiki 문서 저장.
 
     사용자별 Wiki 문서와 버전을 저장한다.
     """
-    return await execute_feature_implementation(request, feature_id="DB-003")
+    return await persist_wiki_build(
+        connection, source=source, plan=plan, job_id=job_id
+    )
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def db_004(request: FeatureRequest) -> FeatureResult:
+async def db_004(
+    connection: AsyncConnection[DictRow],
+    *,
+    document_version_id: object,
+    namespace_key: str,
+    chunks: Sequence[str],
+) -> int:
     """[DB-004] 개인 Wiki Chunk 저장.
 
     개인 Wiki 검색용 Chunk를 저장한다.
     """
-    return await execute_feature_implementation(request, feature_id="DB-004")
+    for chunk_index, chunk in enumerate(chunks):
+        await connection.execute(
+            """
+            INSERT INTO agent.wiki_chunks (
+                document_version_id,
+                namespace_key,
+                chunk_index,
+                content,
+                metadata
+            ) VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (document_version_id, chunk_index) DO UPDATE
+            SET content = EXCLUDED.content, metadata = EXCLUDED.metadata
+            """,
+            (
+                document_version_id,
+                namespace_key,
+                chunk_index,
+                chunk,
+                Jsonb({"policy": "markdown-heading-v1"}),
+            ),
+        )
+    return len(chunks)
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def db_005(request: FeatureRequest) -> FeatureResult:
+async def db_005(
+    connection: AsyncConnection[DictRow],
+    *,
+    namespace_key: str,
+    model_name: str,
+    values: Sequence[WikiEmbeddingValue],
+) -> int:
     """[DB-005] 개인 Wiki Embedding 저장.
 
     개인 Wiki의 Vector 데이터를 저장한다.
     """
-    return await execute_feature_implementation(request, feature_id="DB-005")
+    return await persist_wiki_embeddings(
+        connection,
+        namespace_key=namespace_key,
+        model_name=model_name,
+        values=values,
+    )
 
 
 async def db_006(request: FeatureRequest) -> FeatureResult:
@@ -456,8 +498,7 @@ async def mark_url_source_event(
         error_code: 실패 원인 코드
         error_message: 실패 상세 메시지
     """
-    if status not in {"processing", "completed", "failed", "ignored"}:
-        raise ValueError(f"허용되지 않는 이벤트 상태입니다: {status}")
+    status = await wse_013(status)
     await connection.execute(
         """
         UPDATE agent.wiki_source_events
@@ -569,30 +610,27 @@ async def list_existing_wiki_relations(
     ]
 
 
-def chunk_wiki_markdown(content: str, *, max_chars: int = 2000) -> list[str]:
-    """Wiki Markdown을 Heading 경계를 유지하는 검색용 Chunk로 나눈다."""
-    blocks: list[str] = []
-    current: list[str] = []
-    for line in content.splitlines():
-        if line.startswith("## ") and current:
-            blocks.append("\n".join(current).strip())
-            current = []
-        current.append(line)
-    if current:
-        blocks.append("\n".join(current).strip())
+class _ConnectionWikiChunkRepository:
+    """현재 PostgreSQL 연결을 DB-004 Chunk 저장 경계로 노출한다."""
 
-    chunks: list[str] = []
-    for block in blocks:
-        remaining = block
-        while len(remaining) > max_chars:
-            split_at = remaining.rfind("\n", 0, max_chars + 1)
-            if split_at <= 0:
-                split_at = max_chars
-            chunks.append(remaining[:split_at].strip())
-            remaining = remaining[split_at:].strip()
-        if remaining:
-            chunks.append(remaining)
-    return chunks
+    def __init__(self, connection: AsyncConnection[DictRow]) -> None:
+        """Chunk를 저장할 현재 Transaction 연결을 보관한다."""
+        self._connection = connection
+
+    async def save_chunks(
+        self,
+        *,
+        document_version_id: object,
+        namespace_key: str,
+        chunks: Sequence[str],
+    ) -> int:
+        """DB-004를 통해 문서 Version의 Chunk를 저장한다."""
+        return await db_004(
+            self._connection,
+            document_version_id=document_version_id,
+            namespace_key=namespace_key,
+            chunks=chunks,
+        )
 
 
 async def _upsert_wiki_document(
@@ -633,9 +671,7 @@ async def _upsert_wiki_document(
         """,
         (source.namespace_key, content_hash),
     )
-    duplicate = await duplicate_cursor.fetchone()
-    if head is not None and duplicate is not None and duplicate["id"] == head["id"]:
-        duplicate = None
+    duplicate = await pwiki_008(head, await duplicate_cursor.fetchone())
 
     persisted_kind = document.document_kind
     persisted_key = document.document_key
@@ -754,27 +790,13 @@ async def _upsert_wiki_document(
         )
         version_row = await version_cursor.fetchone()
         document_version_id = version_row["id"]
-        for chunk_index, chunk in enumerate(chunk_wiki_markdown(document.normalized_content)):
-            await connection.execute(
-                """
-                INSERT INTO agent.wiki_chunks (
-                    document_version_id,
-                    namespace_key,
-                    chunk_index,
-                    content,
-                    metadata
-                ) VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (document_version_id, chunk_index) DO UPDATE
-                SET content = EXCLUDED.content, metadata = EXCLUDED.metadata
-                """,
-                (
-                    document_version_id,
-                    source.namespace_key,
-                    chunk_index,
-                    chunk,
-                    Jsonb({"policy": "markdown-heading-v1"}),
-                ),
-            )
+        chunks = await pwe_001(document.normalized_content)
+        await pwe_002(
+            _ConnectionWikiChunkRepository(connection),
+            document_version_id=document_version_id,
+            namespace_key=source.namespace_key,
+            chunks=chunks,
+        )
     else:
         version_cursor = await connection.execute(
             """
@@ -787,17 +809,11 @@ async def _upsert_wiki_document(
         version_row = await version_cursor.fetchone()
         document_version_id = version_row["id"]
 
-    await connection.execute(
-        """
-        INSERT INTO agent.wiki_document_sources (
-            wiki_document_version_id,
-            source_document_version_id,
-            namespace_key,
-            relation_type
-        ) VALUES (%s, %s, %s, 'source')
-        ON CONFLICT DO NOTHING
-        """,
-        (document_version_id, source.source_document_version_id, source.namespace_key),
+    await pwiki_007(
+        connection,
+        wiki_document_version_id=document_version_id,
+        source_document_version_id=source.source_document_version_id,
+        namespace_key=source.namespace_key,
     )
     return (
         PersistedWikiDocument(

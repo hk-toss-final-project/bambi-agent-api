@@ -15,11 +15,11 @@
 
 ## MVP 구현 현황 체크리스트
 
-> 기준: 2026-07-20. 기능 ID 스캐폴드 함수가 아니라 **실제 런타임 경로**(라우터·서비스·Worker·저장소·Agent)가
+> 기준: 2026-07-22. 기능 ID 스캐폴드 함수가 아니라 **실제 런타임 경로**(라우터·서비스·Worker·저장소·Agent)가
 > 동작하는지 기준으로 판정했다. 표기: `[x]` 구현 완료, `[x] ⚠️` 핵심 동작은 되지만 제약 있음,
 > `[ ] ❌` 미구현, `[ ] ➖` Agent API 범위 아님(service-worker 책임).
 >
-> **집계: 완료 52 · 부분 10 · 미구현 7 · 범위 외 2 (총 71)**
+> **집계: 완료 50 · 부분 8 · 미구현 11 · 범위 외 2 (총 71)**
 
 ### Service API 연동
 
@@ -31,11 +31,11 @@
 - [x] `SVC-013` Agent Job 상태 조회
 - [x] `SVC-014` Agent 결과 조회 — 미완료 시 `JOB_RESULT_NOT_READY`
 - [x] `WSE-001` 웹 클리핑 이벤트 수신 — `wiki_source_events` + Frontmatter 필드 저장
-- [x] `WSE-011` 이벤트 중복 처리 방지 — `source_event_id` 멱등, Payload 상이 시 409
+- [x] `WSE-011` 이벤트 중복 처리 방지 — `user_id + source_event_id` 식별 및 DB Unique·Upsert 적용
 - [x] `WSE-013` 이벤트 처리 상태 관리 — Claim·완료·실패 시 Source Event 상태 동기화
 - [x] `PWIKI-006` 개인 Wiki 문서 버전 관리 — 원본 Version·Wiki Version·Build Snapshot 분리 보존
 - [x] `PWIKI-007` Wiki 문서 출처 추적 — `wiki_document_sources` 연결
-- [x] `PWIKI-011` Wiki 문서 정규화 — Frontmatter 분리 저장, LLM Wiki 구조 변환
+- [ ] `PWIKI-011` Wiki 문서 정규화 — ❌ 독립 정규화 기능 미구현. Frontmatter 저장은 `WSE-001/DB-002`, Wiki 구조 변환은 `WBA-003`이 담당하며 기존 항등 위임 함수는 스텁으로 복원
 - [x] `DB-002` Wiki Source Event·원본 저장
 - [x] `DB-003` 개인 LLM Wiki 문서 저장
 
@@ -55,10 +55,10 @@
 
 ### DB 기반 관심사 분류
 
-- [x] `INT-001` 관심사 Topic 추출 — 활성 Wiki 문서 기반 후보 추출
-- [x] `INT-002` 관심사 Category 분류 — ⚠️ 자체 Category만 부여, 서비스 분류 체계 매핑 미정
-- [x] `INT-005` 관심사 점수 계산 — ⚠️ Wiki 기반 점수만, 사용자 행동 강도·최신성 미반영
-- [x] `INT-011` 관심사 프로필 재계산 — ⚠️ 수동 rebuild API만 있고 Wiki 변경 시 자동 재계산 없음
+- [x] `INT-001` 관심사 Topic 추출 — 활성 Wiki 문서 기반 후보 추출 (Category 부여·Wiki 기반 점수 포함, 로직 소유 `domain/interests`)
+- [ ] `INT-002` 관심사 Category 분류 — ❌ 독립 기능 미구현. 추출(INT-001)이 자체 Category를 부여할 뿐 서비스 분류 체계 매핑은 없음 (2026-07-21 스텁 복원)
+- [ ] `INT-005` 관심사 점수 계산 — ❌ 독립 기능 미구현. 추출(INT-001)의 Wiki 기반 점수만 있고 사용자 행동 강도·최신성 미반영 (2026-07-21 스텁 복원)
+- [x] `INT-011` 관심사 프로필 재계산 — ⚠️ 수동 rebuild API만 있고 Wiki 변경 시 자동 재계산 없음 (재계산 오케스트레이션 로직 소유 `domain/interests`)
 
 ### 외부 데이터 자동 수집
 
@@ -104,7 +104,7 @@
 - [x] `WC-001` Queue Job Consume — 상주 소비 루프
 - [x] `WC-002` Job Claim — `FOR UPDATE SKIP LOCKED` + Lease
 - [x] `WC-006` Retry 정책 — retryable 실패 시 지연 후 queued 복귀
-- [x] `WC-009` Idempotency 처리 — `document_kind+document_key` 등 멱등 Upsert
+- [ ] `WC-009` Idempotency 처리 — ❌ Worker 공통 멱등 처리 기능 미구현. 개별 DB·Job 경계의 Unique·Upsert는 유지하며 기존 항등 위임 함수는 스텁으로 복원
 - [x] `WC-013` Concurrency 제어 — ⚠️ Batch Claim 크기 설정만 있고 LLM·Embedding 동시 실행 제한은 순차 처리로 대체
 - [x] `DB-004` 개인 Wiki Chunk 저장
 - [x] `DB-005` 개인 Wiki Embedding 저장

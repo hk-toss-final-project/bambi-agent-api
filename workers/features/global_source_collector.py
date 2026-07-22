@@ -18,7 +18,6 @@ from infrastructure.persistence.api import (
 )
 from infrastructure.sources.connectors.api import (
     GdeltNewsProvider,
-    LatestArticle,
     LatestInformationProvider,
     LatestProviderError,
     NaverNewsProvider,
@@ -26,7 +25,6 @@ from infrastructure.sources.connectors.api import (
     col_003,
 )
 from infrastructure.sources.processing.api import gsp_004, gsp_006, gsp_015
-from shared.contracts import FeatureRequest, FeatureResult
 
 type DictRow = dict[str, Any]
 
@@ -116,36 +114,15 @@ async def run_global_source_collection_batch(
                     gdelt_base_url=gdelt_base_url,
                 )
                 connector = col_002 if provider_name == "naver" else col_003
-                feature_result = await connector(
-                    FeatureRequest(
-                        request_id=f"global-source-collector:{provider_name}",
-                        actor_id="global-source-collector",
-                        payload={
-                            "implementation": lambda: provider.search(
-                                query=query,
-                                limit=limit_per_provider,
-                                language=language,
-                            )
-                        },
-                    )
+                collected = await connector(
+                    provider,
+                    query=query,
+                    limit=limit_per_provider,
+                    language=language,
                 )
-                articles_value = feature_result.data.get("result")
-                if not isinstance(articles_value, list) or not all(
-                    isinstance(article, LatestArticle) for article in articles_value
-                ):
-                    raise RuntimeError(
-                        f"{feature_result.feature_id}가 정규화된 기사 목록을 반환하지 않았습니다."
-                    )
-                normalized = await gsp_004(
-                    FeatureRequest(
-                        request_id=f"global-normalization:{provider_name}",
-                        actor_id="global-source-collector",
-                        payload={"implementation": lambda: articles_value},
-                    )
-                )
-                articles = normalized.data.get("result")
-                if not isinstance(articles, list):
-                    raise RuntimeError("GSP-004가 정규화된 기사 목록을 반환하지 않았습니다.")
+                normalized = await gsp_004(collected)
+                articles = await gsp_006(normalized)
+                await gsp_015("global")
 
                 async def persist_articles() -> dict[str, int]:
                     """정규화된 기사를 Global Namespace에 멱등 저장한다."""
@@ -158,21 +135,7 @@ async def run_global_source_collection_batch(
                             articles=articles,
                         )
 
-                deduplicated = await gsp_006(
-                    FeatureRequest(
-                        request_id=f"global-deduplication:{provider_name}",
-                        actor_id="global-source-collector",
-                        payload={"implementation": persist_articles},
-                    )
-                )
-                isolated = await gsp_015(
-                    FeatureRequest(
-                        request_id=f"global-isolation:{provider_name}",
-                        actor_id="global-source-collector",
-                        payload={"implementation": lambda: dict(deduplicated.data)},
-                    )
-                )
-                saved = dict(isolated.data)
+                saved = await persist_articles()
             except LatestProviderError as error:
                 results.append(
                     {
@@ -197,44 +160,36 @@ async def run_global_source_collection_batch(
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def worker_001(request: FeatureRequest) -> FeatureResult:
+async def worker_001(
+    *,
+    database_url: str,
+    keywords: list[str],
+    providers: list[str] | None = None,
+    limit_per_provider: int = 10,
+    language: str | None = None,
+    naver_client_id: str | None = None,
+    naver_client_secret: str | None = None,
+    gdelt_base_url: str | None = None,
+) -> list[dict[str, object]]:
     """[WORKER-001] Global Source Collector Worker.
 
     외부 뉴스 데이터를 키워드로 수집하고 Global Source Pool에 저장한다. 실제
-    수집·저장은 run_global_source_collection_batch에 위임하고, 결과를 집계해
-    FeatureResult로 반환한다.
+    수집·저장은 run_global_source_collection_batch에 위임하고, Provider별 결과
+    목록을 반환한다.
     """
-    database_url = request.payload.get("database_url")
-    keywords = request.payload.get("keywords")
-    providers = request.payload.get("providers")
-    limit_per_provider = request.payload.get("limit_per_provider", 10)
-    language = request.payload.get("language")
-    if not isinstance(database_url, str) or not database_url:
+    if not database_url:
         raise ValueError("WORKER-001에 database_url이 필요합니다.")
-    if not isinstance(keywords, list) or not all(
-        isinstance(keyword, str) for keyword in keywords
-    ):
+    if not all(isinstance(keyword, str) for keyword in keywords):
         raise ValueError("WORKER-001의 keywords는 문자열 목록이어야 합니다.")
-    if providers is not None and not all(
-        isinstance(name, str) for name in providers
-    ):
+    if providers is not None and not all(isinstance(name, str) for name in providers):
         raise ValueError("WORKER-001의 providers는 문자열 목록이어야 합니다.")
-    if not isinstance(limit_per_provider, int):
-        raise ValueError("WORKER-001의 limit_per_provider는 정수여야 합니다.")
-    if language is not None and not isinstance(language, str):
-        raise ValueError("WORKER-001의 language는 문자열이어야 합니다.")
-    results = await run_global_source_collection_batch(
+    return await run_global_source_collection_batch(
         database_url=database_url,
         keywords=keywords,
         providers=providers,
         limit_per_provider=limit_per_provider,
         language=language,
-        naver_client_id=request.payload.get("naver_client_id"),
-        naver_client_secret=request.payload.get("naver_client_secret"),
-        gdelt_base_url=request.payload.get("gdelt_base_url"),
-    )
-    created = sum(int(item.get("created_count", 0)) for item in results)
-    return FeatureResult(
-        feature_id="WORKER-001",
-        data={"providers": len(results), "created_count": created, "results": results},
+        naver_client_id=naver_client_id,
+        naver_client_secret=naver_client_secret,
+        gdelt_base_url=gdelt_base_url,
     )

@@ -1,13 +1,6 @@
-"""개인 Wiki 문서와 관계 Graph 조회 기능.
+"""개인 Wiki 문서 목록·상세와 관계 Graph 조회 기능 구현."""
 
-PWIKI-003이 주입받은 영속 저장소 경계를 통해 사용자별 최신 Wiki 문서와
-관계를 조회하고 공통 기능 결과로 반환한다.
-"""
-
-from typing import Mapping, Protocol, cast
-
-from shared.contracts import FeatureRequest, FeatureResult
-from shared.feature_runtime import execute_feature_implementation
+from typing import Literal, Mapping, Protocol
 
 
 class WikiGraphReader(Protocol):
@@ -18,19 +11,59 @@ class WikiGraphReader(Protocol):
         ...
 
 
+class WikiDocumentReader(Protocol):
+    """사용자 Wiki 문서 목록과 상세를 읽는 영속 저장소 경계."""
+
+    async def list_documents(
+        self,
+        user_id: str,
+        *,
+        document_kind: str | None,
+        limit: int,
+        offset: int,
+    ) -> Mapping[str, object]:
+        """사용자의 현재 Wiki 문서 목록을 반환한다."""
+        ...
+
+    async def get_document(
+        self, user_id: str, document_id: str
+    ) -> Mapping[str, object] | None:
+        """사용자의 현재 Wiki 문서 상세를 반환한다."""
+        ...
+
+
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def pwiki_003(request: FeatureRequest) -> FeatureResult:
+async def pwiki_003(
+    reader: WikiGraphReader | WikiDocumentReader,
+    user_id: str,
+    *,
+    operation: Literal["graph", "list", "detail"],
+    document_kind: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    document_id: str | None = None,
+) -> Mapping[str, object] | None:
     """[PWIKI-003] 개인 Wiki 문서 조회.
 
     사용자의 Wiki 문서 목록과 상세 내용을 조회한다.
     """
-    if callable(request.payload.get("implementation")):
-        return await execute_feature_implementation(request, feature_id="PWIKI-003")
-    if not request.user_id:
+    if not user_id:
         raise ValueError("PWIKI-003에 user_id가 필요합니다.")
-    reader_value = request.payload.get("reader")
-    if reader_value is None or not hasattr(reader_value, "get_graph"):
-        raise ValueError("PWIKI-003에 Wiki Graph 저장소가 필요합니다.")
-    reader = cast(WikiGraphReader, reader_value)
-    graph = await reader.get_graph(request.user_id)
-    return FeatureResult(feature_id="PWIKI-003", data=graph)
+    if operation == "graph":
+        if not hasattr(reader, "get_graph"):
+            raise ValueError("PWIKI-003 Graph 조회 저장소가 필요합니다.")
+        return await reader.get_graph(user_id)
+    if operation == "list":
+        if not hasattr(reader, "list_documents"):
+            raise ValueError("PWIKI-003 문서 목록 조회 저장소가 필요합니다.")
+        return await reader.list_documents(
+            user_id,
+            document_kind=document_kind,
+            limit=limit,
+            offset=offset,
+        )
+    if document_id is None:
+        raise ValueError("PWIKI-003 상세 조회에 document_id가 필요합니다.")
+    if not hasattr(reader, "get_document"):
+        raise ValueError("PWIKI-003 문서 상세 조회 저장소가 필요합니다.")
+    return await reader.get_document(user_id, document_id)

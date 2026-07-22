@@ -27,6 +27,7 @@ class _FakeCursor:
     """psycopg Cursor의 fetchone만 흉내 내는 결정적 Test Double."""
 
     def __init__(self, row: dict[str, Any] | list[dict[str, Any]] | None) -> None:
+        """조회 시 반환할 고정 Row를 보관한다."""
         self._row = row
 
     async def fetchone(self) -> dict[str, Any] | None:
@@ -46,6 +47,7 @@ class _FakeConnection:
     """전달된 SQL과 Parameter를 기록하고 고정된 Row를 반환하는 Test Double."""
 
     def __init__(self, row: dict[str, Any] | list[dict[str, Any]] | None) -> None:
+        """고정 Row와 빈 SQL 실행 내역을 초기화한다."""
         self._row = row
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
 
@@ -229,6 +231,7 @@ class _SequencedFakeConnection:
     """execute 호출 순서대로 서로 다른 고정 Row를 반환하는 Test Double."""
 
     def __init__(self, rows: list[dict[str, Any] | list[dict[str, Any]] | None]) -> None:
+        """순서대로 반환할 Row와 빈 SQL 실행 내역을 초기화한다."""
         self._rows = list(rows)
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
 
@@ -387,7 +390,7 @@ def test_mark_url_source_event_rejects_unknown_status() -> None:
             mark_url_source_event(
                 connection,  # type: ignore[arg-type]
                 source_event_row_id="event-row-1",
-                status="received",
+                status="queued",
             )
         )
     assert connection.executed == []
@@ -423,6 +426,7 @@ class _SequencedConnection:
     """호출 순서별 응답 목록을 돌려주는 Connection Test Double."""
 
     def __init__(self, responses: list[dict[str, Any] | list[dict[str, Any]] | None]) -> None:
+        """순서별 응답과 빈 SQL 실행 내역을 초기화한다."""
         self._responses = responses
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
 

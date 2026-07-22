@@ -11,8 +11,8 @@ from typing import Any
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
-from shared.contracts import FeatureRequest, FeatureResult
-from shared.feature_runtime import execute_feature_implementation
+from domain.jobs.api import job_001, job_006
+from domain.personal_wiki.source_events.api import wse_013
 
 type DictRow = dict[str, Any]
 
@@ -50,6 +50,41 @@ class StoredAgentJob:
     completed_at: datetime | None
 
 
+@dataclass(frozen=True, slots=True)
+class ClaimAgentJobsCommand:
+    """DB-026 Batch Job Claim 입력."""
+
+    job_type: str
+    worker_id: str
+    limit: int
+    lease_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
+class CompleteAgentJobCommand:
+    """DB-026 Agent Job 완료 입력."""
+
+    job: ClaimedAgentJob
+    worker_id: str
+    result: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class FailAgentJobCommand:
+    """DB-026 Agent Job 실패와 재시도 입력."""
+
+    job: ClaimedAgentJob
+    worker_id: str
+    error_code: str
+    error_message: str
+    retryable: bool
+
+
+type AgentJobStorageCommand = (
+    ClaimAgentJobsCommand | CompleteAgentJobCommand | FailAgentJobCommand
+)
+
+
 async def set_system_job_scope(connection: AsyncConnection[DictRow]) -> None:
     """Job Worker Transaction에 RLS 시스템 Scope를 설정한다."""
     await connection.execute("SET LOCAL app.access_scope = 'system'")
@@ -83,6 +118,7 @@ async def claim_runnable_agent_jobs(
         raise ValueError("Job Claim limit은 1에서 100 사이여야 합니다.")
     if not 30 <= lease_seconds <= 3600:
         raise ValueError("Job Lease는 30초에서 3600초 사이여야 합니다.")
+    claimed_progress = await job_006(0, 5)
     cursor = await connection.execute(
         """
         WITH claimable AS (
@@ -110,7 +146,7 @@ async def claim_runnable_agent_jobs(
             lease_expires_at = clock_timestamp() + (%s * interval '1 second'),
             started_at = COALESCE(started_at, clock_timestamp()),
             attempt_count = attempt_count + 1,
-            progress = GREATEST(progress, 5),
+            progress = GREATEST(progress, %s),
             error_code = NULL,
             error_message = NULL
         FROM claimable
@@ -124,9 +160,10 @@ async def claim_runnable_agent_jobs(
             job.max_attempts,
             job.payload
         """,
-        (job_type, limit, worker_id, lease_seconds),
+        (job_type, limit, worker_id, lease_seconds, claimed_progress),
     )
     rows = await cursor.fetchall()
+    await wse_013("processing")
     jobs: list[ClaimedAgentJob] = []
     for row in rows:
         job = ClaimedAgentJob(
@@ -289,6 +326,7 @@ async def claim_agent_job_by_id(
     """개발 실행용으로 지정한 Job 하나를 Lease로 점유한다."""
     if not 30 <= lease_seconds <= 3600:
         raise ValueError("Job Lease는 30초에서 3600초 사이여야 합니다.")
+    claimed_progress = await job_006(0, 5)
     cursor = await connection.execute(
         """
         UPDATE agent.agent_jobs
@@ -299,7 +337,7 @@ async def claim_agent_job_by_id(
             lease_expires_at = clock_timestamp() + (%s * interval '1 second'),
             started_at = COALESCE(started_at, clock_timestamp()),
             attempt_count = attempt_count + 1,
-            progress = GREATEST(progress, 5),
+            progress = GREATEST(progress, %s),
             error_code = NULL,
             error_message = NULL,
             updated_at = clock_timestamp()
@@ -318,7 +356,7 @@ async def claim_agent_job_by_id(
             max_attempts,
             payload
         """,
-        (worker_id, lease_seconds, job_id),
+        (worker_id, lease_seconds, claimed_progress, job_id),
     )
     row = await cursor.fetchone()
     if row is None:
@@ -365,12 +403,14 @@ async def complete_agent_job(
     result: dict[str, object],
 ) -> None:
     """Worker 소유권을 확인하고 Job·Attempt·Source Event를 완료 처리한다."""
+    completed_progress = await job_006(5, 100)
+    await wse_013("completed")
     cursor = await connection.execute(
         """
         UPDATE agent.agent_jobs
         SET
             status = 'completed',
-            progress = 100,
+            progress = %s,
             result = %s,
             retryable = false,
             completed_at = clock_timestamp(),
@@ -384,7 +424,7 @@ async def complete_agent_job(
           AND lease_expires_at > clock_timestamp()
         RETURNING id
         """,
-        (Jsonb(result), job.job_id, worker_id),
+        (completed_progress, Jsonb(result), job.job_id, worker_id),
     )
     if await cursor.fetchone() is None:
         raise RuntimeError(f"Job Lease 소유권이 없습니다: {job.job_id}")
@@ -418,6 +458,7 @@ async def fail_agent_job(
     """Job 실패를 기록하고 재시도 가능 여부에 따라 다음 상태를 결정한다."""
     can_retry = retryable and job.attempt_number < job.max_attempts
     next_status = "queued" if can_retry else "failed"
+    source_event_status = await wse_013("received" if can_retry else "failed")
     cursor = await connection.execute(
         """
         UPDATE agent.agent_jobs
@@ -477,7 +518,7 @@ async def fail_agent_job(
             processed_at = CASE WHEN %s = 'failed' THEN clock_timestamp() ELSE NULL END
         WHERE job_id = %s
         """,
-        ("received" if can_retry else "failed", error_code, error_message[:2000], next_status, job.job_id),
+        (source_event_status, error_code, error_message[:2000], next_status, job.job_id),
     )
     return next_status
 
@@ -522,7 +563,6 @@ async def enqueue_personal_wiki_build_job(
     Returns:
         Job ID와 이번 호출에서 새로 생성됐는지 여부
     """
-    idempotency_key = f"{source_event_id}:v{source_version}"
     payload = {
         "content_format": "markdown",
         "source_document_id": source_document_id,
@@ -530,6 +570,14 @@ async def enqueue_personal_wiki_build_job(
         "source_event_id": source_event_id,
         "source_event_row_id": source_event_row_id,
     }
+    creation = await job_001(
+        feature_id=feature_id,
+        job_type="personal_wiki_build",
+        user_id=user_id,
+        idempotency_parts=[source_event_id, f"v{source_version}"],
+        payload=payload,
+        request_id=request_id,
+    )
     cursor = await connection.execute(
         """
         INSERT INTO agent.agent_jobs (
@@ -547,7 +595,13 @@ async def enqueue_personal_wiki_build_job(
         DO NOTHING
         RETURNING id
         """,
-        (feature_id, user_id, idempotency_key, Jsonb(payload), request_id),
+        (
+            creation.feature_id,
+            creation.user_id,
+            creation.idempotency_key,
+            Jsonb(creation.payload),
+            creation.request_id,
+        ),
     )
     row = await cursor.fetchone()
     created = row is not None
@@ -560,12 +614,13 @@ async def enqueue_personal_wiki_build_job(
               AND COALESCE(user_id, '') = %s
               AND idempotency_key = %s
             """,
-            (feature_id, user_id, idempotency_key),
+            (creation.feature_id, creation.user_id, creation.idempotency_key),
         )
         row = await cursor.fetchone()
         if row is None:
             raise RuntimeError(
-                f"멱등 충돌한 Personal Wiki Job을 찾을 수 없습니다: {idempotency_key}"
+                "멱등 충돌한 Personal Wiki Job을 찾을 수 없습니다: "
+                f"{creation.idempotency_key}"
             )
     job_id = str(row["id"])
     if source_event_row_id is not None:
@@ -597,6 +652,14 @@ async def enqueue_url_collection_job(
         "source_event_id": source_event_id,
         "source_event_row_id": source_event_row_id,
     }
+    creation = await job_001(
+        feature_id="SVC-003",
+        job_type="personal_wiki_url",
+        user_id=user_id,
+        idempotency_parts=[source_event_id],
+        payload=payload,
+        request_id=request_id,
+    )
     cursor = await connection.execute(
         """
         INSERT INTO agent.agent_jobs (
@@ -614,7 +677,12 @@ async def enqueue_url_collection_job(
         DO NOTHING
         RETURNING id
         """,
-        (user_id, source_event_id, Jsonb(payload), request_id),
+        (
+            creation.user_id,
+            creation.idempotency_key,
+            Jsonb(creation.payload),
+            creation.request_id,
+        ),
     )
     row = await cursor.fetchone()
     created = row is not None
@@ -627,12 +695,13 @@ async def enqueue_url_collection_job(
               AND COALESCE(user_id, '') = %s
               AND idempotency_key = %s
             """,
-            (user_id, source_event_id),
+            (creation.user_id, creation.idempotency_key),
         )
         row = await cursor.fetchone()
         if row is None:
             raise RuntimeError(
-                f"멱등 충돌한 URL 수집 Job을 찾을 수 없습니다: {source_event_id}"
+                "멱등 충돌한 URL 수집 Job을 찾을 수 없습니다: "
+                f"{creation.idempotency_key}"
             )
     job_id = str(row["id"])
     await connection.execute(
@@ -730,9 +799,34 @@ async def release_user_wiki_build_jobs(
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def db_026(request: FeatureRequest) -> FeatureResult:
+async def db_026(
+    connection: AsyncConnection[DictRow], command: AgentJobStorageCommand
+) -> list[ClaimedAgentJob] | str | None:
     """[DB-026] Agent Job 저장.
 
     비동기 작업 상태와 결과를 저장한다.
     """
-    return await execute_feature_implementation(request, feature_id="DB-026")
+    if isinstance(command, ClaimAgentJobsCommand):
+        return await claim_runnable_agent_jobs(
+            connection,
+            job_type=command.job_type,
+            worker_id=command.worker_id,
+            limit=command.limit,
+            lease_seconds=command.lease_seconds,
+        )
+    if isinstance(command, CompleteAgentJobCommand):
+        await complete_agent_job(
+            connection,
+            job=command.job,
+            worker_id=command.worker_id,
+            result=command.result,
+        )
+        return None
+    return await fail_agent_job(
+        connection,
+        job=command.job,
+        worker_id=command.worker_id,
+        error_code=command.error_code,
+        error_message=command.error_message,
+        retryable=command.retryable,
+    )

@@ -3,7 +3,7 @@
 구현 모듈의 기능 함수를 안정적인 import 경로로 다시 노출한다.
 """
 
-from .features.lifecycle import job_001, job_002, job_003, job_004
+from .features.lifecycle import AgentJobCreation, job_001, job_002, job_003, job_004
 from .features.retries import job_005, job_012
 from .features.progress import job_006
 from .features.results import job_007

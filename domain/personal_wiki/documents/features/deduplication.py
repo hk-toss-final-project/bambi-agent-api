@@ -1,16 +1,17 @@
-"""기능 구현 모듈.
+"""개인 Wiki 동일 내용 문서 중복 판정 기능 구현."""
 
-PWIKI-008 기능의 실제 구현 위치를 제공한다.
-"""
-
-from shared.contracts import FeatureRequest, FeatureResult
-from shared.feature_runtime import execute_feature_implementation
+from collections.abc import Mapping
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def pwiki_008(request: FeatureRequest) -> FeatureResult:
+async def pwiki_008(
+    head: Mapping[str, object] | None,
+    duplicate: Mapping[str, object] | None,
+) -> Mapping[str, object] | None:
     """[PWIKI-008] Wiki 문서 중복 제거.
 
     동일하거나 유사한 개인 Wiki 문서를 중복 제거한다.
     """
-    return await execute_feature_implementation(request, feature_id="PWIKI-008")
+    if head is not None and duplicate is not None and duplicate.get("id") == head.get("id"):
+        return None
+    return duplicate

@@ -1,16 +1,32 @@
-"""기능 구현 모듈.
+"""Service 개인화 콘텐츠 생성 접수 기능 구현."""
 
-SVC-008 기능의 실제 구현 위치를 제공한다.
-"""
+from typing import Protocol
 
-from shared.contracts import FeatureRequest, FeatureResult
-from shared.feature_runtime import execute_feature_implementation
+from app.schemas.mvp import AcceptedJobResponse, GenerationRequest
+
+
+class GenerationSubmissionService(Protocol):
+    """개인화 콘텐츠 생성 접수에 필요한 애플리케이션 서비스 경계."""
+
+    async def submit_generation(
+        self, *, user_id: str, payload: GenerationRequest, request_id: str
+    ) -> AcceptedJobResponse:
+        """개인화 콘텐츠 생성 작업을 접수한다."""
+        ...
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def svc_008(request: FeatureRequest) -> FeatureResult:
+async def svc_008(
+    service: GenerationSubmissionService,
+    *,
+    user_id: str,
+    payload: GenerationRequest,
+    request_id: str,
+) -> AcceptedJobResponse:
     """[SVC-008] 콘텐츠 생성 요청.
 
     밤비의 콘텐츠 생성을 요청한다.
     """
-    return await execute_feature_implementation(request, feature_id="SVC-008")
+    return await service.submit_generation(
+        user_id=user_id, payload=payload, request_id=request_id
+    )

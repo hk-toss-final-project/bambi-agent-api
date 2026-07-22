@@ -1,8 +1,8 @@
 """Service Worker가 호출하는 발행 Snapshot과 ACK 내부 라우터."""
 
-from typing import Annotated, TypeVar, cast
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Request
+from fastapi import APIRouter, Depends, Path
 
 from app.dependencies import get_publish_snapshot_service
 from app.schemas.mvp import (
@@ -16,28 +16,8 @@ from app.schemas.mvp import (
 )
 from app.routers.service_worker.api import sw_004, sw_009
 from app.services.publish_snapshots import PublishSnapshotService
-from shared.contracts import FeatureRequest, FeatureResult
 
 router = APIRouter(tags=["service-worker"])
-ResponseT = TypeVar("ResponseT")
-
-
-def _request_id(request: Request) -> str:
-    """추적 미들웨어가 생성한 Request ID를 반환한다."""
-    return request.state.request_id
-
-
-def _feature_response(
-    result: FeatureResult,
-    response_type: type[ResponseT],
-) -> ResponseT:
-    """기능 결과에 담긴 Service Worker 응답 객체를 검증해 반환한다."""
-    response = result.data.get("result")
-    if not isinstance(response, response_type):
-        raise RuntimeError(
-            f"{result.feature_id}가 예상 응답 {response_type.__name__}을 반환하지 않았습니다."
-        )
-    return cast(ResponseT, response)
 
 
 @router.get(
@@ -48,20 +28,10 @@ def _feature_response(
 )
 async def get_publish_snapshot(
     content_id: Annotated[str, Path(min_length=1, max_length=128)],
-    request: Request,
     service: PublishSnapshotService = Depends(get_publish_snapshot_service),
 ) -> PublishSnapshotResponse:
     """[SW-004] service-db 저장에 사용할 최신 Publish Snapshot을 반환한다."""
-    result = await sw_004(
-        FeatureRequest(
-            request_id=_request_id(request),
-            actor_id="service-worker",
-            payload={
-                "implementation": lambda: service.get_publish_snapshot(content_id)
-            },
-        )
-    )
-    return _feature_response(result, PublishSnapshotResponse)
+    return await sw_004(service, content_id)
 
 
 @router.post(
@@ -76,20 +46,10 @@ async def get_publish_snapshot(
 )
 async def claim_publish_snapshot_batch(
     payload: PublishBatchClaimRequest,
-    request: Request,
     service: PublishSnapshotService = Depends(get_publish_snapshot_service),
 ) -> PublishBatchClaimResponse:
     """[SW-004] 준비된 Publish Snapshot을 Lease와 함께 Batch Claim한다."""
-    result = await sw_004(
-        FeatureRequest(
-            request_id=_request_id(request),
-            actor_id=payload.worker_id,
-            payload={
-                "implementation": lambda: service.claim_publish_snapshot_batch(payload)
-            },
-        )
-    )
-    return _feature_response(result, PublishBatchClaimResponse)
+    return await sw_004(service, payload)
 
 
 @router.post(
@@ -101,22 +61,10 @@ async def claim_publish_snapshot_batch(
 async def acknowledge_publish(
     content_id: Annotated[str, Path(min_length=1, max_length=128)],
     payload: PublishAckRequest,
-    request: Request,
     service: PublishSnapshotService = Depends(get_publish_snapshot_service),
 ) -> PublishAckResponse:
     """[SW-009] Service Worker의 service-db 반영 결과를 Agent API에 기록한다."""
-    result = await sw_009(
-        FeatureRequest(
-            request_id=_request_id(request),
-            actor_id="service-worker",
-            payload={
-                "implementation": lambda: service.acknowledge_publish(
-                    content_id, payload
-                )
-            },
-        )
-    )
-    return _feature_response(result, PublishAckResponse)
+    return await sw_009(service, content_id, payload)
 
 
 @router.post(
@@ -132,19 +80,7 @@ async def acknowledge_publish(
 async def acknowledge_publish_snapshot_batch(
     batch_id: Annotated[str, Path(min_length=1, max_length=64)],
     payload: PublishBatchAckRequest,
-    request: Request,
     service: PublishSnapshotService = Depends(get_publish_snapshot_service),
 ) -> PublishBatchAckResponse:
     """[SW-009] Publish Snapshot Batch의 부분 성공 ACK를 기록한다."""
-    result = await sw_009(
-        FeatureRequest(
-            request_id=_request_id(request),
-            actor_id=payload.worker_id,
-            payload={
-                "implementation": lambda: service.acknowledge_publish_snapshot_batch(
-                    batch_id, payload
-                )
-            },
-        )
-    )
-    return _feature_response(result, PublishBatchAckResponse)
+    return await sw_009(service, batch_id, payload)

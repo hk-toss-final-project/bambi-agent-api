@@ -275,6 +275,26 @@ def test_feature_implementation_status_matches_mvp_checklist() -> None:
     implemented = read_checked_mvp_feature_ids() | {"SCH-009"}
     for feature_id, (path, node, _) in discover_feature_functions().items():
         if feature_id in implemented:
-            assert not is_not_implemented_stub(node), f"구현이 필요한 함수: {feature_id} ({path})"
+            assert not is_not_implemented_stub(node), (
+                f"구현이 필요한 함수: {feature_id} ({path})"
+            )
         else:
             assert is_not_implemented_stub(node), f"스텁이 아닌 함수: {feature_id} ({path})"
+
+
+def test_completed_non_excluded_features_use_typed_inputs() -> None:
+    """제외 영역 밖 완료 기능이 범용 FeatureRequest 입력으로 회귀하지 않는지 검증한다."""
+    implemented = read_checked_mvp_feature_ids() | {"SCH-009"}
+    excluded_roots = {("agent", "bambi"), ("agent", "assistant")}
+    for feature_id, (path, node, _) in discover_feature_functions().items():
+        relative = path.relative_to(ROOT)
+        if feature_id not in implemented or relative.parts[:2] in excluded_roots:
+            continue
+        annotation_names = {
+            child.id
+            for child in ast.walk(node.args)
+            if isinstance(child, ast.Name)
+        }
+        assert "FeatureRequest" not in annotation_names, (
+            f"typed 입력으로 전환되지 않은 완료 기능: {feature_id} ({path})"
+        )

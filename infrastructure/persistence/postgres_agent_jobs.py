@@ -23,6 +23,7 @@ from app.services.agent_jobs import (
 )
 from infrastructure.persistence.api import (
     ClaimedAgentJob,
+    db_002,
     claim_agent_job_by_id,
     complete_agent_job,
     enqueue_personal_wiki_build_job,
@@ -33,7 +34,6 @@ from infrastructure.persistence.api import (
     mark_url_source_event,
     register_url_and_enqueue,
     save_user_url_document_version,
-    save_web_clipping_and_enqueue,
     set_personal_wiki_scope,
     set_system_job_scope,
     upsert_user_context_snapshot,
@@ -129,7 +129,7 @@ class PostgresAgentJobRepository:
         async with self._pool.connection() as connection:
             async with connection.transaction():
                 await set_personal_wiki_scope(connection, user_id=user_id)
-                saved = await save_web_clipping_and_enqueue(
+                saved = await db_002(
                     connection,
                     user_id=user_id,
                     source_event_id=source_event_id,

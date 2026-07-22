@@ -274,6 +274,43 @@ async def save_web_clipping_and_enqueue(
     )
 
 
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
+async def db_002(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    source_event_id: str,
+    source_url: str,
+    title: str,
+    content: str,
+    author: str | None,
+    published_at: datetime | None,
+    clipped_on: date | None,
+    description: str | None,
+    tags: list[str],
+    occurred_at: datetime | None,
+    memo: str | None,
+    request_id: str,
+) -> PersistedSourceSubmission:
+    """[DB-002] Wiki Source Event와 웹 클리핑 원본을 저장한다."""
+    return await save_web_clipping_and_enqueue(
+        connection,
+        user_id=user_id,
+        source_event_id=source_event_id,
+        source_url=source_url,
+        title=title,
+        content=content,
+        author=author,
+        published_at=published_at,
+        clipped_on=clipped_on,
+        description=description,
+        tags=tags,
+        occurred_at=occurred_at,
+        memo=memo,
+        request_id=request_id,
+    )
+
+
 async def register_url_and_enqueue(
     connection: AsyncConnection[DictRow],
     *,

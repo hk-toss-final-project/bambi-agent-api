@@ -1,19 +1,18 @@
-"""기능 구현 모듈.
+"""개인 Wiki Source Event 수신 기능과 미구현 Event Scaffold."""
 
-WSE-001, WSE-002, WSE-003, WSE-004, WSE-005, WSE-006, WSE-007, WSE-008 기능의 실제 구현 위치를 제공한다.
-"""
-
+from app.schemas.mvp import WebClippingRequest
 from shared.contracts import FeatureRequest, FeatureResult
-from shared.feature_runtime import execute_feature_implementation
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def wse_001(request: FeatureRequest) -> FeatureResult:
+async def wse_001(payload: WebClippingRequest) -> WebClippingRequest:
     """[WSE-001] 웹 클리핑 이벤트 수신.
 
     사용자가 클리핑한 데이터를 개인 Wiki 반영 후보로 수신한다.
     """
-    return await execute_feature_implementation(request, feature_id="WSE-001")
+    if not payload.content.strip():
+        raise ValueError("WSE-001 웹 클리핑 본문은 비어 있을 수 없습니다.")
+    return payload
 
 
 async def wse_002(request: FeatureRequest) -> FeatureResult:
