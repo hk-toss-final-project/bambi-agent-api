@@ -40,10 +40,6 @@ _VECTORS = {
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
     """이력 파일을 임시 디렉터리로 격리하고 임베딩·통합 요약을 대체한다."""
-    monkeypatch.setattr(history, "_DATA_DIR", tmp_path)
-    monkeypatch.setattr(history, "_COLLECT_HISTORY_PATH", tmp_path / "collect_history.json")
-    monkeypatch.setattr(dedup, "_DATA_DIR", tmp_path)
-    monkeypatch.setattr(dedup, "_REPORT_EMBEDDING_PATH", tmp_path / "report_embedding_history.json")
     monkeypatch.setattr(pipeline, "embed_texts", lambda texts, model=None: [_VECTORS[t] for t in texts])
     monkeypatch.setattr(pipeline, "complete", lambda s, u, model="gpt-4.1-mini": "통합 인사이트")
 
@@ -240,9 +236,11 @@ def test_same_day_rerun_is_idempotent(monkeypatch) -> None:
 
     assert [i["title"] for i in first["items"]] == [i["title"] for i in second["items"]]
 
-    # 보고 임베딩 이력은 url_key당 1건만 유지된다.
-    data = dedup._load()
-    assert len(data["minji"][_TOPIC]) == 2
+    # 보고 임베딩 이력은 url_key당 1건만 유지된다(재실행해도 중복 누적 없음).
+    recorded = dedup.load_recent_report_items(
+        "minji", _TOPIC, now=_NOW, lookback_days=365, exclude_today=False
+    )
+    assert len(recorded) == 2
 
 
 def test_search_query_drives_collection_but_topic_drives_scoring(monkeypatch) -> None:

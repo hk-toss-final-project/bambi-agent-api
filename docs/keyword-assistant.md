@@ -99,6 +99,51 @@ report_012  개인화 → report_008/009 생성 → report_011 인용 → report
 수집 실패는 생성을 막지 않는다. 실시간 자료를 못 얻으면 경고 로그를 남기고 개인 Wiki
 근거만으로 생성한다.
 
+## 이력 저장소 (2026-07-22 DB 이전)
+
+비서는 개인화를 위해 "이 사용자에게 무엇을 이미 보여줬는지"를 기억한다. 저장 위치는
+[features/storage.py](../agent/assistant/features/storage.py)가 정한다.
+
+| 이력 | 테이블 | 용도 |
+|---|---|---|
+| 수집 | `agent.assistant_collected_documents` | 같은 URL 재수집 방지, `first_seen`(발행일 대용), 주간 폴백용 점수 |
+| 보고 기사 | `agent.assistant_reported_articles` | 같은 기사가 다음 리포트에 반복되는 것 방지 |
+| 시청 | `agent.assistant_watched_videos` | 실제로 클릭한 영상만 기록(단순 노출 제외) |
+| 보고 임베딩 | `agent.assistant_report_embeddings` | 최근 7일 보고분과 유사도 비교(`vector(1536)`) |
+
+### 백엔드 선택
+
+1. `AGENT_DATABASE_URL`(또는 `ASSISTANT_DATABASE_URL`)이 있고 연결되면 → **PostgreSQL**
+2. 설정이 없으면 → 로컬 JSON (`DATA_DIR`, 로컬 개발용)
+3. 설정은 있는데 연결 실패면 → 경고 로그 + 로컬 JSON 폴백
+
+3번을 두는 이유: 비서는 PostgreSQL 없이도 동작하던 제품이고, DB 장애로 화면 전체가
+멈추는 것보다 이력이 로컬에 쌓이는 편이 낫다고 판단했다. 어떤 백엔드를 쓰는지는 기동 시
+로그로 남긴다.
+
+`history.py`·`dedup.py`의 공개 함수 시그니처는 그대로라 호출부는 저장 위치를 모른다.
+
+> **이전 상태(문제)**: `data/*.json`에 저장했다. 서버를 여러 대로 늘릴 수 없고, 재배포
+> 시 유실되며, 파일 전체를 읽고 통째로 덮어써서 동시 요청에 이력이 유실될 수 있었다.
+> 임베딩은 1.6MB 전체를 읽어 파이썬에서 코사인을 계산했지만, 지금은 최근 N일 행만 DB가
+> 골라 준다.
+
+> **경로 버그**: facade 마이그레이션으로 `config.py`가 `features/` 아래로 내려가면서
+> `DATA_DIR`의 상대 경로가 한 단계 밀려 `agent/data/`를 가리켰고, 이력이 `data/`와
+> `agent/data/` 두 곳으로 쪼개졌다. 경로를 저장소 루트 기준으로 바로잡고 회귀 테스트
+> (`test_data_dir_points_to_repository_root`)로 고정했다. 두 위치의 이력은 모두 DB로
+> 이관했다(1,512건 → 중복 병합 후 1,508행).
+
+### 기존 JSON 이력 이관
+
+```bash
+uv run python scripts/migrate_assistant_history.py --dry-run   # 건수만 확인
+uv run python scripts/migrate_assistant_history.py             # 실제 이관
+uv run python scripts/migrate_assistant_history.py --data-dir agent/data
+```
+
+멱등하므로 여러 번 실행해도 안전하다. 원본 JSON은 지우지 않는다.
+
 ## 선별 파이프라인의 임계값 (2026-07-20 보정)
 
 [pipeline.py](../agent/assistant/features/pipeline.py)는 수집한 문서를 유사도 필터 → 클러스터링 →

@@ -1,8 +1,8 @@
 """일간 보고서 중복 방지 (보고서 로직과 독립).
 
-최근 DEDUP_LOOKBACK_DAYS일간 보고서에 실린 아이템의 임베딩을 로컬 JSON
-(data/report_embedding_history.json)에 보관하고, 새 후보와의 코사인 유사도로
-"이미 다룬 소식"인지 판정한다.
+최근 DEDUP_LOOKBACK_DAYS일간 보고서에 실린 아이템의 임베딩을 보관하고, 새 후보와의
+코사인 유사도로 "이미 다룬 소식"인지 판정한다. 저장 위치는 [storage.py](storage.py)가
+정한다(PostgreSQL 우선, 없으면 로컬 JSON).
 
 판정 규칙:
 - 유사도 < DUP_THRESHOLD                         → "new" (신규)
@@ -18,15 +18,10 @@
 
 from __future__ import annotations
 
-import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
-from agent.assistant.features import config
+from agent.assistant.features import config, storage
 from agent.assistant.features.embeddings import cosine_similarity
-
-# 이력 파일이 저장될 디렉터리. history와 같은 config.DATA_DIR을 공유한다.
-_DATA_DIR = config.DATA_DIR
-_REPORT_EMBEDDING_PATH = _DATA_DIR / "report_embedding_history.json"
 
 STATUS_NEW = "new"
 STATUS_DUPLICATE = "duplicate"
@@ -35,25 +30,7 @@ STATUS_UPDATE = "update"
 
 def _normalize_keyword(keyword: str) -> str:
     """키워드를 대소문자·공백 차이 없이 조회할 수 있게 정규화한다."""
-    return " ".join(keyword.strip().lower().split())
-
-
-def _load() -> dict[str, dict[str, dict[str, dict[str, object]]]]:
-    """보고 임베딩 이력 파일을 읽는다. 없거나 깨졌으면 빈 구조를 반환한다."""
-    if not _REPORT_EMBEDDING_PATH.exists():
-        return {}
-    try:
-        return json.loads(_REPORT_EMBEDDING_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def _save(data: dict[str, dict[str, dict[str, dict[str, object]]]]) -> None:
-    """보고 임베딩 이력 파일을 저장한다."""
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
-    _REPORT_EMBEDDING_PATH.write_text(
-        json.dumps(data, ensure_ascii=False), encoding="utf-8"
-    )
+    return storage.normalize_keyword(keyword)
 
 
 def _parse_reported_at(entry: dict[str, object]) -> datetime | None:
@@ -83,21 +60,13 @@ def load_recent_report_items(
     비교해 전부 중복 처리되는 것을 막기 위한 멱등성 장치다.
     """
     reference = now or datetime.now(UTC)
-    days = config.DEDUP_LOOKBACK_DAYS if lookback_days is None else lookback_days
-    cutoff = reference - timedelta(days=days)
-
-    data = _load()
-    keyword_entry = data.get(user_id, {}).get(_normalize_keyword(keyword), {})
-
-    items: list[dict[str, object]] = []
-    for url_key, entry in keyword_entry.items():
-        reported_at = _parse_reported_at(entry)
-        if reported_at is None or reported_at < cutoff:
-            continue
-        if exclude_today and reported_at.date() == reference.date():
-            continue
-        items.append({**entry, "url_key": url_key, "reported_at_dt": reported_at})
-    return items
+    if not user_id:
+        return []
+    cutoff = storage.lookback_cutoff(reference, lookback_days)
+    exclude_date = reference.date() if exclude_today else None
+    return storage.get_store().load_recent_report_items(
+        user_id, keyword, cutoff=cutoff, exclude_date=exclude_date
+    )
 
 
 def check_duplicate(
@@ -163,26 +132,8 @@ def record_report_items(
     if not user_id or not items:
         return
     reference = now or datetime.now(UTC)
-    cutoff = reference - timedelta(days=config.DEDUP_LOOKBACK_DAYS)
-
-    data = _load()
-    user_entry = data.setdefault(user_id, {})
-    keyword_entry = user_entry.setdefault(_normalize_keyword(keyword), {})
-
-    # 오래된 항목 정리 (조회가 아니라 기록 시점에 한 번씩 청소한다).
-    for url_key in list(keyword_entry):
-        reported_at = _parse_reported_at(keyword_entry[url_key])
-        if reported_at is None or reported_at < cutoff:
-            del keyword_entry[url_key]
-
-    for item in items:
-        url_key = str(item.get("url_key") or "")
-        embedding = item.get("embedding")
-        if not url_key or not isinstance(embedding, list):
-            continue
-        keyword_entry[url_key] = {
-            "title": str(item.get("title") or ""),
-            "embedding": embedding,
-            "reported_at": reference.isoformat(),
-        }
-    _save(data)
+    # 오래된 항목 정리는 조회가 아니라 기록 시점에 한 번씩 한다.
+    cutoff = storage.lookback_cutoff(reference)
+    storage.get_store().record_report_items(
+        user_id, keyword, items, reference=reference, cutoff=cutoff
+    )

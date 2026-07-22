@@ -166,11 +166,18 @@ WEEKLY_TREND_DAYS: int = _env_int("WEEKLY_TREND_DAYS", 7)
 EMBEDDING_MODEL: str = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
 
 # ── 저장 경로 ────────────────────────────────────────────────────────────
-# 이력 파일(수집·보고·시청·기사)을 저장할 디렉터리. 기본값은 저장소 루트의 data/
-# 이며(agent/assistant/ 기준 2단계 위), ASSISTANT_DATA_DIR 환경변수로 옮길 수 있다.
-# history·dedup 두 모듈이 이 값을 공유해, 경로 계산을 한 곳에만 둔다.
+# 이력 파일(수집·보고·시청·기사)을 저장할 디렉터리. PostgreSQL을 쓸 수 없을 때의
+# 폴백 경로다(저장소 선택은 storage.py 참고). ASSISTANT_DATA_DIR 환경변수로 옮길 수 있다.
+#
+# 경로는 이 파일 위치를 기준으로 저장소 루트를 거슬러 올라간다:
+#   agent/assistant/features/config.py → parents[0]=features, [1]=assistant, [2]=agent, [3]=루트
+# facade 마이그레이션으로 이 파일이 features/ 아래로 내려가면서 한 단계가 밀려
+# 한동안 agent/data/를 가리켰고, 그 결과 이력이 data/와 agent/data/ 두 곳으로
+# 쪼개졌다. 파일이 다시 이동하면 같은 문제가 생기므로 아래 테스트로 고정한다
+# (tests/agent/assistant/test_storage.py::test_data_dir_points_to_repository_root).
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR: Path = Path(
-    os.environ.get("ASSISTANT_DATA_DIR") or Path(__file__).resolve().parents[2] / "data"
+    os.environ.get("ASSISTANT_DATA_DIR") or _REPOSITORY_ROOT / "data"
 )
 
 

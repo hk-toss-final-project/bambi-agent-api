@@ -255,6 +255,17 @@ Seed가 최신 상태여야 Health Check를 통과합니다.
       → wiki_embeddings
       → global_trend_documents / discovery_candidates
 
+### 키워드 비서 이력
+
+    assistant_collected_documents   (수집 URL + first_seen + score)
+    assistant_reported_articles     (리포트에 실은 기사)
+    assistant_watched_videos        (실제로 클릭한 영상)
+    assistant_report_embeddings     (최근 보고 아이템 임베딩, vector(1536))
+
+    사용자·정규화 키워드 단위로 개인화 이력을 보관한다. 2026-07-22 이전에는
+    로컬 JSON 파일(data/*.json)에 저장했으나, 다중 인스턴스·재배포 유실·동시
+    쓰기 문제로 DB로 옮겼다(0007).
+
 ### 콘텐츠 생성과 발행
 
     user_context_snapshots + agent_jobs
@@ -275,5 +286,6 @@ Seed가 최신 상태여야 Health Check를 통과합니다.
 - 사용자 원본과 LLM Wiki 분리: ../database/migrations/0004_separate_user_sources_from_llm_wiki.sql
 - LLM Wiki Vault 구조·관계·Snapshot: ../database/migrations/0005_structure_llm_wiki_documents.sql
 - Report Builder 생성 계약 이전: ../database/migrations/0006_rename_report_builder_contracts.sql
+- 키워드 비서 이력 DB 이전: ../database/migrations/0007_assistant_history.sql
 - 로컬 실행과 Schema 검증: ../database/README.md
 - Service Worker HTTP 계약: fastapi-mvp-api.md

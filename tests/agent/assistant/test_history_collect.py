@@ -12,8 +12,6 @@ _NOW = datetime(2026, 7, 20, 9, 0, tzinfo=UTC)
 @pytest.fixture(autouse=True)
 def _isolate_history(tmp_path, monkeypatch):
     """이력 파일 경로를 임시 디렉터리로 돌려 실제 data/를 건드리지 않는다."""
-    monkeypatch.setattr(history, "_DATA_DIR", tmp_path)
-    monkeypatch.setattr(history, "_COLLECT_HISTORY_PATH", tmp_path / "collect_history.json")
 
 
 def test_cold_start_detection() -> None:

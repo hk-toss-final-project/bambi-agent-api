@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from agent.assistant.features import dedup
+from agent.assistant.features import dedup, storage
 
 _NOW = datetime(2026, 7, 20, 9, 0, tzinfo=UTC)
 
@@ -12,8 +12,9 @@ _NOW = datetime(2026, 7, 20, 9, 0, tzinfo=UTC)
 @pytest.fixture(autouse=True)
 def _isolate_history(tmp_path, monkeypatch):
     """이력 파일 경로를 임시 디렉터리로 돌려 실제 data/를 건드리지 않는다."""
-    monkeypatch.setattr(dedup, "_DATA_DIR", tmp_path)
-    monkeypatch.setattr(dedup, "_REPORT_EMBEDDING_PATH", tmp_path / "report_embedding_history.json")
+    storage.set_store(storage.JsonHistoryStore(tmp_path))
+    yield
+    storage.set_store(None)
 
 
 def _record(url_key: str, embedding: list[float], reported_at: datetime) -> None:
@@ -103,8 +104,13 @@ def test_record_prunes_expired_entries() -> None:
     _record("https://a.com/old", [1.0, 0.0], _NOW - timedelta(days=30))
     _record("https://a.com/new", [0.0, 1.0], _NOW)
 
-    data = dedup._load()
-    keyword_entry = data["minji"]["전고체"]
+    # 룩백을 넉넉히 잡아도 옛 항목은 이미 삭제돼 조회되지 않는다.
+    remaining = {
+        item["url_key"]
+        for item in dedup.load_recent_report_items(
+            "minji", "전고체", now=_NOW, lookback_days=365, exclude_today=False
+        )
+    }
 
-    assert "https://a.com/old" not in keyword_entry
-    assert "https://a.com/new" in keyword_entry
+    assert "https://a.com/old" not in remaining
+    assert "https://a.com/new" in remaining
