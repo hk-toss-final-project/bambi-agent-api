@@ -1,162 +1,227 @@
 <!--
 이 문서는 service-api(Spring) ↔ agent-api(FastAPI) 연동 계약 "초안(제안서)"이다.
-작성: 소라(연동 담당). 근거: 송우/LLM팀이 07-10 커밋한 실제 코드(app/routers, app/schemas, app/services).
-목적: 우석·소라·송우 "agent 계약 경계 확정" 미팅의 입력물. 확정 전까지 FINAL 아님.
+작성: 소라(연동 담당).
+근거: (1) 송우 연동 가이드 docs/service-integration-guide.md (2026-07-20)
+      (2) 소라 로컬 E2E 검증 (2026-07-22) — 실제 계약 흐름을 서버에서 직접 밟아 확인.
+목적: 우석·소라·송우 "agent 계약 경계 확정" 미팅의 입력물 + 소라 Gateway 구현 설계서.
 -->
 
-# Agent 연동 계약 (초안 / 경계 확정용)
+# Agent 연동 계약 & Gateway 설계
 
-> 상태: **DRAFT — 확정 대기.** 이 문서는 소라(연동)가 송우(코어)가 이미 커밋한 코드를 근거로 정리한 제안서다.
-> "송우와 agent 계약 경계 확정 — 우석·소라" 액션의 논의 자료로 쓴다. 아래 **§4 확정 필요 결정**이 정해지면 FINAL로 승격한다.
+> 상태: **DRAFT v2 — 2026-07-22 로컬 E2E 검증 반영.** 초안 v1(07-10 코드 기준)이 전제했던
+> "Worker 없음 · 인메모리 · 즉시 카드(동기)"는 검증 결과 모두 바뀌었다(§2.5). 그에 맞춰
+> 방향(§3)·컨텍스트 설계(§4)·Gateway 설계(§5)를 다시 썼다.
 >
 > 소유 경계: **agent-api 코어(엔드포인트·스키마·생성 로직) = 송우/LLM팀**, **연동(Gateway·계약·AI 로그) = 소라**, **창구 = 우석**.
 
 ---
 
-## 1. 이 문서가 다루는 범위
+## 1. 범위와 아키텍처 원칙
 
-- service-api(Spring, 영현/우석) 가 agent-api(FastAPI, 송우) 를 **어떤 규약으로 호출하는지**.
-- 그 사이 다리인 **AgentGateway(소라, Spring 쪽)** 의 호출·에러·타임아웃 규약.
-- **AI 로그** 를 무엇으로/어디에 남기고 관리자 화면(admin-web, 소라)이 무엇을 읽는지.
-- 아키텍처 원칙(팀 지도 기준): **agent-api·db 는 내부 전용, 프론트는 agent 직접 호출 금지.** 프론트 → nginx → next/spring 만 외부 노출. 따라서 **agent-api 를 호출하는 주체는 항상 Spring** 이다.
+- service-api(Spring, 영현/우석)가 agent-api(FastAPI, 송우)를 **어떤 규약으로 호출하는지**.
+- 그 사이 다리인 **AgentGateway(소라, Spring 쪽)**의 호출·변환·에러·타임아웃 규약.
+- **AI 로그**를 무엇으로/어디에 남기고 관리자 화면(admin-web, 소라)이 무엇을 읽는지.
+- **호출 방향은 service → agent 단방향**(송우 가이드 §1). agent-api는 service를 절대 호출하지 않는다.
+  완성 콘텐츠도 **service-worker가 폴링으로 당겨가는 Pull 방식**이다. → service 쪽에 "agent가 부를 수신 엔드포인트"는 필요 없다.
+- agent-api·db는 **내부 전용**, 프론트의 agent 직접 호출 금지. 따라서 **agent-api를 부르는 주체는 항상 Spring**이다.
 
-이 문서는 agent-api **내부 구현을 규정하지 않는다.** 내부 구현은 송우 소유다.
+이 문서는 agent-api 내부 구현을 규정하지 않는다(송우 소유). 규정하는 것은 **경계(계약)와 Spring 쪽 Gateway 설계**다.
 
 ---
 
-## 2. 지금 실제로 있는 것 (송우 커밋 코드 기준, 사실)
+## 2. 지금 실제로 있는 것 (2026-07-22 검증)
 
-> 아래는 추정이 아니라 `bambi-agent-api` 커밋 `3d5aa7f ✨ Implement FastAPI MVP routes` 의 실제 코드다.
-
-### 2.1 경로 규약
-- 내부 API Prefix: **`/internal/v1`** (`API_PREFIX` 환경변수로 변경 가능, 기본값 `/internal/v1`).
+### 2.1 경로·헤더 규약
+- 내부 API Prefix: **`/internal/v1`** (`API_PREFIX`로 변경 가능).
 - 시스템 엔드포인트는 prefix 없이 `/system/*`.
-- 추적 헤더: `X-Request-ID`, `X-Trace-ID` (없거나 형식 오류면 agent-api 가 생성).
+- 추적 헤더: `X-Request-ID`, `X-Trace-ID` (없으면 agent가 생성). **Gateway가 전파한다.**
+- 내부 인증: 현재 없음(내부망 전제). 배포 전 협의(§7).
 
-### 2.2 시스템 API
-| Method | Path | 설명 |
-|---|---|---|
-| GET | `/system/live` | 프로세스 생존 |
-| GET | `/system/ready` | 컴포넌트 준비 상태 (준비 안 되면 503 `SERVICE_NOT_READY`) |
-| GET | `/system/version` | 앱 이름·버전·환경 |
-
-### 2.3 Service API 연동 (Spring → agent-api) — **전부 비동기 Job 방식**
-| Method | Path | 성공 | 설명 |
+### 2.2 Service → agent 연동 엔드포인트 (전부 비동기 Job)
+| Method | Path | 성공 | 용도 |
 |---|---|---:|---|
-| PUT | `/internal/v1/users/{user_id}/context` | 200 | 사용자 컨텍스트 upsert (버전 역행 시 409 `STALE_CONTEXT_VERSION`) |
-| POST | `/internal/v1/users/{user_id}/wiki-sources/clippings` | 202 | 웹 클리핑 → Job 등록 |
-| POST | `/internal/v1/users/{user_id}/wiki-sources/urls` | 202 | **URL 저장 → Job 등록** |
-| POST | `/internal/v1/users/{user_id}/wiki-sources/content-marks` | 202 | 위키마킹 → Job 등록 |
-| POST | `/internal/v1/users/{user_id}/generations` | 202 | **밤비 콘텐츠 생성 → Job 등록** |
-| GET | `/internal/v1/jobs/{job_id}` | 200 | Job 상태·진행률 |
-| GET | `/internal/v1/jobs/{job_id}/result` | 200 | 완료 결과 (미완료면 409 `JOB_RESULT_NOT_READY`) |
+| PUT | `/users/{id}/context` | 200 | 사용자 컨텍스트 upsert. 버전 역행 시 409 `STALE_CONTEXT_VERSION` |
+| POST | `/users/{id}/wiki-sources/clippings` | 202 | 웹 클리핑 → Job 등록 |
+| POST | `/users/{id}/wiki-sources/urls` | 202 | URL 저장 → Job 등록 |
+| POST | `/users/{id}/generations` | 202 | 콘텐츠 생성(Report Builder) → Job 등록 |
+| GET | `/jobs/{job_id}` | 200 | Job 상태·진행률 |
+| GET | `/jobs/{job_id}/result` | 200 | 완료 결과 (미완료면 409 `JOB_RESULT_NOT_READY`) |
+| POST | `/publish-snapshot-batches/claim` | 200 | **(service-worker) 완성 카드 Pull.** `lease_seconds≥30` |
+| POST | `/publish-snapshot-batches/{id}/ack` | 200 | (service-worker) 처리 완료 ACK |
 
-응답(`202 Accepted`) 예시 — `AcceptedJobResponse`:
+`202 Accepted` 응답(`AcceptedJobResponse`):
 ```json
-{ "job_id": "…", "feature_id": "SVC-008", "status": "queued", "request_id": "…", "created_at": "…" }
+{ "job_id":"…", "feature_id":"SVC-008", "status":"queued", "request_id":"…",
+  "created_at":"…", "generation_request_id":"…" }
 ```
 
-### 2.4 응답·에러 포맷 (agent-api 현재 방식)
-- **성공**: `{success, data, error}` 래핑 **없이** Pydantic 모델을 그대로 반환.
-- **에러**: 공통 `ErrorResponseSchema` —
-  ```json
-  { "code": "JOB_NOT_FOUND", "message": "…", "request_id": "…", "retryable": false, "details": [] }
-  ```
-- 검증 실패: `422` + `code: "REQUEST_VALIDATION_ERROR"`.
-- 정의된 에러 코드: `REQUEST_VALIDATION_ERROR(422)`, `STALE_CONTEXT_VERSION(409)`, `JOB_NOT_FOUND(404)`, `JOB_RESULT_NOT_READY(409)`, `PUBLISH_SNAPSHOT_NOT_FOUND(404)`, `PUBLISH_SNAPSHOT_MISMATCH(409)`, `SERVICE_NOT_READY(503)`, `INTERNAL_SERVER_ERROR(500)`.
+> 위키마킹(`content-marks`)은 Handler 미구현으로 현재 `501`. 연동 보류(송우 가이드 §3.7).
 
-> ⚠️ 이 포맷은 팀 공통 규약 `{ success, data, error }` + 코드표(`AUTH_INVALID_TOKEN`, `VALIDATION_ERROR` 등)와 **다르다.** → §4 GAP-2.
+### 2.3 응답·에러 포맷 (agent 현재 방식)
+- **성공**: `{success,data,error}` 래핑 없이 Pydantic 모델을 그대로 반환.
+- **에러**: 공통 `{ "code","message","request_id","retryable","details":[] }`.
+- 검증 실패: `422` `REQUEST_VALIDATION_ERROR`.
+- 주요 코드: `REQUEST_VALIDATION_ERROR(422)`, `USER_CONTEXT_REQUIRED(409)`, `STALE_CONTEXT_VERSION(409)`,
+  `JOB_NOT_FOUND(404)`, `JOB_RESULT_NOT_READY(409)`, `INVALID_JOB_PAYLOAD`, `PUBLISH_SNAPSHOT_MISMATCH(409)`,
+  `PUBLISH_BATCH_LEASE_EXPIRED(409)`, `SERVICE_NOT_READY(503)`, `INTERNAL_SERVER_ERROR(500)`.
 
-### 2.5 현재 한계 (사실, 미팅에서 반드시 공유)
-- `AgentApiMvpService` 는 **인메모리 저장소**다. 프로세스 재시작 시 컨텍스트·Job·결과가 사라진다.
-- **Job 을 완료(`COMPLETED`)로 바꾸는 Worker 가 아직 없다.** `complete_job()` 을 호출하는 코드가 저장소에 없어서, 지금 `/generations` 를 호출하면 Job 은 `queued` 에 머물고 `/jobs/{id}/result` 는 계속 `409 JOB_RESULT_NOT_READY` 를 반환한다.
-- 생성 기능 함수(`svc_008` 등)는 `raise NotImplementedError` **stub** 이다.
-- **결론: 지금 agent-api 만으로는 "즉시 카드 1장" E2E 가 불가능하다.** 무엇으로 이 갭을 메울지가 이 계약의 핵심.
+> ⚠️ 팀 공통 `{success,data,error}`와 **다르다.** 변환 경계 = Gateway(§5).
 
----
+### 2.4 검증된 실제 동작 (초안 v1 정정)
+초안 v1이 "미구현"이라 적었던 것은 지금 **전부 동작한다.** 07-22 로컬에서 직접 확인:
 
-## 3. P0 목표가 요구하는 것 (팀 지도 기준)
+- ✅ 저장소는 **PostgreSQL 17 + pgvector**(인메모리 아님). 재시작해도 데이터 유지.
+- ✅ **Worker 있음** — `bambi-generation`(리포트 생성), `personal-wiki`(위키 빌드) 등. Job이 실제로 `completed` 됨.
+- ✅ **E2E 카드 생성 검증** — `PUT context → POST generations(202) → job 실행 → generated-contents` 로
+  실제 LLM 카드(title·summary·body·citations) 생성됨. 본문에 `[P1][P2][P3]`(개인 위키) 인라인 인용 확인.
+  (외부 문서 `[G1..]`는 계약상 존재하나 이번 실행에선 미발생 — 외부 수집이 결과를 안 준 것으로 보임. 별도 확인 필요.)
+- ✅ **service-worker Pull 검증** — seed 발행 Snapshot 3건을 `publish-snapshot-batches/claim`으로 그대로 수신.
 
-팀 지도 1차 MVP 흐름: `④ Mock Agent → ⑤ 관심사·요약 → ⑥ 즉시 카드 1장`.
+**⚠️ 새로 발견한 전제조건:** 생성(`generations`)은 **컨텍스트만으론 실패**한다. 개인 위키/관심사 같은
+"재료"가 없으면 즉시 `INVALID_JOB_PAYLOAD`(retryable:false)로 떨어진다(OpenAI 호출 전). 즉 파이프라인은
+**저장 → 위키 빌드 → 관심사 추출 → 생성** 순서를 전제한다. Gateway/플로우가 이 순서를 지켜야 한다.
 
-- **"즉시(즉시 카드 1장)"** = 사용자가 URL/본문을 저장하면 그 요청 흐름 안에서 카드가 바로 나와야 한다.
-- 브리핑 7-5 확정 응답 포맷(Mock 이 만들어야 할 결과):
-  ```json
-  {
-    "summary": "저장한 자료의 핵심 요약입니다.",
-    "interests": ["AI Agent", "LangGraph", "RAG"],
-    "card": {
-      "title": "저장한 자료 기반 브리핑 카드",
-      "summary": "이 카드는 사용자가 저장한 URL/본문을 기반으로 생성되었습니다.",
-      "whyForYou": "최근 저장한 자료에서 AI Agent 관련 관심사가 추론되었기 때문입니다.",
-      "sourceUrl": "{input.url}"
-    }
-  }
-  ```
-- 이 결과가 **관심사·요약(agent schema) + 카드(service schema) + AI 로그** 로 저장되어 피드/관리자 화면에 뜬다.
+> 파이프라인은 "Bambi 생성"에서 **Report Builder**로 리네임됨(마이그레이션 0006). 콘텐츠 유형 예: `article`, `interest_news_card`(기본).
 
 ---
 
-## 4. 확정 필요 결정 (← 미팅 안건, 이게 이 문서의 핵심)
+## 3. 확정된 방향 (초안 v1 GAP 재정리)
 
-> 각 항목은 소라 제안 + 결정 주체를 표기했다. 확정되면 값 채우고 FINAL 로 올린다.
+| # | 항목 | v2 상태 |
+|---|---|---|
+| GAP-1 | 동기 vs 비동기 | ✅ **해소 — 완전 비동기 + Pull 확정(송우 07-22).** 동기 엔드포인트 안 둠. 초안의 (A) 동기안 폐기. Gateway가 비동기를 흡수. |
+| GAP-2 | `{success,data,error}` 변환 경계 | **제안 유지 — Gateway 한 곳에서 변환**(§5.3). 영현(공통 응답) 확인 필요. |
+| GAP-3 | 생성 결과 스키마 매핑 | **갱신 — 실제 스키마 대조 완료(§3.1).** 핵심 불일치 2개: `why_for_you`(agent 미생성)·`body`(service 컬럼 없음). |
+| GAP-4 | 저장 스키마 분담 | 관심사·요약·위키 = agent schema(송우). 카드 최종본·피드·AI 로그 = service schema(영현). 송우·영현 확정. |
 
-### GAP-1. P0 는 동기인가 비동기인가? **(가장 중요)**
-- 현실: 팀 지도는 "즉시 카드"(동기 느낌) ↔ 송우 코드는 비동기 Job + Worker 미구현.
-- **소라 제안(택1):**
-  - **(A) 동기 처리 엔드포인트를 P0 한정으로 추가** — 예: `POST /internal/v1/users/{user_id}/generations:sync` 또는 기존 `generations` 가 `?mode=sync` 일 때 결과까지 담아 `200` 반환. Spring 은 한 번 호출로 카드를 받는다. Worker/Kafka 는 P1.
-  - **(B) 비동기 유지 + Spring 이 짧게 폴링** — `202` 받고 `/jobs/{id}/result` 를 즉시 재조회. Worker(동기 실행이라도) 를 P0 에 넣어 Job 을 바로 `COMPLETED` 로. Gateway 가 폴링을 흡수해 영현 저장 API 에는 동기처럼 보이게.
-  - **소라 추천: (A).** P0 범위가 "Kafka 비동기는 P1" 이므로 폴링/Worker 인프라를 P0 에 넣는 건 과함. 단 **엔드포인트 신설은 송우 코어 영역** → 송우가 넣거나, 송우 위임 시 소라가 넣는다.
-- **결정 주체: 송우(코어) + 우석(창구). 소라 입력.**
+### 3.1 카드 스키마 매핑 (agent 결과 → service 저장) — 실제 코드 대조
+service `service.cards` + `service.card_sources`(V1) ↔ agent `generated-contents` 카드:
 
-### GAP-2. 응답 포맷 — 공통 규약 `{success,data,error}` 경계는 어디서 변환?
-- agent-api = `{code,message,request_id,retryable,details}` / 팀 공통 = `{success,data,error}`.
-- **소라 제안:** agent-api 는 **내부 전용**이니 지금 포맷 유지. **AgentGateway(소라, Spring)가 경계에서 변환** — agent-api 응답을 받아 프론트로 나갈 땐 Spring 공통 `{success,data,error}` 로 감싼다. 에러 코드도 Gateway 에서 팀 코드표로 매핑(예: agent `INTERNAL_SERVER_ERROR` → `AGENT_UNAVAILABLE` 등).
-- **결정 주체: 소라 + 영현(Spring 공통 응답).**
+| service (`cards`) | agent 카드 | 매핑 | 결정 필요 |
+|---|---|---|---|
+| `title` | `title` | 그대로 | — |
+| `summary` | `summary` | 그대로 | — |
+| `why_for_you` | (없음) | agent가 안 만듦 | **누가 채우나:** agent가 생성 추가 vs Gateway가 관심사 기반 파생 vs null 허용 |
+| (컬럼 없음) | `body` | service 카드에 본문 컬럼 없음 | **agent 본문을 버릴지 / `cards`에 `body` 추가할지** |
+| `card_sources[{title,url}]` | `citations[{title,url,reference}]` | citation → source | P/G 구분(`reference`)은 저장 시 소실 — 필요하면 컬럼 추가 |
 
-### GAP-3. 생성 결과 스키마 매핑 — 7-5 포맷 ↔ 송우 스키마
-- 송우 `GenerationRequest` = `{ idempotency_key, topic, content_type, language }`. `JobResultResponse.result` 는 자유 `dict`.
-- 7-5 는 `{ summary, interests[], card{title,summary,whyForYou,sourceUrl} }`.
-- **소라 제안:** `JobResultResponse.result` (또는 GAP-1(A) 동기 응답 body) 안에 7-5 구조를 그대로 담는다. 저장 API 입력(URL/본문)이 `topic`/`payload` 중 어디로 들어갈지 송우와 필드 확정 필요.
-- **결정 주체: 송우(코어 스키마) + 소라.**
-
-### GAP-4. 저장 주체·스키마 분리 — 누가 무엇을 어디에 쓰나
-- 팀 지도: 1개 postgres, **service schema(원본/최종/로그)** ↔ **agent schema(요약/관심사/임베딩)**.
-- **소라 제안:** 관심사·요약·임베딩 = agent schema(송우). 카드 최종본·피드·사용자행동 = service schema(영현). **AI 로그**(입력→결과)는 §5 참조.
-- **결정 주체: 송우 + 영현. 소라 조율.**
+- 참고: 기존 동기 계약의 `BookmarkProcessResponse{summary, interests[], tags[], confidence}` 중 `confidence`·`tags`는 agent 실제 결과에 대응이 불명확 → §3.1과 함께 확정.
+- **결정 주체: 송우(agent 생성 스키마) + 영현(service 카드) + 소라(Gateway 매핑).**
 
 ---
 
-## 5. AgentGateway 규약 (소라, Spring 쪽) — 초안
+## 4. 컨텍스트 동기화 설계 (`PUT /users/{id}/context`) — 착수 지점
 
-> GAP-1 결정에 따라 (A)/(B) 중 하나로 확정. 아래는 (A) 동기 기준 초안.
+> **왜 최우선인가:** 컨텍스트 없는 사용자의 생성 요청은 `USER_CONTEXT_REQUIRED`/`INVALID_JOB_PAYLOAD`로
+> 거부된다(§2.4). **가입 플로우에 반드시 포함**해야 이후 모든 agent 기능이 동작한다.
 
-- **위치:** service-api(Spring). 영현 저장 API 가 동기로 호출하는 컴포넌트.
-- **호출:** `POST {AGENT_API_BASE}/internal/v1/users/{userId}/generations`(동기 모드) — body 에 URL/본문·idempotency_key·topic.
-- **헤더:** `X-Request-ID`, `X-Trace-ID` 전파. (내부 인증은 MVP 제외 — 내부망 한정.)
-- **타임아웃:** 제안 **3초**(Mock 이라 빠름). 초과 시 `AGENT_TIMEOUT` 로 매핑, 저장 자체는 성공시키되 카드는 "생성 대기"로 폴백할지 영현과 합의.
-- **실패 처리:** agent-api 5xx/타임아웃 → Gateway 가 팀 공통 에러(`AGENT_UNAVAILABLE`)로 변환, 저장 트랜잭션 처리 정책(롤백 vs 카드만 지연)은 영현과 합의.
-- **응답 검증:** 받은 JSON 이 7-5 스키마(summary/interests/card) 를 만족하는지 Gateway 에서 검증 후 저장.
+### 4.1 언제 호출하나 (Spring 훅)
+1. **회원가입 성공 직후 1회 (필수)** — `context_version=1`로 최초 등록.
+2. **설정 변경 시마다** — plan(무료↔유료)·선호 언어·개인화 on/off·차단 관심사/소스 변경.
+
+### 4.2 요청 필드 매핑 (service-db 원천 → agent context)
+| agent 필드 | 필수 | service 원천 | 비고 |
+|---|---|---|---|
+| `context_version` | O | 사용자별 **단조 증가 정수** | service-db가 원천. 아래 §4.3 |
+| `plan` | O | `user.plan` | `free` \| `paid` |
+| `preferred_language` | X | 사용자 설정 | 기본 `ko` |
+| `personalization_enabled` | X | 사용자 설정 | 기본 `true` |
+| `blocked_interest_ids` | X | `user_context_snapshots`의 삭제된 관심사 | 송우 확인(07-21): 사용자가 삭제한 관심사 참조. 현재 미지정(빈 배열), 삭제 기능 붙으면 채움 |
+| `blocked_source_ids` | X | 위와 동일(삭제된 소스) | 동일 |
+
+### 4.3 버전 관리 (핵심)
+- `context_version`은 **사용자별로 단조 증가**해야 한다. 같거나 작은 값 재전송 → `STALE_CONTEXT_VERSION`.
+- **제안:** service-db 사용자 레코드에 `agent_context_version` 컬럼(정수). 가입 시 1, 컨텍스트 변경마다 +1 후 그 값으로 PUT.
+- `STALE_CONTEXT_VERSION(409)`은 **오류가 아니라 "이미 최신"** 신호 → Gateway가 삼키고 성공 처리(§5.4).
+
+### 4.4 순서·실패 정책
+- **순서 불변식:** 특정 사용자의 `generations` 이전에 그 사용자의 `context`가 반드시 한 번 반영돼 있어야 한다.
+- **실패 시(가입 중 agent 다운):** 가입은 사용자向 흐름, agent는 내부 비필수 → **가입 자체를 막지 않는다.**
+  사용자를 "agent 미동기(agent_synced=false)"로 표시하고 **재동기(backfill) 큐/재시도**로 나중에 PUT. 재동기 전엔 그 사용자 생성 요청을 보류.
+- (검증 완료: `PUT context` → 200 `feature_id:"SVC-001"`, 필드 그대로 echo.)
 
 ---
 
-## 6. AI 로그 계약 (소라) — 초안
+## 5. AgentGateway 설계 (소라, service-api)
 
-- **무엇을:** Agent 처리 1건당 `{ 입력(url/본문·userId·요청ID), 출력(summary/interests/card), 모델/모드(mock), 소요시간, 성공여부, 에러코드 }`.
-- **어디에:** service schema 의 AI 로그 테이블(관리자 화면이 Spring 통해 조회하므로 service 쪽이 자연스러움) vs agent schema. → GAP-4 와 함께 확정.
-- **누가 남기나:** **AgentGateway(소라)** 가 호출 전후로 남기는 것을 기본안으로 제안(agent-api 내부 실패도 Gateway 관점에서 기록 가능).
-- **관리자 API(소라):** `GET /api/admin/ai-logs`(Spring) — 관리자 권한, 페이지네이션, 팀 공통 `{success,data,error}`. admin-web(소라)이 이 API 를 그린다.
+### 5.1 기존 Spring 계약과의 충돌 (이 설계의 핵심 결정)
+service-api엔 이미 **동기** `AgentClient` 인터페이스가 있다(`com.bambi.service.agent`, 소라가 P1에서 실제 구현으로 교체 예정):
+- `processBookmark(req) → {summary, interests[], tags[], confidence}` — 즉시 반환
+- `generateCards(req) → {cards[{title,summary,whyForYou,sources[]}]}` — 즉시 반환
+
+인터페이스 주석: *"이 인터페이스(=계약)만 지키면 도메인 코드는 안 건드림."* 즉 **영현/우석 의도 = 동기 유지, 속만 FastAPI로.**
+그런데 agent-api는 **비동기 202+Pull**(§3). 두 방식이 충돌한다. → **택1 필요:**
+
+- **(B) 동기 shim** — `AgentClient` 인터페이스 유지. Gateway가 내부에서 `generations(202)` 등록 후 `jobs/{id}/result`를 **블로킹 폴링**해 카드까지 만들어 동기 반환. 도메인 코드 무변경. 단 (1) 저장 요청이 LLM 수십 초를 대기 (2) service-worker Pull 경로와 이중화.
+- **(C) 비동기 전환** — 저장은 즉시 "생성 중" 반환, 생성은 트리거만, **카드는 service-worker claim이 나중에 적재 → 피드 갱신**. agent 실제 설계와 정합. 단 `AgentClient` 인터페이스·저장→카드→피드 흐름 변경(영현 협의) 필요.
+- **소라 관점:** 장기적으론 (C)가 정합(Pull이 이미 구현됨). P0 데모가 "즉시 카드"를 요구하면 (B)로 시작해 (C)로 이행하는 절충도 가능. **결정 주체: 소라·영현·우석·송우.**
+
+> 또한 **동기 메서드 1개 = agent 다단계 파이프라인**이다. `processBookmark` → (클리핑 저장 → 위키 빌드 → 관심사 추출) 여러 Job, `generateCards` → (generations → 완성 대기). 1:1 아님 — Gateway가 이 다단계를 조립해야 한다.
+
+### 5.1b 성격 — (C) 기준: "비동기 어댑터", 카드를 기다리지 않는다
+아래 흐름도는 **(C) 비동기 전환**을 택한 경우다. Gateway는 **호출을 던지고 즉시 반환**하고, 카드는
+나중에 **service-worker의 claim 루프**가 service-db로 당겨온다. Gateway의 일은 **호출·헤더 전파·응답 변환·AI 로그**까지다.
+
+```
+[가입]        UserService ──▶ AgentGateway.putContext()           ──▶ PUT  /context      (200)
+[저장]        SourceService ─▶ AgentGateway.ingestClipping()/Url() ──▶ POST /wiki-sources (202 job_id)
+[생성 트리거] Scheduler ──────▶ AgentGateway.requestGeneration()   ──▶ POST /generations   (202 job_id)
+[수신(별도)]  service-worker ─▶ (publish-snapshot-batches claim/ack 폴링 루프) ──▶ service-db 저장 → 피드/관리자
+```
+> 저장/생성 응답은 202+job_id일 뿐 "카드"가 아니다. Gateway 호출자는 job_id만 받고 흐름을 계속한다.
+
+### 5.2 위치·구성 (제안)
+- 패키지 `…​.agent` — 인터페이스 `AgentGateway` + 구현 `AgentGatewayClient`(Spring `RestClient`/`WebClient`).
+- 설정: `AGENT_API_BASE`(내부 주소), 타임아웃, 재시도.
+- 호출자: `UserService`(컨텍스트), `SourceService`(저장), 생성 `Scheduler`. **HTTP 세부는 Gateway 안에만.**
+
+### 5.3 응답·에러 변환 경계 (GAP-2)
+- **원칙: 변환은 Gateway 한 곳.** agent `{code,message,retryable,…}`를 받아
+  - 성공 → 도메인 결과(예: `AgentJobRef{jobId,status}`) 반환. 바깥 컨트롤러는 기존 팀 공통 `{success,data,error}` advice로 감싼다.
+  - 실패 → agent code를 **팀 코드로 매핑한 도메인 예외**로 던짐. 전역 예외 핸들러가 `{success:false,error:{code,message}}`로 변환.
+- **에러코드 매핑(제안):**
+  | agent | HTTP | Gateway 처리 | 팀 코드 |
+  |---|---:|---|---|
+  | `INTERNAL_SERVER_ERROR`/5xx/타임아웃 | 5xx | 재시도 후 실패 | `AGENT_UNAVAILABLE`(retryable) |
+  | `SERVICE_NOT_READY` | 503 | Backoff 재시도 | `AGENT_UNAVAILABLE` |
+  | `STALE_CONTEXT_VERSION` | 409 | **성공 처리(삼킴)** — 이미 최신 | — |
+  | `USER_CONTEXT_REQUIRED` | 409 | 컨텍스트 먼저 PUT 후 재시도 | 내부 정합성 로그 |
+  | `REQUEST_VALIDATION_ERROR`/`INVALID_JOB_PAYLOAD` | 422/– | 우리 요청 결함 → 로그 | `AGENT_BAD_REQUEST` |
+  | `JOB_RESULT_NOT_READY` | 409 | 비동기 정상 — 나중에 polling/claim | — |
+
+### 5.4 타임아웃·재시도
+- 호출은 202 반환용 가벼운 요청 → 타임아웃 **제안 3s**(연결 실패·5xx만 걸림). LLM 대기 아님.
+- `retryable:true`(5xx/503) → 짧은 Backoff 재시도(최대 2회). 그 외 즉시 실패.
+- **가입/저장은 agent 장애로 막지 않는다** — 실패해도 사용자 흐름은 성공시키고, agent 반영은 재시도 큐로(§4.4).
+
+### 5.5 AI 로그 연결점
+- Gateway는 각 호출 **전후를 감싸 AI 로그 1건**을 남기기 좋은 지점(§6). 호출 성공/실패·소요시간·요청ID·에러코드를 여기서 기록.
 
 ---
 
-## 7. 미확정 → 다음 액션
+## 6. AI 로그 계약 (소라)
+
+테이블은 **이미 V1에 존재**한다(신설 아님). `MockAgentClient` 주석도 *"DB AI 로그(`ai_request_logs`/`ai_response_logs`) 적재는 실제 Gateway(P1, 소라)가 붙인다"*고 못박음. 즉 이 적재 코드가 소라 Gateway의 일이다.
+
+- **`service.ai_request_logs`** (요청): `user_id`, `endpoint`(예: `/agent/bookmarks/process` 또는 실제 agent 경로), `request_body`(JSONB), `created_at`.
+- **`service.ai_response_logs`** (응답): `request_id`(FK), `status_code`, `response_body`(JSONB), `latency_ms`, `created_at`.
+- **누가·언제:** Gateway가 agent 호출 **직전 request 로그 1건 → 응답/실패 시 response 로그 1건**(같은 request_id) 기록(§5.5). latency_ms·status_code는 여기서 자연스럽게 나옴.
+- **비동기 주의:** (C) 전환 시 "요청 시점"과 "카드 완성 시점(service-worker claim)"이 분리된다. 요청/즉시응답은 위 두 테이블로, **완성 결과는 claim 처리 시점에 별도 기록**하고 **`job_id`(또는 request_body 내 식별자)로 연결**한다. → 완성 로그를 어느 테이블에 남길지(응답 로그 확장 vs 별도)는 영현과 확정(§7).
+- **관리자 API(소라, 구현·머지 완료):** `GET /api/admin/ai-logs`(ADMIN, 페이지네이션, 팀 공통 응답). admin-web이 소비. **단 현재 적재 코드가 없어 목록은 빈 상태가 정상** — Gateway 적재가 붙어야 채워진다.
+
+---
+
+## 7. 남은 확정 사항 → 다음 액션
 
 | # | 질문 | 결정 주체 | 상태 |
 |---|---|---|---|
-| GAP-1 | P0 동기 vs 비동기, 동기 엔드포인트 누가 추가 | 송우·우석 | ⬜ |
-| GAP-2 | `{success,data,error}` 변환 경계 = Gateway 확정 | 소라·영현 | ⬜ |
-| GAP-3 | 저장 입력→topic/payload, result 에 7-5 담기 | 송우·소라 | ⬜ |
-| GAP-4 | 관심사/요약/카드/로그 저장 스키마 분담 | 송우·영현 | ⬜ |
-| — | AI 로그 위치·주체·관리자 API 시그니처 | 소라·영현 | ⬜ |
+| **동기 vs 비동기 전환** | **기존 동기 `AgentClient` 유지(B) vs 비동기 전환(C)** — 이 문서 최대 안건(§5.1) | 소라·영현·우석·송우 | ⬜ |
+| GAP-3 | 카드 매핑(§3.1): `why_for_you`(agent 미생성)·`body`(service 컬럼 없음) 처리 | 송우·영현·소라 | ⬜ |
+| GAP-4 | 관심사/요약/카드/로그 저장 스키마 분담 확정 | 송우·영현 | ⬜ |
+| 컨텍스트 | `agent_context_version` 컬럼·재동기 큐 도입 | 소라·영현 | ⬜ |
+| 변환 경계 | Gateway = `{success,data,error}` 변환 지점 확정 | 소라·영현 | ⬜ |
+| 순서 전제 | 생성 전 위키/관심사 필요 — 저장→생성 트리거 시점 설계 | 소라·송우 | ⬜ |
+| 내부 인증 | 무인증 → 공유 시크릿 vs 네트워크 격리 | 전원 | ⬜(배포 전) |
+| 차단 ID | `blocked_*_ids` 실제 연결(삭제 기능) | 소라·송우 | ⬜(개인화 고도화) |
 
-**다음 스텝:** 이 초안을 우석에게 전달 → 송우와 GAP-1·3 확정 → 확정값 반영해 FINAL 승격 → AgentGateway/AI 로그 구현 착수.
+**다음 스텝:** 이 v2를 우석·송우·영현에 공유 → GAP-3/4·변환경계 확정 → AgentGateway·재동기 큐·AI 로그 요청기록 구현 착수.
