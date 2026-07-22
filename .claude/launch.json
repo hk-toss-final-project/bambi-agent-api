@@ -6,12 +6,6 @@
       "runtimeExecutable": "uv",
       "runtimeArgs": ["run", "uvicorn", "app.main:app", "--port", "8000"],
       "port": 8000
-    },
-    {
-      "name": "assistant-web",
-      "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "uvicorn", "app.assistant.main:app", "--port", "8100"],
-      "port": 8100
     }
   ]
 }

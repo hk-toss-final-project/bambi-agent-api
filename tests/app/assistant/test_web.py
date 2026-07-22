@@ -2,7 +2,7 @@
 
 from fastapi.testclient import TestClient
 
-from app.assistant.main import create_web_app
+from app.main import create_app
 
 
 def test_render_markdown_converts_links_and_bullets() -> None:
@@ -141,7 +141,7 @@ def test_render_agent_section_empty_when_no_trace() -> None:
 
 def test_form_page_renders() -> None:
     """루트 페이지는 사용자·키워드 입력 폼을 반환한다."""
-    client = TestClient(create_web_app())
+    client = TestClient(create_app())
     response = client.get("/")
 
     assert response.status_code == 200
@@ -194,7 +194,7 @@ def test_search_renders_both_sections(monkeypatch) -> None:
 
     monkeypatch.setattr(web_module, "assist_daily_agent", lambda keyword, *, user_id: fake_result)
 
-    client = TestClient(create_web_app())
+    client = TestClient(create_app())
     response = client.post("/search", data={"user_id": "minji", "keyword": "전고체"})
 
     assert response.status_code == 200
@@ -227,7 +227,7 @@ def test_search_shows_fallback_mode(monkeypatch) -> None:
 
     monkeypatch.setattr(web_module, "assist_daily_agent", lambda keyword, *, user_id: fake_result)
 
-    client = TestClient(create_web_app())
+    client = TestClient(create_app())
     response = client.post("/search", data={"user_id": "minji", "keyword": "전고체"})
 
     assert response.status_code == 200

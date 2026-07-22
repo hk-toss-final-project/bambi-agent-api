@@ -19,6 +19,7 @@ from psycopg import AsyncConnection
 from agent.report_builder.api import (
     report_004,
     report_005,
+    report_006,
     report_008,
     report_009,
     report_011,
@@ -27,6 +28,8 @@ from agent.report_builder.api import (
     report_020,
     report_021,
     generate_report_content,
+    collect_live_context,
+    select_generation_context,
 )
 from agent.state import ReportGenerationState, PersonalWikiBuildState
 from agent.wiki_builder.api import classify_source_for_wiki, wba_003
@@ -231,12 +234,37 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 payload={"implementation": lambda: contextualized},
             )
         )
-        combined = await report_005(
+        personal_documents = personal.data.get("result", [])
+        # REPORT-005: 실시간 외부 자료(뉴스 RSS·YouTube·Reddit)를 키워드 비서로 수집한다.
+        # 이전에는 개인 Wiki 결과를 그대로 흘려보내는 패스스루라, 저장된 문서만 근거가 됐다.
+        # 네트워크·LLM이 걸리는 동기 함수라 Transaction 밖 스레드에서 실행한다.
+        live = await report_005(
             FeatureRequest(
                 request_id=state["job_id"],
                 actor_id="report-generation-graph",
                 user_id=state["user_id"],
-                payload={"implementation": lambda: personal.data.get("result", [])},
+                payload={
+                    "implementation": lambda: to_thread(
+                        collect_live_context,
+                        state["topic"],
+                        state["user_id"],
+                        model=state["model"],
+                    )
+                },
+            )
+        )
+        # REPORT-006: 개인 Wiki 맥락과 실시간 근거를 합쳐 생성에 넣을 자료를 고른다.
+        selected = await report_006(
+            FeatureRequest(
+                request_id=state["job_id"],
+                actor_id="report-generation-graph",
+                user_id=state["user_id"],
+                payload={
+                    "implementation": lambda: select_generation_context(
+                        personal_documents,
+                        live.data.get("result", []),
+                    )
+                },
             )
         )
         personalized = await report_012(
@@ -244,7 +272,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 request_id=state["job_id"],
                 actor_id="report-generation-graph",
                 user_id=state["user_id"],
-                payload={"implementation": lambda: combined.data.get("result", [])},
+                payload={"implementation": lambda: selected.data.get("result", [])},
             )
         )
         contexts = personalized.data.get("result")

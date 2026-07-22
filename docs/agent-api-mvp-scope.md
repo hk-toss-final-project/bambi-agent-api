@@ -76,7 +76,8 @@
 
 - [x] `REPORT-001` 콘텐츠 생성 요청 — 운영 등록 + dev 즉시 실행
 - [x] `REPORT-004` 개인 Wiki 검색
-- [x] `REPORT-005` Global Source 검색
+- [x] `REPORT-005` Global Source 검색 — 키워드 비서(`agent/assistant`)의 실시간 수집(뉴스 RSS·YouTube·Reddit) 연결
+- [x] `REPORT-006` 생성 자료 선별 — 개인 Wiki 맥락 + 실시간 근거를 합쳐 생성 입력을 고른다
 - [x] `REPORT-008` 콘텐츠 요약 생성
 - [x] `REPORT-009` 콘텐츠 본문 생성
 - [x] `REPORT-011` 콘텐츠 Citation 생성 — P1·G1 참조 검증 포함
@@ -206,6 +207,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | REPORT-001 | 콘텐츠 생성 요청 | 사용자와 주제에 맞는 콘텐츠 생성 요청을 처리한다. |
 | REPORT-004 | 개인 Wiki 검색 | 사용자의 관심사와 기존 지식을 검색한다. |
 | REPORT-005 | Global Source 검색 | 최신 외부 자료와 근거를 검색한다. |
+| REPORT-006 | 생성 자료 선별 | 콘텐츠 생성에 사용할 자료를 선별한다. |
 | REPORT-008 | 콘텐츠 요약 생성 | 피드와 미리보기에 사용할 요약을 생성한다. |
 | REPORT-009 | 콘텐츠 본문 생성 | 플랜과 유형에 맞는 본문을 생성한다. |
 | REPORT-011 | 콘텐츠 Citation 생성 | 본문 주장과 참조한 자료를 연결한다. |

@@ -25,9 +25,10 @@ async def report_005(request: FeatureRequest) -> FeatureResult:
     return await execute_feature_implementation(request, feature_id="REPORT-005")
 
 
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def report_006(request: FeatureRequest) -> FeatureResult:
     """[REPORT-006] 생성 자료 선별.
 
     콘텐츠 생성에 사용할 자료를 선별한다.
     """
-    raise NotImplementedError("[REPORT-006] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="REPORT-006")

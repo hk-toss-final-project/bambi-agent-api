@@ -33,8 +33,19 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
 
 def register_routers(application: FastAPI, settings: Settings) -> None:
-    """[SYS-002] 기능 영역별 최상위 API 라우터를 애플리케이션에 등록한다."""
+    """[SYS-002] 기능 영역별 최상위 API 라우터를 애플리케이션에 등록한다.
+
+    API 라우터(`/internal/v1` 등)와 함께, 키워드 비서 웹 UI(`/`, `/search`)를 같은
+    프로세스에 등록한다. 두 실행 경로가 같은 수집·선별 코드를 쓰도록 통합하는
+    과정에서 서버 프로세스도 하나로 합쳤다. UI가 필요 없는 배포에서는
+    `ENABLE_ASSISTANT_UI=false`로 끌 수 있다.
+    """
     application.include_router(build_api_router(settings))
+    if settings.enable_assistant_ui:
+        # 지연 import: UI를 끄면 비서 의존성(feedparser 등)을 로드하지 않는다.
+        from app.assistant.web import assistant_router
+
+        application.include_router(assistant_router)
 
 
 def create_app(

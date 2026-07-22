@@ -16,6 +16,10 @@ class Settings(BaseModel):
     environment: str = Field(default="local", description="실행 환경 이름")
     api_prefix: str = Field(default="/internal/v1", description="내부 API 경로 Prefix")
     docs_enabled: bool = Field(default=True, description="OpenAPI 문서 활성화 여부")
+    enable_assistant_ui: bool = Field(
+        default=True,
+        description="키워드 비서 웹 UI(/ , /search)를 같은 프로세스에 등록할지 여부",
+    )
     enable_dev_agent_api: bool = Field(
         default=False,
         description="개발용 Agent 동기 실행 API 활성화 여부",
@@ -115,6 +119,7 @@ def load_settings() -> Settings:
         environment=os.getenv("APP_ENV", "local"),
         api_prefix=os.getenv("API_PREFIX", "/internal/v1"),
         docs_enabled=_boolean_env("DOCS_ENABLED", True),
+        enable_assistant_ui=_boolean_env("ENABLE_ASSISTANT_UI", True),
         enable_dev_agent_api=_boolean_env("ENABLE_DEV_AGENT_API", False),
         dev_agent_api_token=_optional_env("DEV_AGENT_API_TOKEN"),
         dev_agent_timeout_seconds=_integer_env("DEV_AGENT_TIMEOUT_SECONDS", 180),

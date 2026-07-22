@@ -1,11 +1,18 @@
 # Report Builder Agent API
 
-이 저장소는 서버 두 개로 구성됩니다.
+이 저장소는 **서버 한 개**로 구성됩니다.
 
-| | 파일 | 포트 | 상태 |
+| | 파일 | 포트 | 제공 |
 |---|---|---|---|
-| **Agent API + LLM Wiki Graph UI** | `app/main.py` | 8000 | ✅ MVP 핵심 파이프라인 동작 — 클리핑/URL → LLM Wiki → 관심사 → 외부 수집 → Report Builder 생성 → 발행 Snapshot |
-| **키워드 비서 웹 UI** | `app/assistant/main.py` | 8100 | ✅ 동작 — 독립 실행 데모 앱 |
+| **Agent API** | `app/main.py` | 8000 | API(`/internal/v1/**`) + LLM Wiki Graph UI + 키워드 비서 웹 UI(`/`, `/search`) |
+
+MVP 핵심 파이프라인: 클리핑/URL → LLM Wiki → 관심사 → 외부 수집 → Report Builder 생성 → 발행 Snapshot.
+
+키워드 비서(`agent/assistant`)의 실시간 수집·선별은 Report Builder의 `REPORT-005`(Global
+Source 검색)·`REPORT-006`(생성 자료 선별)에 연결되어 있습니다. 웹 UI와 Main API가 **같은
+수집·선별 코드**를 쓰므로 두 경로의 결과가 갈라지지 않습니다.
+
+비서 UI가 필요 없는 배포에서는 `ENABLE_ASSISTANT_UI=false`로 끌 수 있습니다.
 
 기능별 구현 상태는 [MVP 구현 현황 체크리스트](docs/agent-api-mvp-scope.md)에서 확인합니다.
 
@@ -69,27 +76,23 @@ http://127.0.0.1:8000/wiki-graph?user_id={user_id}
 
 ### 4. 키워드 비서 웹 UI
 
-키워드를 입력하면 관련 YouTube 영상 자막, Reddit 게시글을 LLM으로 요약하고,
-어제 발행된 뉴스 기사를 중복 없이 모아 브리핑으로 보여주는 독립 앱입니다.
-처음 조회하는 키워드는 폭넓게 보여주고, 이미 본 영상은 다음부터 제외합니다.
+키워드를 입력하면 관련 YouTube 영상 자막, Reddit 게시글을 LLM으로 요약하고, 최근
+뉴스 기사를 중복 없이 모아 브리핑으로 보여줍니다. 처음 조회하는 키워드는 폭넓게
+보여주고, 이미 본 영상은 다음부터 제외합니다.
+
+**API 서버와 같은 프로세스**에서 제공되므로 따로 띄우지 않습니다.
 
 ```bash
-uv run uvicorn app.assistant.main:app --port 8100
-# 브라우저에서 http://localhost:8100 접속
+# 위 2번에서 띄운 서버 그대로 사용
+# 브라우저에서 http://localhost:8000 접속
 ```
 
-PostgreSQL 없이 동작하며 `OPENAI_API_KEY`만 필요합니다. 동작 방식은
+이 화면은 PostgreSQL 없이 동작하며 `OPENAI_API_KEY`만 필요합니다. DB 연결에 실패해도
+서버는 기동하고 비서 UI는 그대로 쓸 수 있습니다(DB가 필요한 API만 `503
+SERVICE_NOT_READY`로 응답합니다). 동작 방식은
 [키워드 비서 개발 명세](docs/keyword-assistant.md)를 참고하세요.
 
-### 5. 두 서버 함께 실행
-
-```bash
-uv run python scripts/run_all.py
-# Agent API + Wiki Graph UI : http://127.0.0.1:8000
-# 키워드 비서 UI            : http://127.0.0.1:8100
-```
-
-### 6. Worker 실행
+### 5. Worker 실행
 
 등록된 Agent Job(Wiki 빌드, Report Builder 생성)과 외부 수집을 처리하는 CLI입니다.
 Wiki 빌드와 Report Builder 생성은 OpenAI를 실제 호출하므로 비용이 발생합니다.

@@ -167,6 +167,15 @@ def test_run_report_generation_chains_search_generate_persist(
         """검색 Context를 변경 없이 반환한다."""
         return contexts
 
+    def fake_collect_live_context(topic: str, user_id: str, *, model: str = "") -> list:
+        """실시간 수집(뉴스·YouTube·Reddit + LLM)을 대체한다.
+
+        대체하지 않으면 이 테스트가 실제 네트워크와 OpenAI를 호출한다.
+        """
+        order.append("collect_live")
+        assert topic == "개인화"
+        return []
+
     def fake_generate(**kwargs: Any) -> str:
         """생성 입력을 검증하고 고정 콘텐츠를 반환한다."""
         order.append("generate")
@@ -186,6 +195,7 @@ def test_run_report_generation_chains_search_generate_persist(
     monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
     monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
     monkeypatch.setattr(agent_graph, "generate_report_content", fake_generate)
+    monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect_live_context)
     monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
 
     connection = _FakeConnection()
@@ -202,6 +212,7 @@ def test_run_report_generation_chains_search_generate_persist(
         )
     )
 
-    assert order == ["load_context", "generate", "persist"]
+    # 실시간 수집(REPORT-005)이 개인 Wiki 검색과 생성 사이에 들어간다.
+    assert order == ["load_context", "collect_live", "generate", "persist"]
     assert result == {"content_candidate_id": "candidate-1"}
     assert connection.transactions == 2

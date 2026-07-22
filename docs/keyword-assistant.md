@@ -55,21 +55,47 @@
 
 ## 실행
 
-키워드 비서 웹 UI는 **Agent API 서버와 별도 포트로 실행되는 독립 앱**이다. API 서버
-(`app.main:app`)는 순수 API만 제공하고, 사람이 접속하는 비서 화면은 `app.assistant.main:app`이
-담당한다.
+키워드 비서 웹 UI는 **Agent API 서버와 같은 프로세스**에서 제공된다.
 
 ```bash
-# 방법 1) 둘을 한 번에 실행 (API 8000 + 비서 UI 8100)
-uv run python scripts/run_all.py
-
-# 방법 2) 각각 따로 실행
-uv run uvicorn app.main:app --port 8000              # Agent API
-uv run uvicorn app.assistant.main:app --port 8100    # 키워드 비서 UI
+uv run uvicorn app.main:app --port 8000
 ```
 
-- Agent API      : <http://127.0.0.1:8000>  (docs: `/redoc`)
-- 키워드 비서 UI : <http://127.0.0.1:8100>  ← 브라우저로 접속해 키워드 입력
+- 키워드 비서 UI : <http://127.0.0.1:8000/>  ← 브라우저로 접속해 키워드 입력
+- API 문서       : <http://127.0.0.1:8000/redoc>
+
+UI가 필요 없는 배포에서는 `ENABLE_ASSISTANT_UI=false`로 등록을 끌 수 있다
+(비서 의존성도 로드하지 않는다).
+
+> **이력**: 한때 API 서버(8000)와 비서 UI(8100)를 별도 프로세스로 분리했다.
+> 이후 Report Builder가 비서의 수집·선별을 그대로 쓰도록 코드 경로를 통합하면서
+> (`REPORT-005`·`REPORT-006`), 서버 프로세스도 하나로 되돌렸다. 두 실행 경로가
+> 같은 코드를 쓰는 것이 이 통합의 목적이다.
+
+## Report Builder와의 연결
+
+Main Swagger로 들어오는 콘텐츠 생성(Job → Worker → `build_report_generation_graph`)은
+이 비서의 수집·선별을 **호출**한다. 로직을 복사하지 않으므로 두 파이프라인이 갈라지지
+않는다.
+
+```
+report_004  개인 Wiki 검색      (DB에 저장된 사용자 문서)
+   ↓
+report_005  Global Source 검색  ← agent/assistant 실시간 수집 (뉴스 RSS·YouTube·Reddit)
+   ↓                              collect_live_context()
+report_006  생성 자료 선별      ← 개인 Wiki 맥락 + 실시간 근거 병합·상한 적용
+   ↓                              select_generation_context()
+report_012  개인화 → report_008/009 생성 → report_011 인용 → report_018 저장
+```
+
+어댑터는 [agent/report_builder/features/live_sources.py](../agent/report_builder/features/live_sources.py)에 있다.
+
+> **보정 전 상태**: `REPORT-005`는 개인 Wiki 결과를 그대로 흘려보내는 패스스루였고
+> `REPORT-006`은 미구현이었다. 그래서 Main API 생성은 DB에 이미 저장된 문서만 근거로
+> 삼았고, 비서의 최신성·관련도·중복 제거 판단을 전혀 거치지 않았다.
+
+수집 실패는 생성을 막지 않는다. 실시간 자료를 못 얻으면 경고 로그를 남기고 개인 Wiki
+근거만으로 생성한다.
 
 ## 선별 파이프라인의 임계값 (2026-07-20 보정)
 

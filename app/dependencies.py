@@ -1,5 +1,6 @@
 """FastAPI 라우터에서 사용하는 애플리케이션 의존성 컨테이너."""
 
+import logging
 from dataclasses import dataclass
 
 from fastapi import Depends, Request, status
@@ -27,6 +28,8 @@ from infrastructure.persistence.postgres_wiki_graph import (
 from infrastructure.persistence.postgres_agent_jobs import PostgresAgentJobRepository
 from workers.api import worker_001
 
+logger = logging.getLogger("app.dependencies")
+
 
 @dataclass(slots=True)
 class AppContainer:
@@ -51,16 +54,64 @@ class AppContainer:
     generated_content_service: GeneratedContentService | None = None
     development_scenario_service: DevelopmentScenarioService | None = None
     ready: bool = False
+    database_error: str | None = None
 
     async def startup(self) -> None:
-        """요청을 받을 수 있도록 컨테이너 상태를 준비 완료로 변경한다."""
-        if self.database is not None:
-            await self.database.startup()
-        if self.wiki_graph_repository is not None:
-            await self.wiki_graph_repository.startup()
-        if self.agent_job_repository is not None:
-            await self.agent_job_repository.startup()
+        """저장소 연결을 열고 요청을 받을 수 있는 상태로 만든다.
+
+        PostgreSQL 연결에 실패해도 앱 기동은 막지 않는다. 이 프로세스는 API와
+        함께 키워드 비서 웹 UI도 제공하는데, 비서는 DB가 필요 없기 때문이다.
+        (서버를 하나로 합치기 전에는 비서를 DB 없이 띄울 수 있었고, 그 성질을
+        유지한다.)
+
+        연결에 실패하면 DB 기반 서비스를 모두 내려 둔다. 해당 API는 503
+        SERVICE_NOT_READY로 명확히 실패하며, 조용히 인메모리로 대체하지 않는다
+        (실제 장애를 정상 동작처럼 보이게 만들지 않기 위해서다).
+        """
+        repositories = (
+            self.database,
+            self.wiki_graph_repository,
+            self.agent_job_repository,
+        )
+        try:
+            for repository in repositories:
+                if repository is not None:
+                    await repository.startup()
+        except Exception as error:
+            self.database_error = f"{type(error).__name__}: {error}"
+            logger.warning(
+                "PostgreSQL 연결에 실패해 DB 기반 API를 비활성화합니다 "
+                "(키워드 비서 UI 등 DB가 필요 없는 경로는 그대로 동작합니다): %s",
+                self.database_error,
+            )
+            await self._disable_database_services()
         self.ready = True
+
+    async def _disable_database_services(self) -> None:
+        """DB 연결 실패 시 저장소·서비스를 내려 503으로 응답하게 만든다."""
+        for repository in (
+            self.database,
+            self.wiki_graph_repository,
+            self.agent_job_repository,
+        ):
+            if repository is None:
+                continue
+            try:
+                await repository.shutdown()
+            except Exception:  # 이미 실패한 Pool 정리 중 오류는 무시한다.
+                logger.debug("실패한 저장소 Pool 정리 중 오류를 무시합니다.", exc_info=True)
+        self.database = None
+        self.wiki_graph_repository = None
+        self.agent_job_repository = None
+        self.mvp_service = None
+        self.publish_snapshot_service = None
+        self.wiki_graph_service = None
+        self.wiki_document_service = None
+        self.agent_workflow_service = None
+        self.interest_service = None
+        self.latest_information_service = None
+        self.generated_content_service = None
+        self.development_scenario_service = None
 
     async def shutdown(self) -> None:
         """새 요청 처리를 중단하고 PostgreSQL 연결 Pool을 종료한다."""
