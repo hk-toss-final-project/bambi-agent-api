@@ -48,7 +48,10 @@ def register_routers(application: FastAPI, settings: Settings) -> None:
         # 지연 import: UI를 끄면 비서 의존성(feedparser 등)을 로드하지 않는다.
         from app.assistant.web import assistant_router
 
-        application.include_router(assistant_router)
+        application.include_router(
+            assistant_router,
+            include_in_schema=False
+        )
 
 
 def create_app(
