@@ -9,7 +9,7 @@
 # Agent 연동 계약 & Gateway 설계
 
 > 상태: **DRAFT v2 — 2026-07-22 로컬 E2E 검증 반영.** 초안 v1(07-10 코드 기준)이 전제했던
-> "Worker 없음 · 인메모리 · 즉시 카드(동기)"는 검증 결과 모두 바뀌었다(§2.5). 그에 맞춰
+> "Worker 없음 · 인메모리 · 즉시 카드(동기)"는 검증 결과 모두 바뀌었다(§2.4). 그에 맞춰
 > 방향(§3)·컨텍스트 설계(§4)·Gateway 설계(§5)를 다시 썼다.
 >
 > 소유 경계: **agent-api 코어(엔드포인트·스키마·생성 로직) = 송우/LLM팀**, **연동(Gateway·계약·AI 로그) = 소라**, **창구 = 우석**.
@@ -77,9 +77,11 @@
   (외부 문서 `[G1..]`는 계약상 존재하나 이번 실행에선 미발생 — 외부 수집이 결과를 안 준 것으로 보임. 별도 확인 필요.)
 - ✅ **service-worker Pull 검증** — seed 발행 Snapshot 3건을 `publish-snapshot-batches/claim`으로 그대로 수신.
 
-**⚠️ 새로 발견한 전제조건:** 생성(`generations`)은 **컨텍스트만으론 실패**한다. 개인 위키/관심사 같은
-"재료"가 없으면 즉시 `INVALID_JOB_PAYLOAD`(retryable:false)로 떨어진다(OpenAI 호출 전). 즉 파이프라인은
-**저장 → 위키 빌드 → 관심사 추출 → 생성** 순서를 전제한다. Gateway/플로우가 이 순서를 지켜야 한다.
+**⚠️ 새로 발견한 전제조건 (실패가 2단계로 나뉨):**
+1. **컨텍스트 자체가 없으면** → `POST /generations`가 즉시 `409 USER_CONTEXT_REQUIRED`로 거부(송우 가이드 §3.4 기준. 본 검증에선 미실시).
+2. **컨텍스트는 있으나 위키·관심사가 없으면** → 요청은 `202`로 접수되지만 **Job 실행 시점에 `INVALID_JOB_PAYLOAD`(retryable:false)로 실패**(직접 확인, OpenAI 호출 전).
+
+즉 파이프라인은 **저장 → 위키 빌드 → 관심사 추출 → 생성** 순서를 전제한다. Gateway/플로우가 이 순서를 지켜야 한다.
 
 > 파이프라인은 "Bambi 생성"에서 **Report Builder**로 리네임됨(마이그레이션 0006). 콘텐츠 유형 예: `article`, `interest_news_card`(기본).
 
@@ -89,7 +91,7 @@
 
 | # | 항목 | v2 상태 |
 |---|---|---|
-| GAP-1 | 동기 vs 비동기 | ✅ **해소 — 완전 비동기 + Pull 확정(송우 07-22).** 동기 엔드포인트 안 둠. 초안의 (A) 동기안 폐기. Gateway가 비동기를 흡수. |
+| GAP-1 | agent가 동기냐 비동기냐 | ✅ **해소 — agent는 완전 비동기 + Pull 확정(송우 07-22).** 동기 엔드포인트 안 둠. 초안의 (A) 동기안 폐기. (Spring이 이 비동기를 어떻게 다룰지 = 별도 결정 §5.1·§7) |
 | GAP-2 | `{success,data,error}` 변환 경계 | **제안 유지 — Gateway 한 곳에서 변환**(§5.3). 영현(공통 응답) 확인 필요. |
 | GAP-3 | 생성 결과 스키마 매핑 | **갱신 — 실제 스키마 대조 완료(§3.1).** 핵심 불일치 2개: `why_for_you`(agent 미생성)·`body`(service 컬럼 없음). |
 | GAP-4 | 저장 스키마 분담 | 관심사·요약·위키 = agent schema(송우). 카드 최종본·피드·AI 로그 = service schema(영현). 송우·영현 확정. |
@@ -103,17 +105,22 @@ service `service.cards` + `service.card_sources`(V1) ↔ agent `generated-conten
 | `summary` | `summary` | 그대로 | — |
 | `why_for_you` | (없음) | agent가 안 만듦 | **누가 채우나:** agent가 생성 추가 vs Gateway가 관심사 기반 파생 vs null 허용 |
 | (컬럼 없음) | `body` | service 카드에 본문 컬럼 없음 | **agent 본문을 버릴지 / `cards`에 `body` 추가할지** |
-| `card_sources[{title,url}]` | `citations[{title,url,reference}]` | citation → source | P/G 구분(`reference`)은 저장 시 소실 — 필요하면 컬럼 추가 |
+| `card_sources[{title,url}]` | `citations[…]`(아래 주의) | citation → source | ⚠️ 아래 citation 구조 주의 |
 
-- 참고: 기존 동기 계약의 `BookmarkProcessResponse{summary, interests[], tags[], confidence}` 중 `confidence`·`tags`는 agent 실제 결과에 대응이 불명확 → §3.1과 함께 확정.
+**citation 구조 주의 (검증):** 생성 카드(`generated-contents`)의 citation은
+`{citation_id, ordinal, reference("P1"/"G1"), document_version_id, chunk_id, title, url, quoted_text}` 형태다.
+- **개인 위키(P) citation은 `url=null`**(위키엔 외부 URL 없음) → `card_sources.url`이 빈다. 외부(G) citation만 url이 있다.
+- P/G 구분(`reference`)은 `card_sources`에 저장 시 소실 → 필요하면 컬럼 추가.
+- 참고: **발행 Snapshot(claim) 카드의 citation은 `{citation_id,title,url}`로 더 단순** — 두 citation 모양이 다르다.
+- 참고: 기존 동기 계약의 `BookmarkProcessResponse{summary, interests[], tags[], confidence}` 중 `confidence`·`tags`는 agent 실제 결과에 대응이 불명확 → 위 매핑과 함께 확정.
 - **결정 주체: 송우(agent 생성 스키마) + 영현(service 카드) + 소라(Gateway 매핑).**
 
 ---
 
 ## 4. 컨텍스트 동기화 설계 (`PUT /users/{id}/context`) — 착수 지점
 
-> **왜 최우선인가:** 컨텍스트 없는 사용자의 생성 요청은 `USER_CONTEXT_REQUIRED`/`INVALID_JOB_PAYLOAD`로
-> 거부된다(§2.4). **가입 플로우에 반드시 포함**해야 이후 모든 agent 기능이 동작한다.
+> **왜 최우선인가:** 컨텍스트 없는 사용자의 생성 요청은 `409 USER_CONTEXT_REQUIRED`로 즉시 거부되고,
+> 컨텍스트가 있어도 위키·관심사가 없으면 Job이 `INVALID_JOB_PAYLOAD`로 실패한다(§2.4). **가입 플로우에 반드시 포함**해야 이후 agent 기능이 동작한다.
 
 ### 4.1 언제 호출하나 (Spring 훅)
 1. **회원가입 성공 직후 1회 (필수)** — `context_version=1`로 최초 등록.
@@ -126,8 +133,8 @@ service `service.cards` + `service.card_sources`(V1) ↔ agent `generated-conten
 | `plan` | O | `user.plan` | `free` \| `paid` |
 | `preferred_language` | X | 사용자 설정 | 기본 `ko` |
 | `personalization_enabled` | X | 사용자 설정 | 기본 `true` |
-| `blocked_interest_ids` | X | `user_context_snapshots`의 삭제된 관심사 | 송우 확인(07-21): 사용자가 삭제한 관심사 참조. 현재 미지정(빈 배열), 삭제 기능 붙으면 채움 |
-| `blocked_source_ids` | X | 위와 동일(삭제된 소스) | 동일 |
+| `blocked_interest_ids` | X | 사용자가 삭제한 관심사 | 송우 확인(07-21): agent가 `agent.user_context_snapshots`(테이블 실재 확인)에 반영. 현재 빈 배열, 삭제 기능 붙으면 채움 |
+| `blocked_source_ids` | X | 사용자가 삭제한 소스 | 위와 동일 |
 
 ### 4.3 버전 관리 (핵심)
 - `context_version`은 **사용자별로 단조 증가**해야 한다. 같거나 작은 값 재전송 → `STALE_CONTEXT_VERSION`.
