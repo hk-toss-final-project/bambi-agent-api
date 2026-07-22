@@ -5,7 +5,8 @@
 ## 스캐폴드 원칙
 
 - 전체 기능 625개는 기능 ID를 소문자로 바꾼 비동기 함수와 1:1로 연결됩니다. 예: `BAMBI-009` → `bambi_009(...)`.
-- 모든 기능 함수는 `FeatureRequest`를 받고 `FeatureResult`를 반환합니다. MVP 체크리스트 완료 62개와 별도 구현된 `SCH-009`는 실행 가능하며, 나머지 562개만 명시적인 `NotImplementedError` 스텁으로 유지합니다.
+- 미구현 스캐폴드 함수는 공통 `FeatureRequest → FeatureResult` 계약과 명시적인 `NotImplementedError`를 유지합니다. 구현된 함수는 기능에 맞는 typed 시그니처·반환값과 `Protocol` 기반 의존성을 사용합니다.
+- MVP 체크리스트 완료 58개와 별도 구현된 `SCH-009`는 실행 가능하며, 나머지 566개는 명시적인 미구현 스텁입니다.
 - 각 기능 영역의 `api.py`는 구현을 포함하지 않는 공개 facade이며, `features/` 아래 응집도 기준으로 분리된 구현 모듈의 함수를 import하고 `__all__`로 노출합니다.
 - 전용 MVP 범위 문서가 구현 우선순위의 기준입니다. 해당 71개 함수 바로 위에 `# MVP:` 주석을 붙였습니다.
 - 전체 명세 44~46절의 MVP·2차·3차 항목은 기존 기능을 묶은 로드맵이므로 실행 함수를 중복 생성하지 않았습니다.
@@ -47,7 +48,8 @@ domain/personal_wiki/documents/
 - 구현 함수는 `features/` 아래에서 역할과 변경 이유가 같은 기능끼리 모듈에 묶으며, 복잡한 기능만 단독 파일로 분리합니다.
 - `features/` 구현 모듈은 `api.py`를 역으로 import하지 않아 순환 의존성을 방지합니다.
 - MVP 주석과 기능 docstring은 facade가 아니라 실제 구현 함수에 유지합니다.
-- 기존 서비스 객체·저장소·Provider처럼 실행 시점에 결합되는 구현은 `shared/feature_runtime.py`의 위임 계약으로 실행하고, 독립 구현은 기능 모듈에서 직접 import해 호출합니다.
+- 기존 서비스 객체·저장소·Provider처럼 실행 시점에 결합되는 의존성은 typed 인자나 `Protocol`로 기능 함수에 전달합니다. 구현된 기능은 호출자 제공 콜백이 아니라 `features/` 함수가 검증·변환·오케스트레이션을 소유합니다.
+- 범용 `FeatureRequest/FeatureResult` 실행 위임은 이번 전환 제외 범위인 `agent/bambi/**`의 호환 경계에만 남기고, 다른 운영 경로에서는 사용하지 않습니다.
 - 외부 모듈의 `features/` 직접 import와 `api.py` 내부 함수 구현은 정합성 테스트로 차단합니다.
 - 적용된 기능별 경계와 런타임 호출 상태는 [`feature-facade-migration.md`](feature-facade-migration.md)에 기록합니다.
 
