@@ -442,6 +442,19 @@ def test_web_clipping_seed_builds_resettable_worker_dependency_chain() -> None:
     assert "ON CONFLICT (id) DO UPDATE" in seed
 
 
+def test_web_clipping_seed_preserves_wiki_documents_referenced_by_citations() -> None:
+    """클리핑 Seed가 Citation이 참조하는 Wiki 문서를 삭제 대상에서 제외하는지 검증한다."""
+    seed = _read(CLIPPING_SEED_PATH)
+    cleanup_start = seed.index("DELETE FROM agent.wiki_documents AS document")
+    cleanup_end = seed.index("DELETE FROM agent.user_interest_profiles")
+    cleanup = seed[cleanup_start:cleanup_end]
+
+    assert "NOT EXISTS" in cleanup
+    assert "JOIN agent.citations AS citation" in cleanup
+    assert "citation.document_version_id = version.id" in cleanup
+    assert "citation.chunk_id = chunk.id" in cleanup
+
+
 def test_user_url_seed_is_generated_from_dummy_url_file() -> None:
     """생성된 URL Seed가 dummy/urls의 목록과 동기화됐는지 검증한다."""
     result = subprocess.run(

@@ -231,10 +231,11 @@ ORDER BY document.file_path;
 
 목업 데이터를 다시 적용할 때는 다음 Seed를 순서대로 실행합니다. 두 번째 Seed는
 기존 발행 시도 이력을 지우고 세 Snapshot을 `ready` 상태로 되돌립니다. 세 번째
-Seed는 클리핑 Job과 Source Event를 `queued`, `received`로 되돌리고 해당 원본으로
-생성한 Wiki·Chunk·Embedding과 Job 시도 이력을 삭제하므로 로컬 목업 데이터를 초기화해도
-될 때만 실행합니다. 네 번째 Seed는 URL Event와 원본 문서 Head를 멱등 등록하며 이미
-수집한 상태와 본문 Version은 변경하지 않습니다.
+Seed는 클리핑 Job과 Source Event를 `queued`, `received`로 되돌리고 Job 시도 이력을
+삭제합니다. 해당 원본으로 생성한 Wiki 중 Citation이 참조하지 않는 문서와 그
+Chunk·Embedding만 삭제하며, 생성 콘텐츠의 인용 근거인 Wiki 문서는 보존합니다.
+네 번째 Seed는 URL Event와 원본 문서 Head를 멱등 등록하며 이미 수집한 상태와 본문
+Version은 변경하지 않습니다.
 
 ```bash
 docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < database/seeds/0001_dev_publish_snapshots.sql

@@ -31,7 +31,7 @@ WHERE job_id IN (
     '51defb75-4ac1-51e7-a7c2-1f0ce9c634b1'
 );
 
--- 같은 원본으로 이전에 생성한 LLM Wiki 결과가 있다면 Worker 재실행 전에 제거한다.
+-- 같은 원본으로 이전에 생성한 LLM Wiki 결과 중 Citation이 참조하지 않는 문서를 제거한다.
 DELETE FROM agent.wiki_documents AS document
 WHERE document.id IN (
     SELECT version.document_id
@@ -85,6 +85,22 @@ WHERE document.id IN (
     '3dde7d81-7e29-574e-a8a9-9cab9108c967',
     '2da2e793-94b4-5d5e-93b3-d16bce40372e'
     )
+)
+AND NOT EXISTS (
+    SELECT 1
+    FROM agent.wiki_document_versions AS version
+    JOIN agent.citations AS citation
+      ON citation.document_version_id = version.id
+    WHERE version.document_id = document.id
+)
+AND NOT EXISTS (
+    SELECT 1
+    FROM agent.wiki_document_versions AS version
+    JOIN agent.wiki_chunks AS chunk
+      ON chunk.document_version_id = version.id
+    JOIN agent.citations AS citation
+      ON citation.chunk_id = chunk.id
+    WHERE version.document_id = document.id
 );
 
 DELETE FROM agent.user_interest_profiles
