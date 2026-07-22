@@ -93,27 +93,33 @@
 |---|---|---|
 | GAP-1 | agent가 동기냐 비동기냐 | ✅ **해소 — agent는 완전 비동기 + Pull 확정(송우 07-22).** 동기 엔드포인트 안 둠. 초안의 (A) 동기안 폐기. (Spring이 이 비동기를 어떻게 다룰지 = 별도 결정 §5.1·§7) |
 | GAP-2 | `{success,data,error}` 변환 경계 | **제안 유지 — Gateway 한 곳에서 변환**(§5.3). 영현(공통 응답) 확인 필요. |
-| GAP-3 | 생성 결과 스키마 매핑 | **갱신 — 실제 스키마 대조 완료(§3.1).** 핵심 불일치 2개: `why_for_you`(agent 미생성)·`body`(service 컬럼 없음). |
-| GAP-4 | 저장 스키마 분담 | 관심사·요약·위키 = agent schema(송우). 카드 최종본·피드·AI 로그 = service schema(영현). 송우·영현 확정. |
+| GAP-3 | 생성 결과 스키마 매핑 | ✅ **확정(송우 07-22, §3.1).** card=요약+관심사태그 / body는 service `report` 테이블에 보존 / why_for_you 문장 폐기→관심사 태그. |
+| GAP-4 | 저장 스키마 분담 | 관심사·위키·임베딩 = agent schema(송우). **report(본문 포함)·card·피드·좋아요·AI 로그 = service schema** — service-worker Pull이 report 저장(송우 07-22 "(나)"). 스키마 변경은 영현·우석 확인. |
 
-### 3.1 카드 스키마 매핑 (agent 결과 → service 저장) — 실제 코드 대조
-service `service.cards` + `service.card_sources`(V1) ↔ agent `generated-contents` 카드:
+### 3.1 카드/리포트 스키마 매핑 (agent 결과 → service 저장) — ✅ 확정(07-22)
 
-| service (`cards`) | agent 카드 | 매핑 | 결정 필요 |
-|---|---|---|---|
-| `title` | `title` | 그대로 | — |
-| `summary` | `summary` | 그대로 | — |
-| `why_for_you` | (없음) | agent가 안 만듦 | **누가 채우나:** agent가 생성 추가 vs Gateway가 관심사 기반 파생 vs null 허용 |
-| (컬럼 없음) | `body` | service 카드에 본문 컬럼 없음 | **agent 본문을 버릴지 / `cards`에 `body` 추가할지** |
-| `card_sources[{title,url}]` | `citations[…]`(아래 주의) | citation → source | ⚠️ 아래 citation 구조 주의 |
+**확정 구조:** agent 리포트를 service-db에 담을 때 **두 곳**으로 나눈다.
+- **`service.report`(신설):** `title` + `summary` + **`body`** + citations. **service-worker가 Pull(claim)로 저장.** service가 본문(리포트)을 소유·관리. (송우 07-22 "(나)")
+- **`service.cards`(기존, 유지):** `title` + `summary` + **관심사 태그** + `report_id` 참조. **body 없음**(카드는 요약만). 피드·좋아요·공개는 카드에 그대로.
+
+| agent 결과 | → 저장 위치 | 비고 |
+|---|---|---|
+| `title` | report.title, card.title | 그대로 |
+| `summary` | report.summary, card.summary | 그대로 (카드는 요약만 노출) |
+| `body` | **report.body** | 카드엔 안 넣음. 리포트에 보존 |
+| `citations[…]` | report(citations) / card_sources | citation 구조는 아래 주의 |
+| interests(관심사) | **card 관심사 태그** | why_for_you 문장 대체. 카드에 태그 필드/조인 신설 필요 |
+| ~~why_for_you~~ | (폐기) | "왜 당신에게" 문장 안 씀 → 관심사 태그로 대체 |
+
+> ⚠️ `report`·카드 관심사 태그는 **service DB 스키마 변경** → 영현·우석 소유. 소라+서빈이 스케줄링/Pull 저장 구현.
 
 **citation 구조 주의 (검증):** 생성 카드(`generated-contents`)의 citation은
 `{citation_id, ordinal, reference("P1"/"G1"), document_version_id, chunk_id, title, url, quoted_text}` 형태다.
 - **개인 위키(P) citation은 `url=null`**(위키엔 외부 URL 없음) → `card_sources.url`이 빈다. 외부(G) citation만 url이 있다.
 - P/G 구분(`reference`)은 `card_sources`에 저장 시 소실 → 필요하면 컬럼 추가.
 - 참고: **발행 Snapshot(claim) 카드의 citation은 `{citation_id,title,url}`로 더 단순** — 두 citation 모양이 다르다.
-- 참고: 기존 동기 계약의 `BookmarkProcessResponse{summary, interests[], tags[], confidence}` 중 `confidence`·`tags`는 agent 실제 결과에 대응이 불명확 → 위 매핑과 함께 확정.
-- **결정 주체: 송우(agent 생성 스키마) + 영현(service 카드) + 소라(Gateway 매핑).**
+- 참고: 기존 동기 계약의 `BookmarkProcessResponse{summary, interests[], tags[], confidence}` 중 `confidence`·`tags`는 agent 실제 결과에 대응이 불명확 → 관심사 태그로 정리되며 자연 흡수.
+- ✅ **결정 완료(07-22, 송우).** 구현 소유: `report`/카드 관심사태그 스키마 = 영현·우석, service-worker Pull 저장·스케줄링 = 소라·서빈.
 
 ---
 
@@ -222,13 +228,13 @@ service-api엔 이미 **동기** `AgentClient` 인터페이스가 있다(`com.ba
 
 | # | 질문 | 결정 주체 | 상태 |
 |---|---|---|---|
-| **동기 vs 비동기 전환** | **기존 동기 `AgentClient` 유지(B) vs 비동기 전환(C)** — 이 문서 최대 안건(§5.1) | 소라·영현·우석·송우 | ⬜ |
-| GAP-3 | 카드 매핑(§3.1): `why_for_you`(agent 미생성)·`body`(service 컬럼 없음) 처리 | 송우·영현·소라 | ⬜ |
-| GAP-4 | 관심사/요약/카드/로그 저장 스키마 분담 확정 | 송우·영현 | ⬜ |
+| **동기 vs 비동기 전환** | (B) vs (C) — §5.1 | 소라·영현·우석·송우 | 🔶 **송우 (C) 지지·스케줄러 등록+완료 Pull 방식.** 우석·영현 동의 대기 |
+| GAP-3 | 카드/리포트 매핑(§3.1) | 송우·영현·소라 | ✅ **확정(07-22): card=요약+관심사태그 / body=service report 보존 / why_for_you 폐기** |
+| GAP-4 | 저장 스키마 분담 | 송우·영현 | 🔶 방향 확정(service가 report 소유·Pull 저장). `report` 테이블·카드 태그 스키마 변경은 영현·우석 확인 |
+| 순서 전제 | 생성 전 위키/관심사 필요 — 저장→생성 트리거(스케줄러) 시점 | 소라·서빈·송우 | ⬜ (service-api swagger 스케줄링 계약 확인) |
 | 컨텍스트 | `agent_context_version` 컬럼·재동기 큐 도입 | 소라·영현 | ⬜ |
 | 변환 경계 | Gateway = `{success,data,error}` 변환 지점 확정 | 소라·영현 | ⬜ |
-| 순서 전제 | 생성 전 위키/관심사 필요 — 저장→생성 트리거 시점 설계 | 소라·송우 | ⬜ |
 | 내부 인증 | 무인증 → 공유 시크릿 vs 네트워크 격리 | 전원 | ⬜(배포 전) |
 | 차단 ID | `blocked_*_ids` 실제 연결(삭제 기능) | 소라·송우 | ⬜(개인화 고도화) |
 
-**다음 스텝:** 이 v2를 우석·송우·영현에 공유 → GAP-3/4·변환경계 확정 → AgentGateway·재동기 큐·AI 로그 요청기록 구현 착수.
+**다음 스텝:** 결정 1(B/C) 우석·영현 동의 → `report` 테이블·카드 관심사태그 스키마(영현·우석) + service-worker Pull·스케줄링(소라·서빈) + AgentGateway·컨텍스트 동기화 구현 착수.
