@@ -11,6 +11,7 @@ from agent.wiki_builder.models import ExistingWikiEntry
 def _fake_response(
     entities: list[dict] | None = None,
     concepts: list[dict] | None = None,
+    relations: list[dict] | None = None,
     source_summary: str = "",
 ) -> str:
     """테스트용 LLM JSON 응답을 만든다."""
@@ -19,6 +20,7 @@ def _fake_response(
             "source_summary": source_summary,
             "entities": entities or [],
             "concepts": concepts or [],
+            "relations": relations or [],
         }
     )
 
@@ -62,6 +64,33 @@ def test_parse_wiki_classification_maps_personal_knowledge_fields() -> None:
     assert result.entities[0].aliases == ["옵시디언"]
     assert result.concepts[0].subtype == "method"
     assert result.concepts[0].key_characteristics == ["양방향 링크"]
+
+
+def test_parse_wiki_classification_maps_grounded_relations() -> None:
+    """응답 내부 참조와 원문 근거가 유효한 관계를 노드 연결로 변환한다."""
+    evidence = "Obsidian Web Clipper는 Obsidian에 웹 페이지를 저장한다."
+    raw = _fake_response(
+        entities=[
+            {"ref": "E1", "name": "Obsidian Web Clipper"},
+            {"ref": "E2", "name": "Obsidian"},
+        ],
+        relations=[
+            {
+                "source_ref": "E1",
+                "target_ref": "E2",
+                "relation_type": "entity_relation",
+                "evidence": evidence,
+            }
+        ],
+    )
+
+    result = llm_wiki.parse_wiki_classification(raw, source_content=evidence)
+
+    assert len(result.relations) == 1
+    assert result.relations[0].source_name == "Obsidian Web Clipper"
+    assert result.relations[0].target_name == "Obsidian"
+    assert result.entities[0].related_entity_names == ["Obsidian"]
+    assert result.relation_warnings == []
 
 
 def test_parse_wiki_classification_normalizes_invalid_subtypes() -> None:
@@ -158,6 +187,7 @@ def test_classify_source_for_wiki_sends_metadata_and_existing_context(
     assert "key=obsidian" in captured["user"]
     assert "aliases=옵시디언" in captured["user"]
     assert "사람, 조직, 프로젝트" in captured["system"]
+    assert "source_ref와 target_ref" in captured["system"]
 
 
 def test_classify_source_for_wiki_processes_all_long_content(
@@ -186,6 +216,89 @@ def test_classify_source_for_wiki_processes_all_long_content(
     assert len(prompts) == 2
     assert sum(prompt.count("가") for prompt in prompts) == len(source)
     assert result.source_summary == "요약 1\n\n요약 2"
+
+
+def test_classify_source_for_wiki_reviews_missing_relations_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """노드가 여러 개인데 관계가 없으면 확정 노드로 관계만 한 번 재검토한다."""
+    responses = [
+        _fake_response(
+            entities=[
+                {"ref": "E1", "name": "Sam Altman", "subtype": "person"},
+                {"ref": "E2", "name": "OpenAI", "subtype": "organization"},
+            ]
+        ),
+        json.dumps(
+            {
+                "relations": [
+                    {
+                        "source_ref": "E1",
+                        "target_ref": "E2",
+                        "relation_type": "entity_relation",
+                        "evidence": "Sam Altman은 OpenAI의 CEO다.",
+                    }
+                ]
+            }
+        ),
+    ]
+    calls: list[str] = []
+
+    def fake_complete(
+        system_prompt: str, user_prompt: str, model: str = "gpt-4.1-mini"
+    ) -> str:
+        """최초 분류와 한 번의 관계 재검토 응답을 순서대로 반환한다."""
+        calls.append(system_prompt)
+        return responses.pop(0)
+
+    monkeypatch.setattr(llm_wiki, "complete", fake_complete)
+
+    result = llm_wiki.classify_source_for_wiki(
+        source_title="OpenAI",
+        source_content="Sam Altman은 OpenAI의 CEO다.",
+        existing_entities=[],
+        existing_concepts=[],
+    )
+
+    assert len(calls) == 2
+    assert len(result.relations) == 1
+    assert result.relations[0].relation_type == "entity_relation"
+    assert result.relation_warnings == []
+
+
+def test_classify_source_for_wiki_reports_isolated_nodes_after_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """관계 재검토 후에도 Edge가 없으면 고립 가능성을 경고로 남긴다."""
+    responses = [
+        _fake_response(
+            entities=[
+                {"ref": "E1", "name": "서로 무관한 대상 A"},
+                {"ref": "E2", "name": "서로 무관한 대상 B"},
+            ]
+        ),
+        json.dumps({"relations": []}),
+    ]
+
+    def fake_complete(
+        system_prompt: str, user_prompt: str, model: str = "gpt-4.1-mini"
+    ) -> str:
+        """관계가 없는 최초 분류와 재검토 응답을 반환한다."""
+        return responses.pop(0)
+
+    monkeypatch.setattr(llm_wiki, "complete", fake_complete)
+
+    result = llm_wiki.classify_source_for_wiki(
+        source_title="무관한 대상",
+        source_content="대상 A와 대상 B를 각각 기록했다.",
+        existing_entities=[],
+        existing_concepts=[],
+    )
+
+    assert result.relations == []
+    assert result.relation_warnings == [
+        "노드가 2개 이상이지만 원문에서 검증된 관계를 찾지 못했습니다."
+    ]
 
 
 def test_split_source_content_preserves_internal_whitespace() -> None:

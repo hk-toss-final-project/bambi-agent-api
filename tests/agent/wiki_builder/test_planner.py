@@ -5,6 +5,7 @@ from agent.wiki_builder.models import (
     EntityClassification,
     ExistingWikiEntry,
     WikiClassification,
+    WikiRelationClassification,
     WikiRelationPlan,
 )
 from agent.wiki_builder.features.planning import build_wiki_plan
@@ -140,13 +141,12 @@ def test_concept_does_not_require_two_related_entities() -> None:
 
 
 def test_entity_to_concept_relation_uses_resolved_keys() -> None:
-    """entity의 관련 concept 이름을 실제 문서 키와 연결한다."""
+    """검증된 entity·concept 관계 이름을 실제 문서 키와 연결한다."""
     classification = WikiClassification(
         entities=[
             EntityClassification(
                 name="Obsidian",
                 subtype="product",
-                related_concepts=["연결 노트"],
             )
         ],
         concepts=[
@@ -154,6 +154,16 @@ def test_entity_to_concept_relation_uses_resolved_keys() -> None:
                 title="연결 노트",
                 subtype="method",
                 definition="노트 연결 방법",
+            )
+        ],
+        relations=[
+            WikiRelationClassification(
+                source_name="Obsidian",
+                source_kind="entity",
+                target_name="연결 노트",
+                target_kind="concept",
+                relation_type="applies_concept",
+                evidence="Obsidian은 연결 노트를 지원한다.",
             )
         ],
     )
@@ -165,18 +175,28 @@ def test_entity_to_concept_relation_uses_resolved_keys() -> None:
     assert relation.source_document_key == "obsidian"
     assert relation.target_document_key == "연결-노트"
     assert relation.relation_type == "applies_concept"
+    assert relation.metadata["evidence"] == "Obsidian은 연결 노트를 지원한다."
+    assert plan.extracted_relation_count == 1
+    assert plan.isolated_node_count == 0
 
 
 def test_entity_relation_is_created_when_both_entities_exist() -> None:
     """원문이 연결한 두 entity가 존재하면 entity_relation을 계획한다."""
     classification = WikiClassification(
         entities=[
-            EntityClassification(
-                name="Obsidian",
-                related_entity_names=["Obsidian Web Clipper"],
-            ),
+            EntityClassification(name="Obsidian"),
             EntityClassification(name="Obsidian Web Clipper"),
-        ]
+        ],
+        relations=[
+            WikiRelationClassification(
+                source_name="Obsidian Web Clipper",
+                source_kind="entity",
+                target_name="Obsidian",
+                target_kind="entity",
+                relation_type="entity_relation",
+                evidence="Web Clipper는 Obsidian에 저장한다.",
+            )
+        ],
     )
 
     plan = _plan(classification)
@@ -184,17 +204,71 @@ def test_entity_relation_is_created_when_both_entities_exist() -> None:
     assert any(relation.relation_type == "entity_relation" for relation in plan.relations)
 
 
+def test_relation_uses_matched_existing_key_when_alias_name_changes() -> None:
+    """관계 노드가 별칭으로 분류돼도 검증된 기존 문서 키로 연결한다."""
+    existing = [
+        ExistingWikiEntry(
+            "entity",
+            "obsidian",
+            "Obsidian",
+            "product",
+            "지식 관리 도구",
+        )
+    ]
+    classification = WikiClassification(
+        entities=[
+            EntityClassification(
+                name="옵시디언",
+                matched_existing_key="obsidian",
+                is_alias=True,
+            ),
+            EntityClassification(name="Obsidian Web Clipper"),
+        ],
+        relations=[
+            WikiRelationClassification(
+                source_name="Obsidian Web Clipper",
+                source_kind="entity",
+                target_name="옵시디언",
+                target_kind="entity",
+                relation_type="entity_relation",
+                evidence="Web Clipper는 옵시디언에 저장한다.",
+                target_matched_key="obsidian",
+            )
+        ],
+    )
+
+    plan = _plan(classification, existing_entities=existing)
+
+    assert len(plan.relations) == 1
+    assert plan.relations[0].source_document_key == "obsidian-web-clipper"
+    assert plan.relations[0].target_document_key == "obsidian"
+
+
 def test_concept_relations_include_related_concepts_and_entities() -> None:
     """concept에서 선언한 관련 concept과 entity도 DB 관계 계획에 반영한다."""
     classification = WikiClassification(
         entities=[EntityClassification(name="Obsidian")],
         concepts=[
-            ConceptClassification(
-                title="연결 노트",
-                related_entity_names=["Obsidian"],
-                related_concepts=["개인 지식 관리"],
-            ),
+            ConceptClassification(title="연결 노트"),
             ConceptClassification(title="개인 지식 관리"),
+        ],
+        relations=[
+            WikiRelationClassification(
+                source_name="Obsidian",
+                source_kind="entity",
+                target_name="연결 노트",
+                target_kind="concept",
+                relation_type="applies_concept",
+                evidence="Obsidian은 연결 노트를 사용한다.",
+            ),
+            WikiRelationClassification(
+                source_name="연결 노트",
+                source_kind="concept",
+                target_name="개인 지식 관리",
+                target_kind="concept",
+                relation_type="related_concept",
+                evidence="연결 노트는 개인 지식 관리 방법이다.",
+            ),
         ],
     )
 
@@ -248,6 +322,21 @@ def test_schema_uses_database_root_key() -> None:
 
     assert plan.schema.document_key == "root"
     assert plan.schema.file_path == "schema/schema.md"
+
+
+def test_plan_counts_nodes_without_validated_relations_as_isolated() -> None:
+    """검증된 관계가 없는 entity·concept를 고립 노드로 집계한다."""
+    classification = WikiClassification(
+        entities=[EntityClassification(name="Obsidian")],
+        concepts=[ConceptClassification(title="개인 지식 관리")],
+        relation_warnings=["검증된 관계 없음"],
+    )
+
+    plan = _plan(classification)
+
+    assert plan.extracted_relation_count == 0
+    assert plan.isolated_node_count == 2
+    assert plan.relation_warnings == ["검증된 관계 없음"]
 
 
 def test_source_manifest_uses_content_hash_suffix_and_source_tags() -> None:

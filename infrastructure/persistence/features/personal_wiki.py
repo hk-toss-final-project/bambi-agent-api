@@ -164,6 +164,7 @@ class PersistedWikiBuild:
     wiki_version: int
     affected_documents: list[PersistedWikiDocument]
     chunk_count: int
+    stored_relation_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -829,6 +830,30 @@ async def _upsert_wiki_document(
     )
 
 
+async def _count_wiki_relations(
+    connection: AsyncConnection[DictRow], *, namespace_key: str
+) -> int:
+    """Namespace에 현재 저장된 개인 Wiki 관계 수를 조회한다."""
+    cursor = await connection.execute(
+        """
+        SELECT COUNT(*) AS relation_count
+        FROM agent.wiki_document_relations AS relation
+        JOIN agent.wiki_documents AS source
+          ON source.id = relation.source_document_id
+         AND source.namespace_key = relation.namespace_key
+        JOIN agent.wiki_documents AS target
+          ON target.id = relation.target_document_id
+         AND target.namespace_key = relation.namespace_key
+        WHERE relation.namespace_key = %s
+          AND source.deleted_at IS NULL
+          AND target.deleted_at IS NULL
+        """,
+        (namespace_key,),
+    )
+    row = await cursor.fetchone()
+    return int(row["relation_count"])
+
+
 async def persist_wiki_build(
     connection: AsyncConnection[DictRow],
     *,
@@ -1000,11 +1025,15 @@ async def persist_wiki_build(
         """,
         (int(counts["document_count"]), chunk_count, wiki_version_id),
     )
+    stored_relation_count = await _count_wiki_relations(
+        connection, namespace_key=source.namespace_key
+    )
     return PersistedWikiBuild(
         wiki_version_id=str(wiki_version_id),
         wiki_version=wiki_version,
         affected_documents=persisted,
         chunk_count=chunk_count,
+        stored_relation_count=stored_relation_count,
     )
 
 

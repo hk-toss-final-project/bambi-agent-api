@@ -342,7 +342,7 @@ def _plan_relations(
     entity_keys: dict[str, str],
     concept_keys: dict[str, str],
 ) -> list[WikiRelationPlan]:
-    """LLM이 추출한 entity·concept 연결을 DB 관계 계획으로 변환한다."""
+    """원문 근거 검증을 통과한 관계를 DB 관계 계획으로 변환한다."""
     relations: list[WikiRelationPlan] = []
     seen: set[tuple[str, str, str]] = set()
 
@@ -352,6 +352,7 @@ def _plan_relations(
         target_key: str,
         target_kind: str,
         relation_type: str,
+        evidence: str,
     ) -> None:
         """중복과 자기 참조를 제외하고 관계 하나를 추가한다."""
         signature = (source_key, target_key, relation_type)
@@ -365,57 +366,44 @@ def _plan_relations(
                 target_document_key=target_key,
                 target_document_kind=target_kind,
                 relation_type=relation_type,
+                metadata={"evidence": evidence},
             )
         )
 
-    for entity in classification.entities:
-        source_key = entity_keys.get(entity.name.strip().casefold())
-        if not source_key:
+    keys_by_kind = {"entity": entity_keys, "concept": concept_keys}
+
+    def resolve_key(
+        keys: dict[str, str], *, name: str, matched_key: str | None
+    ) -> str | None:
+        """검증된 기존 키를 우선하고 새 노드는 분류 이름으로 해석한다."""
+        if matched_key and matched_key in keys.values():
+            return matched_key
+        return keys.get(name.strip().casefold())
+
+    for relation in classification.relations:
+        source_keys = keys_by_kind.get(relation.source_kind)
+        target_keys = keys_by_kind.get(relation.target_kind)
+        if source_keys is None or target_keys is None:
             continue
-        for related_name in entity.related_entity_names:
-            target_key = entity_keys.get(related_name.strip().casefold())
-            if target_key:
-                append(
-                    source_key,
-                    "entity",
-                    target_key,
-                    "entity",
-                    "entity_relation",
-                )
-        for concept_name in entity.related_concepts:
-            target_key = concept_keys.get(concept_name.strip().casefold())
-            if target_key:
-                append(
-                    source_key,
-                    "entity",
-                    target_key,
-                    "concept",
-                    "applies_concept",
-                )
-    for concept in classification.concepts:
-        source_key = concept_keys.get(concept.title.strip().casefold())
-        if not source_key:
-            continue
-        for related_name in concept.related_concepts:
-            target_key = concept_keys.get(related_name.strip().casefold())
-            if target_key:
-                append(
-                    source_key,
-                    "concept",
-                    target_key,
-                    "concept",
-                    "related_concept",
-                )
-        for entity_name in concept.related_entity_names:
-            entity_key = entity_keys.get(entity_name.strip().casefold())
-            if entity_key:
-                append(
-                    entity_key,
-                    "entity",
-                    source_key,
-                    "concept",
-                    "applies_concept",
-                )
+        source_key = resolve_key(
+            source_keys,
+            name=relation.source_name,
+            matched_key=relation.source_matched_key,
+        )
+        target_key = resolve_key(
+            target_keys,
+            name=relation.target_name,
+            matched_key=relation.target_matched_key,
+        )
+        if source_key and target_key:
+            append(
+                source_key,
+                relation.source_kind,
+                target_key,
+                relation.target_kind,
+                relation.relation_type,
+                relation.evidence,
+            )
     return relations
 
 
@@ -466,16 +454,32 @@ def build_wiki_plan(
         source_link=source_wiki_link,
         generated_date=generated_date,
     )
-    relations = _merge_relations(
-        existing_relations,
-        _plan_relations(
-            classification=classification,
-            entity_keys=entity_keys,
-            concept_keys=concept_keys,
-        ),
+    extracted_relations = _plan_relations(
+        classification=classification,
+        entity_keys=entity_keys,
+        concept_keys=concept_keys,
     )
+    relation_warnings = list(classification.relation_warnings)
+    unresolved_relation_count = len(classification.relations) - len(extracted_relations)
+    if unresolved_relation_count > 0:
+        relation_warnings.append(
+            f"검증된 관계 {unresolved_relation_count}건의 문서 키를 해석하지 못했습니다."
+        )
+    relations = _merge_relations(existing_relations, extracted_relations)
     merged_entities = _merge_entries("entity", existing_entities, entity_plans)
     merged_concepts = _merge_entries("concept", existing_concepts, concept_plans)
+    connected_nodes = {
+        (relation.source_document_kind, relation.source_document_key)
+        for relation in relations
+    } | {
+        (relation.target_document_kind, relation.target_document_key)
+        for relation in relations
+    }
+    all_nodes = {
+        ("entity", entry.document_key) for entry in merged_entities
+    } | {
+        ("concept", entry.document_key) for entry in merged_concepts
+    }
     schema_content = render_schema_markdown(
         entities=merged_entities,
         concepts=merged_concepts,
@@ -524,4 +528,7 @@ def build_wiki_plan(
         index=GeneratedArtifact(file_path="index.md", content=index_content),
         source_manifest=GeneratedArtifact(file_path=source_path, content=source_content),
         log_entry=GeneratedArtifact(file_path="log.md", content=log_content),
+        extracted_relation_count=len(extracted_relations),
+        isolated_node_count=len(all_nodes - connected_nodes),
+        relation_warnings=relation_warnings,
     )

@@ -55,6 +55,7 @@ def _fake_persisted() -> SimpleNamespace:
         wiki_version_id="wiki-version-1",
         wiki_version=3,
         chunk_count=2,
+        stored_relation_count=4,
         affected_documents=[document],
     )
 
@@ -68,6 +69,9 @@ def test_run_personal_wiki_build_assembles_result(
         index=SimpleNamespace(content="index"),
         source_manifest=SimpleNamespace(content="manifest"),
         log_entry=SimpleNamespace(content="log"),
+        extracted_relation_count=2,
+        isolated_node_count=1,
+        relation_warnings=["관계 경고"],
     )
 
     async def fake_scope(connection: Any, *, user_id: str) -> None:
@@ -134,6 +138,10 @@ def test_run_personal_wiki_build_assembles_result(
     assert result["source_document_id"] == "source-1"
     assert result["wiki_version_id"] == "wiki-version-1"
     assert result["chunk_count"] == 2
+    assert result["extracted_relation_count"] == 2
+    assert result["stored_relation_count"] == 4
+    assert result["isolated_node_count"] == 1
+    assert result["relation_warnings"] == ["관계 경고"]
     assert "embedding_count" not in result
     assert result["affected_documents"][0]["document_key"] == "entity-key"
     assert result["artifacts"]["index"] == "index"

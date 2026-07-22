@@ -2,7 +2,7 @@
 
 클리핑 원문을 손실 없이 청크로 나누고, 사람·조직·제품·장소 등의
 entity와 이론·방법·분야·용어 등의 concept을 추출한다. 여러 청크의
-결과는 안정적인 키로 병합하며, 원문에 실제로 있는 인용문만 보존한다.
+결과는 안정적인 키로 병합하며, 원문에 실제로 있는 인용문과 관계만 보존한다.
 """
 
 from __future__ import annotations
@@ -13,11 +13,16 @@ from dataclasses import replace
 from pathlib import Path
 
 from agent.llm.api import complete, strip_json_fence
+from agent.wiki_builder.features.relations import (
+    parse_relation_candidates,
+    review_missing_relations,
+)
 from agent.wiki_builder.models import (
     ConceptClassification,
     EntityClassification,
     ExistingWikiEntry,
     WikiClassification,
+    WikiRelationClassification,
 )
 
 _MAX_SOURCE_CHARS = 8000
@@ -136,6 +141,87 @@ def _parse_concept(
     )
 
 
+def _apply_relations_to_nodes(
+    *,
+    entities: Sequence[EntityClassification],
+    concepts: Sequence[ConceptClassification],
+    relations: Sequence[WikiRelationClassification],
+) -> tuple[list[EntityClassification], list[ConceptClassification]]:
+    """검증된 관계를 entity·concept Markdown용 관련 노드 목록에 반영한다."""
+    entity_indexes: dict[str, int] = {}
+    for index, entity in enumerate(entities):
+        if entity.name.strip():
+            entity_indexes[entity.name.strip().casefold()] = index
+        if entity.matched_existing_key:
+            entity_indexes[entity.matched_existing_key.casefold()] = index
+    concept_indexes: dict[str, int] = {}
+    for index, concept in enumerate(concepts):
+        if concept.title.strip():
+            concept_indexes[concept.title.strip().casefold()] = index
+        if concept.matched_existing_key:
+            concept_indexes[concept.matched_existing_key.casefold()] = index
+    merged_entities = [
+        replace(entity, related_entity_names=[], related_concepts=[])
+        for entity in entities
+    ]
+    merged_concepts = [
+        replace(concept, related_entity_names=[], related_concepts=[])
+        for concept in concepts
+    ]
+    for relation in relations:
+        source_marker = (
+            relation.source_matched_key or relation.source_name
+        ).casefold()
+        target_marker = (
+            relation.target_matched_key or relation.target_name
+        ).casefold()
+        if relation.source_kind == "entity" and relation.target_kind == "entity":
+            source_index = entity_indexes.get(source_marker)
+            target_index = entity_indexes.get(target_marker)
+            if source_index is not None and target_index is not None:
+                source = merged_entities[source_index]
+                target_name = merged_entities[target_index].name
+                merged_entities[source_index] = replace(
+                    source,
+                    related_entity_names=_unique(
+                        [*source.related_entity_names, target_name]
+                    ),
+                )
+        elif relation.source_kind == "entity" and relation.target_kind == "concept":
+            source_index = entity_indexes.get(source_marker)
+            target_index = concept_indexes.get(target_marker)
+            if source_index is not None and target_index is not None:
+                source = merged_entities[source_index]
+                target_name = merged_concepts[target_index].title
+                merged_entities[source_index] = replace(
+                    source,
+                    related_concepts=_unique(
+                        [*source.related_concepts, target_name]
+                    ),
+                )
+                target = merged_concepts[target_index]
+                source_name = merged_entities[source_index].name
+                merged_concepts[target_index] = replace(
+                    target,
+                    related_entity_names=_unique(
+                        [*target.related_entity_names, source_name]
+                    ),
+                )
+        elif relation.source_kind == "concept" and relation.target_kind == "concept":
+            source_index = concept_indexes.get(source_marker)
+            target_index = concept_indexes.get(target_marker)
+            if source_index is not None and target_index is not None:
+                source = merged_concepts[source_index]
+                target_name = merged_concepts[target_index].title
+                merged_concepts[source_index] = replace(
+                    source,
+                    related_concepts=_unique(
+                        [*source.related_concepts, target_name]
+                    ),
+                )
+    return merged_entities, merged_concepts
+
+
 def parse_wiki_classification(
     raw_response: str, *, source_content: str | None = None
 ) -> WikiClassification:
@@ -148,20 +234,71 @@ def parse_wiki_classification(
     if not isinstance(payload, dict):
         raise ValueError("LLM Wiki 분류 응답이 JSON 객체가 아닙니다.")
 
-    entities = [
-        _parse_entity(item, source_content)
-        for item in (payload.get("entities") or [])
-        if isinstance(item, dict)
-    ]
-    concepts = [
-        _parse_concept(item, source_content)
-        for item in (payload.get("concepts") or [])
-        if isinstance(item, dict)
-    ]
+    entities: list[EntityClassification] = []
+    concepts: list[ConceptClassification] = []
+    node_refs: dict[str, tuple[str, str, str | None]] = {}
+    reference_warnings: list[str] = []
+
+    raw_entities = payload.get("entities") or []
+    if isinstance(raw_entities, list):
+        for item in raw_entities:
+            if not isinstance(item, dict):
+                continue
+            entity = _parse_entity(item, source_content)
+            if not entity.name:
+                continue
+            entities.append(entity)
+            reference = str(item.get("ref") or "").strip()
+            if reference and entity.name:
+                marker = reference.casefold()
+                if any(key.casefold() == marker for key in node_refs):
+                    reference_warnings.append(f"중복 노드 참조를 제외했습니다: {reference}")
+                else:
+                    node_refs[reference] = (
+                        "entity",
+                        entity.name,
+                        entity.matched_existing_key,
+                    )
+
+    raw_concepts = payload.get("concepts") or []
+    if isinstance(raw_concepts, list):
+        for item in raw_concepts:
+            if not isinstance(item, dict):
+                continue
+            concept = _parse_concept(item, source_content)
+            if not concept.title:
+                continue
+            concepts.append(concept)
+            reference = str(item.get("ref") or "").strip()
+            if reference and concept.title:
+                marker = reference.casefold()
+                if any(key.casefold() == marker for key in node_refs):
+                    reference_warnings.append(f"중복 노드 참조를 제외했습니다: {reference}")
+                else:
+                    node_refs[reference] = (
+                        "concept",
+                        concept.title,
+                        concept.matched_existing_key,
+                    )
+
+    relation_result = parse_relation_candidates(
+        payload.get("relations"),
+        node_refs=node_refs,
+        source_content=source_content,
+    )
+    entities, concepts = _apply_relations_to_nodes(
+        entities=entities,
+        concepts=concepts,
+        relations=relation_result.relations,
+    )
     return WikiClassification(
         source_summary=str(payload.get("source_summary") or "").strip(),
         entities=entities,
         concepts=concepts,
+        relations=relation_result.relations,
+        relation_warnings=_unique(
+            [*reference_warnings, *relation_result.warnings]
+        ),
     )
 
 
@@ -258,7 +395,9 @@ def merge_wiki_classifications(
     """여러 원문 청크의 분류 결과를 하나의 Wiki 분류 결과로 합친다."""
     entities: dict[str, EntityClassification] = {}
     concepts: dict[str, ConceptClassification] = {}
+    relations: dict[tuple[str, str, str, str, str], WikiRelationClassification] = {}
     summaries: list[str] = []
+    relation_warnings: list[str] = []
     for classification in classifications:
         if classification.source_summary:
             summaries.append(classification.source_summary)
@@ -278,10 +417,27 @@ def merge_wiki_classifications(
                 if key in concepts
                 else concept
             )
-    return WikiClassification(
-        source_summary="\n\n".join(_unique(summaries)),
+        for relation in classification.relations:
+            signature = (
+                relation.source_kind,
+                (relation.source_matched_key or relation.source_name).casefold(),
+                relation.target_kind,
+                (relation.target_matched_key or relation.target_name).casefold(),
+                relation.relation_type,
+            )
+            relations.setdefault(signature, relation)
+        relation_warnings.extend(classification.relation_warnings)
+    merged_entities, merged_concepts = _apply_relations_to_nodes(
         entities=list(entities.values()),
         concepts=list(concepts.values()),
+        relations=list(relations.values()),
+    )
+    return WikiClassification(
+        source_summary="\n\n".join(_unique(summaries)),
+        entities=merged_entities,
+        concepts=merged_concepts,
+        relations=list(relations.values()),
+        relation_warnings=_unique(relation_warnings),
     )
 
 
@@ -315,7 +471,33 @@ def classify_source_for_wiki(
             f"[기존 concept 목록]\n{_format_existing_entries(existing_concepts)}"
         )
         raw_response = complete(_SYSTEM_PROMPT, user_prompt, model=model)
-        classifications.append(
-            parse_wiki_classification(raw_response, source_content=chunk)
+        classification = parse_wiki_classification(
+            raw_response, source_content=chunk
         )
+        if (
+            len(classification.entities) + len(classification.concepts) >= 2
+            and not classification.relations
+        ):
+            reviewed = review_missing_relations(
+                source_content=chunk,
+                entities=classification.entities,
+                concepts=classification.concepts,
+                model=model,
+                completion=complete,
+            )
+            reviewed_entities, reviewed_concepts = _apply_relations_to_nodes(
+                entities=classification.entities,
+                concepts=classification.concepts,
+                relations=reviewed.relations,
+            )
+            classification = replace(
+                classification,
+                entities=reviewed_entities,
+                concepts=reviewed_concepts,
+                relations=reviewed.relations,
+                relation_warnings=_unique(
+                    [*classification.relation_warnings, *reviewed.warnings]
+                ),
+            )
+        classifications.append(classification)
     return merge_wiki_classifications(classifications)

@@ -12,6 +12,7 @@ from infrastructure.persistence.features.personal_wiki import (
     RegisteredUrlSource,
     SavedUserSourceVersion,
     UserSourceDocumentForAgent,
+    _count_wiki_relations,
     _upsert_wiki_document,
     chunk_wiki_markdown,
     get_user_source_document_version_for_agent,
@@ -55,6 +56,25 @@ class _FakeConnection:
         """실행된 SQL과 Parameter를 기록한 뒤 고정된 Cursor를 반환한다."""
         self.executed.append((query, params))
         return _FakeCursor(self._row)
+
+
+def test_count_wiki_relations_scopes_query_to_namespace() -> None:
+    """저장 관계 수를 사용자 Namespace 범위로 조회한다."""
+    connection = _FakeConnection({"relation_count": 4})
+
+    count = asyncio.run(
+        _count_wiki_relations(
+            connection,  # type: ignore[arg-type]
+            namespace_key="user/user-1",
+        )
+    )
+
+    assert count == 4
+    query, params = connection.executed[0]
+    assert "FROM agent.wiki_document_relations AS relation" in query
+    assert "source.deleted_at IS NULL" in query
+    assert "target.deleted_at IS NULL" in query
+    assert params == ("user/user-1",)
 
 
 def _sample_row() -> dict[str, Any]:

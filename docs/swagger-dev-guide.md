@@ -124,10 +124,19 @@ X-Dev-Token: <local-test-token>
     "wiki_version_id": "...",
     "wiki_version": 1,
     "chunk_count": 3,
+    "extracted_relation_count": 2,
+    "stored_relation_count": 4,
+    "isolated_node_count": 1,
+    "relation_warnings": [],
     "affected_documents": []
   }
 }
 ```
+
+`extracted_relation_count`는 이번 원문에서 근거 검증을 통과한 관계 수이고,
+`stored_relation_count`는 사용자 Namespace에 저장된 전체 Edge 수입니다. 노드가
+여러 개인데 관계를 찾지 못했거나 잘못된 참조·근거를 제외했다면
+`isolated_node_count`와 `relation_warnings`를 함께 확인합니다.
 
 HTTP 상태만 보지 말고 최상위 `status`도 확인합니다. 실행 중 실패는 HTTP 200과
 `status: "failed"`, `failed_stage`, 단계별 오류 코드로 반환될 수 있습니다.

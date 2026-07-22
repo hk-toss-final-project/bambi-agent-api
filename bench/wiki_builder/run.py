@@ -64,8 +64,32 @@ def _names(items: list[object], attribute: str) -> dict[str, object]:
     return {str(getattr(item, attribute)).casefold(): item for item in items}
 
 
+def _relation_signature(relation: object) -> tuple[str, str, str, str, str]:
+    """관계 객체를 대소문자에 무관한 채점용 Signature로 변환한다."""
+    return (
+        str(getattr(relation, "source_kind")).casefold(),
+        str(getattr(relation, "source_name")).casefold(),
+        str(getattr(relation, "target_kind")).casefold(),
+        str(getattr(relation, "target_name")).casefold(),
+        str(getattr(relation, "relation_type")).casefold(),
+    )
+
+
+def _expected_relation_signature(
+    relation: dict[str, str],
+) -> tuple[str, str, str, str, str]:
+    """Dataset 관계 기대값을 실제 결과와 같은 Signature로 변환한다."""
+    return (
+        relation["source_kind"].casefold(),
+        relation["source_name"].casefold(),
+        relation["target_kind"].casefold(),
+        relation["target_name"].casefold(),
+        relation["relation_type"].casefold(),
+    )
+
+
 def _score(result: object, expected: dict[str, Any]) -> tuple[bool, list[str]]:
-    """추출 결과를 케이스의 필수 이름·유형·별칭·인용 기준으로 채점한다."""
+    """노드·관계 추출 결과를 Dataset의 품질 기준으로 채점한다."""
     errors: list[str] = []
     entities = _names(result.entities, "name")
     concepts = _names(result.concepts, "title")
@@ -109,6 +133,18 @@ def _score(result: object, expected: dict[str, Any]) -> tuple[bool, list[str]]:
     for term in expected.get("required_summary_terms", []):
         if term.casefold() not in summary:
             errors.append(f"missing summary term: {term}")
+    relations = {_relation_signature(relation) for relation in result.relations}
+    for expected_relation in expected.get("relations", []):
+        signature = _expected_relation_signature(expected_relation)
+        if signature not in relations:
+            errors.append(
+                "missing relation: "
+                f"{expected_relation['source_name']} -> "
+                f"{expected_relation['target_name']} / "
+                f"{expected_relation['relation_type']}"
+            )
+    if len(relations) > expected.get("max_relations", 10_000):
+        errors.append(f"too many relations: {len(relations)}")
     return not errors, errors
 
 
@@ -124,7 +160,10 @@ def _prompt_revision() -> str:
     digest = hashlib.sha256()
     for path in (
         PROJECT_ROOT / "agent/wiki_builder/features/classification.py",
+        PROJECT_ROOT / "agent/wiki_builder/features/relations.py",
         PROJECT_ROOT / "agent/prompts/templates/personal_wiki_classifier.md",
+        PROJECT_ROOT
+        / "agent/prompts/templates/personal_wiki_relation_reviewer.md",
     ):
         digest.update(path.read_bytes())
     return f"{completed.stdout.strip()}+{digest.hexdigest()[:12]}"

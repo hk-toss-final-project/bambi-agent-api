@@ -144,6 +144,10 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
                 "wiki_version_id": persisted.wiki_version_id,
                 "wiki_version": persisted.wiki_version,
                 "chunk_count": persisted.chunk_count,
+                "extracted_relation_count": build_plan.extracted_relation_count,
+                "stored_relation_count": persisted.stored_relation_count,
+                "isolated_node_count": build_plan.isolated_node_count,
+                "relation_warnings": build_plan.relation_warnings,
                 "affected_documents": [
                     {
                         "document_id": document.document_id,

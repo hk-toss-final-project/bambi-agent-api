@@ -54,12 +54,28 @@ class ConceptClassification:
 
 
 @dataclass(frozen=True, slots=True)
+class WikiRelationClassification:
+    """LLM 원문 근거로 검증된 entity·concept 관계 후보 한 건."""
+
+    source_name: str
+    source_kind: str
+    target_name: str
+    target_kind: str
+    relation_type: str
+    evidence: str
+    source_matched_key: str | None = None
+    target_matched_key: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class WikiClassification:
     """LLM 분류 호출 한 번의 전체 결과."""
 
     source_summary: str = ""
     entities: list[EntityClassification] = field(default_factory=list)
     concepts: list[ConceptClassification] = field(default_factory=list)
+    relations: list[WikiRelationClassification] = field(default_factory=list)
+    relation_warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +124,9 @@ class WikiBuildPlan:
     index: GeneratedArtifact
     source_manifest: GeneratedArtifact
     log_entry: GeneratedArtifact
+    extracted_relation_count: int = 0
+    isolated_node_count: int = 0
+    relation_warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
