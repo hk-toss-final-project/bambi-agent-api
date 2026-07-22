@@ -1,7 +1,7 @@
 """Global Source 검색을 에이전트 Tool로 노출하는 함수."""
 
 
-# MVP: BAMBI-005 Global Source 검색 단계에서 구현합니다.
+# MVP: REPORT-005 Global Source 검색 단계에서 구현합니다.
 async def search_global_source_tool(
     query: str,
     top_k: int = 10,

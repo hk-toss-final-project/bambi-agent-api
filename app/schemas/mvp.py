@@ -154,7 +154,7 @@ class ContentMarkRequest(WikiSourceRequestBase):
 
 
 class GenerationRequest(ImmutableSchema):
-    """밤비 개인화 콘텐츠 생성을 요청하는 모델."""
+    """리포트 생성기 개인화 콘텐츠 생성을 요청하는 모델."""
 
     idempotency_key: str = Field(
         min_length=1,
@@ -205,7 +205,7 @@ class AcceptedJobResponse(ImmutableSchema):
         default=None, description="즉시 저장된 원본 문서 Version 식별자"
     )
     generation_request_id: str | None = Field(
-        default=None, description="Bambi 생성 요청 식별자"
+        default=None, description="Report Builder 생성 요청 식별자"
     )
 
 

@@ -33,53 +33,6 @@ wheels = [
 ]
 
 [[package]]
-name = "bambi-agent-api"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "fastapi" },
-    { name = "feedparser" },
-    { name = "htmldate" },
-    { name = "httpx" },
-    { name = "langchain-openai" },
-    { name = "langgraph" },
-    { name = "openai" },
-    { name = "psycopg", extra = ["binary", "pool"] },
-    { name = "python-dotenv" },
-    { name = "python-multipart" },
-    { name = "tavily-python" },
-    { name = "uvicorn" },
-    { name = "youtube-search-python" },
-    { name = "youtube-transcript-api" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", specifier = ">=0.139.0" },
-    { name = "feedparser", specifier = ">=6.0.12" },
-    { name = "htmldate", specifier = ">=1.10.0" },
-    { name = "httpx", specifier = ">=0.27,<0.28" },
-    { name = "langchain-openai", specifier = ">=1.3.4" },
-    { name = "langgraph", specifier = ">=1.2.8" },
-    { name = "openai", specifier = ">=2.44.0" },
-    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2,<4" },
-    { name = "python-dotenv", specifier = ">=1.2.2" },
-    { name = "python-multipart", specifier = ">=0.0.32" },
-    { name = "tavily-python", specifier = ">=0.7.26" },
-    { name = "uvicorn", specifier = ">=0.51.0" },
-    { name = "youtube-search-python", specifier = ">=1.6.6" },
-    { name = "youtube-transcript-api", specifier = ">=1.2.4" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.1.1" }]
-
-[[package]]
 name = "certifi"
 version = "2026.6.17"
 source = { registry = "https://pypi.org/simple" }
@@ -824,6 +777,53 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/0f/de/f8613c03b36786ddef2c930d28f9bcae861fcd541cc9203a870956cf1e83/regex-2026.6.28-cp314-cp314t-win_amd64.whl", hash = "sha256:ede8d8e53b6dde0a50f7eca902f0af76d87ab02a55aba7542da68ae3e5dfe83d", size = 283650, upload-time = "2026-06-28T19:56:50.614Z" },
     { url = "https://files.pythonhosted.org/packages/4d/f3/f5ec86839bbabe33b6dee649b62ff9a445d43de6b0ad780cf6b83c56f61e/regex-2026.6.28-cp314-cp314t-win_arm64.whl", hash = "sha256:4da6f6a72f8700b97a1a765e837fb7d5750bfd9f13acea7bae498f573e3a70a8", size = 283338, upload-time = "2026-06-28T19:56:52.879Z" },
 ]
+
+[[package]]
+name = "report-builder-agent-api"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "fastapi" },
+    { name = "feedparser" },
+    { name = "htmldate" },
+    { name = "httpx" },
+    { name = "langchain-openai" },
+    { name = "langgraph" },
+    { name = "openai" },
+    { name = "psycopg", extra = ["binary", "pool"] },
+    { name = "python-dotenv" },
+    { name = "python-multipart" },
+    { name = "tavily-python" },
+    { name = "uvicorn" },
+    { name = "youtube-search-python" },
+    { name = "youtube-transcript-api" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.139.0" },
+    { name = "feedparser", specifier = ">=6.0.12" },
+    { name = "htmldate", specifier = ">=1.10.0" },
+    { name = "httpx", specifier = ">=0.27,<0.28" },
+    { name = "langchain-openai", specifier = ">=1.3.4" },
+    { name = "langgraph", specifier = ">=1.2.8" },
+    { name = "openai", specifier = ">=2.44.0" },
+    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2,<4" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "python-multipart", specifier = ">=0.0.32" },
+    { name = "tavily-python", specifier = ">=0.7.26" },
+    { name = "uvicorn", specifier = ">=0.51.0" },
+    { name = "youtube-search-python", specifier = ">=1.6.6" },
+    { name = "youtube-transcript-api", specifier = ">=1.2.4" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.1.1" }]
 
 [[package]]
 name = "requests"

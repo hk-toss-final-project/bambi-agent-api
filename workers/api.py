@@ -9,7 +9,7 @@ from .features.global_source_collector import (
 )
 from .features.global_content_fetcher import run_global_content_fetch_batch
 from .features.personal_wiki_builder import run_personal_wiki_batch, worker_002
-from .features.bambi_generation import run_bambi_generation_batch, worker_003
+from .features.report_generation import run_report_generation_batch, worker_003
 from .features.content_quality import worker_004
 from .features.summary import worker_005
 from .features.translation import worker_006

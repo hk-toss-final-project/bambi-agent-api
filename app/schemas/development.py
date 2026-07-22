@@ -246,7 +246,7 @@ ScenarioSource = Annotated[
 
 
 class SourceToContentScenarioRequest(DevelopmentSchema):
-    """원본 저장부터 Bambi 콘텐츠까지 한 번에 실행하는 개발 요청."""
+    """원본 저장부터 Report Builder 콘텐츠까지 한 번에 실행하는 개발 요청."""
 
     source: ScenarioSource = Field(description="URL 또는 Markdown 클리핑 원본")
     context: UserContextUpsertRequest | None = Field(
@@ -260,7 +260,7 @@ class SourceToContentScenarioRequest(DevelopmentSchema):
         default_factory=LatestInformationSearchRequest,
         description="최신 외부 정보 검색 조건",
     )
-    generation: GenerationRequest = Field(description="Bambi 생성 조건")
+    generation: GenerationRequest = Field(description="Report Builder 생성 조건")
 
 
 class SourceToContentScenarioResponse(DevelopmentSchema):

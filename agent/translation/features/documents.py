@@ -33,6 +33,6 @@ async def tr_003(request: FeatureRequest) -> FeatureResult:
 async def tr_004(request: FeatureRequest) -> FeatureResult:
     """[TR-004] 생성 콘텐츠 번역.
 
-    밤비가 생성한 콘텐츠를 다른 언어로 번역한다.
+    리포트 생성기가 생성한 콘텐츠를 다른 언어로 번역한다.
     """
     raise NotImplementedError("[TR-004] 기능 구현이 필요합니다.")

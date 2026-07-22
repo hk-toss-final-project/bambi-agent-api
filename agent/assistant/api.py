@@ -5,7 +5,7 @@
 이 모듈만 import한다.
 
 이 기능 영역은 전체 명세(docs/agent-api-feature-spec.md)의 1~43절 기능 ID
-체계(BAMBI-*, WBA-* 등)에 속하지 않는 별도 제품 라인이라, 기능-ID 형식
+체계(REPORT-*, WBA-* 등)에 속하지 않는 별도 제품 라인이라, 기능-ID 형식
 함수(`async def xxx_001(request) -> FeatureResult`)를 두지 않는다. 대신
 AGENTS.md의 구조 규칙(구현은 features/, 공개는 api.py)은 그대로 따른다.
 """

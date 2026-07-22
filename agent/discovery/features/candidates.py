@@ -9,7 +9,7 @@ from shared.contracts import FeatureRequest, FeatureResult
 async def disc_009(request: FeatureRequest) -> FeatureResult:
     """[DISC-009] 콘텐츠 생성 후보 생성.
 
-    밤비가 사용할 최신 자료 후보를 생성한다.
+    리포트 생성기가 사용할 최신 자료 후보를 생성한다.
     """
     raise NotImplementedError("[DISC-009] 기능 구현이 필요합니다.")
 

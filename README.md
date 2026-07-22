@@ -1,10 +1,10 @@
-# Bambi Agent API
+# Report Builder Agent API
 
 이 저장소는 서버 두 개로 구성됩니다.
 
 | | 파일 | 포트 | 상태 |
 |---|---|---|---|
-| **Agent API + LLM Wiki Graph UI** | `app/main.py` | 8000 | ✅ MVP 핵심 파이프라인 동작 — 클리핑/URL → LLM Wiki → 관심사 → 외부 수집 → Bambi 생성 → 발행 Snapshot |
+| **Agent API + LLM Wiki Graph UI** | `app/main.py` | 8000 | ✅ MVP 핵심 파이프라인 동작 — 클리핑/URL → LLM Wiki → 관심사 → 외부 수집 → Report Builder 생성 → 발행 Snapshot |
 | **키워드 비서 웹 UI** | `app/assistant/main.py` | 8100 | ✅ 동작 — 독립 실행 데모 앱 |
 
 기능별 구현 상태는 [MVP 구현 현황 체크리스트](docs/agent-api-mvp-scope.md)에서 확인합니다.
@@ -20,7 +20,7 @@ cp .env.example .env
 
 `.env`에서 최소한 아래 값을 채웁니다.
 
-- **`OPENAI_API_KEY`** — Wiki 빌드·Bambi 생성·키워드 비서 요약에 필요 (필수)
+- **`OPENAI_API_KEY`** — Wiki 빌드·Report Builder 생성·키워드 비서 요약에 필요 (필수)
 - `AGENT_DATABASE_URL`, `AGENT_DB_PASSWORD` — Agent API·Worker용.
   키워드 비서 UI만 쓸 경우 비워둬도 됩니다.
 - `ENABLE_DEV_AGENT_API=true` — Swagger 개발 실행 API(`/internal/v1/dev/**`)
@@ -91,23 +91,23 @@ uv run python scripts/run_all.py
 
 ### 6. Worker 실행
 
-등록된 Agent Job(Wiki 빌드, Bambi 생성)과 외부 수집을 처리하는 CLI입니다.
-Wiki 빌드와 Bambi 생성은 OpenAI를 실제 호출하므로 비용이 발생합니다.
+등록된 Agent Job(Wiki 빌드, Report Builder 생성)과 외부 수집을 처리하는 CLI입니다.
+Wiki 빌드와 Report Builder 생성은 OpenAI를 실제 호출하므로 비용이 발생합니다.
 
 | Worker | 용도 | 모드 |
 |---|---|---|
 | `personal-wiki` | 클리핑·URL 원본을 LLM Wiki로 빌드 (Chunk 포함, Embedding은 보류) | 단발 / `--loop` 상주 |
-| `bambi-generation` | 생성 Job을 처리해 콘텐츠·발행 Snapshot 저장 | 단발 / `--loop` 상주 |
+| `report-generation` | 생성 Job을 처리해 콘텐츠·발행 Snapshot 저장 | 단발 / `--loop` 상주 |
 | `global-collector` | 키워드로 외부 기사 수집 (`--keywords` 필수, Provider 기본 `gdelt,naver`) | 단발 |
 | `global-content` | 수집된 기사의 본문 확보 | 단발 |
 
 ```bash
 # 단발: 대기 Job 한 Batch를 처리하고 종료
 uv run python -m workers.main --worker personal-wiki
-uv run python -m workers.main --worker bambi-generation
+uv run python -m workers.main --worker report-generation
 
 # 상주: Job이 생기면 자동 처리 (없으면 60초 간격으로 확인)
-uv run python -m workers.main --worker bambi-generation --loop
+uv run python -m workers.main --worker report-generation --loop
 
 # 외부 기사 수집 → 본문 확보
 uv run python -m workers.main --worker global-collector --keywords "AI 에이전트,개인화"

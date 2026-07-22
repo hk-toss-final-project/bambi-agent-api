@@ -41,7 +41,7 @@ def test_swagger_ui_contains_theme_toggle(client: TestClient) -> None:
     assert response.status_code == 200
     assert 'id = "swagger-theme-toggle"' in response.text
     assert 'html[data-theme="dark"]' in response.text
-    assert 'storageKey = "bambi-swagger-theme"' in response.text
+    assert 'storageKey = "report-builder-swagger-theme"' in response.text
     assert "prefers-color-scheme: dark" in response.text
     assert 'classList.toggle("dark-mode", initialTheme === "dark")' in response.text
     assert 'classList.toggle("dark-mode", theme === "dark")' in response.text

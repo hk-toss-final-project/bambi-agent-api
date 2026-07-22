@@ -353,7 +353,7 @@ class PublishSnapshotService:
         self._repository = repository
 
     async def save_publish_snapshot(self, snapshot: PublishSnapshotResponse) -> None:
-        """Bambi Worker가 생성한 최신 발행 Snapshot을 저장한다."""
+        """Report Builder Worker가 생성한 최신 발행 Snapshot을 저장한다."""
         try:
             await self._repository.save(snapshot)
         except StalePublishSnapshotError as exc:

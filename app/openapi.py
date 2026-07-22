@@ -5,7 +5,7 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse
 
 OPENAPI_DESCRIPTION = """
-LangGraph 기반 에이전트를 제공하는 Bambi Agent API입니다.
+LangGraph 기반 에이전트를 제공하는 Report Builder Agent API입니다.
 
 현재 MVP는 `service-api`와 `service-worker`가 호출하는 내부 API를 제공합니다.
 내부 인증이 적용되기 전까지 API와 Swagger UI를 외부 네트워크에 노출하지 마세요.
@@ -47,12 +47,12 @@ DEVELOPMENT_OPENAPI_TAGS = [
         "description": "관심 키워드로 최신 외부 자료를 수집하고 Global 문서로 저장합니다.",
     },
     {
-        "name": "dev-bambi",
-        "description": "개인 Wiki와 Global 최신 자료로 Bambi 콘텐츠를 즉시 생성합니다.",
+        "name": "dev-reports",
+        "description": "개인 Wiki와 Global 최신 자료로 Report Builder 콘텐츠를 즉시 생성합니다.",
     },
     {
         "name": "dev-scenarios",
-        "description": "원본 저장부터 Bambi 콘텐츠까지 전체 흐름을 한 요청으로 실행합니다.",
+        "description": "원본 저장부터 Report Builder 콘텐츠까지 전체 흐름을 한 요청으로 실행합니다.",
     },
     {
         "name": "dev-workers",
@@ -78,7 +78,7 @@ SWAGGER_UI_PARAMETERS: dict[str, bool | str] = {
 SWAGGER_THEME_HEAD = """
 <script>
 (() => {
-  const storageKey = "bambi-swagger-theme";
+  const storageKey = "report-builder-swagger-theme";
   let savedTheme = null;
   try {
     savedTheme = window.localStorage.getItem(storageKey);
@@ -237,7 +237,7 @@ html[data-theme="dark"] .swagger-ui .opblock.opblock-patch {
 SWAGGER_THEME_TOGGLE_SCRIPT = """
 <script>
 (() => {
-  const storageKey = "bambi-swagger-theme";
+  const storageKey = "report-builder-swagger-theme";
   const toggle = document.createElement("button");
   toggle.id = "swagger-theme-toggle";
   toggle.type = "button";

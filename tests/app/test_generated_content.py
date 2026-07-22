@@ -1,4 +1,4 @@
-"""저장된 Bambi 콘텐츠 목록·상세 조회 서비스를 검증한다."""
+"""저장된 Report Builder 콘텐츠 목록·상세 조회 서비스를 검증한다."""
 
 import asyncio
 from datetime import UTC, datetime
@@ -49,7 +49,7 @@ class _FakeGeneratedContentRepository:
             "title": "제목",
             "summary": "요약",
             "created_at": datetime.now(UTC),
-            "feature_id": "BAMBI-018",
+            "feature_id": "REPORT-018",
             "user_id": user_id,
             "body": "본문 [P1]",
             "structured_body": {"format": "markdown"},

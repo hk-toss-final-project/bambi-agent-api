@@ -21,12 +21,12 @@ from workers.runtime.api import wc_001
 
 def _parse_args() -> argparse.Namespace:
     """Agent Worker 명령행 옵션을 파싱한다."""
-    parser = argparse.ArgumentParser(description="Bambi Agent Worker")
+    parser = argparse.ArgumentParser(description="Report Builder Agent Worker")
     parser.add_argument(
         "--worker",
         choices=[
             "personal-wiki",
-            "bambi-generation",
+            "report-generation",
             "global-collector",
             "global-content",
         ],
@@ -56,7 +56,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        help="Worker LLM 모델 (기본: Wiki는 WIKI_LLM_MODEL, Bambi는 BAMBI_LLM_MODEL)",
+        help="Worker LLM 모델 (기본: Wiki는 WIKI_LLM_MODEL, Report Builder는 REPORT_LLM_MODEL)",
     )
     parser.add_argument("--lease-seconds", type=int, help="Job Lease 유지 시간")
     parser.add_argument(
@@ -108,7 +108,7 @@ async def _run_batch_once(
             database_url=settings.agent_database_url,
             limit=args.limit or settings.personal_wiki_worker_batch_size,
         )
-    if args.worker == "bambi-generation":
+    if args.worker == "report-generation":
         return await worker_003(
             database_url=settings.agent_database_url,
             worker_id=worker_id,
@@ -116,7 +116,7 @@ async def _run_batch_once(
             lease_seconds=(
                 args.lease_seconds or settings.personal_wiki_job_lease_seconds
             ),
-            model=args.model or settings.bambi_llm_model,
+            model=args.model or settings.report_llm_model,
         )
     return await worker_002(
         database_url=settings.agent_database_url,
@@ -156,7 +156,7 @@ async def _run() -> None:
         """결과가 있는 Batch를 JSON Line으로 출력한다."""
         print(json.dumps(results, ensure_ascii=False, default=str), flush=True)
 
-    if args.worker == "bambi-generation":
+    if args.worker == "report-generation":
         await wc_001(
             database_url=settings.agent_database_url,
             worker_id=worker_id,
@@ -164,10 +164,10 @@ async def _run() -> None:
             lease_seconds=(
                 args.lease_seconds or settings.personal_wiki_job_lease_seconds
             ),
-            model=args.model or settings.bambi_llm_model,
+            model=args.model or settings.report_llm_model,
             interval_seconds=args.interval_seconds,
             max_batches=None,
-            job_type="bambi_generation",
+            job_type="report_generation",
             on_batch=on_batch,
         )
         return

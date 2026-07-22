@@ -20,8 +20,8 @@ class PersonalWikiBuildState(TypedDict):
     result: NotRequired[dict[str, object]]
 
 
-class BambiGenerationState(TypedDict):
-    """Bambi Generation 그래프가 노드 사이에서 갱신하는 상태."""
+class ReportGenerationState(TypedDict):
+    """Report Builder Generation 그래프가 노드 사이에서 갱신하는 상태."""
 
     user_id: str
     job_id: str

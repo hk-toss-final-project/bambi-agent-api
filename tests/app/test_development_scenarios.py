@@ -1,4 +1,4 @@
-"""원본에서 Bambi 콘텐츠까지 이어지는 개발 시나리오를 검증한다."""
+"""원본에서 Report Builder 콘텐츠까지 이어지는 개발 시나리오를 검증한다."""
 
 import asyncio
 from datetime import UTC, datetime
@@ -27,12 +27,12 @@ class _FakeJobs:
         return _accepted("wiki-job-1", source=True)
 
     async def submit_generation(self, **_: object) -> AcceptedJobResponse:
-        """등록된 Bambi 생성 Job을 반환한다."""
-        return _accepted("bambi-job-1", generation=True)
+        """등록된 Report Builder 생성 Job을 반환한다."""
+        return _accepted("report-job-1", generation=True)
 
 
 class _FakeWorkflows:
-    """Wiki Build와 Bambi 생성 Handler 결과를 Job ID별로 반환한다."""
+    """Wiki Build와 Report Builder 생성 Handler 결과를 Job ID별로 반환한다."""
 
     async def run_job(self, job_id: str, **_: object) -> DevelopmentJobRunResponse:
         """Job ID에 대응하는 저장 결과를 반환한다."""
@@ -41,9 +41,9 @@ class _FakeWorkflows:
             result: dict[str, object] = {"wiki_version_id": "wiki-version-1"}
             job_type = "personal_wiki_build"
         else:
-            stage = "bambi_generation"
+            stage = "report_generation"
             result = {"content_candidate_id": "candidate-1"}
-            job_type = "bambi_generation"
+            job_type = "report_generation"
         return DevelopmentJobRunResponse(
             run_id=f"run-{job_id}",
             job_id=job_id,
@@ -110,7 +110,7 @@ def _accepted(
 
 
 def test_source_to_content_scenario_returns_all_persisted_stage_ids() -> None:
-    """클리핑·Wiki·관심·최신 정보·Bambi 결과 ID가 한 응답에 모이는지 검증한다."""
+    """클리핑·Wiki·관심·최신 정보·Report Builder 결과 ID가 한 응답에 모이는지 검증한다."""
     payload = SourceToContentScenarioRequest.model_validate(
         {
             "context": {"context_version": 1, "plan": "free"},
@@ -145,7 +145,7 @@ def test_source_to_content_scenario_returns_all_persisted_stage_ids() -> None:
         "wiki_build",
         "interest_extraction",
         "latest_collection",
-        "bambi_generation",
+        "report_generation",
     ]
     assert response.result["source_document_version_id"] == "source-version-1"
     assert response.result["wiki_version_id"] == "wiki-version-1"

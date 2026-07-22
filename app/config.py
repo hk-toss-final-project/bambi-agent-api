@@ -11,7 +11,7 @@ class Settings(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    app_name: str = Field(default="Bambi Agent API", description="애플리케이션 이름")
+    app_name: str = Field(default="Report Builder Agent API", description="애플리케이션 이름")
     app_version: str = Field(default="0.1.0", description="애플리케이션 버전")
     environment: str = Field(default="local", description="실행 환경 이름")
     api_prefix: str = Field(default="/internal/v1", description="내부 API 경로 Prefix")
@@ -54,8 +54,8 @@ class Settings(BaseModel):
     wiki_llm_model: str = Field(
         default="gpt-4.1-mini", description="Personal Wiki 분류 모델"
     )
-    bambi_llm_model: str = Field(
-        default="gpt-4.1-mini", description="Bambi 콘텐츠 생성 모델"
+    report_llm_model: str = Field(
+        default="gpt-4.1-mini", description="Report Builder 콘텐츠 생성 모델"
     )
     wiki_embedding_model: str = Field(
         default="text-embedding-3-small",
@@ -110,7 +110,7 @@ def load_settings() -> Settings:
     """[SYS-003] 환경변수와 Secret 참조로부터 설정을 로딩한다."""
     load_dotenv()
     return Settings(
-        app_name=os.getenv("APP_NAME", "Bambi Agent API"),
+        app_name=os.getenv("APP_NAME", "Report Builder Agent API"),
         app_version=os.getenv("APP_VERSION", "0.1.0"),
         environment=os.getenv("APP_ENV", "local"),
         api_prefix=os.getenv("API_PREFIX", "/internal/v1"),
@@ -128,7 +128,7 @@ def load_settings() -> Settings:
         news_api_key=_optional_env("NEWS_API_KEY"),
         gdelt_base_url=_optional_env("GDELT_BASE_URL"),
         wiki_llm_model=os.getenv("WIKI_LLM_MODEL", "gpt-4.1-mini"),
-        bambi_llm_model=os.getenv("BAMBI_LLM_MODEL", "gpt-4.1-mini"),
+        report_llm_model=os.getenv("REPORT_LLM_MODEL", "gpt-4.1-mini"),
         wiki_embedding_model=os.getenv(
             "WIKI_EMBEDDING_MODEL", "text-embedding-3-small"
         ),

@@ -1,6 +1,6 @@
-"""사용자 Context, Bambi Job·검색 Context와 생성 결과 영속화.
+"""사용자 Context, Report Builder Job·검색 Context와 생성 결과 영속화.
 
-Service API의 생성 요청을 PostgreSQL Job으로 등록하고, Bambi Worker가 개인
+Service API의 생성 요청을 PostgreSQL Job으로 등록하고, Report Builder Worker가 개인
 Wiki와 Global 문서를 검색해 만든 콘텐츠·Citation·Publish Snapshot을 저장한다.
 """
 
@@ -13,7 +13,7 @@ from typing import Any, Sequence
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
-from shared.bambi_models import BambiContextDocument, GeneratedBambiContent
+from shared.report_models import ReportContextDocument, GeneratedReportContent
 
 type DictRow = dict[str, Any]
 
@@ -23,7 +23,7 @@ class StaleContextVersionError(RuntimeError):
 
 
 class UserContextRequiredError(RuntimeError):
-    """Bambi 생성에 필요한 사용자 Context가 없는 오류."""
+    """Report Builder 생성에 필요한 사용자 Context가 없는 오류."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +43,7 @@ class StoredUserContext:
 
 @dataclass(frozen=True, slots=True)
 class PersistedGenerationSubmission:
-    """Bambi Generation Job과 생성 요청 저장 결과."""
+    """Report Builder Generation Job과 생성 요청 저장 결과."""
 
     job_id: str
     generation_request_id: str
@@ -128,7 +128,7 @@ async def upsert_user_context_snapshot(
     )
 
 
-async def enqueue_bambi_generation_job(
+async def enqueue_report_generation_job(
     connection: AsyncConnection[DictRow],
     *,
     user_id: str,
@@ -139,7 +139,7 @@ async def enqueue_bambi_generation_job(
     scheduled_at: datetime | None = None,
     request_id: str,
 ) -> PersistedGenerationSubmission:
-    """최신 사용자 Context에 연결된 Bambi Job과 생성 요청을 멱등 등록한다.
+    """최신 사용자 Context에 연결된 Report Builder Job과 생성 요청을 멱등 등록한다.
 
     scheduled_at을 지정하면 Worker Batch Claim의 `scheduled_at <= now`
     조건에 따라 그 시각 전에는 실행되지 않는 예약 Job으로 등록한다.
@@ -179,7 +179,7 @@ async def enqueue_bambi_generation_job(
             request_id,
             scheduled_at
         ) VALUES (
-            'SVC-008', 'bambi_generation', %s, %s, 'queued', 0, %s, true, %s,
+            'SVC-008', 'report_generation', %s, %s, 'queued', 0, %s, true, %s,
             COALESCE(%s, clock_timestamp())
         )
         ON CONFLICT (feature_id, COALESCE(user_id, ''), idempotency_key)
@@ -202,7 +202,7 @@ async def enqueue_bambi_generation_job(
         )
         job = await existing_cursor.fetchone()
         if job is None:
-            raise RuntimeError(f"멱등 충돌한 Bambi Job을 찾을 수 없습니다: {idempotency_key}")
+            raise RuntimeError(f"멱등 충돌한 Report Builder Job을 찾을 수 없습니다: {idempotency_key}")
     request_cursor = await connection.execute(
         """
         INSERT INTO agent.generation_requests (
@@ -243,16 +243,16 @@ async def enqueue_bambi_generation_job(
     )
 
 
-async def load_bambi_context(
+async def load_report_context(
     connection: AsyncConnection[DictRow],
     *,
     user_id: str,
     query: str,
     top_k_per_scope: int = 5,
-) -> list[BambiContextDocument]:
+) -> list[ReportContextDocument]:
     """개인 Wiki와 Global 최신 문서의 Keyword·Trigram 검색 Context를 조회한다."""
     if not 1 <= top_k_per_scope <= 20:
-        raise ValueError("Bambi 검색 top_k는 1에서 20 사이여야 합니다.")
+        raise ValueError("Report Builder 검색 top_k는 1에서 20 사이여야 합니다.")
     namespace_key = f"user/{user_id}"
     cursor = await connection.execute(
         """
@@ -335,7 +335,7 @@ async def load_bambi_context(
         rows = await fallback_cursor.fetchall()
     personal_index = 0
     global_index = 0
-    contexts: list[BambiContextDocument] = []
+    contexts: list[ReportContextDocument] = []
     for row in rows:
         if row["namespace_key"] == "global":
             global_index += 1
@@ -344,7 +344,7 @@ async def load_bambi_context(
             personal_index += 1
             reference = f"P{personal_index}"
         contexts.append(
-            BambiContextDocument(
+            ReportContextDocument(
                 reference=reference,
                 document_version_id=str(row["document_version_id"]),
                 chunk_id=str(row["chunk_id"]),
@@ -358,15 +358,15 @@ async def load_bambi_context(
     return contexts
 
 
-async def persist_bambi_generation(
+async def persist_report_generation(
     connection: AsyncConnection[DictRow],
     *,
     job_id: str,
     user_id: str,
     attempt_number: int,
     content_type: str,
-    generated: GeneratedBambiContent,
-    contexts: Sequence[BambiContextDocument],
+    generated: GeneratedReportContent,
+    contexts: Sequence[ReportContextDocument],
     latency_ms: int,
 ) -> dict[str, object]:
     """생성 Run·후보·Citation·Publish Snapshot·Outbox를 한 트랜잭션에 저장한다."""
@@ -381,7 +381,7 @@ async def persist_bambi_generation(
     )
     generation_request = await request_cursor.fetchone()
     if generation_request is None:
-        raise ValueError("Bambi Job에 연결된 generation_request가 없습니다.")
+        raise ValueError("Report Builder Job에 연결된 generation_request가 없습니다.")
     await connection.execute(
         "UPDATE agent.generation_requests SET status = 'running', updated_at = clock_timestamp() WHERE id = %s",
         (generation_request["id"],),
@@ -414,7 +414,7 @@ async def persist_bambi_generation(
         ),
     )
     generation_run = await run_cursor.fetchone()
-    content_id = f"bambi-{job_id}"
+    content_id = f"report-{job_id}"
     version_cursor = await connection.execute(
         """
         SELECT COALESCE(MAX(version), 0) + 1 AS next_version

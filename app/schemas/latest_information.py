@@ -72,7 +72,7 @@ class LatestProviderFailure(LatestInformationSchema):
 class LatestInformationSearchResponse(LatestInformationSchema):
     """키워드와 Provider별 최신 정보 수집·저장 결과."""
 
-    feature_id: str = Field(default="BAMBI-005", description="명세 기능 ID")
+    feature_id: str = Field(default="REPORT-005", description="명세 기능 ID")
     user_id: str = Field(description="검색 기준 사용자 ID")
     query: str = Field(description="Provider에 전달한 검색 Query")
     keywords: list[str] = Field(description="사용한 관심 또는 직접 입력 키워드")

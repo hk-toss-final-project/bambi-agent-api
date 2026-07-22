@@ -1,15 +1,15 @@
-"""Bambi Generation Worker의 러너 위임과 입력 검증을 검증한다."""
+"""Report Builder Generation Worker의 러너 위임과 입력 검증을 검증한다."""
 
 import asyncio
 from typing import Any
 
 import pytest
 
-from workers.features import bambi_generation
-from workers.features.bambi_generation import worker_003
+from workers.features import report_generation
+from workers.features.report_generation import worker_003
 
 
-def test_run_bambi_generation_batch_delegates_to_shared_runner(
+def test_run_report_generation_batch_delegates_to_shared_runner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """생성 Batch가 공통 러너에 유형·오류 접두사·처리 함수를 전달한다."""
@@ -18,23 +18,23 @@ def test_run_bambi_generation_batch_delegates_to_shared_runner(
     async def fake_run_job_batch(**kwargs: Any) -> list[dict[str, object]]:
         """공통 Batch 러너 호출 인자를 기록하고 고정 결과를 반환한다."""
         captured.update(kwargs)
-        return [{"job_id": "bambi-job-1", "status": "completed"}]
+        return [{"job_id": "report-job-1", "status": "completed"}]
 
-    monkeypatch.setattr(bambi_generation, "run_job_batch", fake_run_job_batch)
+    monkeypatch.setattr(report_generation, "run_job_batch", fake_run_job_batch)
 
     results = asyncio.run(
-        bambi_generation.run_bambi_generation_batch(
+        report_generation.run_report_generation_batch(
             database_url="postgresql://test",
             worker_id="worker-1",
             limit=3,
             lease_seconds=600,
-            model="bambi-model",
+            model="report-model",
         )
     )
 
-    assert results == [{"job_id": "bambi-job-1", "status": "completed"}]
-    assert captured["job_type"] == "bambi_generation"
-    assert captured["error_code_prefix"] == "BAMBI_GENERATION"
+    assert results == [{"job_id": "report-job-1", "status": "completed"}]
+    assert captured["job_type"] == "report_generation"
+    assert captured["error_code_prefix"] == "REPORT_GENERATION"
     assert captured["limit"] == 3
     assert callable(captured["process"])
 

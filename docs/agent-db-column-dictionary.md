@@ -1,9 +1,10 @@
 # Agent DB 컬럼 사전
 
-> 기준: 2026-07-15. 43개 테이블, 497개 컬럼을 0001_initial.sql,
+> 기준: 2026-07-22. 43개 테이블, 497개 컬럼을 0001_initial.sql,
 > 0002_publish_snapshot_batches.sql, 0003_web_clipping_markdown.sql,
 > 0004_separate_user_sources_from_llm_wiki.sql,
-> 0005_structure_llm_wiki_documents.sql 기준으로 정리했습니다.
+> 0005_structure_llm_wiki_documents.sql 기준으로 정리했습니다. 컬럼을 추가하지
+> 않고 생성 Job 값을 이전하는 0006_rename_report_builder_contracts.sql도 반영합니다.
 
 이 문서는 Agent DB의 모든 테이블과 컬럼을 물리 Schema 수준에서 설명합니다.
 테이블의 영역·성격·관계·RLS·런타임 연결 상태는
@@ -877,4 +878,5 @@ Agent DB에 적용된 Migration Version을 기록합니다.
 - [웹 클리핑 Markdown Migration](../database/migrations/0003_web_clipping_markdown.sql): Frontmatter와 본문 형식 확장
 - [사용자 원본·LLM Wiki 분리 Migration](../database/migrations/0004_separate_user_sources_from_llm_wiki.sql): 원본 테이블과 출처 관계 추가
 - [LLM Wiki Vault 구조 Migration](../database/migrations/0005_structure_llm_wiki_documents.sql): 문서 유형·관계·Build 구성 추가
+- [Report Builder 계약 이전 Migration](../database/migrations/0006_rename_report_builder_contracts.sql): 생성 Job 유형·기능 ID 이전
 - [Database 실행 안내](../database/README.md): Local DB 기동과 Migration 적용 방법

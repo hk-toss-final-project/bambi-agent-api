@@ -1,4 +1,4 @@
-"""Bambi 개인·Global 근거 결합 생성 품질을 실제 LLM으로 평가한다.
+"""Report Builder 개인·Global 근거 결합 생성 품질을 실제 LLM으로 평가한다.
 
 비용이 발생하므로 예상 입력 Token과 비용을 먼저 표시하고 --confirm-cost를
 명시한 경우에만 최소 10개 Benchmark 케이스를 실행한다.
@@ -11,7 +11,7 @@ import json
 import time
 from pathlib import Path
 
-from agent.bambi.api import BambiContextDocument, generate_bambi_content
+from agent.report_builder.api import ReportContextDocument, generate_report_content
 
 ROOT = Path(__file__).parent
 DATASET = ROOT / "dataset.jsonl"
@@ -55,12 +55,12 @@ def main() -> int:
     results: list[dict[str, object]] = []
     for case in cases:
         started = time.perf_counter()
-        generated = generate_bambi_content(
+        generated = generate_report_content(
             topic=str(case["topic"]),
             content_type=str(case["content_type"]),
             language=str(case["language"]),
             contexts=[
-                BambiContextDocument(
+                ReportContextDocument(
                     reference="P1",
                     document_version_id="personal-version",
                     chunk_id="personal-chunk",
@@ -70,7 +70,7 @@ def main() -> int:
                     url=None,
                     score=1,
                 ),
-                BambiContextDocument(
+                ReportContextDocument(
                     reference="G1",
                     document_version_id="global-version",
                     chunk_id="global-chunk",

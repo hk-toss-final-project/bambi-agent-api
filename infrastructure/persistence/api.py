@@ -78,9 +78,9 @@ from .features.generation_runtime import (
     StaleContextVersionError,
     StoredUserContext,
     UserContextRequiredError,
-    enqueue_bambi_generation_job,
-    load_bambi_context,
-    persist_bambi_generation,
+    enqueue_report_generation_job,
+    load_report_context,
+    persist_report_generation,
     upsert_user_context_snapshot,
 )
 from .features.events import db_027

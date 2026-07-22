@@ -25,7 +25,7 @@ async def mcptool_006(request: FeatureRequest) -> FeatureResult:
 async def mcptool_007(request: FeatureRequest) -> FeatureResult:
     """[MCPTOOL-007] 콘텐츠 생성.
 
-    밤비 콘텐츠 생성을 요청한다.
+    리포트 생성기 콘텐츠 생성을 요청한다.
     """
     raise NotImplementedError("[MCPTOOL-007] 기능 구현이 필요합니다.")
 

@@ -250,8 +250,8 @@ async def get_active_interests(
 @router.get(
     "/users/{user_id}/generated-contents",
     response_model=GeneratedContentListResponse,
-    operation_id="bambi_018_list",
-    summary="Bambi 생성 콘텐츠 목록 조회",
+    operation_id="report_018_list",
+    summary="Report Builder 생성 콘텐츠 목록 조회",
 )
 async def list_generated_contents(
     user_id: UserId,
@@ -259,15 +259,15 @@ async def list_generated_contents(
     offset: Annotated[int, Query(ge=0)] = 0,
     service: GeneratedContentService = Depends(get_generated_content_service),
 ) -> GeneratedContentListResponse:
-    """[BAMBI-018] 사용자의 저장된 Bambi 생성 후보를 최신순으로 조회한다."""
+    """[REPORT-018] 사용자의 저장된 Report Builder 생성 후보를 최신순으로 조회한다."""
     return await service.list_contents(user_id, limit=limit, offset=offset)
 
 
 @router.get(
     "/users/{user_id}/generated-contents/{candidate_id}",
     response_model=GeneratedContentDetailResponse,
-    operation_id="bambi_018_detail",
-    summary="Bambi 생성 콘텐츠 상세 조회",
+    operation_id="report_018_detail",
+    summary="Report Builder 생성 콘텐츠 상세 조회",
 )
 async def get_generated_content(
     user_id: UserId,
@@ -276,7 +276,7 @@ async def get_generated_content(
     ],
     service: GeneratedContentService = Depends(get_generated_content_service),
 ) -> GeneratedContentDetailResponse:
-    """[BAMBI-018] 생성 본문, 실행 정보와 Citation을 조회한다."""
+    """[REPORT-018] 생성 본문, 실행 정보와 Citation을 조회한다."""
     return await service.get_content(user_id, candidate_id)
 
 
@@ -293,7 +293,7 @@ async def request_generation(
     request: Request,
     service: AgentApiMvpService = Depends(get_mvp_service),
 ) -> AcceptedJobResponse:
-    """[SVC-008] 밤비 개인화 콘텐츠 생성 Job을 등록한다."""
+    """[SVC-008] 리포트 생성기 개인화 콘텐츠 생성 Job을 등록한다."""
     request_id = _request_id(request)
     return await svc_008(
         service,

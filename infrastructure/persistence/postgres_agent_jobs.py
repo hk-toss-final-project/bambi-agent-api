@@ -29,7 +29,7 @@ from infrastructure.persistence.api import (
     enqueue_personal_wiki_build_job,
     fail_agent_job,
     get_agent_job,
-    enqueue_bambi_generation_job,
+    enqueue_report_generation_job,
     list_runnable_agent_jobs,
     mark_url_source_event,
     register_url_and_enqueue,
@@ -233,11 +233,11 @@ class PostgresAgentJobRepository:
         scheduled_at: datetime | None = None,
         request_id: str,
     ) -> SubmittedGenerationJob:
-        """Bambi Generation Job과 요청을 사용자 Context에 연결해 저장한다."""
+        """Report Builder Generation Job과 요청을 사용자 Context에 연결해 저장한다."""
         async with self._pool.connection() as connection:
             async with connection.transaction():
                 await set_personal_wiki_scope(connection, user_id=user_id)
-                submitted = await enqueue_bambi_generation_job(
+                submitted = await enqueue_report_generation_job(
                     connection,
                     user_id=user_id,
                     idempotency_key=idempotency_key,
@@ -250,7 +250,7 @@ class PostgresAgentJobRepository:
                 stored = await get_agent_job(connection, job_id=submitted.job_id)
                 if stored is None:
                     raise RuntimeError(
-                        f"저장한 Bambi Job을 찾을 수 없습니다: {submitted.job_id}"
+                        f"저장한 Report Builder Job을 찾을 수 없습니다: {submitted.job_id}"
                     )
         return SubmittedGenerationJob(
             job=self._to_job_record(stored),
@@ -409,7 +409,7 @@ class PostgresAgentJobRepository:
         limit: int,
         offset: int,
     ) -> dict[str, object]:
-        """사용자의 Bambi 생성 후보를 최신순으로 조회한다."""
+        """사용자의 Report Builder 생성 후보를 최신순으로 조회한다."""
         async with self._pool.connection() as connection:
             async with connection.transaction():
                 await set_personal_wiki_scope(connection, user_id=user_id)

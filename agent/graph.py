@@ -1,6 +1,6 @@
 """LangGraph 기반 에이전트 그래프의 빌더와 실행 진입점.
 
-Personal Wiki Build와 Bambi Generation 오케스트레이션을 StateGraph로
+Personal Wiki Build와 Report Builder Generation 오케스트레이션을 StateGraph로
 정의한다. 개발 API(AgentWorkflowService)와 운영 Worker가 같은 그래프를
 invoke하므로 실행 경로가 갈라지지 않는다. DB 노드는 각자 짧은
 Transaction을 소유하고, LLM 노드는 Transaction 밖(스레드)에서 실행한다.
@@ -16,19 +16,19 @@ from typing import Any
 from langgraph.graph import END, StateGraph
 from psycopg import AsyncConnection
 
-from agent.bambi.api import (
-    bambi_004,
-    bambi_005,
-    bambi_008,
-    bambi_009,
-    bambi_011,
-    bambi_012,
-    bambi_018,
-    bambi_020,
-    bambi_021,
-    generate_bambi_content,
+from agent.report_builder.api import (
+    report_004,
+    report_005,
+    report_008,
+    report_009,
+    report_011,
+    report_012,
+    report_018,
+    report_020,
+    report_021,
+    generate_report_content,
 )
-from agent.state import BambiGenerationState, PersonalWikiBuildState
+from agent.state import ReportGenerationState, PersonalWikiBuildState
 from agent.wiki_builder.api import classify_source_for_wiki, wba_003
 from domain.personal_wiki.documents.api import pwiki_002
 from domain.personal_wiki.retrieval.api import prag_003, prag_006, prag_007
@@ -203,13 +203,13 @@ async def run_personal_wiki_build(
     return dict(state["result"])
 
 
-def build_bambi_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
-    """밤비 콘텐츠 생성 노드와 엣지를 조립해 컴파일된 그래프를 반환한다.
+def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
+    """리포트 생성기 콘텐츠 생성 노드와 엣지를 조립해 컴파일된 그래프를 반환한다.
 
     load_context → generate → persist 순서로 검색·생성·영속화를 잇는다.
     """
 
-    async def load_context(state: BambiGenerationState) -> dict[str, Any]:
+    async def load_context(state: ReportGenerationState) -> dict[str, Any]:
         """개인 Wiki와 Global 최신 문서 Context를 조회 Transaction으로 읽는다."""
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=state["user_id"])
@@ -219,48 +219,46 @@ def build_bambi_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 query=state["topic"],
             )
         contextualized = await prag_006(hybrid)
-        personal = await bambi_004(
+        personal = await report_004(
             FeatureRequest(
                 request_id=state["job_id"],
-                actor_id="bambi-generation-graph",
+                actor_id="report-generation-graph",
                 user_id=state["user_id"],
-                payload={
-                    "implementation": lambda: contextualized
-                },
+                payload={"implementation": lambda: contextualized},
             )
         )
-        combined = await bambi_005(
+        combined = await report_005(
             FeatureRequest(
                 request_id=state["job_id"],
-                actor_id="bambi-generation-graph",
+                actor_id="report-generation-graph",
                 user_id=state["user_id"],
                 payload={"implementation": lambda: personal.data.get("result", [])},
             )
         )
-        personalized = await bambi_012(
+        personalized = await report_012(
             FeatureRequest(
                 request_id=state["job_id"],
-                actor_id="bambi-generation-graph",
+                actor_id="report-generation-graph",
                 user_id=state["user_id"],
                 payload={"implementation": lambda: combined.data.get("result", [])},
             )
         )
         contexts = personalized.data.get("result")
         if not isinstance(contexts, list):
-            raise RuntimeError("BAMBI 검색 기능이 Context 목록을 반환하지 않았습니다.")
+            raise RuntimeError("REPORT 검색 기능이 Context 목록을 반환하지 않았습니다.")
         return {"contexts": contexts}
 
-    async def generate(state: BambiGenerationState) -> dict[str, Any]:
+    async def generate(state: ReportGenerationState) -> dict[str, Any]:
         """Transaction 밖에서 LLM 생성을 실행하고 지연 시간을 기록한다."""
         started = monotonic()
-        summary = await bambi_008(
+        summary = await report_008(
             FeatureRequest(
                 request_id=state["job_id"],
-                actor_id="bambi-generation-graph",
+                actor_id="report-generation-graph",
                 user_id=state["user_id"],
                 payload={
                     "implementation": lambda: to_thread(
-                        generate_bambi_content,
+                        generate_report_content,
                         topic=state["topic"],
                         content_type=state["content_type"],
                         language=state["language"],
@@ -270,31 +268,31 @@ def build_bambi_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 },
             )
         )
-        body = await bambi_009(
+        body = await report_009(
             FeatureRequest(
                 request_id=state["job_id"],
-                actor_id="bambi-generation-graph",
+                actor_id="report-generation-graph",
                 user_id=state["user_id"],
                 payload={"implementation": lambda: summary.data.get("result")},
             )
         )
-        cited = await bambi_011(
+        cited = await report_011(
             FeatureRequest(
                 request_id=state["job_id"],
-                actor_id="bambi-generation-graph",
+                actor_id="report-generation-graph",
                 user_id=state["user_id"],
                 payload={"implementation": lambda: body.data.get("result")},
             )
         )
         generated = cited.data.get("result")
         if generated is None:
-            raise RuntimeError("BAMBI 생성 기능이 콘텐츠를 반환하지 않았습니다.")
+            raise RuntimeError("REPORT 생성 기능이 콘텐츠를 반환하지 않았습니다.")
         return {
             "generated": generated,
             "latency_ms": int((monotonic() - started) * 1000),
         }
 
-    async def persist(state: BambiGenerationState) -> dict[str, Any]:
+    async def persist(state: ReportGenerationState) -> dict[str, Any]:
         """생성 Run·후보·Citation·Snapshot·Outbox를 저장 Transaction으로 기록한다."""
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=state["user_id"])
@@ -308,33 +306,33 @@ def build_bambi_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 contexts=state["contexts"],
                 latency_ms=state["latency_ms"],
             )
-            persisted = await bambi_018(
+            persisted = await report_018(
                 FeatureRequest(
                     request_id=state["job_id"],
-                    actor_id="bambi-generation-graph",
+                    actor_id="report-generation-graph",
                     user_id=state["user_id"],
                     payload={"implementation": lambda: dict(citations)},
                 )
             )
-        completed = await bambi_020(
+        completed = await report_020(
             FeatureRequest(
                 request_id=state["job_id"],
-                actor_id="bambi-generation-graph",
+                actor_id="report-generation-graph",
                 user_id=state["user_id"],
                 payload={"implementation": lambda: dict(persisted.data)},
             )
         )
-        safeguarded = await bambi_021(
+        safeguarded = await report_021(
             FeatureRequest(
                 request_id=state["job_id"],
-                actor_id="bambi-generation-graph",
+                actor_id="report-generation-graph",
                 user_id=state["user_id"],
                 payload={"implementation": lambda: dict(completed.data)},
             )
         )
         return {"result": dict(safeguarded.data)}
 
-    graph = StateGraph(BambiGenerationState)
+    graph = StateGraph(ReportGenerationState)
     graph.add_node("load_context", load_context)
     graph.add_node("generate", generate)
     graph.add_node("persist", persist)
@@ -345,7 +343,7 @@ def build_bambi_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
     return graph.compile()
 
 
-async def run_bambi_generation(
+async def run_report_generation(
     connection: AsyncConnection[DictRow],
     *,
     user_id: str,
@@ -356,11 +354,11 @@ async def run_bambi_generation(
     language: str,
     model: str = "gpt-4.1-mini",
 ) -> dict[str, object]:
-    """Bambi Generation 그래프를 실행하고 저장 결과 Payload를 반환한다.
+    """Report Builder Generation 그래프를 실행하고 저장 결과 Payload를 반환한다.
 
     개발 API와 Worker가 공유하는 유일한 생성 실행 진입점이다.
     """
-    graph = build_bambi_generation_graph(connection)
+    graph = build_report_generation_graph(connection)
     state = await graph.ainvoke(
         {
             "user_id": user_id,

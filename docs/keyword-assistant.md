@@ -1,7 +1,7 @@
 # 키워드 비서 AI — 개발 명세
 
 > 이 문서는 프로젝트의 새 방향인 "키워드 → 관련 URL/영상 수집·요약 비서"의 명세입니다.
-> 기존 `agent-api-feature-spec.md` / `agent-api-mvp-scope.md`의 대형 밤비 에이전트
+> 기존 `agent-api-feature-spec.md` / `agent-api-mvp-scope.md`의 대형 리포트 생성기 에이전트
 > 명세는 이 방향으로 재편 중이며, 관련 스캐폴드는 단계적으로 정리합니다.
 
 ## 목표
@@ -17,7 +17,7 @@
 구현은 모두 `agent/assistant/features/` 아래에 두고, 외부 계층(웹 등)은
 [agent/assistant/api.py](../agent/assistant/api.py) facade만 import한다
 (AGENTS.md의 "구현은 features/, 공개는 api.py" 규칙). 이 기능 영역은 전체 명세
-1~43절의 기능 ID 체계(BAMBI-* 등)에 속하지 않는 별도 제품 라인이라 기능 ID를
+1~43절의 기능 ID 체계(REPORT-* 등)에 속하지 않는 별도 제품 라인이라 기능 ID를
 부여하지 않는다.
 
 | 영역 | 파일 | 역할 |
@@ -222,7 +222,7 @@ uv run python bench/assistant_reformulation/run.py \
 
 ## 남은 정리 (사용자 확인 필요)
 
-- 구 밤비 대형 스캐폴드(`agent/bambi`, `domain/`, `infrastructure/`, `workers/` 등 626개
+- 구 리포트 생성기 대형 스캐폴드(`agent/report_builder`, `domain/`, `infrastructure/`, `workers/` 등 626개
   기능 함수와 `tests/test_feature_scaffolds.py`)는 이 방향과 무관해졌다. 삭제는 되돌리기
   어려우므로 사용자 승인 후 별도로 제거한다.
-- `app/demo/`(밤비 생성 데모)도 필요 없으면 함께 정리 대상이다.
+- `app/demo/`(리포트 생성기 생성 데모)도 필요 없으면 함께 정리 대상이다.

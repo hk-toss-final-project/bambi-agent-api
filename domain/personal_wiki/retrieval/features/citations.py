@@ -1,4 +1,4 @@
-"""Bambi 생성 결과와 개인 Wiki Citation 연결 기능 구현."""
+"""Report Builder 생성 결과와 개인 Wiki Citation 연결 기능 구현."""
 
 from collections.abc import Sequence
 from typing import Any
@@ -6,9 +6,9 @@ from typing import Any
 from psycopg import AsyncConnection
 
 from infrastructure.persistence.features.generation_runtime import (
-    persist_bambi_generation,
+    persist_report_generation,
 )
-from shared.bambi_models import BambiContextDocument, GeneratedBambiContent
+from shared.report_models import ReportContextDocument, GeneratedReportContent
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
@@ -19,8 +19,8 @@ async def prag_007(
     user_id: str,
     attempt_number: int,
     content_type: str,
-    generated: GeneratedBambiContent,
-    contexts: Sequence[BambiContextDocument],
+    generated: GeneratedReportContent,
+    contexts: Sequence[ReportContextDocument],
     latency_ms: int,
 ) -> dict[str, object]:
     """[PRAG-007] Citation 연결.
@@ -33,7 +33,7 @@ async def prag_007(
         raise ValueError(
             "PRAG-007이 연결할 수 없는 Citation 참조입니다: " + ", ".join(missing)
         )
-    return await persist_bambi_generation(
+    return await persist_report_generation(
         connection,
         job_id=job_id,
         user_id=user_id,

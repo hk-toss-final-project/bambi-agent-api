@@ -4,7 +4,7 @@
 """
 
 from .features.queue import (
-    consume_bambi_generation_jobs,
+    consume_report_generation_jobs,
     consume_personal_wiki_jobs,
     wc_001,
     wc_002,

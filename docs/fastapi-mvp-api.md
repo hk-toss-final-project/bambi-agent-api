@@ -31,7 +31,7 @@
 | `POST` | `/internal/v1/users/{user_id}/wiki-sources/clippings` | `SVC-002` | `202` | 웹 클리핑 Markdown을 저장하고 Personal Wiki Builder Job을 등록합니다. |
 | `POST` | `/internal/v1/users/{user_id}/wiki-sources/urls` | `SVC-003` | `202` | URL Personal Wiki Builder Job을 등록합니다. |
 | `POST` | `/internal/v1/users/{user_id}/wiki-sources/content-marks` | `SVC-004` | `202` | 생성 콘텐츠 위키마킹 Job을 등록합니다. |
-| `POST` | `/internal/v1/users/{user_id}/generations` | `SVC-008` | `202` | 밤비 콘텐츠 생성 Job을 등록합니다. `scheduled_at`으로 지정 시각 실행을 예약할 수 있습니다. |
+| `POST` | `/internal/v1/users/{user_id}/generations` | `SVC-008` | `202` | 리포트 생성기 콘텐츠 생성 Job을 등록합니다. `scheduled_at`으로 지정 시각 실행을 예약할 수 있습니다. |
 | `GET` | `/internal/v1/jobs/{job_id}` | `SVC-013` | `200` | Job 상태와 진행률을 조회합니다. |
 | `GET` | `/internal/v1/jobs/{job_id}/result` | `SVC-014` | `200` | 완료된 Job 결과를 조회합니다. 미완료 시 `409`를 반환합니다. |
 | `GET` | `/internal/v1/users/{user_id}/wiki/graph` | `PWIKI-003` | `200` | 현재 개인 Wiki 문서와 관계 Graph를 조회합니다. |

@@ -10,7 +10,7 @@ PostgreSQL 저장 결과를 조회할 수 있게 한다.
 3. 생성된 LLM Wiki의 문서, 버전, 관계를 조회한다.
 4. 사용자 Wiki에서 관심 키워드를 추출한다.
 5. 키워드로 최신 외부 정보를 수집·검색한다.
-6. 개인 Wiki와 최신 정보를 함께 사용해 Bambi 콘텐츠를 생성한다.
+6. 개인 Wiki와 최신 정보를 함께 사용해 Report Builder 콘텐츠를 생성한다.
 7. 생성 콘텐츠와 Citation을 조회한다.
 
 이 API는 개발·통합 테스트를 위한 실행 표면이다. 운영 API의 비동기 Job 계약을
@@ -28,10 +28,10 @@ PostgreSQL 저장 결과를 조회할 수 있게 한다.
 | Wiki 조회 | Entity·Concept Graph 조회만 구현됨 | 문서 목록·Markdown 상세·Build Version 조회 추가 |
 | 관심 키워드 | 저장 테이블은 있으나 추출 실행 경로가 없음 | Wiki 기반 추출·근거·Profile 저장 구현 |
 | 최신 정보 | Global Source DB 구조는 있으나 Agent 검색 Tool은 미구현 | Connector 실행, 정규화, Global 검색 구현 |
-| Bambi Agent | Orchestration, 검색, 생성, Citation, 저장이 대부분 미구현 | 최소 생성 파이프라인부터 구현 |
+| Report Builder Agent | Orchestration, 검색, 생성, Citation, 저장이 대부분 미구현 | 최소 생성 파이프라인부터 구현 |
 | Worker 실행 | Job Claim/완료·실패 저장 함수는 있으나 실행 Dispatcher가 없음 | Job Type별 Handler와 `run` 진입점 구현 |
 
-핵심 병목은 Swagger가 아니라 Bambi와 검색 Use Case다. 따라서 Swagger 전용
+핵심 병목은 Swagger가 아니라 Report Builder와 검색 Use Case다. 따라서 Swagger 전용
 가짜 결과를 만들지 않고, 각 기능을 실제 Worker 경로에 먼저 연결한다.
 
 ## 3. 권장 구조
@@ -45,11 +45,11 @@ flowchart LR
     DEV --> DISPATCH["공통 Job Dispatcher"]
     WORKER["운영 Worker"] --> DISPATCH
     DISPATCH --> WIKI["Personal Wiki Handler"]
-    DISPATCH --> BAMBI["Bambi Generation Handler"]
+    DISPATCH --> REPORT["Report Builder Generation Handler"]
     WIKI --> DB
-    BAMBI --> RAG["Personal Wiki + Global Source 검색"]
+    REPORT --> RAG["Personal Wiki + Global Source 검색"]
     RAG --> DB
-    BAMBI --> DB
+    REPORT --> DB
     DEV --> PROVIDERS["Jina / Naver / NewsAPI / GDELT / LLM"]
     DISPATCH --> PROVIDERS
 ```
@@ -102,7 +102,7 @@ flowchart LR
 | `dev-wiki` | `POST /internal/v1/dev/users/{user_id}/wiki-builds` | `source_document_version_id`를 지정해 Wiki Builder만 직접 실행 |
 | `dev-interests` | `POST /internal/v1/dev/users/{user_id}/interest-profiles/rebuild` | 활성 Wiki에서 키워드·점수·근거를 추출하고 새 Profile 저장 |
 | `dev-global` | `POST /internal/v1/dev/users/{user_id}/latest-information/search` | 사용자 키워드 또는 직접 입력 키워드로 최신 자료 수집·검색 |
-| `dev-bambi` | `POST /internal/v1/dev/users/{user_id}/bambi-generations` | 선택한 Wiki Version과 최신 자료로 Bambi를 동기 실행 |
+| `dev-reports` | `POST /internal/v1/dev/users/{user_id}/report-generations` | 선택한 Wiki Version과 최신 자료로 Report Builder를 동기 실행 |
 | `dev-scenarios` | `POST /internal/v1/dev/users/{user_id}/scenarios/source-to-content` | 원본 입력부터 콘텐츠 저장까지 전체 흐름 실행 |
 
 명시적 기능별 Request Schema를 사용한다. 범용
@@ -153,7 +153,7 @@ flowchart LR
 3. `interest_extraction`: 활성 Wiki에서 관심 키워드와 근거를 만든다.
 4. `latest_collection`: Naver, NewsAPI, GDELT 중 지정 Provider로 최신 정보를 수집한다.
 5. `context_retrieval`: 개인 Wiki와 Global 문서를 Hybrid Search한다.
-6. `bambi_generation`: 제목·요약·본문·Citation을 생성한다.
+6. `report_generation`: 제목·요약·본문·Citation을 생성한다.
 7. `result_persistence`: 생성 후보와 실행 정보를 저장한다.
 
 Source 입력은 URL과 클리핑의 Discriminated Union으로 정의해 Swagger에서 두
@@ -222,14 +222,14 @@ Global 문서를 수집·검색할 수 있다.
 Provider는 공통 Interface 뒤에 두고 Naver를 첫 수직 Slice로 완성한 뒤 NewsAPI,
 GDELT를 추가한다. 여러 Provider를 한 Transaction이나 한 실패 단위로 묶지 않는다.
 
-### Sprint 3 — Bambi와 전체 시나리오 (21 Point)
+### Sprint 3 — Report Builder와 전체 시나리오 (21 Point)
 
 **Sprint Goal:** 개인 Wiki와 최신 자료로 콘텐츠를 생성·저장하고 전체 흐름을
 Swagger 한 요청으로 검증할 수 있다.
 
 | 순서 | 작업 | Point | 의존성 | 완료 조건 |
 |---|---|---:|---|---|
-| 1 | Bambi 계획·Personal/Global Context 조립 | 4 | Sprint 2 | 사용한 문서 Version이 Context에 고정됨 |
+| 1 | Report Builder 계획·Personal/Global Context 조립 | 4 | Sprint 2 | 사용한 문서 Version이 Context에 고정됨 |
 | 2 | 제목·요약·본문 생성과 Citation 검증 | 6 | 1 | 근거 없는 Citation과 다른 사용자 Wiki 참조 차단 |
 | 3 | 생성 Run·Candidate 저장과 목록·상세 API | 4 | 2 | 실행 비용·지연·모델 설정과 결과 Version 저장 |
 | 4 | `source-to-content` 전체 시나리오 Orchestrator | 3 | 1~3 | Stage별 결과·오류·재시도 Key 반환 |
@@ -243,13 +243,13 @@ flowchart LR
     B --> C["Wiki 조회·검색"]
     C --> D["관심 키워드"]
     D --> E["최신 정보 수집"]
-    C --> F["Bambi Context"]
+    C --> F["Report Builder Context"]
     E --> F
     F --> G["콘텐츠 생성·Citation"]
     G --> H["전체 Swagger 시나리오"]
 ```
 
-Critical Path는 `원본 영속 저장 → Wiki Builder → 검색 → Bambi → 시나리오`다.
+Critical Path는 `원본 영속 저장 → Wiki Builder → 검색 → Report Builder → 시나리오`다.
 라우터부터 먼저 많이 만들면 미구현 Agent를 감추는 가짜 API가 되므로, 각 Sprint는
 Use Case와 저장 경로를 완성한 후 해당 Swagger Route를 연결한다.
 
@@ -278,7 +278,7 @@ Use Case와 저장 경로를 완성한 후 해당 Swagger Route를 연결한다.
 4. Wiki 문서 목록·상세·Graph를 조회한다.
 5. 관심 Profile을 재계산하고 키워드를 조회한다.
 6. 최신 정보 검색을 실행한다.
-7. Bambi 생성을 실행한다.
+7. Report Builder 생성을 실행한다.
 8. 생성 콘텐츠 상세와 Citation을 조회한다.
 9. 같은 입력을 재실행해 원본·Job·문서가 불필요하게 중복되지 않는지 확인한다.
 

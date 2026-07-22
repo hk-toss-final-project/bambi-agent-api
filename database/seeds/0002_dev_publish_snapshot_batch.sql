@@ -63,7 +63,7 @@ INSERT INTO agent.agent_jobs (
     (
         '20000000-0000-4000-8000-000000000002',
         'SVC-008',
-        'bambi_generation',
+        'report_generation',
         'mock-user-002',
         'mock-generation-002',
         'completed',
@@ -77,7 +77,7 @@ INSERT INTO agent.agent_jobs (
     (
         '20000000-0000-4000-8000-000000000003',
         'SVC-008',
-        'bambi_generation',
+        'report_generation',
         'mock-user-003',
         'mock-generation-003',
         'completed',

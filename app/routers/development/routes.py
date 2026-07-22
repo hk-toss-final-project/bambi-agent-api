@@ -215,7 +215,7 @@ async def search_wiki_keyword_latest_information(
 @router.post(
     "/users/{user_id}/insight-generations",
     response_model=InsightGenerationResponse,
-    tags=["dev-bambi"],
+    tags=["dev-reports"],
     operation_id="dev_generate_insight_content",
     summary="[미구현] Wiki·최신 정보 요약·인사이트 생성",
     description=(
@@ -264,20 +264,20 @@ async def search_latest_information(
 
 
 @router.post(
-    "/users/{user_id}/bambi-generations",
+    "/users/{user_id}/report-generations",
     response_model=DevelopmentJobRunResponse,
-    tags=["dev-bambi"],
-    operation_id="dev_run_bambi_generation",
-    summary="Bambi 콘텐츠 즉시 생성",
+    tags=["dev-reports"],
+    operation_id="dev_run_report_generation",
+    summary="Report Builder 콘텐츠 즉시 생성",
 )
-async def run_bambi_generation(
+async def run_report_generation(
     user_id: UserId,
     payload: GenerationRequest,
     request: Request,
     jobs: AgentApiMvpService = Depends(get_mvp_service),
     workflows: AgentWorkflowService = Depends(get_agent_workflow_service),
 ) -> DevelopmentJobRunResponse:
-    """Bambi Job을 멱등 등록하고 개인·Global 검색부터 저장까지 즉시 실행한다."""
+    """Report Builder Job을 멱등 등록하고 개인·Global 검색부터 저장까지 즉시 실행한다."""
     accepted = await jobs.submit_generation(
         user_id=user_id,
         payload=payload,
@@ -285,7 +285,7 @@ async def run_bambi_generation(
     )
     return await workflows.run_job(
         accepted.job_id,
-        expected_job_type="bambi_generation",
+        expected_job_type="report_generation",
         expected_user_id=user_id,
     )
 
@@ -295,7 +295,7 @@ async def run_bambi_generation(
     response_model=SourceToContentScenarioResponse,
     tags=["dev-scenarios"],
     operation_id="dev_run_source_to_content_scenario",
-    summary="원본에서 Bambi 콘텐츠까지 전체 실행",
+    summary="원본에서 Report Builder 콘텐츠까지 전체 실행",
 )
 async def run_source_to_content_scenario(
     user_id: UserId,
@@ -305,7 +305,7 @@ async def run_source_to_content_scenario(
         get_development_scenario_service
     ),
 ) -> SourceToContentScenarioResponse:
-    """URL·클리핑 저장부터 Wiki·관심·최신 정보·Bambi 저장까지 실행한다."""
+    """URL·클리핑 저장부터 Wiki·관심·최신 정보·Report Builder 저장까지 실행한다."""
     return await service.run(
         user_id,
         payload,

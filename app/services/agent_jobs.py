@@ -67,7 +67,7 @@ class StoredUserContextRecord:
 
 @dataclass(frozen=True, slots=True)
 class SubmittedGenerationJob:
-    """Bambi Generation Job과 생성 요청 접수 결과."""
+    """Report Builder Generation Job과 생성 요청 접수 결과."""
 
     job: AgentJobRecord
     generation_request_id: str
@@ -134,7 +134,7 @@ class AgentJobRepository(Protocol):
         scheduled_at: datetime | None,
         request_id: str,
     ) -> SubmittedGenerationJob:
-        """Bambi Generation Job과 생성 요청을 멱등 저장한다."""
+        """Report Builder Generation Job과 생성 요청을 멱등 저장한다."""
         ...
 
     async def get_job(self, job_id: str) -> AgentJobRecord | None:

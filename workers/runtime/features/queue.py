@@ -3,7 +3,7 @@
 WC-001, WC-002 기능의 실제 구현 위치를 제공한다.
 
 WC-001은 실행 가능한 Job Batch를 설정된 크기만큼 반복해서 가져오는 상주
-소비 루프다. Personal Wiki Build와 Bambi Generation이 같은 루프 규칙을
+소비 루프다. Personal Wiki Build와 Report Builder Generation이 같은 루프 규칙을
 사용한다. Job Claim 자체(WC-002)와 조용 시간 정책(SCH-009)은
 scheduled_at <= now 조건을 통해 Claim SQL이 존중하므로, 이 루프는
 실행 시각이 되지 않은 Job을 가져오지 않는다.
@@ -115,7 +115,7 @@ async def consume_personal_wiki_jobs(
     )
 
 
-async def consume_bambi_generation_jobs(
+async def consume_report_generation_jobs(
     *,
     database_url: str,
     worker_id: str,
@@ -127,17 +127,17 @@ async def consume_bambi_generation_jobs(
     batch_runner: BatchRunner | None = None,
     on_batch: BatchObserver | None = None,
 ) -> BatchResults:
-    """실행 가능한 Bambi Generation Job Batch를 반복해서 가져와 처리한다.
+    """실행 가능한 Report Builder Generation Job Batch를 반복해서 가져와 처리한다.
 
     소비 규칙은 consume_personal_wiki_jobs와 같으며, Batch 실행기만
-    Bambi Generation Worker를 사용한다.
+    Report Builder Generation Worker를 사용한다.
 
     Args:
         database_url: Agent DB 연결 문자열
         worker_id: Job Lease 소유자 식별자
         limit: Batch 하나가 Claim할 최대 Job 수 (WC-001 Batch 크기)
         lease_seconds: Job Lease 유지 시간(초)
-        model: Bambi 콘텐츠 생성 LLM 모델
+        model: Report Builder 콘텐츠 생성 LLM 모델
         interval_seconds: 처리할 Job이 없을 때 다음 확인까지 대기 초
         max_batches: 가져올 Batch 횟수 상한. None이면 무제한 상주
         batch_runner: Batch 한 번을 실행하는 함수 (테스트 대체용)
@@ -148,9 +148,9 @@ async def consume_bambi_generation_jobs(
         상주 모드에서는 메모리 누적을 피하기 위해 빈 목록을 유지한다.
     """
     if batch_runner is None:
-        from workers.api import run_bambi_generation_batch
+        from workers.api import run_report_generation_batch
 
-        batch_runner = run_bambi_generation_batch
+        batch_runner = run_report_generation_batch
     return await _consume_job_batches(
         batch_runner=batch_runner,
         runner_kwargs={
@@ -190,11 +190,11 @@ async def wc_001(
         raise ValueError("WC-001에 worker_id가 필요합니다.")
     if not model:
         raise ValueError("WC-001의 model은 빈 문자열이면 안 됩니다.")
-    if job_type not in ("personal_wiki_build", "bambi_generation"):
+    if job_type not in ("personal_wiki_build", "report_generation"):
         raise ValueError("WC-001이 지원하지 않는 job_type입니다.")
     consumer = (
-        consume_bambi_generation_jobs
-        if job_type == "bambi_generation"
+        consume_report_generation_jobs
+        if job_type == "report_generation"
         else consume_personal_wiki_jobs
     )
     return await consumer(

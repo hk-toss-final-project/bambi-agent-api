@@ -106,7 +106,7 @@ async def claim_runnable_agent_jobs(
 
     Args:
         connection: 시스템 Scope가 설정된 DB 연결
-        job_type: 점유할 Job 유형 (예: personal_wiki_build, bambi_generation)
+        job_type: 점유할 Job 유형 (예: personal_wiki_build, report_generation)
         worker_id: Job Lease 소유자 식별자
         limit: 한 번에 점유할 최대 Job 수
         lease_seconds: Job Lease 유지 시간(초)

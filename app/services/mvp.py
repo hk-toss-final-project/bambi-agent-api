@@ -146,7 +146,7 @@ class AgentApiMvpService:
         payload: GenerationRequest,
         request_id: str,
     ) -> AcceptedJobResponse:
-        """Bambi 생성 요청과 Job을 사용자 컨텍스트에 연결해 멱등 접수한다."""
+        """Report Builder 생성 요청과 Job을 사용자 컨텍스트에 연결해 멱등 접수한다."""
         try:
             submission: SubmittedGenerationJob = (
                 await self._agent_jobs.submit_generation(

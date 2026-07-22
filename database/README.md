@@ -210,6 +210,10 @@ docker compose exec -T -u postgres agent-db /bin/sh /usr/local/bin/initialize-ag
 추가합니다. `wiki_document_relations`는 문서 Graph를,
 `wiki_version_documents`는 특정 Wiki Build의 정확한 문서 Version 구성을 보존합니다.
 
+`0006`은 기존 생성 Job의 실행 유형을 `report_generation`으로 바꾸고,
+기존 콘텐츠 생성 기능 ID를 `REPORT-*` 계약으로 이전합니다. 외부에 전달된
+기존 콘텐츠 식별자는 변경하지 않습니다.
+
 ```sql
 SELECT document.document_kind,
        document.document_key,

@@ -25,12 +25,19 @@ STRUCTURED_WIKI_MIGRATION_PATH = (
     / "migrations"
     / "0005_structure_llm_wiki_documents.sql"
 )
+REPORT_BUILDER_RENAME_MIGRATION_PATH = (
+    PROJECT_ROOT
+    / "database"
+    / "migrations"
+    / "0006_rename_report_builder_contracts.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
     WEB_CLIPPING_MIGRATION_PATH,
     SOURCE_SEPARATION_MIGRATION_PATH,
     STRUCTURED_WIKI_MIGRATION_PATH,
+    REPORT_BUILDER_RENAME_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
@@ -131,6 +138,20 @@ def test_migration_does_not_create_service_owned_tables() -> None:
     created_tables = set(re.findall(r"CREATE TABLE agent\.([a-z_]+)", migration))
 
     assert created_tables.isdisjoint(service_owned_tables)
+
+
+def test_report_builder_rename_migration_updates_existing_generation_jobs() -> None:
+    """기존 생성 Job과 기능 ID가 새 Report Builder 실행 계약으로 이전되는지 검증한다."""
+    migration = _read(REPORT_BUILDER_RENAME_MIGRATION_PATH)
+
+    assert "job_type = 'report_generation'" in migration
+    assert "WHERE job_type = 'bambi_generation'" in migration
+    assert "feature_id = 'REPORT-'" in migration
+    assert "WHERE feature_id LIKE 'BAMBI-%'" in migration
+    assert (
+        "VALUES (6, 'Rename legacy generation contracts to Report Builder')"
+        in migration
+    )
 
 
 def test_design_maps_every_agent_db_feature_id() -> None:

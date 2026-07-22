@@ -1,11 +1,12 @@
 # Agent DB 테이블 카탈로그
 
-> 기준: 2026-07-15. 물리 스키마의 최종 기준은
+> 기준: 2026-07-22. 물리 스키마와 데이터 계약의 최종 기준은
 > database/migrations/0001_initial.sql,
 > database/migrations/0002_publish_snapshot_batches.sql,
 > database/migrations/0003_web_clipping_markdown.sql,
 > database/migrations/0004_separate_user_sources_from_llm_wiki.sql,
-> database/migrations/0005_structure_llm_wiki_documents.sql입니다.
+> database/migrations/0005_structure_llm_wiki_documents.sql,
+> database/migrations/0006_rename_report_builder_contracts.sql입니다.
 
 이 문서는 Agent DB의 43개 테이블을 영역과 데이터 성격으로 분류하고, 각 테이블의
 책임, 핵심 관계·제약, RLS 적용 여부와 현재 애플리케이션 연결 상태를 정리합니다.
@@ -76,6 +77,8 @@ publish_snapshots, publish_attempts에 Lease 기반 Batch 처리 Column과 Index
 사용자 원본 테이블로 이관하면서 원본·LLM Wiki·출처 관계 테이블 3개를 추가합니다.
 0005는 Wiki Head에 Entity·Concept·Schema 유형과 Vault 경로를 추가하고,
 문서 Graph·Wiki Build 구성 관계 테이블 2개를 추가합니다.
+0006은 새 테이블 없이 기존 생성 Job 유형과 콘텐츠 생성 기능 ID를
+Report Builder 계약으로 이전합니다.
 
 ## 3. 설정
 
@@ -271,5 +274,6 @@ Seed가 최신 상태여야 Health Check를 통과합니다.
 - 웹 클리핑 Markdown 확장: ../database/migrations/0003_web_clipping_markdown.sql
 - 사용자 원본과 LLM Wiki 분리: ../database/migrations/0004_separate_user_sources_from_llm_wiki.sql
 - LLM Wiki Vault 구조·관계·Snapshot: ../database/migrations/0005_structure_llm_wiki_documents.sql
+- Report Builder 생성 계약 이전: ../database/migrations/0006_rename_report_builder_contracts.sql
 - 로컬 실행과 Schema 검증: ../database/README.md
 - Service Worker HTTP 계약: fastapi-mvp-api.md

@@ -9,7 +9,7 @@
 - Personal Wiki Builder Worker가 저장된 클리핑을 Chunk·Embedding·관심사 갱신까지 비동기로 처리한다.
 - 개인 Wiki 데이터를 기반으로 사용자 관심사를 분류한다.
 - Naver API, NewsAPI, GDELT 데이터를 정기적으로 수집한다.
-- 개인 Wiki와 최신 수집 데이터를 결합해 밤비 콘텐츠를 생성한다.
+- 개인 Wiki와 최신 수집 데이터를 결합해 리포트 생성기 콘텐츠를 생성한다.
 - 생성 결과를 service-api 및 service-worker가 사용할 수 있도록 제공한다.
 - Service 스케줄러의 생성 요청(즉시 또는 `scheduled_at` 예약)을 Agent Worker가 Batch로 처리하고, Service Worker가 준비된 Publish Snapshot을 Batch로 가져가 service-db에 반영한다.
 
@@ -27,7 +27,7 @@
 - [x] `SVC-002` 웹 클리핑 처리 요청 — 원본·Version·Job 한 Transaction Commit 후 202
 - [x] `SVC-003` URL 처리 요청 — URL Head 저장 + `personal_wiki_url` 수집 Job 등록
 - [ ] `SVC-004` 위키마킹 처리 요청 — ❌ `personal_wiki_content_mark` Handler 미구현. 인메모리 유령 접수를 제거하고 접수 API가 명시적 `501`을 반환하도록 정리(2026-07-20 리팩토링)
-- [x] `SVC-008` 콘텐츠 생성 요청 — `generation_requests` + `bambi_generation` Job 멱등 등록, `scheduled_at` 예약 실행 지원
+- [x] `SVC-008` 콘텐츠 생성 요청 — `generation_requests` + `report_generation` Job 멱등 등록, `scheduled_at` 예약 실행 지원
 - [x] `SVC-013` Agent Job 상태 조회
 - [x] `SVC-014` Agent 결과 조회 — 미완료 시 `JOB_RESULT_NOT_READY`
 - [x] `WSE-001` 웹 클리핑 이벤트 수신 — `wiki_source_events` + Frontmatter 필드 저장
@@ -50,7 +50,7 @@
 - [ ] `PWE-004` Embedding 생성 — ❌ 보류(2026-07-20 결정). 활용처(Vector 검색)가 없어 실행 경로에서 제외했으며 생성 유틸(`generate_wiki_embeddings`)은 재도입 대비로 유지
 - [ ] `PWE-005` Embedding 저장 — ❌ 보류(위와 동일). `wiki_embeddings` 스키마와 저장 함수는 유지
 - [x] `PRAG-003` Hybrid Search — ⚠️ FTS·키워드 검색만 결합, pgvector 의미 검색은 미연결
-- [x] `PRAG-006` 개인 Wiki Context 구성 — Bambi 입력 Context(P1, P2 참조) 조립
+- [x] `PRAG-006` 개인 Wiki Context 구성 — Report Builder 입력 Context(P1, P2 참조) 조립
 - [x] `PRAG-007` Citation 연결 — `citations`에 문서 Version·Chunk 연결
 
 ### DB 기반 관심사 분류
@@ -72,24 +72,24 @@
 - [ ] `SCH-003` GDELT 수집 스케줄 — ❌
 - [ ] `SCH-004` NewsAPI 수집 스케줄 — ❌ (참고: MVP 목록 외 `SCH-009` Wiki Build 조용 시간 트리거는 구현됨)
 
-### 콘텐츠 생성 에이전트 밤비
+### 리포트 생성기 (Report Builder)
 
-- [x] `BAMBI-001` 콘텐츠 생성 요청 — 운영 등록 + dev 즉시 실행
-- [x] `BAMBI-004` 개인 Wiki 검색
-- [x] `BAMBI-005` Global Source 검색
-- [x] `BAMBI-008` 콘텐츠 요약 생성
-- [x] `BAMBI-009` 콘텐츠 본문 생성
-- [x] `BAMBI-011` 콘텐츠 Citation 생성 — P1·G1 참조 검증 포함
-- [x] `BAMBI-012` 사용자 개인화 적용 — ⚠️ 언어 반영 구현, 차단 관심사·출처 필터는 Context 저장만 되고 검색·생성에 미적용
-- [x] `BAMBI-018` 생성 콘텐츠 후보 저장 — `generation_runs`·`generated_content_candidates`
-- [x] `BAMBI-020` 콘텐츠 완료 이벤트 — ⚠️ `CONTENT_READY` Outbox 기록까지 구현, Event Bus 발행 Relay 없음
-- [x] `BAMBI-021` 자동 Wiki 편입 금지 — 생성 결과는 후보 테이블에만 저장
+- [x] `REPORT-001` 콘텐츠 생성 요청 — 운영 등록 + dev 즉시 실행
+- [x] `REPORT-004` 개인 Wiki 검색
+- [x] `REPORT-005` Global Source 검색
+- [x] `REPORT-008` 콘텐츠 요약 생성
+- [x] `REPORT-009` 콘텐츠 본문 생성
+- [x] `REPORT-011` 콘텐츠 Citation 생성 — P1·G1 참조 검증 포함
+- [x] `REPORT-012` 사용자 개인화 적용 — ⚠️ 언어 반영 구현, 차단 관심사·출처 필터는 Context 저장만 되고 검색·생성에 미적용
+- [x] `REPORT-018` 생성 콘텐츠 후보 저장 — `generation_runs`·`generated_content_candidates`
+- [x] `REPORT-020` 콘텐츠 완료 이벤트 — ⚠️ `CONTENT_READY` Outbox 기록까지 구현, Event Bus 발행 Relay 없음
+- [x] `REPORT-021` 자동 Wiki 편입 금지 — 생성 결과는 후보 테이블에만 저장
 
 ### Worker 및 서비스 반영
 
 - [x] `WORKER-001` Global Source Collector Worker — ⚠️ 수집·저장은 dev API 동기 실행만, 상주 Worker 없음
 - [x] `WORKER-002` Personal Wiki Builder Worker — 단발·상주(Loop) 모드 CLI
-- [x] `WORKER-003` Bambi Generation Worker — 단발·상주(Loop) 모드 CLI, `SKIP LOCKED` Batch Claim (dev API와 같은 Handler 체인)
+- [x] `WORKER-003` Report Builder Generation Worker — 단발·상주(Loop) 모드 CLI, `SKIP LOCKED` Batch Claim (dev API와 같은 Handler 체인)
 - [ ] `SW-001` Content Ready 이벤트 수신 — ➖ service-worker(Spring) 책임, Agent API 범위 아님
 - [x] `SW-004` Publish Snapshot 조회 — 단건 조회 + Lease Batch Claim
 - [ ] `SW-007` service-db 콘텐츠 Upsert — ➖ service-worker 책임
@@ -118,7 +118,7 @@
 | SVC-002 | 웹 클리핑 처리 요청 | 클리핑 Markdown을 영속 저장하고 Personal Wiki Builder Job을 등록한다. |
 | SVC-003 | URL 처리 요청 | 입력된 URL을 개인 Wiki 처리 작업으로 전달한다. |
 | SVC-004 | 위키마킹 처리 요청 | 사용자가 선택한 콘텐츠의 Wiki 편입을 요청한다. |
-| SVC-008 | 콘텐츠 생성 요청 | 밤비의 콘텐츠 생성을 요청한다. |
+| SVC-008 | 콘텐츠 생성 요청 | 리포트 생성기의 콘텐츠 생성을 요청한다. |
 | SVC-013 | Agent Job 상태 조회 | 비동기 작업 상태를 조회한다. |
 | SVC-014 | Agent 결과 조회 | 생성 및 처리 결과를 Agent API에서 조회한다. |
 
@@ -199,20 +199,20 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | SCH-003 | GDELT 수집 스케줄 | GDELT 수집 작업을 정기 등록한다. |
 | SCH-004 | NewsAPI 수집 스케줄 | NewsAPI 수집 작업을 정기 등록한다. |
 
-## 5. 콘텐츠 생성 에이전트 밤비
+## 5. 리포트 생성기 (Report Builder)
 
 | ID | 기능 | 설명 |
 |---|---|---|
-| BAMBI-001 | 콘텐츠 생성 요청 | 사용자와 주제에 맞는 콘텐츠 생성 요청을 처리한다. |
-| BAMBI-004 | 개인 Wiki 검색 | 사용자의 관심사와 기존 지식을 검색한다. |
-| BAMBI-005 | Global Source 검색 | 최신 외부 자료와 근거를 검색한다. |
-| BAMBI-008 | 콘텐츠 요약 생성 | 피드와 미리보기에 사용할 요약을 생성한다. |
-| BAMBI-009 | 콘텐츠 본문 생성 | 플랜과 유형에 맞는 본문을 생성한다. |
-| BAMBI-011 | 콘텐츠 Citation 생성 | 본문 주장과 참조한 자료를 연결한다. |
-| BAMBI-012 | 사용자 개인화 적용 | 관심사, 언어, 비선호 설정을 반영한다. |
-| BAMBI-018 | 생성 콘텐츠 후보 저장 | 발행 전 콘텐츠를 agent-db에 저장한다. |
-| BAMBI-020 | 콘텐츠 완료 이벤트 | 생성 완료 사실을 Integration Event로 발행한다. |
-| BAMBI-021 | 자동 Wiki 편입 금지 | 생성된 콘텐츠를 사용자 선택 없이 개인 Wiki에 넣지 않는다. |
+| REPORT-001 | 콘텐츠 생성 요청 | 사용자와 주제에 맞는 콘텐츠 생성 요청을 처리한다. |
+| REPORT-004 | 개인 Wiki 검색 | 사용자의 관심사와 기존 지식을 검색한다. |
+| REPORT-005 | Global Source 검색 | 최신 외부 자료와 근거를 검색한다. |
+| REPORT-008 | 콘텐츠 요약 생성 | 피드와 미리보기에 사용할 요약을 생성한다. |
+| REPORT-009 | 콘텐츠 본문 생성 | 플랜과 유형에 맞는 본문을 생성한다. |
+| REPORT-011 | 콘텐츠 Citation 생성 | 본문 주장과 참조한 자료를 연결한다. |
+| REPORT-012 | 사용자 개인화 적용 | 관심사, 언어, 비선호 설정을 반영한다. |
+| REPORT-018 | 생성 콘텐츠 후보 저장 | 발행 전 콘텐츠를 agent-db에 저장한다. |
+| REPORT-020 | 콘텐츠 완료 이벤트 | 생성 완료 사실을 Integration Event로 발행한다. |
+| REPORT-021 | 자동 Wiki 편입 금지 | 생성된 콘텐츠를 사용자 선택 없이 개인 Wiki에 넣지 않는다. |
 
 ## 6. Worker 및 서비스 반영
 
@@ -220,7 +220,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 |---|---|---|
 | WORKER-001 | Global Source Collector Worker | 외부 데이터를 수집하고 Global Source Pool에 저장한다. |
 | WORKER-002 | Personal Wiki Builder Worker | 사용자 선택 데이터를 개인 Wiki로 구성한다. |
-| WORKER-003 | Bambi Generation Worker | 생성 Job Batch를 점유하고 제한된 동시성으로 개인화 콘텐츠를 생성한다. |
+| WORKER-003 | Report Builder Generation Worker | 생성 Job Batch를 점유하고 제한된 동시성으로 개인화 콘텐츠를 생성한다. |
 | SW-001 | Content Ready 이벤트 수신 | 발행 가능한 콘텐츠 이벤트를 소비한다. |
 | SW-004 | Publish Snapshot 조회 | Agent API에서 단건 Snapshot을 조회하거나 준비된 Snapshot Batch를 Claim한다. |
 | SW-007 | service-db 콘텐츠 Upsert | Batch의 각 콘텐츠 발행본을 멱등하게 저장하거나 갱신한다. |

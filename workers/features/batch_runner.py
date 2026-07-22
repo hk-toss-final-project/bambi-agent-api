@@ -1,7 +1,7 @@
 """Job 큐 Worker 공통 Batch 러너.
 
 연결 생성 → Batch Claim → 건별 실행 → 완료·실패 기록의 공통 수명주기를
-한 곳에서 구현한다. personal-wiki와 bambi-generation Worker는 Job 처리
+한 곳에서 구현한다. personal-wiki와 report-generation Worker는 Job 처리
 함수와 오류 코드 접두사만 주입해 재사용하며, 실패 기록의 Lease 상실
 복원력(lease_lost)도 여기서 한 번만 처리한다.
 """

@@ -181,3 +181,19 @@ def test_development_planned_routes_return_not_implemented() -> None:
         "/internal/v1/dev/users/{user_id}/wiki-keyword-latest-information" in paths
     )
     assert "/internal/v1/dev/users/{user_id}/insight-generations" in paths
+
+
+def test_development_openapi_exposes_report_generation_name() -> None:
+    """개발 Swagger가 Report Builder 생성 경로만 공개하는지 검증한다."""
+    client, _, _ = _development_client()
+    with client:
+        schema = client.get("/openapi.json").json()
+
+    report_path = "/internal/v1/dev/users/{user_id}/report-generations"
+    legacy_path = "/internal/v1/dev/users/{user_id}/bambi-generations"
+    assert report_path in schema["paths"]
+    assert legacy_path not in schema["paths"]
+    assert schema["paths"][report_path]["post"]["operationId"] == (
+        "dev_run_report_generation"
+    )
+    assert "dev-reports" in {tag["name"] for tag in schema["tags"]}

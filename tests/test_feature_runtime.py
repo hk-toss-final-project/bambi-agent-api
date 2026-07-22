@@ -1,4 +1,4 @@
-"""Bambi 호환 공통 실행기와 타입 기반 facade 전환 경계를 검증한다."""
+"""Report Builder 호환 공통 실행기와 타입 기반 facade 전환 경계를 검증한다."""
 
 import asyncio
 from collections.abc import Awaitable, Callable
@@ -6,17 +6,17 @@ from pathlib import Path
 
 import pytest
 
-from agent.bambi.api import (
-    bambi_001,
-    bambi_004,
-    bambi_005,
-    bambi_008,
-    bambi_009,
-    bambi_011,
-    bambi_012,
-    bambi_018,
-    bambi_020,
-    bambi_021,
+from agent.report_builder.api import (
+    report_001,
+    report_004,
+    report_005,
+    report_008,
+    report_009,
+    report_011,
+    report_012,
+    report_018,
+    report_020,
+    report_021,
 )
 from shared.contracts import FeatureRequest, FeatureResult
 from shared.feature_runtime import execute_feature_implementation
@@ -24,16 +24,16 @@ from shared.feature_runtime import execute_feature_implementation
 type FeatureDelegate = Callable[[FeatureRequest], Awaitable[FeatureResult]]
 
 DELEGATED_FEATURES: tuple[tuple[str, FeatureDelegate], ...] = (
-    ("BAMBI-001", bambi_001),
-    ("BAMBI-004", bambi_004),
-    ("BAMBI-005", bambi_005),
-    ("BAMBI-008", bambi_008),
-    ("BAMBI-009", bambi_009),
-    ("BAMBI-011", bambi_011),
-    ("BAMBI-012", bambi_012),
-    ("BAMBI-018", bambi_018),
-    ("BAMBI-020", bambi_020),
-    ("BAMBI-021", bambi_021),
+    ("REPORT-001", report_001),
+    ("REPORT-004", report_004),
+    ("REPORT-005", report_005),
+    ("REPORT-008", report_008),
+    ("REPORT-009", report_009),
+    ("REPORT-011", report_011),
+    ("REPORT-012", report_012),
+    ("REPORT-018", report_018),
+    ("REPORT-020", report_020),
+    ("REPORT-021", report_021),
 )
 
 
@@ -55,15 +55,15 @@ def test_completed_delegate_executes_injected_implementation(
     assert result == FeatureResult(feature_id=feature_id, data={"value": feature_id})
 
 
-def test_generic_executor_is_limited_to_excluded_bambi_features() -> None:
-    """공통 구현 주입 실행기가 제외 대상 Bambi 밖에서 사용되지 않는지 검증한다."""
+def test_generic_executor_is_limited_to_excluded_report_features() -> None:
+    """공통 구현 주입 실행기가 제외 대상 Report Builder 밖에서 사용되지 않는지 검증한다."""
     root = Path(__file__).resolve().parents[1]
     source_roots = ("app", "agent", "domain", "infrastructure", "workers", "scheduler")
     offending: list[str] = []
     for source_root in source_roots:
         for path in (root / source_root).rglob("*.py"):
             relative = path.relative_to(root)
-            if relative.parts[:2] == ("agent", "bambi"):
+            if relative.parts[:2] == ("agent", "report_builder"):
                 continue
             if "execute_feature_implementation" in path.read_text(encoding="utf-8"):
                 offending.append(str(relative))

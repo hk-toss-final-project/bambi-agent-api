@@ -1,4 +1,4 @@
-"""Bambi 생성 콘텐츠 후보 목록·상세 조회 API 스키마."""
+"""Report Builder 생성 콘텐츠 후보 목록·상세 조회 API 스키마."""
 
 from datetime import datetime
 
@@ -27,7 +27,7 @@ class GeneratedContentSummary(GeneratedContentSchema):
 class GeneratedContentListResponse(GeneratedContentSchema):
     """사용자별 생성 콘텐츠 후보 목록."""
 
-    feature_id: str = Field(default="BAMBI-018", description="명세 기능 ID")
+    feature_id: str = Field(default="REPORT-018", description="명세 기능 ID")
     user_id: str = Field(description="사용자 ID")
     total: int = Field(ge=0, description="필터 조건에 맞는 전체 후보 수")
     items: list[GeneratedContentSummary] = Field(description="최신순 생성 후보")
@@ -49,7 +49,7 @@ class GeneratedContentCitation(GeneratedContentSchema):
 class GeneratedContentDetailResponse(GeneratedContentSummary):
     """본문, Citation과 실행 Metadata를 포함한 생성 콘텐츠 상세."""
 
-    feature_id: str = Field(default="BAMBI-018", description="명세 기능 ID")
+    feature_id: str = Field(default="REPORT-018", description="명세 기능 ID")
     user_id: str = Field(description="사용자 ID")
     body: str = Field(description="Markdown 콘텐츠 본문")
     structured_body: dict[str, object] = Field(description="구조화 본문 Metadata")

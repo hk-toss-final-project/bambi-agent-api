@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from workers.runtime.features.queue import (
-    consume_bambi_generation_jobs,
+    consume_report_generation_jobs,
     consume_personal_wiki_jobs,
     wc_001,
 )
@@ -61,14 +61,14 @@ def test_consume_drains_available_batches_up_to_max_batches() -> None:
     ]
 
 
-def test_consume_bambi_generation_jobs_passes_generation_arguments() -> None:
-    """Bambi 소비 루프가 생성 Batch 실행기에 생성 인자만 전달한다."""
-    runner = _FakeBatchRunner([[{"job_id": "bambi-job-1", "status": "completed"}]])
+def test_consume_report_generation_jobs_passes_generation_arguments() -> None:
+    """Report Builder 소비 루프가 생성 Batch 실행기에 생성 인자만 전달한다."""
+    runner = _FakeBatchRunner([[{"job_id": "report-job-1", "status": "completed"}]])
 
     results = asyncio.run(
-        consume_bambi_generation_jobs(
+        consume_report_generation_jobs(
             database_url="postgresql://test",
-            worker_id="bambi-worker-1",
+            worker_id="report-worker-1",
             limit=3,
             lease_seconds=600,
             model="gpt-4.1-mini",
@@ -78,8 +78,8 @@ def test_consume_bambi_generation_jobs_passes_generation_arguments() -> None:
         )
     )
 
-    assert [result["job_id"] for result in results] == ["bambi-job-1"]
-    assert runner.calls[0]["worker_id"] == "bambi-worker-1"
+    assert [result["job_id"] for result in results] == ["report-job-1"]
+    assert runner.calls[0]["worker_id"] == "report-worker-1"
     assert runner.calls[0]["model"] == "gpt-4.1-mini"
     assert "embedding_model" not in runner.calls[0]
 

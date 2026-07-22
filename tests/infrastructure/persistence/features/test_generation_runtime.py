@@ -1,11 +1,11 @@
-"""Bambi Generation Job 등록의 예약 시각(scheduled_at) 영속화를 검증한다."""
+"""Report Builder Generation Job 등록의 예약 시각(scheduled_at) 영속화를 검증한다."""
 
 import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
 from infrastructure.persistence.features.generation_runtime import (
-    enqueue_bambi_generation_job,
+    enqueue_report_generation_job,
 )
 
 
@@ -57,7 +57,7 @@ def test_enqueue_persists_scheduled_at_for_reserved_generation() -> None:
     scheduled = datetime(2026, 7, 21, 7, 0, tzinfo=UTC)
 
     submission = asyncio.run(
-        enqueue_bambi_generation_job(
+        enqueue_report_generation_job(
             connection,  # type: ignore[arg-type]
             user_id="user-1",
             idempotency_key="2026-07-21-user-1-interest_news_card",
@@ -82,7 +82,7 @@ def test_enqueue_defaults_to_immediate_execution_without_schedule() -> None:
     connection = _connection_with_context()
 
     asyncio.run(
-        enqueue_bambi_generation_job(
+        enqueue_report_generation_job(
             connection,  # type: ignore[arg-type]
             user_id="user-1",
             idempotency_key="generation-immediate",

@@ -1,5 +1,5 @@
 [project]
-name = "bambi-agent-api"
+name = "report-builder-agent-api"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"

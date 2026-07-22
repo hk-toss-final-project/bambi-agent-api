@@ -237,7 +237,7 @@ def get_latest_information_service(
 def get_generated_content_service(
     container: AppContainer = Depends(get_container),
 ) -> GeneratedContentService:
-    """Bambi 생성 콘텐츠 후보 목록·상세 조회 서비스를 반환한다."""
+    """Report Builder 생성 콘텐츠 후보 목록·상세 조회 서비스를 반환한다."""
     if container.generated_content_service is None:
         raise AgentApiError(
             status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -253,7 +253,7 @@ def get_generated_content_service(
 def get_development_scenario_service(
     container: AppContainer = Depends(get_container),
 ) -> DevelopmentScenarioService:
-    """원본에서 Bambi 콘텐츠까지 실행하는 개발 시나리오 서비스를 반환한다."""
+    """원본에서 Report Builder 콘텐츠까지 실행하는 개발 시나리오 서비스를 반환한다."""
     if container.development_scenario_service is None:
         raise AgentApiError(
             status.HTTP_503_SERVICE_UNAVAILABLE,

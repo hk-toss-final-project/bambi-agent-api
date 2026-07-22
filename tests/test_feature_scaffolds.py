@@ -285,7 +285,7 @@ def test_feature_implementation_status_matches_mvp_checklist() -> None:
 def test_completed_non_excluded_features_use_typed_inputs() -> None:
     """제외 영역 밖 완료 기능이 범용 FeatureRequest 입력으로 회귀하지 않는지 검증한다."""
     implemented = read_checked_mvp_feature_ids() | {"SCH-009"}
-    excluded_roots = {("agent", "bambi"), ("agent", "assistant")}
+    excluded_roots = {("agent", "report_builder"), ("agent", "assistant")}
     for feature_id, (path, node, _) in discover_feature_functions().items():
         relative = path.relative_to(ROOT)
         if feature_id not in implemented or relative.parts[:2] in excluded_roots:

@@ -1,4 +1,4 @@
-"""개발 환경에서 Bambi Agent API 서버를 실행하는 명령 진입점."""
+"""개발 환경에서 Report Builder Agent API 서버를 실행하는 명령 진입점."""
 
 import uvicorn
 

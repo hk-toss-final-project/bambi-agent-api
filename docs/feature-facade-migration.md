@@ -22,7 +22,7 @@ Router / Service / Worker / Graph
 - DB 연결, Repository, Service, Provider처럼 런타임에 결합되는 의존성은 typed 인자나 `Protocol`로 기능 함수에 명시한다.
 - 완료 기능은 호출자의 `payload["implementation"]`을 실행하지 않고, 기능 함수가 검증·변환·오케스트레이션을 소유한다.
 - 하나의 트랜잭션에 여러 기능이 포함되면 상위 실행 경계가 각 기능 facade를 정확히 한 번씩 합성해 중복 쓰기를 막는다.
-- `execute_feature_implementation` 호환 위임은 이번 작업에서 제외한 `agent/bambi/**`에만 유지한다.
+- `execute_feature_implementation` 호환 위임은 이번 작업에서 제외한 `agent/report_builder/**`에만 유지한다.
 
 ## 적용 결과
 
@@ -35,7 +35,7 @@ Router / Service / Worker / Graph
 표의 적용 방식은 다음 의미다.
 
 - `소유`: 기능 함수가 typed 인자와 명시적 의존성으로 검증·변환·오케스트레이션을 소유한다.
-- `제외(호환 위임)`: 사용자 요청에 따라 변경하지 않은 Bambi 구현으로, 기존 범용 실행기를 유지한다.
+- `제외(호환 위임)`: 사용자 요청에 따라 변경하지 않은 Report Builder 구현으로, 기존 범용 실행기를 유지한다.
 
 ## 로직 소유 전환 (2026-07-22)
 
@@ -66,7 +66,7 @@ Router / Service / Worker / Graph
 - Job·Worker Runtime·Persistence: `JOB-*`, `WC-*`, `DB-*`, `WSE-*`가 생성·Claim·진행률·결과·재시도·상태 전이를 직접 소유한다.
 - Worker·Scheduler 진입점: `WORKER-*`, `WC-001`, `SCH-009`가 typed 실행 인자를 받아 하위 facade를 호출한다.
 - `PWIKI-011`, `WC-009`는 독립 로직 없이 값을 그대로 반환하던 항등 위임이어서 `INT-002/005`와 함께 명시적 스텁으로 복원했다.
-- 사용자 지정 제외 범위인 `agent/bambi/**`, `agent/assistant/**`는 변경하지 않았다. 이 중 실제 완료 기능이 있는 Bambi 영역만 기존 범용 실행기 호환 경계를 유지한다.
+- 사용자 지정 제외 범위인 `agent/report_builder/**`, `agent/assistant/**`는 변경하지 않았다. 이 중 실제 완료 기능이 있는 Report Builder 영역만 기존 범용 실행기 호환 경계를 유지한다.
 
 ## 기능별 목록
 
@@ -99,19 +99,19 @@ Router / Service / Worker / Graph
 | `GSP-004` | `infrastructure/sources/processing/api.py` | `features/normalization.py` | 소유 |
 | `GSP-006` | `infrastructure/sources/processing/api.py` | `features/deduplication.py` | 소유 |
 | `GSP-015` | `infrastructure/sources/processing/api.py` | `features/safeguards.py` | 소유 |
-| `BAMBI-001` | `agent/bambi/api.py` | `features/orchestration.py` | 제외(호환 위임) |
-| `BAMBI-004` | `agent/bambi/api.py` | `features/retrieval.py` | 제외(호환 위임) |
-| `BAMBI-005` | `agent/bambi/api.py` | `features/retrieval.py` | 제외(호환 위임) |
-| `BAMBI-008` | `agent/bambi/api.py` | `features/generation.py` | 제외(호환 위임) |
-| `BAMBI-009` | `agent/bambi/api.py` | `features/generation.py` | 제외(호환 위임) |
-| `BAMBI-011` | `agent/bambi/api.py` | `features/citations.py` | 제외(호환 위임) |
-| `BAMBI-012` | `agent/bambi/api.py` | `features/context.py` | 제외(호환 위임) |
-| `BAMBI-018` | `agent/bambi/api.py` | `features/persistence.py` | 제외(호환 위임) |
-| `BAMBI-020` | `agent/bambi/api.py` | `features/events.py` | 제외(호환 위임) |
-| `BAMBI-021` | `agent/bambi/api.py` | `features/safeguards.py` | 제외(호환 위임) |
+| `REPORT-001` | `agent/report_builder/api.py` | `features/orchestration.py` | 제외(호환 위임) |
+| `REPORT-004` | `agent/report_builder/api.py` | `features/retrieval.py` | 제외(호환 위임) |
+| `REPORT-005` | `agent/report_builder/api.py` | `features/retrieval.py` | 제외(호환 위임) |
+| `REPORT-008` | `agent/report_builder/api.py` | `features/generation.py` | 제외(호환 위임) |
+| `REPORT-009` | `agent/report_builder/api.py` | `features/generation.py` | 제외(호환 위임) |
+| `REPORT-011` | `agent/report_builder/api.py` | `features/citations.py` | 제외(호환 위임) |
+| `REPORT-012` | `agent/report_builder/api.py` | `features/context.py` | 제외(호환 위임) |
+| `REPORT-018` | `agent/report_builder/api.py` | `features/persistence.py` | 제외(호환 위임) |
+| `REPORT-020` | `agent/report_builder/api.py` | `features/events.py` | 제외(호환 위임) |
+| `REPORT-021` | `agent/report_builder/api.py` | `features/safeguards.py` | 제외(호환 위임) |
 | `WORKER-001` | `workers/api.py` | `features/global_source_collector.py` | 소유 |
 | `WORKER-002` | `workers/api.py` | `features/personal_wiki_builder.py` | 소유 |
-| `WORKER-003` | `workers/api.py` | `features/bambi_generation.py` | 소유 |
+| `WORKER-003` | `workers/api.py` | `features/report_generation.py` | 소유 |
 | `SW-004` | `app/routers/service_worker/api.py` | `features/snapshots.py` | 소유 |
 | `SW-009` | `app/routers/service_worker/api.py` | `features/acknowledgements.py` | 소유 |
 | `WBA-001` | `agent/wiki_builder/api.py` | `features/orchestration.py` | 소유 |
@@ -141,8 +141,8 @@ Router / Service / Worker / Graph
 | Personal Wiki Graph 저장 | `PWIKI-002` |
 | Wiki 목록·상세·Build 조회 | `PWIKI-003/006` |
 | Personal Wiki Worker와 개발 즉시 실행 | `WORKER-002 → WBA-001` |
-| Bambi Worker와 개발 즉시 실행 | `WORKER-003 → BAMBI-001` |
-| Bambi Graph 검색·생성·저장 | `PRAG-* → BAMBI-*` |
+| Report Builder Worker와 개발 즉시 실행 | `WORKER-003 → REPORT-001` |
+| Report Builder Graph 검색·생성·저장 | `PRAG-* → REPORT-*` |
 | 관심사 재계산 | `INT-011 → INT-001` |
 | 최신 정보 API·Collector Worker | `COL-* → GSP-*` |
 | Wiki 저장 Transaction | `PWIKI-002 → DB-003 → PWIKI-008/007 → PWE-001/002 → DB-004` |
@@ -162,6 +162,8 @@ Router / Service / Worker / Graph
 - `api.py`에 함수 구현이 없는지 검사한다.
 - 기능 함수가 정확히 하나의 `api.py`에서 공개되는지 검사한다.
 - 외부 모듈이 `features/` 구현 파일을 직접 import하지 않는지 검사한다.
-- `execute_feature_implementation`의 운영 코드 사용처가 제외 대상인 `agent/bambi/**`로 제한되는지 검사한다.
+- `execute_feature_implementation`의 운영 코드 사용처가 제외 대상인 `agent/report_builder/**`로 제한되는지 검사한다.
 - typed 기능 단위 테스트와 Router·Worker·Persistence 통합 테스트로 실제 facade 실행 체인을 검증한다.
-- 프롬프트, 모델, LangGraph 노드·엣지는 변경하지 않았으므로 유료 LLM 벤치마크 재실행 대상이 아니다.
+- 기능명 전환으로 시스템 프롬프트의 제목과 파일 경로만 바뀌었고 생성 규칙,
+  모델, LangGraph 노드·엣지는 유지했다. 프롬프트 파일 변경에 해당하므로
+  `bench/report_generation/` 유료 벤치마크는 비용 승인 후 별도로 실행한다.

@@ -71,7 +71,9 @@ def _fetch_chart_json(symbol: str, range_: str = "1mo") -> dict:
     response = httpx.get(
         url,
         params={"range": range_, "interval": "1d"},
-        headers={"User-Agent": "Mozilla/5.0 (compatible; bambi-keyword-assistant/0.1)"},
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; report-builder-keyword-assistant/0.1)"
+        },
         timeout=_FETCH_TIMEOUT,
         follow_redirects=True,
     )

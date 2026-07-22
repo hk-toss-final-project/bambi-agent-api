@@ -28,7 +28,7 @@ def test_version_uses_application_settings(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json() == {
-        "name": "Test Bambi Agent API",
+        "name": "Test Report Builder Agent API",
         "version": "9.9.9",
         "environment": "test",
     }

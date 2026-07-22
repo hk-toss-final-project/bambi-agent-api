@@ -139,10 +139,10 @@ def test_run_personal_wiki_build_assembles_result(
     assert result["artifacts"]["index"] == "index"
 
 
-def test_run_bambi_generation_chains_search_generate_persist(
+def test_run_report_generation_chains_search_generate_persist(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Bambi 그래프가 검색→생성→영속화 순서로 저장 결과를 반환한다."""
+    """Report Builder 그래프가 검색→생성→영속화 순서로 저장 결과를 반환한다."""
     order: list[str] = []
 
     async def fake_scope(connection: Any, *, user_id: str) -> None:
@@ -177,12 +177,12 @@ def test_run_bambi_generation_chains_search_generate_persist(
     monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
     monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
     monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
-    monkeypatch.setattr(agent_graph, "generate_bambi_content", fake_generate)
+    monkeypatch.setattr(agent_graph, "generate_report_content", fake_generate)
     monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
 
     connection = _FakeConnection()
     result = asyncio.run(
-        agent_graph.run_bambi_generation(
+        agent_graph.run_report_generation(
             connection,  # type: ignore[arg-type]
             user_id="user-1",
             job_id="job-1",

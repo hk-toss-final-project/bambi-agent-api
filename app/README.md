@@ -1,6 +1,6 @@
 # app/ — FastAPI 애플리케이션
 
-Bambi Agent API의 HTTP 서버 계층을 담는 디렉터리입니다.
+Report Builder Agent API의 HTTP 서버 계층을 담는 디렉터리입니다.
 라우팅, 요청/응답 스키마, 의존성 주입 등 "외부와 통신하는" 코드는 모두 여기에 둡니다.
 에이전트 로직(그래프, 노드, 프롬프트)은 여기에 두지 않고 `agent/`에 둡니다. `app/`은 `agent/`를 호출하는 쪽입니다.
 

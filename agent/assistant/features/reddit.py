@@ -31,7 +31,7 @@ from agent.assistant.features.summarize import summarize_text
 
 _SEARCH_RSS_URL = "https://www.reddit.com/search.rss"
 # Reddit이 User-Agent 없는 요청을 더 쉽게 차단/제한하므로 고유 User-Agent를 명시한다.
-_HEADERS = {"User-Agent": "bambi-keyword-assistant/0.1 (keyword digest)"}
+_HEADERS = {"User-Agent": "report-builder-keyword-assistant/0.1 (keyword digest)"}
 # 게시글 사이 요청 지연(초). 반복 요청으로 인한 429 재발을 막기 위한 완화책이다.
 _REQUEST_DELAY_SECONDS = 2.0
 

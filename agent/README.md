@@ -1,6 +1,6 @@
 # agent/ — LangGraph 에이전트
 
-Bambi Agent API의 에이전트 로직을 담는 디렉터리입니다.
+Report Builder Agent API의 에이전트 로직을 담는 디렉터리입니다.
 LLM 호출, 그래프 정의, 도구 연동 등 "에이전트가 생각하고 행동하는" 코드는 모두 여기에 둡니다.
 FastAPI 관련 코드(라우터, 요청/응답 스키마)는 여기에 두지 않고 `app/`에 둡니다.
 

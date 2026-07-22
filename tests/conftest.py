@@ -176,7 +176,7 @@ class InMemoryAgentJobRepository:
             raise UserContextRequiredError(user_id)
         record, _created = self._submit_job(
             feature_id="SVC-008",
-            job_type="bambi_generation",
+            job_type="report_generation",
             user_id=user_id,
             idempotency_key=idempotency_key,
             request_id=request_id,
@@ -249,7 +249,7 @@ def feature_request() -> FeatureRequest:
 def settings() -> Settings:
     """외부 연결 없이 실행할 수 있는 테스트 설정을 반환한다."""
     return Settings(
-        app_name="Test Bambi Agent API",
+        app_name="Test Report Builder Agent API",
         app_version="9.9.9",
         environment="test",
     )

@@ -1,4 +1,4 @@
-"""Bambi 생성 콘텐츠 후보 목록·상세 조회 애플리케이션 서비스."""
+"""Report Builder 생성 콘텐츠 후보 목록·상세 조회 애플리케이션 서비스."""
 
 from typing import Mapping, Protocol
 
@@ -9,7 +9,7 @@ from app.schemas.generated_content import (
     GeneratedContentDetailResponse,
     GeneratedContentListResponse,
 )
-from agent.bambi.api import bambi_018
+from agent.report_builder.api import report_018
 from shared.contracts import FeatureRequest
 
 
@@ -30,7 +30,7 @@ class GeneratedContentRepository(Protocol):
 
 
 class GeneratedContentService:
-    """BAMBI-018 저장 결과를 조회 API 모델로 제공한다."""
+    """REPORT-018 저장 결과를 조회 API 모델로 제공한다."""
 
     def __init__(self, repository: GeneratedContentRepository) -> None:
         """생성 콘텐츠 Repository를 주입한다."""
@@ -40,7 +40,7 @@ class GeneratedContentService:
         self, user_id: str, *, limit: int, offset: int
     ) -> GeneratedContentListResponse:
         """사용자 생성 후보 목록을 검증해 반환한다."""
-        result = await bambi_018(
+        result = await report_018(
             FeatureRequest(
                 request_id=f"generated-contents:list:{user_id}",
                 actor_id="generated-content-service",
@@ -58,7 +58,7 @@ class GeneratedContentService:
         self, user_id: str, candidate_id: str
     ) -> GeneratedContentDetailResponse:
         """생성 후보 상세를 반환하고 다른 사용자 후보는 숨긴다."""
-        result = await bambi_018(
+        result = await report_018(
             FeatureRequest(
                 request_id=f"generated-contents:detail:{candidate_id}",
                 actor_id="generated-content-service",

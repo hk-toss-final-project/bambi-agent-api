@@ -1,4 +1,4 @@
-"""원본 입력부터 Bambi 콘텐츠까지 실행하는 개발 시나리오 오케스트레이터.
+"""원본 입력부터 Report Builder 콘텐츠까지 실행하는 개발 시나리오 오케스트레이터.
 
 운영 API가 쓰는 원본·Generation Job 접수와 공통 Job Handler를 순서대로 호출해
 Swagger 한 요청으로 전체 영속 흐름을 검증한다.
@@ -96,7 +96,7 @@ class DevelopmentScenarioService:
         *,
         request_id: str,
     ) -> SourceToContentScenarioResponse:
-        """Context·원본·Wiki·관심·최신 정보·Bambi 순서로 전체 흐름을 실행한다."""
+        """Context·원본·Wiki·관심·최신 정보·Report Builder 순서로 전체 흐름을 실행한다."""
         run_id = str(uuid4())
         started_at = datetime.now(UTC)
         started = monotonic()
@@ -234,20 +234,20 @@ class DevelopmentScenarioService:
                 )
             )
 
-            current_stage = "bambi_generation"
+            current_stage = "report_generation"
             accepted_generation = await self._jobs.submit_generation(
                 user_id=user_id,
                 payload=payload.generation,
                 request_id=request_id,
             )
             result["generation_job_id"] = accepted_generation.job_id
-            bambi_run = await self._workflows.run_job(
+            report_run = await self._workflows.run_job(
                 accepted_generation.job_id,
-                expected_job_type="bambi_generation",
+                expected_job_type="report_generation",
                 expected_user_id=user_id,
             )
-            stages.extend(bambi_run.stages)
-            if bambi_run.status == "failed":
+            stages.extend(report_run.stages)
+            if report_run.status == "failed":
                 return self._failed_response(
                     run_id=run_id,
                     user_id=user_id,
@@ -255,10 +255,10 @@ class DevelopmentScenarioService:
                     started=started,
                     stages=stages,
                     result=result,
-                    failed_stage=bambi_run.failed_stage or current_stage,
-                    error_code="BAMBI_GENERATION_FAILED",
+                    failed_stage=report_run.failed_stage or current_stage,
+                    error_code="REPORT_GENERATION_FAILED",
                 )
-            result.update(bambi_run.result)
+            result.update(report_run.result)
         except AgentApiError as error:
             return self._failed_response(
                 run_id=run_id,

@@ -2,18 +2,18 @@
 
 from collections.abc import Sequence
 
-from shared.bambi_models import BambiContextDocument
+from shared.report_models import ReportContextDocument
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def prag_006(
-    contexts: Sequence[BambiContextDocument],
-) -> list[BambiContextDocument]:
+    contexts: Sequence[ReportContextDocument],
+) -> list[ReportContextDocument]:
     """[PRAG-006] 개인 Wiki Context 구성.
 
     LLM 입력에 사용할 개인 Wiki Context를 구성한다.
     """
-    result: list[BambiContextDocument] = []
+    result: list[ReportContextDocument] = []
     references: set[str] = set()
     for context in contexts:
         if not context.reference.strip():

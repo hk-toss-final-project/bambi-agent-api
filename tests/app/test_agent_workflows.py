@@ -62,7 +62,7 @@ class _FakeAgentRepository:
                 "source_event_id": "event-1",
                 "source_event_row_id": "event-row-1",
             }
-        elif self.record.job_type == "bambi_generation":
+        elif self.record.job_type == "report_generation":
             payload = {
                 "topic": "개인화",
                 "content_type": "article",
@@ -159,9 +159,9 @@ def test_run_wiki_job_invokes_wiki_graph_runner() -> None:
     assert call["job_id"] == "job-1"
 
 
-def test_run_bambi_job_invokes_generation_graph_runner() -> None:
-    """Bambi Job 실행이 Payload 인자로 생성 그래프를 호출하고 완료 처리하는지 검증한다."""
-    repository = _FakeAgentRepository("bambi_generation")
+def test_run_report_job_invokes_generation_graph_runner() -> None:
+    """Report Builder Job 실행이 Payload 인자로 생성 그래프를 호출하고 완료 처리하는지 검증한다."""
+    repository = _FakeAgentRepository("report_generation")
     runner = _RecordingRunner(
         {
             "content_candidate_id": "candidate-1",
@@ -172,19 +172,19 @@ def test_run_bambi_job_invokes_generation_graph_runner() -> None:
     service = AgentWorkflowService(
         repository,  # type: ignore[arg-type]
         Settings(environment="test", dev_agent_timeout_seconds=30),
-        bambi_runner=runner,
+        report_runner=runner,
     )
 
     response = asyncio.run(
         service.run_job(
             "job-1",
-            expected_job_type="bambi_generation",
+            expected_job_type="report_generation",
             expected_user_id="user-1",
         )
     )
 
     assert response.status == "completed"
-    assert response.stages[0].name == "bambi_generation"
+    assert response.stages[0].name == "report_generation"
     assert response.result["content_candidate_id"] == "candidate-1"
     assert repository.completed == response.result
     call = runner.calls[0]

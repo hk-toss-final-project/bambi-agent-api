@@ -3,7 +3,7 @@
 이 문서는 로컬 Swagger에서 아래 흐름을 직접 검증하는 방법을 설명합니다.
 
 ```text
-Source 저장 → Wiki 생성 → 관심사 추출 → 외부 문서 수집 → Bambi 생성 → 결과 조회
+Source 저장 → Wiki 생성 → 관심사 추출 → 외부 문서 수집 → Report Builder 생성 → 결과 조회
 ```
 
 `/internal/v1/dev/**` API는 운영용 등록 API를 대체하지 않습니다. 운영 API가
@@ -19,12 +19,12 @@ APP_ENV=local
 DOCS_ENABLED=true
 ENABLE_DEV_AGENT_API=true
 
-AGENT_DATABASE_URL=postgresql://bambi_agent:<password>@127.0.0.1:5432/bambi_agent
+AGENT_DATABASE_URL=postgresql://report_agent:<password>@127.0.0.1:5432/report_agent
 AGENT_DB_PASSWORD=<password>
 
 OPENAI_API_KEY=<openai-api-key>
 WIKI_LLM_MODEL=gpt-4.1-mini
-BAMBI_LLM_MODEL=gpt-4.1-mini
+REPORT_LLM_MODEL=gpt-4.1-mini
 
 # 선택 사항. 설정하면 모든 /dev 요청에 이 값을 헤더로 보내야 합니다.
 DEV_AGENT_API_TOKEN=<local-test-token>
@@ -33,7 +33,7 @@ DEV_AGENT_TIMEOUT_SECONDS=180
 
 - `APP_ENV`는 `local` 또는 `test`여야 합니다.
 - `ENABLE_DEV_AGENT_API=true`가 아니면 `/internal/v1/dev/**` 경로가 등록되지 않습니다.
-- Wiki와 Bambi 생성은 OpenAI API를 실제 호출하므로 비용이 발생합니다.
+- Wiki와 Report Builder 생성은 OpenAI API를 실제 호출하므로 비용이 발생합니다.
 - URL 수집은 Jina를 사용합니다. `JINA_API_TOKEN`을 생략하면 익명 호출을 시도합니다.
 - GDELT는 별도 키가 없고, Naver와 NewsAPI는 각 API 자격 증명이 필요합니다.
 
@@ -45,7 +45,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 Swagger는 [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)에서 엽니다.
-`dev-jobs`, `dev-wiki`, `dev-interests`, `dev-global`, `dev-bambi`,
+`dev-jobs`, `dev-wiki`, `dev-interests`, `dev-global`, `dev-reports`,
 `dev-scenarios`, `dev-workers` 태그가 보이면 개발 API가 활성화된 상태입니다.
 
 `DEV_AGENT_API_TOKEN`을 설정했다면 각 `/dev` 호출에 다음 헤더를 보냅니다.
@@ -81,14 +81,14 @@ X-Dev-Token: <local-test-token>
 ```json
 {
   "source_event_id": "swagger-clipping-001",
-  "source": "https://example.com/bambi/storage",
-  "title": "Bambi 저장 구조",
-  "author": "Bambi Team",
+  "source": "https://example.com/report-builder/storage",
+  "title": "Report Builder 저장 구조",
+  "author": "Report Builder Team",
   "published": "2026-07-20T09:00:00+09:00",
   "created": "2026-07-20",
-  "description": "Bambi의 저장 구조를 설명한다.",
-  "tags": ["bambi", "database"],
-  "content": "# Bambi 저장 구조\n\n클리핑과 생성된 Wiki는 서로 다른 테이블에 저장된다."
+  "description": "Report Builder의 저장 구조를 설명한다.",
+  "tags": ["report-builder", "database"],
+  "content": "# Report Builder 저장 구조\n\n클리핑과 생성된 Wiki는 서로 다른 테이블에 저장된다."
 }
 ```
 
@@ -210,9 +210,9 @@ GET /internal/v1/users/swagger-user-001/interests
 Provider 하나가 실패해도 다른 Provider의 결과는 저장될 수 있습니다. `items`뿐 아니라
 `provider_failures`도 함께 확인합니다.
 
-### 2.7 Bambi 생성
+### 2.7 Report Builder 생성
 
-`POST /internal/v1/dev/users/swagger-user-001/bambi-generations`
+`POST /internal/v1/dev/users/swagger-user-001/report-generations`
 
 ```json
 {
@@ -298,11 +298,11 @@ Jina로 본문을 저장하고, 내용이 바뀐 경우 후속 `wiki_build_job_i
   "source": {
     "type": "clipping",
     "source_event_id": "swagger-scenario-001",
-    "source": "https://example.com/bambi/scenario",
+    "source": "https://example.com/report-builder/scenario",
     "title": "전체 시나리오 테스트",
     "created": "2026-07-20",
-    "tags": ["bambi", "swagger"],
-    "content": "# 전체 시나리오\n\nSource에서 Wiki와 관심사를 만들고 Bambi 콘텐츠를 생성한다."
+    "tags": ["report-builder", "swagger"],
+    "content": "# 전체 시나리오\n\nSource에서 Wiki와 관심사를 만들고 Report Builder 콘텐츠를 생성한다."
   },
   "interest_limit": 20,
   "latest": {
@@ -335,7 +335,7 @@ URL 시나리오는 `source`만 아래처럼 바꿉니다.
 
 ```text
 context → source_ingestion → (URL일 때 url_collection) → wiki_build
-→ interest_extraction → latest_collection → bambi_generation
+→ interest_extraction → latest_collection → report_generation
 ```
 
 `result`에는 `source_document_version_id`, `wiki_version_id`,
@@ -360,7 +360,7 @@ Context를 생략하거나 `context_version`을 증가시킵니다.
 | Swagger에 `dev-*` 태그가 없음 | `APP_ENV=local`, `ENABLE_DEV_AGENT_API=true` 확인 후 재시작 |
 | `/dev` 호출이 `401` | `X-Dev-Token`이 설정과 같은지 확인 |
 | 앱 시작 실패 | PostgreSQL 상태와 `AGENT_DATABASE_URL` 확인 |
-| Wiki 또는 Bambi 단계 실패 | `OPENAI_API_KEY`, 모델명, `failed_stage` 확인 |
+| Wiki 또는 Report Builder 단계 실패 | `OPENAI_API_KEY`, 모델명, `failed_stage` 확인 |
 | URL 수집 실패 | 대상 URL 접근 가능 여부와 Jina 응답 확인 |
 | 외부 문서가 없음 | `provider_failures`, 검색어, 언어, Provider 키 확인 |
 | `JOB_NOT_RUNNABLE` | 작업이 이미 실행 중인지 확인하고 lease 만료 후 재실행 |

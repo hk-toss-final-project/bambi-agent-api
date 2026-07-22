@@ -197,7 +197,7 @@ def test_wiki_graph_page_contains_local_interactive_graph(client: TestClient) ->
     response = client.get("/wiki-graph?user_id=mock-clipping-user")
 
     assert response.status_code == 200
-    assert "Bambi Wiki Graph" in response.text
+    assert "Report Builder Wiki Graph" in response.text
     assert 'id="graph-search"' in response.text
     assert 'id="filter-entity"' in response.text
     assert 'id="detail-markdown"' in response.text

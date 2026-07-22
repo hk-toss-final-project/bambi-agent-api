@@ -1,6 +1,6 @@
 """공유 LLM Chat Completion 경계.
 
-wiki_builder·bambi 등 Agent 기능이 공통으로 사용하는 저수준 LLM 호출을
+wiki_builder·report_builder 등 Agent 기능이 공통으로 사용하는 저수준 LLM 호출을
 한 곳에 모은다. 일시적 Provider 오류 재시도(지수 Backoff), 요청 Timeout,
 토큰 사용량 반환을 여기서만 처리해 각 도메인이 복원력 코드를 중복
 구현하지 않게 한다. 테스트는 `_get_client`를 대체해 실제 호출을 막는다.
@@ -113,7 +113,7 @@ def complete(
 ) -> str:
     """system·user 프롬프트로 호출해 응답 텍스트만 반환한다.
 
-    기존 호출부(wiki 분류, bambi 생성)의 서명을 유지하는 호환 진입점이며,
+    기존 호출부(wiki 분류, 리포트 생성)의 서명을 유지하는 호환 진입점이며,
     내부적으로 complete_with_usage의 재시도·Timeout을 그대로 적용한다.
     """
     return complete_with_usage(system_prompt, user_prompt, model=model).text

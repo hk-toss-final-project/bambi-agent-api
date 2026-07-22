@@ -45,7 +45,7 @@ INSERT INTO agent.agent_jobs (
 ) VALUES (
     '20000000-0000-4000-8000-000000000001',
     'SVC-008',
-    'bambi_generation',
+    'report_generation',
     'mock-user-001',
     'mock-generation-001',
     'completed',
@@ -191,7 +191,7 @@ INSERT INTO agent.citations (
     '50000000-0000-4000-8000-000000000001',
     'mock-user-001',
     0,
-    'Bambi Agent API 목업 출처',
+    'Report Builder Agent API 목업 출처',
     'https://example.com/mock-ai-agent',
     'Service Worker 연동 검증을 위한 목업 출처입니다.',
     ARRAY['body']::text[]
@@ -227,7 +227,7 @@ INSERT INTO agent.publish_snapshots (
       "body":"최근 AI 에이전트는 검색과 요약뿐 아니라 여러 도구를 연결해 사용자의 목표를 수행하는 방향으로 발전하고 있습니다. 이 콘텐츠는 Service Worker API 연동 검증을 위한 목업 본문입니다.",
       "citations":[{
         "citation_id":"70000000-0000-4000-8000-000000000001",
-        "title":"Bambi Agent API 목업 출처",
+        "title":"Report Builder Agent API 목업 출처",
         "url":"https://example.com/mock-ai-agent"
       }]
     }'::jsonb,

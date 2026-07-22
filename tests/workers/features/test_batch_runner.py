@@ -60,7 +60,7 @@ def _job(job_id: str) -> ClaimedAgentJob:
         job_id=job_id,
         user_id="user-1",
         feature_id="SVC-008",
-        job_type="bambi_generation",
+        job_type="report_generation",
         attempt_number=3,
         max_attempts=3,
         payload={},
@@ -78,12 +78,12 @@ def test_record_job_failure_reports_lease_lost_instead_of_raising() -> None:
             job=_job("job-1"),
             worker_id="worker-1",
             error=TimeoutError("처리가 Lease보다 오래 걸림"),
-            error_code_prefix="BAMBI_GENERATION",
+            error_code_prefix="REPORT_GENERATION",
         )
     )
 
     assert result["status"] == "lease_lost"
-    assert result["error_code"] == "BAMBI_GENERATION_LEASE_LOST"
+    assert result["error_code"] == "REPORT_GENERATION_LEASE_LOST"
     assert result["job_id"] == "job-1"
 
 
@@ -131,7 +131,7 @@ def test_run_job_batch_processes_each_job_and_isolates_failures(
 
     async def fake_claim(conn: Any, **kwargs: Any) -> list[ClaimedAgentJob]:
         """Claim 인자를 검증하고 준비된 Job 목록을 반환한다."""
-        assert kwargs["job_type"] == "bambi_generation"
+        assert kwargs["job_type"] == "report_generation"
         assert kwargs["worker_id"] == "worker-1"
         return claimed
 
@@ -153,11 +153,11 @@ def test_run_job_batch_processes_each_job_and_isolates_failures(
     results = asyncio.run(
         batch_runner.run_job_batch(
             database_url="postgresql://test",
-            job_type="bambi_generation",
+            job_type="report_generation",
             worker_id="worker-1",
             limit=5,
             lease_seconds=600,
-            error_code_prefix="BAMBI_GENERATION",
+            error_code_prefix="REPORT_GENERATION",
             process=process,
         )
     )
@@ -168,5 +168,5 @@ def test_run_job_batch_processes_each_job_and_isolates_failures(
         "content_id": "content-1",
     }
     assert results[1]["status"] == "queued"
-    assert results[1]["error_code"] == "BAMBI_GENERATION_RETRYABLE"
+    assert results[1]["error_code"] == "REPORT_GENERATION_RETRYABLE"
     assert connection.closed is True

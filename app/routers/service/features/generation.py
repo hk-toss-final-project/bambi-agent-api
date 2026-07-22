@@ -25,7 +25,7 @@ async def svc_008(
 ) -> AcceptedJobResponse:
     """[SVC-008] 콘텐츠 생성 요청.
 
-    밤비의 콘텐츠 생성을 요청한다.
+    리포트 생성기의 콘텐츠 생성을 요청한다.
     """
     return await service.submit_generation(
         user_id=user_id, payload=payload, request_id=request_id

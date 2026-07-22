@@ -1,4 +1,4 @@
-"""Bambi Agent API의 FastAPI 애플리케이션 진입점.
+"""Report Builder Agent API의 FastAPI 애플리케이션 진입점.
 
 앱 팩토리, 생명주기, 미들웨어와 최상위 라우터 등록 위치를 제공한다.
 """
