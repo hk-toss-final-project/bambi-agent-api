@@ -1,11 +1,13 @@
 """Agent DB Migration, Docker와 설계 문서의 정적 계약을 검증한다."""
 
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parents[2]
+PROJECT_README_PATH = PROJECT_ROOT / "README.md"
 MIGRATION_PATH = PROJECT_ROOT / "database" / "migrations" / "0001_initial.sql"
 BATCH_MIGRATION_PATH = (
     PROJECT_ROOT / "database" / "migrations" / "0002_publish_snapshot_batches.sql"
@@ -45,6 +47,7 @@ DESIGN_PATH = PROJECT_ROOT / "docs" / "agent-db-design.md"
 TABLE_CATALOG_PATH = PROJECT_ROOT / "docs" / "agent-db-table-catalog.md"
 COLUMN_DICTIONARY_PATH = PROJECT_ROOT / "docs" / "agent-db-column-dictionary.md"
 COMPOSE_PATH = PROJECT_ROOT / "compose.yaml"
+DATABASE_README_PATH = PROJECT_ROOT / "database" / "README.md"
 SEED_PATH = PROJECT_ROOT / "database" / "seeds" / "0001_dev_publish_snapshots.sql"
 BATCH_SEED_PATH = (
     PROJECT_ROOT / "database" / "seeds" / "0002_dev_publish_snapshot_batch.sql"
@@ -63,11 +66,72 @@ USER_URL_SEED_GENERATOR_PATH = (
 USER_URL_DUMMY_PATH = PROJECT_ROOT / "dummy" / "urls" / "url.txt"
 MIGRATION_RUNNER_PATH = PROJECT_ROOT / "scripts" / "run_agent_db_migrations.sh"
 DATABASE_INITIALIZER_PATH = PROJECT_ROOT / "scripts" / "initialize_agent_db.sh"
+DATABASE_STARTER_PATH = PROJECT_ROOT / "scripts" / "start_agent_db.sh"
 
 
 def _read(path: Path) -> str:
     """UTF-8 텍스트 파일 내용을 반환한다."""
     return path.read_text(encoding="utf-8")
+
+
+def _run_database_starter(
+    tmp_path: Path,
+    *,
+    initializer_exit_code: int = 0,
+    unhealthy_inspections: int = 1,
+    health_max_attempts: int = 3,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """가짜 Docker 명령으로 Agent DB 시작 스크립트의 호출 순서를 기록한다."""
+    call_log_path = tmp_path / "docker-calls.log"
+    inspection_count_path = tmp_path / "docker-inspection-count"
+    fake_docker_path = tmp_path / "docker"
+    fake_docker_path.write_text(
+        """#!/bin/sh
+printf '%s|%s\\n' "$PWD" "$*" >> "$DOCKER_CALL_LOG"
+if [ "$2" = "exec" ]; then
+    exit "$DOCKER_INITIALIZER_EXIT_CODE"
+fi
+if [ "$2" = "ps" ]; then
+    printf '%s\\n' 'fake-agent-db-container-id'
+    exit 0
+fi
+if [ "$1" = "inspect" ]; then
+    inspection_count=0
+    if [ -f "$DOCKER_INSPECTION_COUNT_FILE" ]; then
+        inspection_count="$(sed -n '1p' "$DOCKER_INSPECTION_COUNT_FILE")"
+    fi
+    inspection_count=$((inspection_count + 1))
+    printf '%s\\n' "$inspection_count" > "$DOCKER_INSPECTION_COUNT_FILE"
+    if [ "$inspection_count" -le "$DOCKER_UNHEALTHY_INSPECTIONS" ]; then
+        printf '%s\\n' 'unhealthy'
+    else
+        printf '%s\\n' 'healthy'
+    fi
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_docker_path.chmod(0o755)
+
+    environment = os.environ.copy()
+    environment["PATH"] = f"{tmp_path}:{environment['PATH']}"
+    environment["DOCKER_CALL_LOG"] = str(call_log_path)
+    environment["DOCKER_INITIALIZER_EXIT_CODE"] = str(initializer_exit_code)
+    environment["DOCKER_INSPECTION_COUNT_FILE"] = str(inspection_count_path)
+    environment["DOCKER_UNHEALTHY_INSPECTIONS"] = str(unhealthy_inspections)
+    environment["AGENT_DB_HEALTH_MAX_ATTEMPTS"] = str(health_max_attempts)
+    environment["AGENT_DB_HEALTH_POLL_SECONDS"] = "0"
+    result = subprocess.run(
+        ["/bin/sh", str(DATABASE_STARTER_PATH)],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    calls = call_log_path.read_text(encoding="utf-8").splitlines()
+
+    return result, calls
 
 
 def test_migration_contains_all_agent_db_feature_tables() -> None:
@@ -277,6 +341,69 @@ def test_database_initializer_runs_migrations_before_dev_seeds() -> None:
     assert "sha256sum" in initializer
     assert "flock -x" in initializer
     assert 'if [ "$MODE" = "--check" ]' in initializer
+
+
+def test_database_starter_initializes_before_waiting_for_health(tmp_path: Path) -> None:
+    """실행 중인 DB도 초기화한 뒤 최종 Health 상태를 기다리는지 검증한다."""
+    result, calls = _run_database_starter(tmp_path)
+    project_root = str(PROJECT_ROOT)
+
+    assert result.returncode == 0, result.stderr
+    assert calls[:3] == [
+        f"{project_root}|compose up -d agent-db",
+        (
+            f"{project_root}|compose exec -T -u postgres agent-db "
+            "/bin/sh /usr/local/bin/initialize-agent-db"
+        ),
+        f"{project_root}|compose ps -q agent-db",
+    ]
+    assert len(calls) == 5
+    assert all(
+        call.startswith(f"{project_root}|inspect --format ") for call in calls[3:]
+    )
+    assert "Agent DB Health Check 통과" in result.stdout
+
+
+def test_database_starter_stops_when_initialization_fails(tmp_path: Path) -> None:
+    """초기화 실패를 숨기지 않고 Health 대기 전에 종료하는지 검증한다."""
+    result, calls = _run_database_starter(tmp_path, initializer_exit_code=23)
+
+    assert result.returncode == 23
+    assert len(calls) == 2
+    assert calls[-1].endswith(
+        "compose exec -T -u postgres agent-db "
+        "/bin/sh /usr/local/bin/initialize-agent-db"
+    )
+
+
+def test_database_starter_fails_when_health_does_not_recover(tmp_path: Path) -> None:
+    """초기화 후에도 Health 상태가 회복되지 않으면 제한 횟수 뒤 실패하는지 검증한다."""
+    result, calls = _run_database_starter(
+        tmp_path,
+        unhealthy_inspections=3,
+        health_max_attempts=3,
+    )
+
+    assert result.returncode == 1
+    assert sum("|inspect --format " in call for call in calls) == 3
+    assert "제한 시간 안에 통과하지 못했습니다: unhealthy" in result.stderr
+
+
+def test_database_readme_uses_starter_for_repeatable_initialization() -> None:
+    """실행 중인 DB에도 적용되는 시작 스크립트를 표준 명령으로 안내하는지 검증한다."""
+    readme = _read(DATABASE_README_PATH)
+
+    assert readme.count("./scripts/start_agent_db.sh") >= 2
+    assert "이미 실행 중인 컨테이너" in readme
+    assert "`post_start`가 다시 실행되지 않으므로" in readme
+
+
+def test_project_readme_uses_database_starter() -> None:
+    """프로젝트 실행 안내가 반복 가능한 Agent DB 시작 명령을 사용하는지 검증한다."""
+    readme = _read(PROJECT_README_PATH)
+
+    assert "./scripts/start_agent_db.sh" in readme
+    assert "이미 실행 중인 DB에도" in readme
 
 
 def test_dev_seed_builds_service_worker_snapshot_dependency_chain() -> None:

@@ -224,9 +224,11 @@ Append-only 성격을 강제해야 합니다.
 |---|---|---|---|---|---|
 | schema_migrations | History/System | 적용된 Agent DB Migration 버전과 설명 기록 | version PK | 없음 | Migration Script |
 
-빈 Volume과 기존 Volume 모두 Compose `post_start` Initializer가 미적용 Migration을
-순서대로 적용한 뒤 Checksum이 변경된 개발 Seed를 한 번 적용합니다. Migration과
-Seed가 최신 상태여야 Health Check를 통과합니다.
+`scripts/start_agent_db.sh`는 실행 중인 컨테이너에도 Initializer를 명시적으로
+호출하고, Compose `post_start` Hook은 컨테이너가 실제로 시작될 때 같은 경로를
+실행합니다. Initializer는 미적용 Migration을 순서대로 적용한 뒤 Checksum이
+변경된 개발 Seed를 한 번 적용합니다. Migration과 Seed가 최신 상태여야 Health
+Check를 통과합니다.
 
 ## 14. 핵심 관계 흐름
 

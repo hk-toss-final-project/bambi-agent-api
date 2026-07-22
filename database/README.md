@@ -1,10 +1,14 @@
 # Agent DB 로컬 실행
 
-`agent-db`는 PostgreSQL 17과 pgvector를 사용합니다. Docker Compose는 DB가 시작될
-때마다 `scripts/initialize_agent_db.sh`를 실행합니다. 먼저
+`agent-db`는 PostgreSQL 17과 pgvector를 사용합니다. `scripts/start_agent_db.sh`는
+DB 실행을 보장한 뒤 `scripts/initialize_agent_db.sh`를 명시적으로 실행합니다. 먼저
 `schema_migrations`에 없는 SQL을 파일명 순서대로 적용하고, 개발 Seed 파일의
 합성 Checksum이 바뀌었으면 Publish Snapshot, 웹 클리핑과 사용자 URL Seed를
-이어서 적용합니다.
+이어서 적용한 다음 Health 상태를 확인합니다.
+
+Compose `post_start` Hook도 컨테이너가 실제로 시작될 때 같은 Initializer를
+실행합니다. 이미 실행 중인 컨테이너에서 Migration이나 Seed 파일만 바뀐 경우에는
+`post_start`가 다시 실행되지 않으므로 항상 시작 스크립트를 진입점으로 사용합니다.
 
 자동 실행에는 Lifecycle Hook을 지원하는 Docker Compose 2.30 이상이 필요합니다.
 
@@ -19,7 +23,7 @@ cp .env.example .env
 비밀번호가 포함된 `.env`는 Git에서 제외됩니다.
 
 ```bash
-docker compose up -d --wait agent-db
+./scripts/start_agent_db.sh
 docker compose ps agent-db
 ```
 
@@ -156,9 +160,10 @@ docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_US
 - 적용된 SQL 파일은 수정하지 않고 다음 순번 파일을 추가합니다.
 - Migration 파일은 `NNNN_description.sql` 형식으로 만들고 Transaction 안에서 같은
   번호를 `agent.schema_migrations`에 기록합니다.
-- 로컬 Compose는 `post_start` Hook으로 매 기동 시 미적용 Migration과
-  변경된 개발 Seed를 자동 적용합니다. Migration은 Advisory Lock을, Seed는
-  볼륨 내 Checksum과 File Lock을 사용해 중복 적용을 막습니다.
+- 로컬 DB 시작 스크립트는 실행 중인 컨테이너에도 Initializer를 명시적으로 호출하고,
+  Compose `post_start` Hook은 컨테이너가 실제로 시작될 때 같은 경로를 실행합니다.
+  Migration은 Advisory Lock을, Seed는 볼륨 내 Checksum과 File Lock을 사용해
+  중복 적용을 막습니다.
 - 운영 마이그레이션은 Agent API 시작 과정이 아니라 별도 Cloud Run Job에서 한 번만 실행합니다.
 - `vector`, `pg_trgm` 확장은 Cloud SQL Primary에서 `cloudsqlsuperuser` 권한으로 먼저 생성합니다.
 - 애플리케이션 계정은 테이블 소유자가 아니어야 하며 DML 최소 권한만 부여합니다.
@@ -182,7 +187,7 @@ Scheduler나 시스템 관리 작업은 별도 권한을 가진 Worker 계정에
 
 ```bash
 git pull
-docker compose up -d --wait agent-db
+./scripts/start_agent_db.sh
 ```
 
 Runner를 수동으로 다시 확인하거나 실행할 수도 있습니다. 이미 적용된 Version은

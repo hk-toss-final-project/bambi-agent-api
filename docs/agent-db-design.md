@@ -253,7 +253,12 @@ MVP의 실시간·대량 발행 경로는 Agent API가 agent-db를 직접 노출
 
 루트 `compose.yaml`은 `pgvector/pgvector:0.8.1-pg17-bookworm`을 `127.0.0.1`에만 노출합니다. 비밀번호는 파일에 기본값으로 넣지 않으며 `.env`의 `AGENT_DB_PASSWORD`가 없으면 Compose가 시작되지 않습니다.
 
-초기화와 검증 절차는 `database/README.md`를 따릅니다. 빈 Volume과 기존 Volume 모두 Compose `post_start` Initializer가 `schema_migrations`에 없는 SQL과 Checksum이 변경된 개발 Seed를 자동 적용합니다. 적용된 Migration 파일은 수정하지 않고 Schema 변경은 반드시 다음 순번 Migration으로 추가합니다.
+초기화와 검증 절차는 `database/README.md`를 따릅니다. `scripts/start_agent_db.sh`가
+실행 중인 컨테이너에도 Initializer를 명시적으로 호출하고, Compose `post_start`
+Hook은 컨테이너가 실제로 시작될 때 같은 경로를 실행합니다. 두 경로 모두
+`schema_migrations`에 없는 SQL과 Checksum이 변경된 개발 Seed를 적용합니다.
+적용된 Migration 파일은 수정하지 않고 Schema 변경은 반드시 다음 순번
+Migration으로 추가합니다.
 
 `0006_rename_report_builder_contracts.sql`은 기존 생성 Job 유형과 콘텐츠 생성
 기능 ID를 Report Builder 명칭으로 이전합니다. 외부 시스템이 이미 참조할 수 있는

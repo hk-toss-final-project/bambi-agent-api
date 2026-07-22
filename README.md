@@ -37,12 +37,13 @@ cp .env.example .env
 ### 1. PostgreSQL 실행 (Agent API 선행 조건)
 
 ```bash
-docker compose up -d
+./scripts/start_agent_db.sh
 ```
 
-시작 시 Migration과 개발 Seed(`mock-clipping-user` 데이터 포함)가 자동
-적용됩니다. 자세한 절차는 [database/README.md](database/README.md)를
-참고하세요. 키워드 비서 UI만 쓸 경우에는 필요 없습니다.
+처음 시작하는 DB뿐 아니라 이미 실행 중인 DB에도 미적용 Migration과 변경된
+개발 Seed(`mock-clipping-user` 데이터 포함)를 반영한 뒤 Health 상태를 확인합니다.
+자세한 절차는 [database/README.md](database/README.md)를 참고하세요. 키워드 비서
+UI만 쓸 경우에는 필요 없습니다.
 
 ### 2. Agent API 서버 + Swagger
 
