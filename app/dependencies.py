@@ -25,6 +25,7 @@ from infrastructure.persistence.postgres_wiki_graph import (
     PostgresWikiGraphRepository,
 )
 from infrastructure.persistence.postgres_agent_jobs import PostgresAgentJobRepository
+from workers.api import worker_001
 
 
 @dataclass(slots=True)
@@ -88,6 +89,7 @@ def create_container(settings: Settings) -> AppContainer:
             wiki_graph_repository,
             interest_service,
             settings,
+            news_collector=worker_001,
         )
         return AppContainer(
             settings=settings,

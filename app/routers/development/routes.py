@@ -179,17 +179,27 @@ async def run_url_collection_worker(
     response_model=LatestNewsWorkerRunResponse,
     tags=["dev-workers"],
     operation_id="dev_run_latest_news_worker",
-    summary="[미구현] 최신 뉴스 수집 Worker 실행",
+    summary="최신 뉴스 수집 Worker 즉시 실행",
     description=(
-        "키워드로 외부 뉴스 API를 호출해 최신 기사를 수집하고 Global 문서로 "
-        f"저장하는 Worker 계약입니다. {NOT_IMPLEMENTED_NOTE}"
+        "키워드로 외부 뉴스 API(GDELT·Naver)를 호출해 최신 기사를 수집하고 "
+        "Global Namespace에 stub 문서로 저장하는 Worker를 즉시 실행한다. 본문은 "
+        "이후 본문 수집 Worker가 채운다."
     ),
 )
 async def run_latest_news_worker(
     payload: LatestNewsWorkerRunRequest,
+    service: LatestInformationService = Depends(get_latest_information_service),
 ) -> LatestNewsWorkerRunResponse:
-    """[미구현] 최신 뉴스 수집 Worker 계약. 현재는 501을 반환한다."""
-    raise _not_implemented("최신 뉴스 수집 Worker")
+    """키워드로 최신 뉴스 수집 Worker를 즉시 실행해 Global 문서로 저장한다."""
+    if not any(keyword.strip() for keyword in payload.keywords):
+        raise AgentApiError(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            ErrorDetail(
+                code="REQUEST_VALIDATION_ERROR",
+                message="최신 뉴스 수집에는 키워드가 하나 이상 필요합니다.",
+            ),
+        )
+    return await service.run_news_worker(payload)
 
 
 @router.post(

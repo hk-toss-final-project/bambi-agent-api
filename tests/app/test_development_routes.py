@@ -12,6 +12,8 @@ from app.schemas.development import (
     DevelopmentRunStage,
     DevelopmentWorkerJobResult,
     DevelopmentWorkerRunResponse,
+    LatestNewsWorkerRunRequest,
+    LatestNewsWorkerRunResponse,
 )
 
 
@@ -162,7 +164,6 @@ def test_development_planned_routes_return_not_implemented() -> None:
     """미구현 계약 경로가 Swagger에 노출되고 501을 반환하는지 검증한다."""
     client, _, _ = _development_client()
     with client:
-        news = client.post("/internal/v1/dev/workers/latest-news/run", json={})
         keyword = client.post(
             "/internal/v1/dev/users/user-1/wiki-keyword-latest-information",
             json={},
@@ -173,14 +174,92 @@ def test_development_planned_routes_return_not_implemented() -> None:
         )
         paths = set(client.get("/openapi.json").json()["paths"])
 
-    for response in (news, keyword, insight):
+    for response in (keyword, insight):
         assert response.status_code == 501
         assert response.json()["code"] == "NOT_IMPLEMENTED"
-    assert "/internal/v1/dev/workers/latest-news/run" in paths
     assert (
         "/internal/v1/dev/users/{user_id}/wiki-keyword-latest-information" in paths
     )
     assert "/internal/v1/dev/users/{user_id}/insight-generations" in paths
+
+
+class _FakeLatestInformationService:
+    """최신 뉴스 Worker 호출 인자를 기록하고 고정 실행 결과를 반환한다."""
+
+    def __init__(self) -> None:
+        """아직 호출되지 않은 초기 상태를 준비한다."""
+        self.payload: LatestNewsWorkerRunRequest | None = None
+
+    async def run_news_worker(
+        self, payload: LatestNewsWorkerRunRequest
+    ) -> LatestNewsWorkerRunResponse:
+        """요청 Payload를 기록하고 결정적인 수집 결과를 반환한다."""
+        self.payload = payload
+        return LatestNewsWorkerRunResponse.model_validate(
+            {
+                "run_id": "news-run-1",
+                "status": "completed",
+                "keywords": list(payload.keywords),
+                "collected_count": 2,
+                "stored_count": 1,
+                "items": [
+                    {
+                        "provider": "gdelt",
+                        "title": "최신 소식",
+                        "url": "https://example.com/latest",
+                        "description": "",
+                        "source_name": "example.com",
+                        "language": "ko",
+                        "document_id": "doc-1",
+                        "document_version_id": "ver-1",
+                        "version": 1,
+                        "created": True,
+                    }
+                ],
+                "provider_failures": [],
+            }
+        )
+
+
+def _latest_news_client() -> tuple[TestClient, _FakeLatestInformationService]:
+    """가짜 최신 정보 서비스를 연결한 개발 라우터 TestClient를 만든다."""
+    settings = Settings(environment="test", enable_dev_agent_api=True)
+    container = create_container(settings)
+    fake = _FakeLatestInformationService()
+    container.latest_information_service = fake  # type: ignore[assignment]
+    return TestClient(create_app(settings, container)), fake
+
+
+def test_development_latest_news_worker_route_runs_collection() -> None:
+    """최신 뉴스 Worker 경로가 키워드로 수집 서비스를 호출하고 집계를 반환한다."""
+    client, fake = _latest_news_client()
+    with client:
+        response = client.post(
+            "/internal/v1/dev/workers/latest-news/run",
+            json={"providers": ["gdelt"], "keywords": ["AI"], "limit_per_provider": 5},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "completed"
+    assert body["stored_count"] == 1
+    assert body["items"][0]["document_id"] == "doc-1"
+    assert fake.payload is not None
+    assert fake.payload.keywords == ["AI"]
+
+
+def test_development_latest_news_worker_route_rejects_empty_keywords() -> None:
+    """키워드가 없으면 최신 뉴스 Worker 경로가 422로 거부하는지 검증한다."""
+    client, fake = _latest_news_client()
+    with client:
+        response = client.post(
+            "/internal/v1/dev/workers/latest-news/run",
+            json={"providers": ["gdelt"], "keywords": []},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "REQUEST_VALIDATION_ERROR"
+    assert fake.payload is None
 
 
 def test_development_openapi_exposes_report_generation_name() -> None:
