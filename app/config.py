@@ -18,7 +18,7 @@ class Settings(BaseModel):
     docs_enabled: bool = Field(default=True, description="OpenAPI 문서 활성화 여부")
     enable_assistant_ui: bool = Field(
         default=True,
-        description="키워드 비서 웹 UI(/ , /search)를 같은 프로세스에 등록할지 여부",
+        description="키워드 비서 웹 UI(/assistant/**)를 같은 프로세스에 등록할지 여부",
     )
     enable_dev_agent_api: bool = Field(
         default=False,

@@ -140,12 +140,12 @@ def test_render_agent_section_empty_when_no_trace() -> None:
 
 
 def test_form_page_renders() -> None:
-    """루트 페이지는 사용자·키워드 입력 폼을 반환한다."""
+    """/assistant/ 페이지는 사용자·키워드 입력 폼을 반환한다."""
     client = TestClient(create_app())
-    response = client.get("/")
+    response = client.get("/assistant/")
 
     assert response.status_code == 200
-    assert 'action="/search"' in response.text
+    assert 'action="/assistant/search"' in response.text
     assert 'name="keyword"' in response.text
 
 
@@ -195,7 +195,7 @@ def test_search_renders_both_sections(monkeypatch) -> None:
     monkeypatch.setattr(web_module, "assist_daily_agent", lambda keyword, *, user_id: fake_result)
 
     client = TestClient(create_app())
-    response = client.post("/search", data={"user_id": "minji", "keyword": "전고체"})
+    response = client.post("/assistant/search", data={"user_id": "minji", "keyword": "전고체"})
 
     assert response.status_code == 200
     body = response.text
@@ -228,7 +228,7 @@ def test_search_shows_fallback_mode(monkeypatch) -> None:
     monkeypatch.setattr(web_module, "assist_daily_agent", lambda keyword, *, user_id: fake_result)
 
     client = TestClient(create_app())
-    response = client.post("/search", data={"user_id": "minji", "keyword": "전고체"})
+    response = client.post("/assistant/search", data={"user_id": "minji", "keyword": "전고체"})
 
     assert response.status_code == 200
     assert "주간 트렌드 요약" in response.text

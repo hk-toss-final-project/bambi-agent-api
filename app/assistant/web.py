@@ -1,6 +1,6 @@
 """키워드 비서 웹 라우터.
 
-`/` 에서 사용자 식별자와 키워드를 입력받아 `/search`로 제출하면, 신규 선별
+`/assistant/` 에서 사용자 식별자와 키워드를 입력받아 `/assistant/search`로 제출하면, 신규 선별
 파이프라인(agent.assistant.api.assist_daily_agent)을 한 번 실행하고 결과를 한
 페이지에 두 칸으로 나누어 보여준다.
 
@@ -25,7 +25,12 @@ from fastapi.responses import HTMLResponse
 
 from agent.assistant.api import assist_daily_agent, collect_window_days
 
-assistant_router = APIRouter(tags=["assistant"])
+# 비서 UI가 붙는 경로 접두사. 이 저장소는 API 서버이므로 루트(`/`)는 비워 두고,
+# 사람이 보는 화면은 이 하위에만 노출한다. 라우터 등록과 화면 안의 링크·폼 action이
+# 같은 값을 쓰도록 여기 한 곳에서 관리한다.
+ASSISTANT_PREFIX = "/assistant"
+
+assistant_router = APIRouter(prefix=ASSISTANT_PREFIX, tags=["assistant"])
 
 _PAGE_STYLE = """
 <style>
@@ -160,7 +165,7 @@ def _form_html(user_id: str = "") -> str:
 <p class="banner">이름과 키워드를 입력하면 최근 자료를 수집해 유사도·신선도·소스 신뢰도로
 점수를 매기고, 중복을 걸러 하나의 일간 브리핑으로 정리합니다. 다음 페이지에서 수집·선별
 내역과 보고서를 함께 보여줍니다.</p>
-<form method="post" action="/search">
+<form method="post" action="{ASSISTANT_PREFIX}/search">
   <label for="user_id">이름 / 아이디</label>
   <input id="user_id" name="user_id" required placeholder="예: minji" value="{user_id_value}">
   <label for="keyword">키워드</label>
@@ -460,7 +465,8 @@ def _render_results(result: dict[str, object]) -> str:
     from urllib.parse import quote, urlencode
 
     keyword = html.escape(str(result.get("keyword") or ""))
-    back_link = f"/?{urlencode({'user_id': str(result.get('user_id') or '')}, quote_via=quote)}"
+    query = urlencode({"user_id": str(result.get("user_id") or "")}, quote_via=quote)
+    back_link = f"{ASSISTANT_PREFIX}/?{query}"
     errors_html = "".join(
         f"<div class='err'>{html.escape(str(err))}</div>" for err in result.get("errors", [])
     )

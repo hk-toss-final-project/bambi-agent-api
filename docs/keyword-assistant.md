@@ -36,7 +36,7 @@
 | 보고서 | [features/report.py](../agent/assistant/features/report.py) | 워터폴(당일/주간/개념 정리) Markdown 생성 |
 | 요약 | [features/summarize.py](../agent/assistant/features/summarize.py) | ChatOpenAI 기반 한국어 요약 헬퍼 |
 | 오케스트레이션 | [features/service.py](../agent/assistant/features/service.py) | 진입점 3종 결합 (소스별 실패 격리) |
-| 웹 | [app/assistant/web.py](../app/assistant/web.py) | `/` 키워드 폼, `/search` 결과 페이지 |
+| 웹 | [app/assistant/web.py](../app/assistant/web.py) | `/assistant/` 키워드 폼, `/assistant/search` 결과 페이지 |
 
 ## 사용 라이브러리
 
@@ -61,10 +61,12 @@
 uv run uvicorn app.main:app --port 8000
 ```
 
-- 키워드 비서 UI : <http://127.0.0.1:8000/>  ← 브라우저로 접속해 키워드 입력
+- 키워드 비서 UI : <http://127.0.0.1:8000/assistant/>  ← 브라우저로 접속해 키워드 입력
 - API 문서       : <http://127.0.0.1:8000/redoc>
 
-UI가 필요 없는 배포에서는 `ENABLE_ASSISTANT_UI=false`로 등록을 끌 수 있다
+비서 UI는 `/assistant` 하위에만 노출한다 — 이 저장소는 API 서버이므로 루트를
+사람이 보는 화면이 차지하면 안 된다. UI가 필요 없는 배포에서는
+`ENABLE_ASSISTANT_UI=false`로 등록을 끌 수 있다
 (비서 의존성도 로드하지 않는다).
 
 > **이력**: 한때 API 서버(8000)와 비서 UI(8100)를 별도 프로세스로 분리했다.

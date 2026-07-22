@@ -137,7 +137,7 @@ def test_app_serves_assistant_ui_without_database(monkeypatch) -> None:
     application = create_app(settings=settings)
 
     with TestClient(application) as client:
-        response = client.get("/")
+        response = client.get("/assistant/")
 
     assert response.status_code == 200
-    assert 'action="/search"' in response.text
+    assert 'action="/assistant/search"' in response.text

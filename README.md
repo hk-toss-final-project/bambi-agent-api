@@ -4,7 +4,7 @@
 
 | | 파일 | 포트 | 제공 |
 |---|---|---|---|
-| **Agent API** | `app/main.py` | 8000 | API(`/internal/v1/**`) + LLM Wiki Graph UI + 키워드 비서 웹 UI(`/`, `/search`) |
+| **Agent API** | `app/main.py` | 8000 | API(`/internal/v1/**`) + LLM Wiki Graph UI + 키워드 비서 웹 UI(`/assistant/**`) |
 
 MVP 핵심 파이프라인: 클리핑/URL → LLM Wiki → 관심사 → 외부 수집 → Report Builder 생성 → 발행 Snapshot.
 
@@ -12,7 +12,8 @@ MVP 핵심 파이프라인: 클리핑/URL → LLM Wiki → 관심사 → 외부 
 Source 검색)·`REPORT-006`(생성 자료 선별)에 연결되어 있습니다. 웹 UI와 Main API가 **같은
 수집·선별 코드**를 쓰므로 두 경로의 결과가 갈라지지 않습니다.
 
-비서 UI가 필요 없는 배포에서는 `ENABLE_ASSISTANT_UI=false`로 끌 수 있습니다.
+비서 UI는 루트가 아니라 `/assistant` 하위에만 노출합니다(루트는 API 서버의 것입니다).
+UI가 필요 없는 배포에서는 `ENABLE_ASSISTANT_UI=false`로 끌 수 있습니다.
 
 기능별 구현 상태는 [MVP 구현 현황 체크리스트](docs/agent-api-mvp-scope.md)에서 확인합니다.
 
@@ -84,7 +85,7 @@ http://127.0.0.1:8000/wiki-graph?user_id={user_id}
 
 ```bash
 # 위 2번에서 띄운 서버 그대로 사용
-# 브라우저에서 http://localhost:8000 접속
+# 브라우저에서 http://localhost:8000/assistant/ 접속
 ```
 
 이 화면은 PostgreSQL 없이 동작하며 `OPENAI_API_KEY`만 필요합니다. DB 연결에 실패해도
