@@ -3,6 +3,7 @@
 앱 팩토리, 생명주기, 미들웨어와 최상위 라우터 등록 위치를 제공한다.
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -20,6 +21,20 @@ from app.openapi import (
     register_swagger_ui,
 )
 from app.routers.routes import build_api_router
+
+
+def selector_event_loop() -> asyncio.AbstractEventLoop:
+    """psycopg 비동기 Pool과 호환되는 Selector 이벤트 루프를 만든다.
+
+    Windows의 uvicorn 기본 루프는 ProactorEventLoop인데 psycopg 비동기 연결이
+    이를 지원하지 않아, DB Pool이 붙지 못하고 DB가 필요한 모든 요청이
+    SERVICE_NOT_READY로 실패한다. uvicorn `--loop`에 이 팩토리를 지정하면
+    (`--loop app.main:selector_event_loop`) 플랫폼과 무관하게 같은 루프를 쓴다.
+
+    Selector 루프는 Linux·macOS의 기본 구현이기도 해서 그쪽 동작은 바뀌지 않는다.
+    `workers/main.py`와 `scripts/*.py`가 쓰는 루프 설정과 같은 이유·같은 선택이다.
+    """
+    return asyncio.SelectorEventLoop()
 
 
 @asynccontextmanager

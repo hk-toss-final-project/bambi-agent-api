@@ -41,7 +41,7 @@ DB와 API를 실행합니다.
 
 ```bash
 docker compose up -d
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.main:selector_event_loop
 ```
 
 Swagger는 [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)에서 엽니다.

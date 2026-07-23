@@ -21,7 +21,7 @@ app/
 ## 실행
 
 ```bash
-uv run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload --loop app.main:selector_event_loop
 ```
 
 ## 작성 규칙

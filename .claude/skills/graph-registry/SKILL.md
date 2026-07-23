@@ -32,6 +32,6 @@ description: 새 LangGraph 에이전트(StateGraph)를 추가하거나 기존 �
 4. **테스트 갱신·실행** — `tests/app/test_graph_views.py`의 기대 slug·노드명을
    갱신하고 `uv run pytest`를 실행한다. StateGraph 정의 수와 레지스트리 항목
    수를 대조하는 가드 테스트가 있어, 등록을 빠뜨리면 여기서 실패한다.
-5. **렌더 확인** — 서버(`uv run uvicorn app.main:app --port 8000`)를 띄우고
+5. **렌더 확인** — 서버(`uv run uvicorn app.main:app --port 8000 --loop app.main:selector_event_loop`)를 띄우고
    `/dev/graphs`에서 새/수정 그래프가 올바르게 그려지는지 확인한다.
    (`ENABLE_DEV_AGENT_API=true` + `APP_ENV=local|test` 필요)

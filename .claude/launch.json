@@ -4,7 +4,15 @@
     {
       "name": "agent-api",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "python", "scripts/run_api.py", "--port", "8010"],
+      "runtimeArgs": [
+        "run",
+        "uvicorn",
+        "app.main:app",
+        "--port",
+        "8010",
+        "--loop",
+        "app.main:selector_event_loop"
+      ],
       "port": 8010
     }
   ]
