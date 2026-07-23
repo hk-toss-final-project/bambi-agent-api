@@ -17,6 +17,12 @@ from .features.usage import llm_015, llm_016
 from .features.safety import llm_017, llm_018
 
 __all__ = [
+    "LlmCompletion",
+    "complete",
+    "complete_with_usage",
+    "embed_texts",
+    "get_embedding_client",
+    "strip_json_fence",
     "llm_001",
     "llm_002",
     "llm_003",
