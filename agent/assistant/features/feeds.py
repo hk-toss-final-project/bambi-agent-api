@@ -139,15 +139,21 @@ def filter_recent_entries(
 
 
 def jina_read(url: str) -> str | None:
-    """Jina Reader로 URL 본문을 정제한 텍스트를 가져온다. 실패 시 None."""
-    import httpx
+    """Jina Reader로 URL 본문을 정제한 텍스트를 가져온다. 실패 시 None.
+
+    호출은 공유 Jina 커넥터에 위임한다(인증·오류 처리 일원화). 비서는 기사
+    하나쯤 실패해도 리포트를 계속 만들어야 하므로 예외 대신 None을 준다.
+    'Image N:' 헤더로 대표 이미지를 뽑아야 해서 원문 전체를 받는다.
+    """
+    from infrastructure.sources.connectors.api import (
+        JinaReadError,
+        fetch_url_raw_via_jina,
+    )
 
     try:
-        response = httpx.get(f"https://r.jina.ai/{url}", timeout=_JINA_TIMEOUT)
-        response.raise_for_status()
-    except Exception:
+        return fetch_url_raw_via_jina(url, timeout=_JINA_TIMEOUT)
+    except JinaReadError:
         return None
-    return response.text
 
 
 def _clean_jina_content(text: str) -> str:

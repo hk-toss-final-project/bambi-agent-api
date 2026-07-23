@@ -17,6 +17,7 @@ from .features.url import (
     JinaReadError,
     JinaReadResult,
     col_011,
+    fetch_url_raw_via_jina,
     fetch_url_via_jina,
     parse_jina_reader_response,
 )
@@ -31,6 +32,17 @@ from .features.latest import (
 from .features.custom import col_012
 
 __all__ = [
+    "GdeltNewsProvider",
+    "JinaReadError",
+    "JinaReadResult",
+    "LatestArticle",
+    "LatestInformationProvider",
+    "LatestProviderError",
+    "NaverNewsProvider",
+    "NewsApiProvider",
+    "fetch_url_raw_via_jina",
+    "fetch_url_via_jina",
+    "parse_jina_reader_response",
     "col_001",
     "col_002",
     "col_003",

@@ -86,6 +86,51 @@ def parse_jina_reader_response(text: str, *, requested_url: str) -> JinaReadResu
     )
 
 
+def fetch_url_raw_via_jina(
+    url: str,
+    *,
+    timeout: float = _JINA_TIMEOUT_SECONDS,
+    api_key: str | None = None,
+    transport: httpx.BaseTransport | None = None,
+) -> str:
+    """URL 본문을 Jina Reader로 수집해 헤더 포함 원문 텍스트로 반환한다.
+
+    Jina 인증·HTTP 오류 처리를 이 함수 한 곳에 모은다. 구조화된 결과가
+    필요하면 fetch_url_via_jina를, 'Image N:' 헤더 등 원문 전체가 필요하면
+    (키워드 비서의 대표 이미지 추출 등) 이 함수를 사용한다.
+
+    Args:
+        url: 수집할 대상 URL
+        timeout: HTTP 타임아웃(초)
+        api_key: Jina API Key. 생략하면 JINA_API_KEY 환경변수를 사용하고,
+            둘 다 없으면 무인증 무료 호출로 요청한다.
+        transport: 테스트에서 네트워크를 대체할 httpx Transport
+
+    Returns:
+        Jina Reader의 text/plain 응답 전문
+
+    Raises:
+        JinaReadError: 네트워크 오류, HTTP 4xx/5xx
+    """
+    key = api_key if api_key is not None else (os.getenv("JINA_API_KEY") or None)
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    try:
+        with httpx.Client(
+            timeout=timeout, transport=transport, follow_redirects=True
+        ) as client:
+            response = client.get(f"{_JINA_READER_BASE_URL}/{url}", headers=headers)
+    except httpx.HTTPError as error:
+        raise JinaReadError(
+            "network_error", f"Jina Reader 호출에 실패했습니다: {error}"
+        ) from error
+    if response.status_code >= 400:
+        raise JinaReadError(
+            f"http_{response.status_code}",
+            f"Jina Reader가 오류 상태를 반환했습니다: {response.status_code} ({url})",
+        )
+    return response.text
+
+
 def fetch_url_via_jina(
     url: str,
     *,
@@ -108,23 +153,10 @@ def fetch_url_via_jina(
     Raises:
         JinaReadError: 네트워크 오류, HTTP 4xx/5xx, 빈 본문
     """
-    key = api_key if api_key is not None else (os.getenv("JINA_API_KEY") or None)
-    headers = {"Authorization": f"Bearer {key}"} if key else {}
-    try:
-        with httpx.Client(
-            timeout=timeout, transport=transport, follow_redirects=True
-        ) as client:
-            response = client.get(f"{_JINA_READER_BASE_URL}/{url}", headers=headers)
-    except httpx.HTTPError as error:
-        raise JinaReadError(
-            "network_error", f"Jina Reader 호출에 실패했습니다: {error}"
-        ) from error
-    if response.status_code >= 400:
-        raise JinaReadError(
-            f"http_{response.status_code}",
-            f"Jina Reader가 오류 상태를 반환했습니다: {response.status_code} ({url})",
-        )
-    return parse_jina_reader_response(response.text, requested_url=url)
+    raw = fetch_url_raw_via_jina(
+        url, timeout=timeout, api_key=api_key, transport=transport
+    )
+    return parse_jina_reader_response(raw, requested_url=url)
 
 
 async def col_011(request: FeatureRequest) -> FeatureResult:

@@ -122,3 +122,27 @@ def test_fetch_url_via_jina_raises_on_network_error() -> None:
         )
 
     assert excinfo.value.error_code == "network_error"
+
+
+def test_fetch_url_raw_via_jina_returns_full_text_with_headers() -> None:
+    """원문 함수는 헤더 블록('Image N:' 등)을 잃지 않고 전문을 반환한다.
+
+    키워드 비서의 대표 이미지 추출이 헤더에 의존하므로, 파싱 전에 원문을
+    받을 수 있는 경계가 유지돼야 한다.
+    """
+    raw = (
+        "Title: 제목\nURL Source: https://news.example/1\n"
+        "Image 1: https://img.example/a.jpg\n"
+        "Markdown Content:\n본문입니다."
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=raw)
+
+    from infrastructure.sources.connectors.features.url import fetch_url_raw_via_jina
+
+    result = fetch_url_raw_via_jina(
+        "https://news.example/1", transport=httpx.MockTransport(handler)
+    )
+
+    assert result == raw

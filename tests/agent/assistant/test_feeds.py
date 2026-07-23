@@ -130,3 +130,23 @@ def test_extract_jina_image_picks_content_image_over_icon() -> None:
 def test_extract_jina_image_returns_none_when_no_image() -> None:
     """이미지가 없으면 None을 반환한다."""
     assert feeds._extract_jina_image("Markdown Content:\n본문만 있음") is None
+
+
+def test_jina_read_delegates_to_shared_connector(monkeypatch) -> None:
+    """jina_read는 공유 Jina 커넥터에 위임하고 실패 시 None을 반환한다."""
+    from infrastructure.sources.connectors import api as connectors_api
+
+    monkeypatch.setattr(
+        connectors_api,
+        "fetch_url_raw_via_jina",
+        lambda url, timeout: f"Markdown Content:\n{url} 본문",
+    )
+    assert feeds.jina_read("https://news.example/1") == (
+        "Markdown Content:\nhttps://news.example/1 본문"
+    )
+
+    def boom(url, timeout):
+        raise connectors_api.JinaReadError("network_error", "실패")
+
+    monkeypatch.setattr(connectors_api, "fetch_url_raw_via_jina", boom)
+    assert feeds.jina_read("https://news.example/1") is None
