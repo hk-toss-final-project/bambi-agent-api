@@ -2,8 +2,11 @@
 
 그래프 구조 추출은 DB·LLM·네트워크 없이 결정적으로 동작해야 한다 — Wiki·
 Report 그래프 빌더가 빌드 시점에 연결을 쓰지 않는다는 전제(None 스텁)가
-깨지면 여기서 잡힌다.
+깨지면 여기서 잡힌다. 또한 agent/에 정의된 StateGraph 수와 레지스트리
+항목 수를 대조해, 새 그래프의 등록 누락(AGENTS.md 규칙 10)을 차단한다.
 """
+
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -27,6 +30,27 @@ def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
     assert "reformulate" in diagrams["assistant"].mermaid
     for diagram in diagrams.values():
         assert "-->" in diagram.mermaid  # 엣지가 최소 하나는 있어야 그래프다
+
+
+def test_every_stategraph_definition_is_registered() -> None:
+    """agent/의 모든 StateGraph 정의가 /dev/graphs 레지스트리에 등록돼야 한다.
+
+    새 그래프를 만들고 등록을 빠뜨리면 여기서 실패한다. 절차는 AGENTS.md
+    필수 규칙 10(에이전트 그래프 등록)과 .claude/skills/graph-registry를 따른다.
+    """
+    agent_root = Path(__file__).parents[2] / "agent"
+    definitions = 0
+    for path in sorted(agent_root.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        definitions += path.read_text(encoding="utf-8").count("StateGraph(")
+
+    registered = len(list_graph_diagrams())
+    assert definitions == registered, (
+        f"agent/에 StateGraph 정의가 {definitions}개인데 그래프 시각화 레지스트리에는 "
+        f"{registered}개만 등록돼 있습니다. app/services/graph_diagrams.py의 "
+        "list_graph_diagrams()에 등록하세요 (AGENTS.md 필수 규칙 10 참고)."
+    )
 
 
 def test_get_graph_diagram_returns_none_for_unknown_slug() -> None:

@@ -113,6 +113,18 @@ bench/
 - MVP 주석은 facade의 import가 아니라 **실제 구현 함수 바로 위**에 작성한다.
 - 테스트는 `features/` 구현 모듈 구조를 미러링하고, `tests/test_feature_scaffolds.py`의 명세·facade 정합성 검증을 유지한다.
 
+### 10. 에이전트 그래프 등록 (/dev/graphs)
+
+새 LangGraph(`StateGraph`)를 추가하거나 기존 그래프의 노드·엣지를 수정하면, **반드시 그래프 시각화 페이지(/dev/graphs) 레지스트리를 함께 갱신한다.** 이 페이지는 팀이 에이전트 구조를 공유하는 기준 화면이므로 코드와 어긋나면 안 된다.
+
+절차:
+
+1. `app/services/graph_diagrams.py`의 `list_graph_diagrams()`에 항목을 등록/갱신한다 — slug, 제목, 한국어 설명(노드 흐름 요약), 빌더.
+2. 빌더가 DB 연결 등 인자를 받으면, **빌드 시점에 그 인자를 사용하지 않는지** 확인한 뒤 None 스텁으로 구조를 추출한다. (빌드 시점에 연결이 필요해지면 레지스트리 쪽 주석과 함께 별도 처리 방식을 사용자와 합의한다.)
+3. 그래프 빌더는 해당 기능 영역의 `api.py` facade로 재노출해 레지스트리가 facade만 import하게 한다(규칙 9).
+4. `tests/app/test_graph_views.py`의 기대값(slug·노드명)을 갱신하고 `uv run pytest`로 통과를 확인한다. `agent/`의 StateGraph 정의 수와 레지스트리 항목 수를 대조하는 가드 테스트가 있어, 등록을 누락하면 테스트가 실패한다.
+5. 서버를 띄워 `/dev/graphs`에서 렌더를 확인한다.
+
 ## 권장 규칙 (SHOULD)
 
 - **타입 힌트**: 모든 함수 시그니처에 파라미터/반환 타입을 명시한다.
