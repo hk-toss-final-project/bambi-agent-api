@@ -38,6 +38,9 @@ class LatestArticle:
     published_at: datetime | None = None
     source_name: str | None = None
     language: str | None = None
+    # 원본 발행처 URL. Google News처럼 url이 리다이렉트 주소인 Provider에서
+    # 소스 신뢰도(도메인 가중치) 판정에 쓴다. 알 수 없으면 None.
+    source_url: str | None = None
 
 
 class LatestInformationProvider(Protocol):
@@ -130,6 +133,8 @@ class NaverNewsProvider:
                     published_at=published_at,
                     source_name="Naver News",
                     language=language or "ko",
+                    # originallink가 곧 발행처 주소라 신뢰도 판정에 그대로 쓴다.
+                    source_url=url,
                 )
             )
         return articles
@@ -246,6 +251,11 @@ class GdeltNewsProvider:
                 ),
                 source_name=_clean_text(item.get("domain")),
                 language=_clean_text(item.get("language")) or language,
+                source_url=(
+                    f"https://{_clean_text(item.get('domain'))}"
+                    if _clean_text(item.get("domain"))
+                    else None
+                ),
             )
             for item in payload.get("articles", [])
             if str(item.get("url") or "").strip()
@@ -307,6 +317,7 @@ class GoogleNewsRssProvider:
                 published_at = None
             source = item.find("source")
             source_name = _clean_text(source.text if source is not None else "")
+            source_url = (source.get("url") or "").strip() if source is not None else ""
             articles.append(
                 LatestArticle(
                     provider=self.name,
@@ -316,6 +327,8 @@ class GoogleNewsRssProvider:
                     published_at=published_at,
                     source_name=source_name or None,
                     language=lang,
+                    # link는 Google 리다이렉트 주소라 발행처는 source 요소에서 읽는다.
+                    source_url=source_url or None,
                 )
             )
             if len(articles) >= limit:

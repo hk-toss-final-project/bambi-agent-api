@@ -56,8 +56,11 @@ def _exclude(log: dict[str, object], stage: str, doc: dict[str, object], reason:
 
 
 def _news_documents(keyword: str, now: datetime) -> list[dict[str, object]]:
-    """Google News RSS에서 후보 문서를 수집한다 (날짜 추출 전 원시 상태)."""
-    entries = feeds.fetch_feed_entries(feeds.build_news_feed_url(keyword))
+    """공용 뉴스 Provider(Naver·GDELT·Google News RSS)에서 후보 문서를 수집한다.
+
+    Global 수집과 같은 소스 풀을 쓰며, 날짜 추출 전 원시 상태로 반환한다.
+    """
+    entries = feeds.fetch_provider_entries(keyword)
     unique = feeds.deduplicate(entries)[:_NEWS_POOL]
     docs: list[dict[str, object]] = []
     for entry in unique:

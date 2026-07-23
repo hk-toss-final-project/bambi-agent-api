@@ -25,27 +25,70 @@ def _ts(dt: datetime) -> int:
     return int(dt.timestamp())
 
 
-def test_build_news_feed_url_encodes_keyword() -> None:
-    """키워드가 URL 인코딩되어 Google News 검색 피드 주소에 들어간다."""
-    url = feeds.build_news_feed_url("전고체 배터리")
-    assert "news.google.com/rss/search" in url
-    assert "%EC" in url or "+" in url  # 한글이 인코딩됨
+def test_fetch_provider_entries_merges_sources_and_isolates_failure() -> None:
+    """여러 Provider 결과를 entry 형태로 합치고, 실패한 Provider는 건너뛴다."""
+    from datetime import datetime
+
+    from infrastructure.sources.connectors.api import LatestArticle
+
+    class _OkProvider:
+        name = "google_news"
+
+        async def search(self, *, query, limit, language):
+            return [
+                LatestArticle(
+                    provider=self.name,
+                    title="코스피 급락",
+                    url="https://news.google.com/rss/articles/a",
+                    description="요약",
+                    published_at=datetime(2026, 7, 23, 9, 0, tzinfo=UTC),
+                    source_name="매일경제",
+                    source_url="https://maeil.com",
+                )
+            ]
+
+    class _BoomProvider:
+        name = "naver"
+
+        async def search(self, *, query, limit, language):
+            raise RuntimeError("네트워크 오류")
+
+    entries = feeds.fetch_provider_entries(
+        "코스피", providers=[_OkProvider(), _BoomProvider()]
+    )
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["title"] == "코스피 급락"
+    assert entry["link"] == "https://news.google.com/rss/articles/a"
+    assert entry["summary"] == "요약"
+    assert entry["source_url"] == "https://maeil.com"  # 신뢰도 판정용 발행처
+    assert entry["published_ts"] == int(
+        datetime(2026, 7, 23, 9, 0, tzinfo=UTC).timestamp()
+    )
 
 
-def test_extract_source_reads_publisher_from_rss() -> None:
-    """RSS의 <source> 요소에서 원본 발행처 URL과 이름을 뽑는다.
+def test_fetch_provider_entries_defaults_published_ts_to_zero() -> None:
+    """발행 시각을 모르는 기사는 published_ts 0으로 최신성 컷에서 걸러지게 한다."""
+    from infrastructure.sources.connectors.api import LatestArticle
 
-    Google News의 link는 자기네 리다이렉트 주소라 발행처를 알 수 없고, 이 필드가
-    유일하게 진짜 언론사 도메인을 알려준다.
-    """
-    entry = {"source": {"href": "https://www.chosun.com", "title": "조선일보"}}
-    assert feeds._extract_source(entry) == ("https://www.chosun.com", "조선일보")
+    class _NoDateProvider:
+        name = "gdelt"
 
+        async def search(self, *, query, limit, language):
+            return [
+                LatestArticle(
+                    provider=self.name,
+                    title="날짜 없는 기사",
+                    url="https://n.example/1",
+                    description="",
+                )
+            ]
 
-def test_extract_source_returns_empty_when_absent() -> None:
-    """<source>가 없는 피드 항목은 빈 문자열을 반환한다 (예외를 내지 않는다)."""
-    assert feeds._extract_source({}) == ("", "")
-    assert feeds._extract_source({"source": None}) == ("", "")
+    entries = feeds.fetch_provider_entries("AI", providers=[_NoDateProvider()])
+
+    assert entries[0]["published_ts"] == 0
+    assert entries[0]["published"] == ""
 
 
 def test_canonical_url_strips_query_and_fragment() -> None:

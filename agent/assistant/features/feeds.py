@@ -1,9 +1,10 @@
-"""RSS 수집 + Jina Reader 정제 + 중복 제거.
+"""뉴스 Provider 수집 어댑터 + Jina Reader 정제 + 중복 제거.
 
-키워드로 Google News RSS 검색 피드를 조회해 최신 기사 URL을 모으고, 정규화한 URL과
-제목으로 중복을 제거한 뒤, 상위 항목은 Jina Reader(r.jina.ai)로 본문을 정제해
-짧은 요지를 만든다. 네트워크 경계 함수(피드 조회, Jina 조회)를 분리해 테스트에서
-대체할 수 있게 한다.
+키워드로 공용 뉴스 Provider(Naver·GDELT·Google News RSS — Global 수집과 같은
+커넥터 계층)를 조회해 최신 기사를 모으고, 정규화한 URL과 제목으로 중복을
+제거한 뒤, 상위 항목은 Jina Reader로 본문을 정제해 짧은 요지를 만든다.
+네트워크 경계 함수(Provider 조회, Jina 조회)를 분리해 테스트에서 대체할 수
+있게 한다.
 
 리포트의 신선도는 최신성 컷으로 보장한다 — 발행된 지 일정 시간(기본 48시간)
 이내인 기사만 후보로 삼는다. 이미 보고한 기사를 제외하다 보면 목록의 점점
@@ -15,8 +16,19 @@
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
-from urllib.parse import quote_plus, urlsplit, urlunsplit
+from typing import TYPE_CHECKING
+from urllib.parse import urlsplit, urlunsplit
+
+if TYPE_CHECKING:
+    from infrastructure.sources.connectors.api import (
+        LatestArticle,
+        LatestInformationProvider,
+    )
+
+logger = logging.getLogger("agent.assistant.features.feeds")
 
 # Jina Reader 조회 타임아웃(초)과 요지로 사용할 최대 문자 수.
 _JINA_TIMEOUT = 12.0
@@ -28,14 +40,96 @@ _SNIPPET_CHARS = 280
 _DEFAULT_MAX_AGE_HOURS = 48.0
 
 
-def build_news_feed_url(keyword: str, language: str = "ko", country: str = "KR") -> str:
-    """키워드로 Google News RSS 검색 피드 URL을 만든다."""
-    query = quote_plus(keyword)
-    ceid = f"{country}:{language}"
-    return (
-        f"https://news.google.com/rss/search?q={query}"
-        f"&hl={language}&gl={country}&ceid={ceid}"
+def _build_default_providers() -> list["LatestInformationProvider"]:
+    """환경 자격 증명에 맞춰 사용할 뉴스 Provider 목록을 만든다.
+
+    Google News RSS는 키가 필요 없어 항상 포함하고, Naver는 자격 증명이
+    있을 때만 넣는다(팀원 로컬처럼 키 없는 환경에서도 비서가 동작해야 한다).
+    """
+    import os
+
+    from infrastructure.sources.connectors.api import (
+        GdeltNewsProvider,
+        GoogleNewsRssProvider,
+        NaverNewsProvider,
     )
+
+    providers: list[LatestInformationProvider] = [GoogleNewsRssProvider()]
+    naver_id = os.getenv("NAVER_CLIENT_ID")
+    naver_secret = os.getenv("NAVER_CLIENT_SECRET")
+    if naver_id and naver_secret:
+        providers.append(NaverNewsProvider(naver_id, naver_secret))
+    providers.append(
+        GdeltNewsProvider(os.getenv("GDELT_BASE_URL") or "https://api.gdeltproject.org")
+    )
+    return providers
+
+
+def _article_to_entry(article: "LatestArticle") -> dict[str, object]:
+    """Provider 공통 기사 모델을 파이프라인이 쓰는 entry 딕셔너리로 변환한다."""
+    published_at = article.published_at
+    if published_at is not None and published_at.tzinfo is None:
+        published_at = published_at.replace(tzinfo=UTC)
+    return {
+        "title": article.title,
+        "link": article.url,
+        "summary": article.description,
+        "published": published_at.isoformat() if published_at else "",
+        "published_ts": int(published_at.timestamp()) if published_at else 0,
+        "source_url": article.source_url or "",
+        "source_name": article.source_name or "",
+    }
+
+
+def fetch_provider_entries(
+    keyword: str,
+    *,
+    limit_per_provider: int = 15,
+    providers: Sequence["LatestInformationProvider"] | None = None,
+) -> list[dict[str, object]]:
+    """공용 뉴스 Provider들에서 최신 기사를 모아 entry 목록으로 반환한다.
+
+    Global 수집과 같은 Provider 계층을 사용해 두 파이프라인의 근거 풀이
+    갈라지지 않게 한다. Provider 실패는 서로 격리한다 — 소스 하나가 죽어도
+    비서 리포트는 나머지 소스로 계속된다.
+
+    Args:
+        keyword: 검색 키워드
+        limit_per_provider: Provider당 최대 기사 수
+        providers: 조회할 Provider 목록. 생략하면 환경 자격 증명 기준 기본 구성.
+
+    Returns:
+        {title, link, summary, published, published_ts, source_url, source_name}
+        딕셔너리 리스트 (published_ts는 정렬용 정수 타임스탬프, 없으면 0)
+    """
+    import asyncio
+
+    selected = list(providers) if providers is not None else _build_default_providers()
+    if not selected:
+        return []
+
+    async def _search_all() -> list[object]:
+        return await asyncio.gather(
+            *(
+                provider.search(
+                    query=keyword, limit=limit_per_provider, language="ko"
+                )
+                for provider in selected
+            ),
+            return_exceptions=True,
+        )
+
+    entries: list[dict[str, object]] = []
+    for provider, result in zip(selected, asyncio.run(_search_all()), strict=True):
+        if isinstance(result, BaseException):
+            logger.warning(
+                "뉴스 Provider %s 조회 실패, 나머지 소스로 계속한다: %s",
+                provider.name,
+                result,
+            )
+            continue
+        entries.extend(_article_to_entry(article) for article in result)
+    return entries
 
 
 def canonical_url(url: str) -> str:
@@ -45,57 +139,6 @@ def canonical_url(url: str) -> str:
     netloc = parts.netloc.lower()
     # query와 fragment는 중복 판별에서 무시한다.
     return urlunsplit((scheme, netloc, parts.path.rstrip("/"), "", ""))
-
-
-def fetch_feed_entries(feed_url: str) -> list[dict[str, object]]:
-    """RSS 피드를 파싱해 항목 목록을 반환한다.
-
-    Returns:
-        {title, link, summary, published, published_ts, source_url, source_name}
-        딕셔너리 리스트 (published_ts는 정렬용 정수 타임스탬프, 없으면 0)
-    """
-    import calendar
-
-    import feedparser
-
-    parsed = feedparser.parse(feed_url)
-    entries: list[dict[str, object]] = []
-    for entry in parsed.entries:
-        published_struct = entry.get("published_parsed")
-        published_ts = calendar.timegm(published_struct) if published_struct else 0
-        source_url, source_name = _extract_source(entry)
-        entries.append(
-            {
-                "title": entry.get("title", ""),
-                "link": entry.get("link", ""),
-                "summary": entry.get("summary", ""),
-                "published": entry.get("published", ""),
-                "published_ts": published_ts,
-                "source_url": source_url,
-                "source_name": source_name,
-            }
-        )
-    return entries
-
-
-def _extract_source(entry: object) -> tuple[str, str]:
-    """RSS 항목에서 원본 발행처의 URL과 이름을 뽑는다. 없으면 빈 문자열.
-
-    Google News RSS의 link는 자기네 리다이렉트 주소(news.google.com/rss/articles/...)
-    라서, 도메인만 보면 모든 기사가 news.google.com이 된다. 그러면 소스 신뢰도
-    테이블(config.SOURCE_WEIGHTS)이 한 건도 매칭되지 않아 전부 기본 가중치를 받는다.
-    Google News는 원본 발행처를 <source url="..."> 요소로 따로 주므로, 여기서
-    진짜 언론사 도메인을 확보한다. 추가 HTTP 요청이 필요 없다.
-
-    Returns:
-        (발행처 URL, 발행처 이름). 예: ("https://www.chosun.com", "조선일보")
-    """
-    source = entry.get("source") if hasattr(entry, "get") else None
-    if not source:
-        return "", ""
-    if hasattr(source, "get"):
-        return str(source.get("href") or ""), str(source.get("title") or "")
-    return "", ""
 
 
 def deduplicate(entries: list[dict[str, object]]) -> list[dict[str, object]]:

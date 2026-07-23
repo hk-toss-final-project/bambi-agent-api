@@ -130,6 +130,7 @@ def test_google_news_rss_provider_normalizes_items() -> None:
     assert article.url == "https://news.google.com/rss/articles/abc"
     assert article.description == "코스피 급락"
     assert article.source_name == "매일경제"
+    assert article.source_url == "https://maeil.com"  # 신뢰도 판정용 발행처 URL
     assert article.published_at is not None
     assert article.language == "ko"
 
