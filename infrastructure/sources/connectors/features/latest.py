@@ -1,4 +1,4 @@
-"""Naver·NewsAPI·GDELT 최신 정보 검색 Connector.
+"""Naver·NewsAPI·GDELT·Google News RSS 최신 정보 검색 Connector.
 
 서로 다른 외부 뉴스 API 응답을 제목, URL, 게시 시각, 설명과 Provider를 갖는
 공통 LatestArticle 모델로 정규화한다.
@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Protocol
+from xml.etree import ElementTree
 
 import httpx
 
@@ -249,3 +250,74 @@ class GdeltNewsProvider:
             for item in payload.get("articles", [])
             if str(item.get("url") or "").strip()
         ]
+
+
+class GoogleNewsRssProvider:
+    """Google News RSS 검색 결과를 공통 최신 문서로 정규화한다.
+
+    API Key 없이 동작하는 유일한 뉴스 Provider라, 자격 증명이 없는 환경
+    (팀원 로컬 등)에서 기본 소스 역할을 한다. 기사 link는 Google 리다이렉트
+    주소이므로 매체 정보는 source 요소에서 읽는다.
+    """
+
+    name = "google_news"
+
+    def __init__(self, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        """테스트용 HTTP Transport를 저장한다."""
+        self._transport = transport
+
+    async def search(
+        self, *, query: str, limit: int, language: str | None
+    ) -> list[LatestArticle]:
+        """Google News RSS 검색 피드에서 최신 기사 목록을 가져온다."""
+        lang = (language or "ko").split("-")[0]
+        country = "KR" if lang == "ko" else "US"
+        params = {"q": query, "hl": lang, "gl": country, "ceid": f"{country}:{lang}"}
+        try:
+            async with httpx.AsyncClient(
+                timeout=20, transport=self._transport, follow_redirects=True
+            ) as client:
+                response = await client.get(
+                    "https://news.google.com/rss/search", params=params
+                )
+                response.raise_for_status()
+                text = response.text
+        except httpx.HTTPError as error:
+            raise LatestProviderError(
+                self.name,
+                "request_failed",
+                f"Google News RSS 조회에 실패했습니다: {error}",
+            ) from error
+        try:
+            root = ElementTree.fromstring(text)
+        except ElementTree.ParseError as error:
+            raise LatestProviderError(
+                self.name,
+                "invalid_feed",
+                f"Google News RSS 응답을 해석할 수 없습니다: {error}",
+            ) from error
+        articles: list[LatestArticle] = []
+        for item in root.iter("item"):
+            url = (item.findtext("link") or "").strip()
+            if not url:
+                continue
+            try:
+                published_at = parsedate_to_datetime(item.findtext("pubDate") or "")
+            except (TypeError, ValueError):
+                published_at = None
+            source = item.find("source")
+            source_name = _clean_text(source.text if source is not None else "")
+            articles.append(
+                LatestArticle(
+                    provider=self.name,
+                    title=_clean_text(item.findtext("title")),
+                    url=url,
+                    description=_clean_text(item.findtext("description")),
+                    published_at=published_at,
+                    source_name=source_name or None,
+                    language=lang,
+                )
+            )
+            if len(articles) >= limit:
+                break
+        return articles

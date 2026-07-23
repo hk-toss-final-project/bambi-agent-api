@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-LatestProviderName = Literal["naver", "newsapi", "gdelt"]
+LatestProviderName = Literal["naver", "newsapi", "gdelt", "google_news"]
 
 
 class LatestInformationSchema(BaseModel):

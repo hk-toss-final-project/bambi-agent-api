@@ -23,6 +23,7 @@ from .features.url import (
 )
 from .features.latest import (
     GdeltNewsProvider,
+    GoogleNewsRssProvider,
     LatestArticle,
     LatestInformationProvider,
     LatestProviderError,
@@ -33,6 +34,7 @@ from .features.custom import col_012
 
 __all__ = [
     "GdeltNewsProvider",
+    "GoogleNewsRssProvider",
     "JinaReadError",
     "JinaReadResult",
     "LatestArticle",

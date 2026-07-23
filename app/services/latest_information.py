@@ -16,11 +16,13 @@ from app.schemas.latest_information import (
 from app.services.interests import InterestService
 from infrastructure.sources.connectors.api import (
     GdeltNewsProvider,
+    GoogleNewsRssProvider,
     LatestArticle,
     LatestInformationProvider,
     LatestProviderError,
     NaverNewsProvider,
     NewsApiProvider,
+    col_001,
     col_002,
     col_003,
     col_004,
@@ -88,6 +90,8 @@ class LatestInformationService:
             return GdeltNewsProvider(
                 self._settings.gdelt_base_url or "https://api.gdeltproject.org"
             )
+        if name == "google_news":
+            return GoogleNewsRssProvider()
         raise LatestProviderError(name, "unsupported_provider", "지원하지 않는 Provider입니다.")
 
     async def search(
@@ -108,6 +112,7 @@ class LatestInformationService:
                     "naver": col_002,
                     "gdelt": col_003,
                     "newsapi": col_004,
+                    "google_news": col_001,
                 }.get(provider_name)
                 if connector is None:
                     raise LatestProviderError(

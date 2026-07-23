@@ -62,6 +62,7 @@
 
 ### 외부 데이터 자동 수집
 
+- [x] `COL-001` RSS 수집 — Google News RSS 검색 Provider (자격 증명 불필요)
 - [x] `COL-002` Naver API 수집 — Adapter 구현 (자격 증명 필요)
 - [x] `COL-003` GDELT 수집
 - [x] `COL-004` NewsAPI 수집
@@ -190,6 +191,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 
 | ID | 기능 | 설명 |
 |---|---|---|
+| COL-001 | RSS 수집 | Google News RSS 검색 피드에서 신규 콘텐츠를 수집한다. |
 | COL-002 | Naver API 수집 | 설정된 키워드로 Naver API 데이터를 수집한다. |
 | COL-003 | GDELT 수집 | 글로벌 뉴스와 이벤트 데이터를 수집한다. |
 | COL-004 | NewsAPI 수집 | 뉴스 기사와 관련 메타데이터를 수집한다. |

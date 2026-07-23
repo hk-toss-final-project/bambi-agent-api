@@ -13,6 +13,7 @@ import pytest
 
 import workers.features.global_source_collector as collector
 from infrastructure.sources.connectors.api import (
+    GoogleNewsRssProvider,
     GdeltNewsProvider,
     LatestArticle,
     LatestProviderError,
@@ -182,6 +183,14 @@ def test_build_provider_selects_and_validates() -> None:
         gdelt_base_url=None,
     )
     assert isinstance(naver, NaverNewsProvider)
+
+    google_news = collector._build_provider(
+        "google_news",
+        naver_client_id=None,
+        naver_client_secret=None,
+        gdelt_base_url=None,
+    )
+    assert isinstance(google_news, GoogleNewsRssProvider)
 
     with pytest.raises(LatestProviderError):
         collector._build_provider(

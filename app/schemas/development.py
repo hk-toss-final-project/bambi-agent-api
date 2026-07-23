@@ -129,7 +129,7 @@ class LatestNewsWorkerRunRequest(DevelopmentSchema):
     providers: list[LatestProviderName] = Field(
         default_factory=lambda: ["gdelt"],
         min_length=1,
-        max_length=3,
+        max_length=4,
         description="뉴스를 수집할 외부 Provider 목록",
     )
     keywords: list[str] = Field(
@@ -167,7 +167,7 @@ class WikiKeywordLatestInformationRequest(DevelopmentSchema):
     providers: list[LatestProviderName] = Field(
         default_factory=lambda: ["gdelt"],
         min_length=1,
-        max_length=3,
+        max_length=4,
         description="검색할 외부 Provider 목록",
     )
     language: str | None = Field(

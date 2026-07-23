@@ -1,6 +1,6 @@
 """PostgreSQL Global Source Collector Worker.
 
-GDELT·Naver 최신 뉴스 API를 키워드로 검색해 뉴스 기사 URL을 Global
+GDELT·Naver·Google News RSS를 키워드로 검색해 뉴스 기사 URL을 Global
 Namespace에 중복 없이 저장한다. 본문은 저장하지 않고 `content_status='pending'`
 상태로만 등록하며, 이후 Jina Reader Worker(global_content_fetcher)가 본문을
 채운다. Provider별 실패는 서로 격리해 한 Provider가 실패해도 나머지 수집을
@@ -18,9 +18,11 @@ from infrastructure.persistence.api import (
 )
 from infrastructure.sources.connectors.api import (
     GdeltNewsProvider,
+    GoogleNewsRssProvider,
     LatestInformationProvider,
     LatestProviderError,
     NaverNewsProvider,
+    col_001,
     col_002,
     col_003,
 )
@@ -29,7 +31,14 @@ from infrastructure.sources.processing.api import gsp_004, gsp_006, gsp_015
 type DictRow = dict[str, Any]
 
 # 이 Worker가 지원하는 최신 뉴스 Provider 이름.
-_SUPPORTED_PROVIDERS = ("gdelt", "naver")
+_SUPPORTED_PROVIDERS = ("gdelt", "naver", "google_news")
+
+# Provider별 수집 기능(COL-*) 매핑.
+_PROVIDER_CONNECTORS = {
+    "naver": col_002,
+    "gdelt": col_003,
+    "google_news": col_001,
+}
 
 
 def _build_provider(
@@ -42,7 +51,7 @@ def _build_provider(
     """이름과 자격 증명으로 최신 뉴스 Provider를 구성한다.
 
     Args:
-        name: Provider 이름 (gdelt 또는 naver)
+        name: Provider 이름 (gdelt, naver 또는 google_news)
         naver_client_id: Naver 검색 API Client ID
         naver_client_secret: Naver 검색 API Client Secret
         gdelt_base_url: GDELT API 기본 URL (없으면 기본값 사용)
@@ -63,6 +72,8 @@ def _build_provider(
         return NaverNewsProvider(naver_client_id, naver_client_secret)
     if name == "gdelt":
         return GdeltNewsProvider(gdelt_base_url or "https://api.gdeltproject.org")
+    if name == "google_news":
+        return GoogleNewsRssProvider()
     raise LatestProviderError(name, "unsupported_provider", "지원하지 않는 Provider입니다.")
 
 
@@ -77,7 +88,7 @@ async def run_global_source_collection_batch(
     naver_client_secret: str | None = None,
     gdelt_base_url: str | None = None,
 ) -> list[dict[str, object]]:
-    """키워드로 GDELT·Naver 뉴스를 수집해 Global Namespace에 저장한다.
+    """키워드로 GDELT·Naver·Google News RSS 뉴스를 수집해 Global Namespace에 저장한다.
 
     Provider별로 독립적인 Transaction과 오류 처리를 사용해, 한 Provider의 API
     실패나 저장 오류가 다른 Provider의 수집 결과를 되돌리지 않는다.
@@ -85,7 +96,7 @@ async def run_global_source_collection_batch(
     Args:
         database_url: Agent DB 연결 문자열
         keywords: 검색에 사용할 키워드 목록 (공백으로 합쳐 Query 구성)
-        providers: 수집할 Provider 목록 (기본 gdelt, naver)
+        providers: 수집할 Provider 목록 (기본 gdelt, naver, google_news)
         limit_per_provider: Provider당 최대 수집 기사 수
         language: 검색 언어 힌트 (예: ko)
         naver_client_id: Naver 검색 API Client ID
@@ -113,7 +124,7 @@ async def run_global_source_collection_batch(
                     naver_client_secret=naver_client_secret,
                     gdelt_base_url=gdelt_base_url,
                 )
-                connector = col_002 if provider_name == "naver" else col_003
+                connector = _PROVIDER_CONNECTORS[provider_name]
                 collected = await connector(
                     provider,
                     query=query,
