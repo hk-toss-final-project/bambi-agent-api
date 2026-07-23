@@ -14,7 +14,6 @@ from __future__ import annotations
 import re
 import time
 
-from agent.assistant.features import history
 from agent.assistant.features.summarize import summarize_text
 
 # 자막 조회 시 선호하는 언어 순서. 한국어 우선, 없으면 영어를 시도한다.
@@ -218,27 +217,3 @@ def youtube_digest(
     pool = search_videos(keyword, limit=pool_size)
     recent = filter_recent_videos(pool, max_age_hours=max_age_hours)[:limit]
     return _summarize_videos_with_delay(recent, model=model)
-
-
-def youtube_digest_for_user(
-    keyword: str,
-    user_id: str,
-    limit: int = 4,
-    model: str = "gpt-4.1-mini",
-    max_age_hours: float = _DEFAULT_MAX_AGE_HOURS,
-) -> list[dict[str, object]]:
-    """사용자의 시청 이력을 반영해 개인화된 YouTube 요약 목록을 반환한다.
-
-    첫 조회 여부와 무관하게 항상 최근(max_age_hours 이내) 영상만 후보로 삼고,
-    그중 이미 본 영상은 제외한다. 기사·Reddit과 같은 최신성 기준을 공유한다.
-    조건을 만족하는 새 영상이 없으면 빈 목록을 반환한다(새 소식 없음).
-    """
-    already_watched = history.get_watched_video_ids(user_id, keyword)
-
-    pool_size = max(limit * 6, 18)
-    pool = search_videos(keyword, limit=pool_size)
-    recent = filter_recent_videos(pool, max_age_hours=max_age_hours)
-    candidates = [video for video in recent if video.get("video_id") not in already_watched]
-
-    selected = candidates[:limit]
-    return _summarize_videos_with_delay(selected, model=model)

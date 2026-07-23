@@ -32,8 +32,6 @@ from agent.assistant.features.summarize import summarize_text
 _SEARCH_RSS_URL = "https://www.reddit.com/search.rss"
 # Reddit이 User-Agent 없는 요청을 더 쉽게 차단/제한하므로 고유 User-Agent를 명시한다.
 _HEADERS = {"User-Agent": "report-builder-keyword-assistant/0.1 (keyword digest)"}
-# 게시글 사이 요청 지연(초). 반복 요청으로 인한 429 재발을 막기 위한 완화책이다.
-_REQUEST_DELAY_SECONDS = 2.0
 
 # 429 응답을 받았을 때 재시도 전 대기 시간. x-ratelimit-reset 헤더가 있으면 그
 # 값을 쓰고, 없으면 기본값을 쓴다. 사용자 요청이 너무 오래 걸리지 않도록 상한을 둔다.
@@ -179,15 +177,3 @@ def summarize_post(post: dict[str, object], model: str = "gpt-4.1-mini") -> dict
         "summary": summary,
         "note": note,
     }
-
-
-def reddit_digest(keyword: str, limit: int = 4, model: str = "gpt-4.1-mini") -> list[dict[str, object]]:
-    """키워드로 게시글을 검색하고, 요청 사이 지연을 두며 각 게시글을 요약한다."""
-    posts = search_posts(keyword, limit=limit)
-
-    results: list[dict[str, object]] = []
-    for index, post in enumerate(posts):
-        if index > 0:
-            time.sleep(_REQUEST_DELAY_SECONDS)
-        results.append(summarize_post(post, model=model))
-    return results

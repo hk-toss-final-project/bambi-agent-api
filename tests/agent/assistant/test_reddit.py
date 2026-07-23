@@ -31,8 +31,7 @@ def _entry(title: str, published_dt: datetime | None = _NOW, **overrides):
 
 @pytest.fixture(autouse=True)
 def _no_delay(monkeypatch):
-    """지연·재시도 대기를 0으로 만들고, 검색 캐시를 테스트마다 비운다."""
-    monkeypatch.setattr(reddit, "_REQUEST_DELAY_SECONDS", 0)
+    """재시도 대기를 0으로 만들고, 검색 캐시를 테스트마다 비운다."""
     monkeypatch.setattr(reddit.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(reddit, "_search_cache", {})
 
@@ -76,25 +75,6 @@ def test_summarize_post_notes_when_no_body(monkeypatch) -> None:
     assert result["summary"] is None
     assert "본문" in result["note"]
     assert called["summarize"] is False
-
-
-def test_reddit_digest_maps_search_to_summaries(monkeypatch) -> None:
-    """검색된 게시글 각각을 요약으로 변환한다."""
-    monkeypatch.setattr(
-        reddit,
-        "search_posts",
-        lambda keyword, limit=4: [
-            {"title": "글1", "url": "u1", "subreddit": "s1", "body": "본문1"},
-            {"title": "글2", "url": "u2", "subreddit": "s2", "body": "본문2"},
-        ],
-    )
-    monkeypatch.setattr(reddit, "summarize_text", lambda text, instruction, model="gpt-4.1-mini": "요약")
-
-    digest = reddit.reddit_digest("키워드", limit=2)
-
-    assert len(digest) == 2
-    assert digest[0]["title"] == "글1"
-    assert digest[0]["summary"] == "요약"
 
 
 def test_search_posts_raises_on_rate_limit_status(monkeypatch) -> None:

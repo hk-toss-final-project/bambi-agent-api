@@ -110,28 +110,6 @@ def test_filter_recent_videos_excludes_unparseable_and_old() -> None:
     assert kept == ["최근"]
 
 
-def test_digest_for_user_applies_recency_on_first_visit(monkeypatch) -> None:
-    """시청 이력이 없는 첫 조회도 최근(48시간 이내) 영상만 남기고 오래된 영상은 제외한다."""
-    from agent.assistant.features import history
-
-    monkeypatch.setattr(history, "get_watched_video_ids", lambda user_id, keyword: set())
-    monkeypatch.setattr(
-        youtube,
-        "search_videos",
-        lambda query, limit=4: [
-            {"video_id": "v1", "title": "최근 영상", "url": "u1", "published_time": "5 hours ago"},
-            {"video_id": "v2", "title": "오래된 영상", "url": "u2", "published_time": "3 months ago"},
-        ],
-    )
-    monkeypatch.setattr(youtube, "fetch_transcript", lambda vid, languages=("ko", "en"): "자막")
-    monkeypatch.setattr(youtube, "summarize_text", lambda text, instruction, model="gpt-4.1-mini": "요약")
-
-    digest = youtube.youtube_digest_for_user("전고체", "minji", limit=4, max_age_hours=48)
-
-    titles = [item["title"] for item in digest]
-    assert titles == ["최근 영상"]
-
-
 def test_summarize_videos_with_delay_sleeps_between_but_not_before_first(monkeypatch) -> None:
     """영상이 여러 개면 사이마다 지연을 두되, 첫 영상 앞에는 기다리지 않는다."""
     monkeypatch.setattr(youtube, "_TRANSCRIPT_REQUEST_DELAY_SECONDS", 5)
@@ -144,26 +122,3 @@ def test_summarize_videos_with_delay_sleeps_between_but_not_before_first(monkeyp
     youtube._summarize_videos_with_delay(videos, model="gpt-4.1-mini")
 
     assert sleep_calls == [5, 5]  # 영상 3개 -> 지연은 사이사이 2번만
-
-
-def test_digest_for_user_excludes_watched_on_return_visit(monkeypatch) -> None:
-    """시청 이력이 있으면 최근 영상 중 이미 본 영상을 제외한다."""
-    from agent.assistant.features import history
-
-    monkeypatch.setattr(history, "get_watched_video_ids", lambda user_id, keyword: {"v1"})
-    monkeypatch.setattr(
-        youtube,
-        "search_videos",
-        lambda query, limit=4: [
-            {"video_id": "v1", "title": "이미 봄", "url": "u1", "published_time": "5 hours ago"},
-            {"video_id": "v2", "title": "새 영상", "url": "u2", "published_time": "10 hours ago"},
-            {"video_id": "v3", "title": "오래됨", "url": "u3", "published_time": "10 days ago"},
-        ],
-    )
-    monkeypatch.setattr(youtube, "fetch_transcript", lambda vid, languages=("ko", "en"): "자막")
-    monkeypatch.setattr(youtube, "summarize_text", lambda text, instruction, model="gpt-4.1-mini": "요약")
-
-    digest = youtube.youtube_digest_for_user("전고체", "minji", limit=4, max_age_hours=48)
-
-    titles = [item["title"] for item in digest]
-    assert titles == ["새 영상"]
