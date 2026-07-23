@@ -9,6 +9,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Sequence
+from uuid import UUID
 
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
@@ -358,6 +359,22 @@ async def load_report_context(
     return contexts
 
 
+def _uuid_or_none(value: str) -> str | None:
+    """UUID 형식이 아닌 문서 식별자를 None으로 바꾼다.
+
+    실시간 외부 자료(live_sources)는 Wiki 문서가 아니라서 Version·Chunk UUID가
+    없고 참조 ID(L1 등)를 대신 담는다. citations의 uuid 컬럼·FK에 그대로 넣으면
+    저장이 실패하므로 URL만 출처 증빙으로 남긴다.
+    """
+    if not value:
+        return None
+    try:
+        UUID(value)
+    except ValueError:
+        return None
+    return value
+
+
 async def persist_report_generation(
     connection: AsyncConnection[DictRow],
     *,
@@ -496,8 +513,8 @@ async def persist_report_generation(
                 candidate["id"],
                 user_id,
                 ordinal,
-                context.document_version_id,
-                context.chunk_id,
+                _uuid_or_none(context.document_version_id),
+                _uuid_or_none(context.chunk_id),
                 context.title,
                 context.url,
                 context.content[:500],

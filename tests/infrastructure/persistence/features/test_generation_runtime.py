@@ -95,3 +95,17 @@ def test_enqueue_defaults_to_immediate_execution_without_schedule() -> None:
 
     _, insert_params = connection.executed[1]
     assert insert_params is not None and insert_params[-1] is None
+
+
+def test_uuid_or_none_keeps_wiki_ids_and_drops_live_references() -> None:
+    """Wiki UUID는 유지하고 실시간 자료 참조(L1 등)·빈 값은 None으로 바꾼다.
+
+    citations의 document_version_id·chunk_id는 uuid 컬럼 + Wiki FK라서,
+    UUID가 아닌 값을 그대로 넣으면 실시간 근거 인용 저장이 실패한다.
+    """
+    from infrastructure.persistence.features.generation_runtime import _uuid_or_none
+
+    wiki_id = "0d4f6f5e-2f3a-4b9c-8a1d-3e5f7a9b1c2d"
+    assert _uuid_or_none(wiki_id) == wiki_id
+    assert _uuid_or_none("L1") is None
+    assert _uuid_or_none("") is None
