@@ -92,12 +92,17 @@ def _youtube_documents(keyword: str, now: datetime, window_hours: float) -> list
             continue
         title = str(video.get("title") or "")
         url = str(video.get("url") or "")
+        video_id = str(video.get("video_id") or "")
+        # canonical_url은 query를 제거하므로 watch URL(?v=...)이 전부 같은 key로
+        # 뭉개져 첫 영상 외에는 중복으로 오판된다. 유튜브는 영상 식별자가 query에
+        # 있으므로 video_id 기반 key를 써서 영상별로 구분한다.
+        url_key = f"https://www.youtube.com/watch?v={video_id}" if video_id else feeds.canonical_url(url)
         docs.append(
             {
                 "source_type": "youtube",
                 "title": title,
                 "url": url,
-                "url_key": feeds.canonical_url(url),
+                "url_key": url_key,
                 "text": f"{title}\n{video.get('channel') or ''}".strip(),
                 "published_ts": (now - timedelta(hours=age_hours)).timestamp(),
                 "published_raw": str(video.get("published_time") or ""),

@@ -284,3 +284,28 @@ def test_next_day_skips_already_collected_urls(monkeypatch) -> None:
     assert reasons.count("url_already_collected") == 4
     # 신규 문서가 없으므로 전날 수집분의 주간 트렌드로 폴백한다.
     assert next_day["mode"] == "weekly"
+
+
+def test_youtube_documents_use_video_id_as_url_key(monkeypatch) -> None:
+    """유튜브 문서의 url_key는 영상별로 고유해야 한다.
+
+    canonical_url은 query를 제거해 모든 watch URL(?v=...)이 같은 key로 뭉개지고,
+    기초 필터가 두 번째 영상부터 duplicate_url로, 다음 실행부터는 전체를
+    url_already_collected로 오판해 유튜브 결과가 사라지는 회귀를 방지한다.
+    """
+    monkeypatch.setattr(
+        pipeline.youtube,
+        "search_videos",
+        lambda keyword, limit=4: [
+            {"video_id": "vid1", "title": "영상1", "url": "https://www.youtube.com/watch?v=vid1", "published_time": "5 hours ago"},
+            {"video_id": "vid2", "title": "영상2", "url": "https://www.youtube.com/watch?v=vid2", "published_time": "10 hours ago"},
+        ],
+    )
+
+    docs = pipeline._youtube_documents("전고체", _NOW, 72.0)
+
+    keys = [str(doc["url_key"]) for doc in docs]
+    assert len(keys) == 2
+    assert len(set(keys)) == 2  # 영상마다 고유 key여야 기초 필터를 통과한다
+    assert "vid1" in keys[0]
+    assert "vid2" in keys[1]
