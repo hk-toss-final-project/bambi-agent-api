@@ -1,4 +1,4 @@
-"""INT-001 관심 키워드 추출 규칙을 검증한다."""
+"""INT-001 관심 후보 추출 규칙을 검증한다."""
 
 import asyncio
 
@@ -7,50 +7,134 @@ import pytest
 from domain.interests.api import int_001
 
 
-def test_int_001_prioritizes_titles_and_shared_topics() -> None:
-    """문서 제목과 여러 문서에 반복된 Topic이 높은 점수와 근거를 갖는지 검증한다."""
+def _node(
+    document_id: str,
+    title: str,
+    *,
+    degree: float = 0.0,
+    domain: str | None = "product",
+    document_kind: str = "entity",
+    aliases: list[str] | None = None,
+    source_count: int = 1,
+    source_types: list[str] | None = None,
+    last_activity_at: str | None = "2026-07-20T00:00:00+00:00",
+) -> dict[str, object]:
+    """검증용 Entity·Concept 노드 Row를 만든다."""
+    return {
+        "document_id": document_id,
+        "document_kind": document_kind,
+        "document_key": title.casefold(),
+        "title": title,
+        "domain": domain,
+        "source_metadata": {"aliases": aliases or []},
+        "degree": degree,
+        "source_count": source_count,
+        "source_types": source_types or ["web_clipping"],
+        "last_activity_at": last_activity_at,
+    }
+
+
+def test_int_001_ranks_nodes_by_connection_degree() -> None:
+    """연결 수가 많은 노드가 더 높은 구조 점수를 갖는지 검증한다."""
     candidates = asyncio.run(
         int_001(
             [
-                {
-                    "document_id": "doc-1",
-                    "title": "Obsidian",
-                    "summary": "Markdown 기반 연결 노트 지식 관리 도구",
-                    "domain": "product",
-                    "source_metadata": {"aliases": ["옵시디언"], "tags": ["Markdown"]},
-                },
-                {
-                    "document_id": "doc-2",
-                    "title": "Markdown 연결 노트",
-                    "summary": "Obsidian에서 Markdown 문서를 연결하는 방법",
-                    "domain": "method",
-                    "source_metadata": {},
-                },
+                _node("doc-1", "Obsidian", degree=4.0, aliases=["옵시디언"]),
+                _node("doc-2", "Markdown", degree=1.0, document_kind="concept"),
             ],
             limit=10,
         )
     )
 
-    topics = {candidate.topic.casefold(): candidate for candidate in candidates}
-    assert "obsidian" in topics
-    assert "markdown" in topics
-    assert topics["markdown"].document_ids == ("doc-1", "doc-2")
-    assert topics["markdown"].confidence > 0.5
+    assert [candidate.topic for candidate in candidates] == ["Obsidian", "Markdown"]
     assert candidates[0].score == 1.0
+    assert candidates[0].score > candidates[1].score
+    assert candidates[0].evidence["degree"] == 4.0
+    assert candidates[0].evidence["aliases"] == ["옵시디언"]
+    assert candidates[0].document_ids == ("doc-1",)
+
+
+def test_int_001_keeps_node_titles_without_tokenizing() -> None:
+    """노드 제목을 토큰으로 쪼개지 않고 그대로 Topic으로 쓰는지 검증한다."""
+    candidates = asyncio.run(
+        int_001([_node("doc-1", "검색 증강 생성", degree=2.0)], limit=10)
+    )
+
+    assert [candidate.topic for candidate in candidates] == ["검색 증강 생성"]
+
+
+def test_int_001_carries_scoring_signals_into_evidence() -> None:
+    """INT-005가 쓸 최신성·행동 강도 신호를 근거에 담는지 검증한다."""
+    candidates = asyncio.run(
+        int_001(
+            [
+                _node(
+                    "doc-1",
+                    "LangGraph",
+                    degree=3.0,
+                    source_count=2,
+                    source_types=["memo", "web_clipping"],
+                    last_activity_at="2026-07-01T00:00:00+00:00",
+                )
+            ],
+            limit=10,
+        )
+    )
+
+    evidence = candidates[0].evidence
+    assert evidence["source_count"] == 2
+    assert evidence["source_types"] == ["memo", "web_clipping"]
+    assert evidence["last_activity_at"] == "2026-07-01T00:00:00+00:00"
+    assert evidence["structure_weight"] > 1.0
+
+
+def test_int_001_merges_nodes_sharing_a_title() -> None:
+    """제목이 같은 노드를 하나의 후보로 합치고 근거를 모으는지 검증한다."""
+    candidates = asyncio.run(
+        int_001(
+            [
+                _node("doc-1", "PostgreSQL", degree=1.0, domain=None),
+                _node("doc-2", "postgresql", degree=2.0, domain="database"),
+            ],
+            limit=10,
+        )
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].document_ids == ("doc-1", "doc-2")
+    assert candidates[0].evidence["degree"] == 3.0
+    assert candidates[0].category == "database"
+
+
+def test_int_001_drops_generic_domain_category() -> None:
+    """분류에 쓸 수 없는 other 영역은 Category로 남기지 않는지 검증한다."""
+    candidates = asyncio.run(
+        int_001([_node("doc-1", "Unknown", domain="other")], limit=10)
+    )
+
+    assert candidates[0].category is None
 
 
 def test_int_001_is_deterministic_and_validates_limit() -> None:
-    """같은 문서는 같은 후보 순서를 만들고 잘못된 limit을 거절하는지 검증한다."""
-    documents = [
-        {
-            "document_id": "doc-1",
-            "title": "PostgreSQL",
-            "summary": "데이터베이스와 pgvector",
-            "domain": "product",
-            "source_metadata": {},
-        }
-    ]
+    """같은 노드는 같은 후보 순서를 만들고 잘못된 limit을 거절하는지 검증한다."""
+    nodes = [_node("doc-1", "PostgreSQL", degree=2.0)]
 
-    assert asyncio.run(int_001(documents)) == asyncio.run(int_001(documents))
+    assert asyncio.run(int_001(nodes)) == asyncio.run(int_001(nodes))
     with pytest.raises(ValueError, match="limit"):
-        asyncio.run(int_001(documents, limit=0))
+        asyncio.run(int_001(nodes, limit=0))
+
+
+def test_int_001_ignores_rows_without_identity() -> None:
+    """document_id나 제목이 없는 Row를 후보에서 제외하는지 검증한다."""
+    candidates = asyncio.run(
+        int_001(
+            [
+                _node("", "제목만 있는 노드"),
+                _node("doc-2", "   "),
+                _node("doc-3", "정상 노드"),
+            ],
+            limit=10,
+        )
+    )
+
+    assert [candidate.topic for candidate in candidates] == ["정상 노드"]

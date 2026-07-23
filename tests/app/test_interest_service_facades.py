@@ -19,16 +19,21 @@ class _FakeInterestRepository:
         self._wiki_version_id = wiki_version_id
 
     async def load_interest_documents(self, user_id: str) -> Mapping[str, object]:
-        """관심사 추출에 사용할 활성 Wiki 문서 한 건을 반환한다."""
+        """관심사 추출에 사용할 활성 Wiki 노드 한 건을 반환한다."""
         return {
             "wiki_version_id": self._wiki_version_id,
             "documents": [
                 {
                     "document_id": "document-1",
+                    "document_kind": "entity",
+                    "document_key": "langgraph-agent",
                     "title": "LangGraph Agent",
-                    "summary": "LangGraph 기반 에이전트 오케스트레이션",
                     "domain": "technology",
-                    "source_metadata": {"tags": ["Python"]},
+                    "source_metadata": {"aliases": ["랭그래프"]},
+                    "degree": 3.0,
+                    "source_count": 1,
+                    "source_types": ["web_clipping"],
+                    "last_activity_at": "2026-07-20T00:00:00+00:00",
                 }
             ],
         }

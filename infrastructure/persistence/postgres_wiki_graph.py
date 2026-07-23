@@ -500,7 +500,11 @@ class PostgresWikiGraphRepository:
         }
 
     async def load_interest_documents(self, user_id: str) -> Mapping[str, object]:
-        """활성 Wiki Build와 관심 키워드 계산에 사용할 현재 문서를 조회한다."""
+        """활성 Wiki Build와 관심 키워드 계산에 쓸 Entity·Concept 노드를 조회한다.
+
+        노드마다 관계 유형을 가중한 연결 수(degree), 근거 원문의 수·종류와
+        최신 활동 시각을 함께 계산해 INT-001·INT-005 입력으로 넘긴다.
+        """
         namespace_key = f"user/{user_id}"
         async with self._pool.connection() as connection:
             async with connection.transaction():
@@ -524,14 +528,71 @@ class PostgresWikiGraphRepository:
                         document.document_key,
                         document.domain,
                         version.title,
-                        version.summary,
-                        version.source_metadata
+                        version.source_metadata,
+                        COALESCE(relation_stats.degree, 0)::float8 AS degree,
+                        COALESCE(source_stats.source_count, 0) AS source_count,
+                        COALESCE(
+                            source_stats.source_types, ARRAY[]::text[]
+                        ) AS source_types,
+                        COALESCE(
+                            source_stats.last_source_at, document.updated_at
+                        ) AS last_activity_at
                     FROM agent.wiki_documents AS document
                     JOIN agent.wiki_document_versions AS version
                       ON version.document_id = document.id
                      AND version.namespace_key = document.namespace_key
                      AND version.version = document.current_version
+                    LEFT JOIN LATERAL (
+                        SELECT SUM(
+                            CASE relation.relation_type
+                                WHEN 'entity_relation' THEN 1.0
+                                WHEN 'applies_concept' THEN 1.0
+                                WHEN 'related_concept' THEN 0.5
+                                ELSE 0.0
+                            END
+                        ) AS degree
+                        FROM agent.wiki_document_relations AS relation
+                        JOIN agent.wiki_documents AS peer
+                          ON peer.id = CASE
+                                 WHEN relation.source_document_id = document.id
+                                 THEN relation.target_document_id
+                                 ELSE relation.source_document_id
+                             END
+                         AND peer.namespace_key = relation.namespace_key
+                        WHERE relation.namespace_key = document.namespace_key
+                          AND document.id IN (
+                              relation.source_document_id,
+                              relation.target_document_id
+                          )
+                          AND peer.document_kind IN ('entity', 'concept')
+                          AND peer.status = 'active'
+                          AND peer.deleted_at IS NULL
+                    ) AS relation_stats ON true
+                    LEFT JOIN LATERAL (
+                        SELECT
+                            COUNT(DISTINCT source_document.id) AS source_count,
+                            array_agg(
+                                DISTINCT source_document.source_type
+                            ) AS source_types,
+                            MAX(
+                                COALESCE(
+                                    source_version.clipped_on::timestamptz,
+                                    source_version.created_at
+                                )
+                            ) AS last_source_at
+                        FROM agent.wiki_document_sources AS link
+                        JOIN agent.user_source_document_versions AS source_version
+                          ON source_version.id = link.source_document_version_id
+                         AND source_version.namespace_key = link.namespace_key
+                        JOIN agent.user_source_documents AS source_document
+                          ON source_document.id = source_version.source_document_id
+                         AND source_document.namespace_key
+                             = source_version.namespace_key
+                        WHERE link.wiki_document_version_id = version.id
+                    ) AS source_stats ON true
                     WHERE document.namespace_key = %s
+                      AND document.document_kind IN ('entity', 'concept')
+                      AND document.status = 'active'
                       AND document.deleted_at IS NULL
                     ORDER BY document.document_kind, document.document_key
                     """,
@@ -551,6 +612,9 @@ class PostgresWikiGraphRepository:
                     **dict(document),
                     "document_id": str(document["document_id"]),
                     "source_metadata": dict(document["source_metadata"] or {}),
+                    "degree": float(document["degree"]),
+                    "source_count": int(document["source_count"]),
+                    "source_types": list(document["source_types"] or []),
                 }
                 for document in documents
             ],
