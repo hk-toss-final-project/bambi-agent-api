@@ -496,12 +496,11 @@ _store_lock = threading.Lock()
 
 
 def _database_url() -> str | None:
-    """비서 이력에 쓸 연결 문자열을 찾는다. 없으면 None."""
-    return (
-        os.environ.get("ASSISTANT_DATABASE_URL")
-        or os.environ.get("AGENT_DATABASE_URL")
-        or None
-    )
+    """비서 이력에 쓸 연결 문자열을 찾는다. 없으면 None.
+
+    비서 이력은 별도 DB가 아니라 Agent DB(agent 스키마)에 함께 저장한다.
+    """
+    return os.environ.get("AGENT_DATABASE_URL") or None
 
 
 def _build_store() -> HistoryStore:

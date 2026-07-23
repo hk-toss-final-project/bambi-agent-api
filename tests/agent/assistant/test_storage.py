@@ -86,7 +86,6 @@ def test_normalize_keyword_ignores_case_and_spacing() -> None:
 
 def test_uses_json_when_no_database_url(monkeypatch) -> None:
     """연결 문자열이 없으면 JSON 저장소를 쓴다 (로컬 개발)."""
-    monkeypatch.delenv("ASSISTANT_DATABASE_URL", raising=False)
     monkeypatch.delenv("AGENT_DATABASE_URL", raising=False)
     storage.set_store(None)
 

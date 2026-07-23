@@ -9,7 +9,7 @@
     uv run python scripts/migrate_assistant_history.py             # 실제 이관
 
 선행 조건:
-- `AGENT_DATABASE_URL`(또는 `ASSISTANT_DATABASE_URL`)이 설정돼 있어야 한다.
+- `AGENT_DATABASE_URL`이 설정돼 있어야 한다.
 - `database/migrations/0007_assistant_history.sql`이 적용돼 있어야 한다.
 """
 
@@ -150,7 +150,7 @@ def main() -> int:
     else:
         dsn = storage._database_url()
         if not dsn:
-            print("오류: AGENT_DATABASE_URL(또는 ASSISTANT_DATABASE_URL)이 필요합니다.")
+            print("오류: AGENT_DATABASE_URL이 필요합니다.")
             return 1
         store = storage.PostgresHistoryStore(dsn)
         try:

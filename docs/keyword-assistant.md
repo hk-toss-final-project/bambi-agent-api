@@ -113,7 +113,7 @@ report_012  개인화 → report_008/009 생성 → report_011 인용 → report
 
 ### 백엔드 선택
 
-1. `AGENT_DATABASE_URL`(또는 `ASSISTANT_DATABASE_URL`)이 있고 연결되면 → **PostgreSQL**
+1. `AGENT_DATABASE_URL`이 있고 연결되면 → **PostgreSQL**
 2. 설정이 없으면 → 로컬 JSON (`DATA_DIR`, 로컬 개발용)
 3. 설정은 있는데 연결 실패면 → 경고 로그 + 로컬 JSON 폴백
 
