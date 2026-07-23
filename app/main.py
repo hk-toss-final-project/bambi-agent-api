@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from app.config import Settings, load_settings
 from app.dependencies import AppContainer, create_container
 from app.exceptions import register_exception_handlers
+from app.logging_config import configure_logging
 from app.middleware.tracing import RequestTracingMiddleware
 from app.openapi import (
     OPENAPI_DESCRIPTION,
@@ -60,6 +61,10 @@ def create_app(
 ) -> FastAPI:
     """[SYS-001] 설정을 받아 FastAPI 애플리케이션 뼈대를 생성한다."""
     resolved_settings = settings or load_settings()
+    configure_logging(
+        log_level=resolved_settings.log_level,
+        log_directory=resolved_settings.log_directory,
+    )
     application = FastAPI(
         title=resolved_settings.app_name,
         description=OPENAPI_DESCRIPTION,

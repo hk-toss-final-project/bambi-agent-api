@@ -77,7 +77,13 @@ async def handle_validation_error(
 
 async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
     """예상하지 못한 오류를 내부 정보가 없는 공통 응답으로 변환한다."""
-    logger.exception("처리되지 않은 Agent API 오류", exc_info=exc)
+    # 이 핸들러는 추적 미들웨어 바깥(ServerErrorMiddleware)에서 실행돼 contextvar가
+    # 이미 해제된 뒤라, request.state의 ID를 직접 실어 로그 상관관계를 유지한다.
+    logger.exception(
+        "처리되지 않은 Agent API 오류",
+        exc_info=exc,
+        extra={"request_id": _request_id(request)},
+    )
     body = ErrorResponseSchema(
         code="INTERNAL_SERVER_ERROR",
         message="요청 처리 중 오류가 발생했습니다.",

@@ -5,6 +5,13 @@
 전용으로 제공해 라우트 테스트가 실제 계약을 검증하게 한다.
 """
 
+import os
+
+# app.main은 import 시점에 create_app()을 실행해 로깅까지 구성한다(uvicorn 진입점
+# 부작용). 테스트가 저장소 logs/에 파일을 쓰지 않도록 그 import보다 먼저 파일
+# 로그를 끈다 — configure_logging은 최초 1회만 적용되기 때문이다.
+os.environ["LOG_DIR"] = ""
+
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime

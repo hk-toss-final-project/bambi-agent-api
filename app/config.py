@@ -16,6 +16,11 @@ class Settings(BaseModel):
     environment: str = Field(default="local", description="실행 환경 이름")
     api_prefix: str = Field(default="/internal/v1", description="내부 API 경로 Prefix")
     docs_enabled: bool = Field(default=True, description="OpenAPI 문서 활성화 여부")
+    log_level: str = Field(default="INFO", description="root 로거 레벨 이름")
+    log_directory: str = Field(
+        default="logs",
+        description="회전 파일 로그 디렉터리. 빈 값이면 파일 로그를 끈다(콘솔만).",
+    )
     enable_assistant_ui: bool = Field(
         default=True,
         description="키워드 비서 웹 UI(/assistant/**)를 같은 프로세스에 등록할지 여부",
@@ -119,6 +124,8 @@ def load_settings() -> Settings:
         environment=os.getenv("APP_ENV", "local"),
         api_prefix=os.getenv("API_PREFIX", "/internal/v1"),
         docs_enabled=_boolean_env("DOCS_ENABLED", True),
+        log_level=os.getenv("LOG_LEVEL", "INFO"),
+        log_directory=os.getenv("LOG_DIR", "logs"),
         enable_assistant_ui=_boolean_env("ENABLE_ASSISTANT_UI", True),
         enable_dev_agent_api=_boolean_env("ENABLE_DEV_AGENT_API", False),
         dev_agent_api_token=_optional_env("DEV_AGENT_API_TOKEN"),

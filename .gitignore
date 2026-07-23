@@ -22,3 +22,6 @@ data/watch_history.json
 # 키워드 비서 로컬 수집 이력·보고 임베딩 이력(사용자 데이터, 커밋하지 않음)
 data/collect_history.json
 data/report_embedding_history.json
+
+# 애플리케이션 로그 (로컬 파일 로그, 커밋하지 않음)
+logs/
