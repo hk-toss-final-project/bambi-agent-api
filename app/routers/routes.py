@@ -17,10 +17,13 @@ def build_api_router(settings: Settings) -> APIRouter:
     router.include_router(service_router, prefix=settings.api_prefix)
     router.include_router(service_worker_router, prefix=settings.api_prefix)
     if settings.dev_agent_api_enabled:
+        from app.routers.development.graph_views import router as graph_views_router
         from app.routers.development.routes import router as development_router
 
         router.include_router(
             development_router,
             prefix=f"{settings.api_prefix}/dev",
         )
+        # 사람이 브라우저로 여는 시각화 페이지라 내부 API prefix 없이 /dev에 둔다.
+        router.include_router(graph_views_router, prefix="/dev")
     return router

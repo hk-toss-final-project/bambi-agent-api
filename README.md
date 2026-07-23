@@ -57,6 +57,9 @@ uv run uvicorn app.main:app --port 8000 --reload
 - `APP_ENV=local`(또는 `test`) + `ENABLE_DEV_AGENT_API=true`면 `dev-*` 태그의
   개발 실행 API가 함께 등록됩니다. 단계별 사용법은
   [Swagger 개발 테스트 가이드](docs/swagger-dev-guide.md)를 따라가세요.
+- 에이전트 그래프 구조 시각화: <http://127.0.0.1:8000/dev/graphs> —
+  Personal Wiki·Report Generation·키워드 비서 그래프를 Mermaid 차트로
+  보여줍니다(개발 API와 같은 플래그로 활성화).
 - 내부 인증이 적용되기 전까지 API와 문서를 외부 네트워크에 노출하지 마세요.
   문서가 필요 없는 환경에서는 `DOCS_ENABLED=false`로 비활성화할 수 있습니다.
 
