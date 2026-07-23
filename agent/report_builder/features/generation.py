@@ -18,7 +18,9 @@ from shared.feature_runtime import execute_feature_implementation
 
 _PROMPT_PATH = Path(__file__).parents[2] / "prompts" / "templates" / "report_builder_system.md"
 _SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8").strip()
-_CITATION_REF = re.compile(r"\[([PG]\d+)\]")
+# P=개인 Wiki, G=Global 문서, L=실시간 외부 자료(live_sources). 세 접두사가
+# 실제 근거 참조 체계의 전부이며, 프롬프트의 인용 지시와 함께 유지해야 한다.
+_CITATION_REF = re.compile(r"\[([PGL]\d+)\]")
 _MAX_CONTEXT_CHARS = 16000
 
 

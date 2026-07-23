@@ -32,15 +32,19 @@ _DEFAULT_MAX_DOCUMENTS = 12
 _LIVE_NAMESPACE = "live-source"
 
 
-def _to_context_document(item: dict[str, object], index: int) -> ReportContextDocument | None:
+def _to_context_document(item: dict[str, object], number: int) -> ReportContextDocument | None:
     """비서 선별 아이템 하나를 Report Builder 근거 문서로 변환한다.
+
+    참조 ID는 개인 Wiki(P1)·Global(G1)과 같은 체계의 `L{n}`을 쓴다. 생성 프롬프트가
+    `[P1]`/`[G1]`/`[L1]` 형식만 허용하므로, 다른 형식을 쓰면 LLM이 존재하지 않는
+    참조를 만들어 Citation 검증에서 실패한다.
 
     Args:
         item: assist_daily_agent 결과의 items 원소
-        index: 참조 ID를 유일하게 만들기 위한 순번
+        number: 참조 ID(L{n})에 쓸 1부터 시작하는 순번
 
     Returns:
-        변환된 근거 문서. 제목과 본문이 모두 비면 None.
+        변환된 근거 문서. 제목과 본문이 모두 비거나 출처 URL이 없으면 None.
     """
     title = str(item.get("title") or "").strip()
     summary = str(item.get("summary") or "").strip()
@@ -49,6 +53,10 @@ def _to_context_document(item: dict[str, object], index: int) -> ReportContextDo
 
     sources = [s for s in (item.get("sources") or []) if isinstance(s, dict)]
     primary_url = str(sources[0].get("url") or "") if sources else ""
+    # 실시간 자료는 Wiki 문서 Version이 없어서 Citation 저장 시 URL이 유일한 출처
+    # 증빙이다(agent.citations는 document_version_id 또는 url을 요구한다).
+    if not primary_url:
+        return None
 
     # 통합 요약 본문에 실제 출처 목록을 덧붙여, 생성 단계가 근거를 인용할 수 있게 한다.
     source_lines = "\n".join(
@@ -62,13 +70,13 @@ def _to_context_document(item: dict[str, object], index: int) -> ReportContextDo
         score = 0.0
 
     return ReportContextDocument(
-        reference=f"live-{index}",
+        reference=f"L{number}",
         document_version_id="",
-        chunk_id=f"live-{index}",
+        chunk_id=f"L{number}",
         namespace_key=_LIVE_NAMESPACE,
         title=title or summary[:60],
         content=content,
-        url=primary_url or None,
+        url=primary_url,
         score=score,
     )
 
@@ -102,10 +110,11 @@ def collect_live_context(
         return []
 
     documents: list[ReportContextDocument] = []
-    for index, item in enumerate(result.get("items") or []):
+    for item in result.get("items") or []:
         if not isinstance(item, dict):
             continue
-        document = _to_context_document(item, index)
+        # 순번은 수락된 문서 기준으로 매겨 참조 ID(L1, L2, …)에 빈 번호가 없게 한다.
+        document = _to_context_document(item, len(documents) + 1)
         if document is not None:
             documents.append(document)
 

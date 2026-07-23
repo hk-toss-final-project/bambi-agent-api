@@ -51,6 +51,21 @@ def test_parse_report_generation_rejects_invented_reference() -> None:
         )
 
 
+def test_parse_report_generation_accepts_live_source_reference() -> None:
+    """실시간 자료 참조(L1)를 본문 인용과 명시 Citation 양쪽에서 인식한다.
+
+    live_sources가 L{n} 참조를 쓰므로, 본문 정규식이 L 접두사를 놓치면
+    실시간 근거 인용이 Citation 목록에서 누락된다.
+    """
+    result = parse_report_generation(
+        '{"title":"제목","summary":"요약",'
+        '"body":"기존 맥락. [P1] 오늘 소식이다. [L1]","citation_refs":["L2"]}',
+        allowed_references=["P1", "L1", "L2"],
+    )
+
+    assert result.citation_references == ("L2", "P1", "L1")
+
+
 def test_generate_report_content_passes_stable_context_to_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     """생성기가 안정 참조와 모델을 Prompt에 전달하고 검증된 결과만 반환한다."""
     captured: dict[str, str] = {}

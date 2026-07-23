@@ -48,6 +48,8 @@ def test_collect_live_context_converts_items(monkeypatch) -> None:
 
     assert len(documents) == 1
     document = documents[0]
+    # 참조는 프롬프트 인용 체계(P/G/L)에 맞는 L{n} 형식이어야 한다.
+    assert document.reference == "L1"
     assert document.title == "코스피 급락"
     assert document.score == 0.42
     assert document.url == "https://a.test/1"      # 대표 출처 URL
@@ -81,6 +83,32 @@ def test_collect_live_context_skips_empty_items(monkeypatch) -> None:
     )
 
     assert live_sources.collect_live_context("코스피", "minji") == []
+
+
+def test_collect_live_context_skips_items_without_source_url(monkeypatch) -> None:
+    """출처 URL이 없는 아이템은 건너뛰고 순번을 이어 붙인다.
+
+    실시간 자료는 Wiki Version이 없어 Citation 저장 시 URL이 유일한 출처 증빙이다.
+    """
+    monkeypatch.setattr(
+        live_sources,
+        "assist_daily_agent",
+        lambda topic, user_id, model="gpt-4.1-mini": {
+            "items": [
+                {"title": "출처 없는 개념 정리", "summary": "요약", "sources": []},
+                {
+                    "title": "출처 있는 소식",
+                    "summary": "요약",
+                    "sources": [{"source_type": "news", "title": "기사", "url": "https://a.test/1"}],
+                },
+            ]
+        },
+    )
+
+    documents = live_sources.collect_live_context("코스피", "minji")
+
+    assert [d.reference for d in documents] == ["L1"]  # 건너뛴 아이템은 번호를 차지하지 않는다
+    assert documents[0].title == "출처 있는 소식"
 
 
 def test_select_generation_context_puts_personal_first() -> None:
