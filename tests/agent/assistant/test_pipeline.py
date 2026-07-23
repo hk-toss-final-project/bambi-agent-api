@@ -309,3 +309,42 @@ def test_youtube_documents_use_video_id_as_url_key(monkeypatch) -> None:
     assert len(set(keys)) == 2  # 영상마다 고유 key여야 기초 필터를 통과한다
     assert "vid1" in keys[0]
     assert "vid2" in keys[1]
+
+
+def test_news_documents_reuse_global_body_when_available(monkeypatch) -> None:
+    """Global 저장소에 본문이 있으면 스니펫 대신 본문을 텍스트로 쓴다.
+
+    본문이 없는 기사는 기존처럼 Provider 설명 스니펫으로 동작한다(폴백).
+    """
+    from datetime import UTC, datetime
+
+    entries = [
+        {
+            "title": "본문 있는 기사",
+            "link": "https://n.example/full",
+            "summary": "짧은 설명",
+            "published": "", "published_ts": 100, "source_url": "", "source_name": "",
+        },
+        {
+            "title": "본문 없는 기사",
+            "link": "https://n.example/short",
+            "summary": "짧은 설명만 있음",
+            "published": "", "published_ts": 90, "source_url": "", "source_name": "",
+        },
+    ]
+    monkeypatch.setattr(
+        pipeline.feeds, "fetch_provider_entries", lambda keyword, **kwargs: entries
+    )
+    monkeypatch.setattr(
+        pipeline.content_store,
+        "fetch_global_article_texts",
+        lambda urls: {"https://n.example/full": "# 제목\n\n저장된 **전체 본문**입니다."},
+    )
+
+    docs = pipeline._news_documents("키워드", datetime.now(UTC))
+
+    by_url = {doc["url"]: doc for doc in docs}
+    # 마크다운 표기(#, **)는 걷어내고 본문 텍스트만 남는다.
+    assert "저장된 전체 본문" in str(by_url["https://n.example/full"]["text"])
+    assert "**" not in str(by_url["https://n.example/full"]["text"])
+    assert "짧은 설명만 있음" in str(by_url["https://n.example/short"]["text"])

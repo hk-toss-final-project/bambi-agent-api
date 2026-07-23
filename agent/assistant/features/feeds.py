@@ -242,6 +242,17 @@ def _extract_jina_image(text: str) -> str | None:
     return candidates[0] if candidates else None
 
 
+def clean_article_body(markdown: str, max_chars: int = 2000) -> str:
+    """저장된 기사 본문 Markdown을 파이프라인 입력 텍스트로 정제한다.
+
+    Global 저장소에서 재사용한 본문(마크다운)을 임베딩·통합 요약에 넣을 수
+    있게 표기를 걷어내고 공백을 정리한다. 상한은 임베딩 입력 상한(2000자)에
+    맞춘다.
+    """
+    text = _clean_jina_content(markdown)
+    return " ".join(text.split())[:max_chars]
+
+
 def _clean_text(entry: dict[str, object], content: str | None, max_chars: int) -> str:
     """Jina 콘텐츠(있으면) 또는 RSS 요약을 정제해 사람이 읽는 텍스트로 만든다."""
     import html as html_lib
