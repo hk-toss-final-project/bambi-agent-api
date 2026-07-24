@@ -82,7 +82,7 @@
 - [x] `REPORT-008` 콘텐츠 요약 생성
 - [x] `REPORT-009` 콘텐츠 본문 생성
 - [x] `REPORT-011` 콘텐츠 Citation 생성 — P1·G1 참조 검증 포함
-- [x] `REPORT-012` 사용자 개인화 적용 — ⚠️ 언어 반영 구현, 차단 관심사·출처 필터는 Context 저장만 되고 검색·생성에 미적용
+- [x] `REPORT-012` 사용자 개인화 적용 — 언어 반영 구현. **차단(비선호) 필터는 MVP 범위에서 제외**(입력 UX 부재 + 피드백 반영 위치 미확정, 2026-07-24 결정). 관련 컬럼(`blocked_interest_ids`·`blocked_source_ids`)은 스키마에만 남기고 검색·생성에는 적용하지 않는다.
 - [x] `REPORT-018` 생성 콘텐츠 후보 저장 — `generation_runs`·`generated_content_candidates`
 - [x] `REPORT-020` 콘텐츠 완료 이벤트 — ⚠️ `CONTENT_READY` Outbox 기록까지 구현, Event Bus 발행 Relay 없음
 - [x] `REPORT-021` 자동 Wiki 편입 금지 — 생성 결과는 후보 테이블에만 저장
@@ -213,7 +213,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | REPORT-008 | 콘텐츠 요약 생성 | 피드와 미리보기에 사용할 요약을 생성한다. |
 | REPORT-009 | 콘텐츠 본문 생성 | 플랜과 유형에 맞는 본문을 생성한다. |
 | REPORT-011 | 콘텐츠 Citation 생성 | 본문 주장과 참조한 자료를 연결한다. |
-| REPORT-012 | 사용자 개인화 적용 | 관심사, 언어, 비선호 설정을 반영한다. |
+| REPORT-012 | 사용자 개인화 적용 | 관심사, 언어를 반영한다. (비선호/차단 설정은 MVP 제외) |
 | REPORT-018 | 생성 콘텐츠 후보 저장 | 발행 전 콘텐츠를 agent-db에 저장한다. |
 | REPORT-020 | 콘텐츠 완료 이벤트 | 생성 완료 사실을 Integration Event로 발행한다. |
 | REPORT-021 | 자동 Wiki 편입 금지 | 생성된 콘텐츠를 사용자 선택 없이 개인 Wiki에 넣지 않는다. |
