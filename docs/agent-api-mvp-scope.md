@@ -84,7 +84,7 @@
 - [x] `REPORT-011` 콘텐츠 Citation 생성 — P1·G1 참조 검증 포함
 - [x] `REPORT-012` 사용자 개인화 적용 — 언어 반영 구현. **차단(비선호) 필터는 MVP 범위에서 제외**(입력 UX 부재 + 피드백 반영 위치 미확정, 2026-07-24 결정). 관련 컬럼(`blocked_interest_ids`·`blocked_source_ids`)은 스키마에만 남기고 검색·생성에는 적용하지 않는다.
 - [x] `REPORT-018` 생성 콘텐츠 후보 저장 — `generation_runs`·`generated_content_candidates`
-- [x] `REPORT-020` 콘텐츠 완료 이벤트 — ⚠️ `CONTENT_READY` Outbox 기록까지 구현, Event Bus 발행 Relay 없음
+- [x] `REPORT-020` 콘텐츠 완료 이벤트 — `CONTENT_READY`를 `event_outbox`에 기록까지 구현. **Event Bus 발행 Relay(`WORKER-012`)는 보류**(2026-07-24 결정): 이벤트를 받는 쪽이 service-api(full stack 팀)라 전달 방식·payload 형식 합의와 양쪽 동시 테스트가 필요하다. full stack 연동 시점에 함께 진행한다.
 - [x] `REPORT-021` 자동 Wiki 편입 금지 — 생성 결과는 후보 테이블에만 저장
 
 ### Worker 및 서비스 반영
