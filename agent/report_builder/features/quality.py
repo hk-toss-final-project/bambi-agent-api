@@ -49,16 +49,24 @@ MIN_BODY_CHARS: int = _env_int("REPORT_MIN_BODY_CHARS", 300)
 # 근거를 많이 줬는데 한두 개만 인용하면 생성이 자료를 활용하지 않은 것이다.
 MIN_CITATION_COVERAGE: float = _env_float("REPORT_MIN_CITATION_COVERAGE", 0.3)
 
+# 근거가 이 수 이하이면 "너무 짧음" 판정을 재생성으로 고칠 수 없다고 본다.
+# 쓸 재료가 부족하면 다시 써도 본문이 늘지 않는다(실측: 근거 1개면 재생성해도
+# 300자 미만). 이 경우 짧은 대로 발행해 헛재생성 비용을 막는다.
+MIN_CONTEXT_FOR_LENGTH_RETRY: int = _env_int("REPORT_MIN_CONTEXT_FOR_LENGTH_RETRY", 3)
+
 
 # ── 판정 결과 코드 ─────────────────────────────────────────────────────────
 PASS = "pass"
 NO_CITATIONS = "no_citations"
 TOO_SHORT = "too_short"
 IGNORES_CONTEXT = "ignores_context"
+# 짧지만 근거가 부족해 재생성으로 못 고치는 경우. 재생성 대상이 아니다.
+TOO_SHORT_LOW_CONTEXT = "too_short_low_context"
 
 # 재생성해서 나아질 수 있는 판정. (PASS는 통과라 재생성 안 함)
-# 셋 다 "생성이 자료를 제대로 안 썼다"는 문제라, 교정 지시를 주고 다시 쓰면 나아질 수
-# 있다. 근거 부족(검색 문제)은 여기 없다 — 그건 재생성 대상이 아니다.
+# "생성이 자료를 제대로 안 썼다"는 문제만 넣는다 — 교정 지시를 주고 다시 쓰면
+# 나아질 수 있기 때문이다. 근거 부족으로 짧은 것(TOO_SHORT_LOW_CONTEXT)은
+# 검색 문제라 재생성해도 소용없으므로 뺀다.
 REGENERATABLE = frozenset({NO_CITATIONS, TOO_SHORT, IGNORES_CONTEXT})
 
 # 사람이 읽는 판정 설명. 재생성 시 LLM에게 주는 교정 지시로도 쓴다.
@@ -66,6 +74,8 @@ _DESCRIPTIONS = {
     PASS: "품질 기준을 통과했습니다.",
     NO_CITATIONS: "본문이 근거를 하나도 인용하지 않았습니다.",
     TOO_SHORT: f"본문이 최소 길이({MIN_BODY_CHARS}자)에 못 미칩니다.",
+    TOO_SHORT_LOW_CONTEXT: f"본문이 짧지만({MIN_BODY_CHARS}자 미만) 근거가 부족해 "
+    "재생성으로 늘릴 수 없어 그대로 발행합니다.",
     IGNORES_CONTEXT: "제공한 근거를 거의 인용하지 않았습니다.",
 }
 
@@ -122,8 +132,10 @@ def evaluate_report(
     if not cited and not content.citation_references:
         return _verdict(NO_CITATIONS)
 
-    # 2. 본문이 너무 짧음.
+    # 2. 본문이 너무 짧음. 단, 근거가 부족하면 재생성해도 못 늘리므로 그대로 발행한다.
     if len(body.strip()) < MIN_BODY_CHARS:
+        if context_count < MIN_CONTEXT_FOR_LENGTH_RETRY:
+            return _verdict(TOO_SHORT_LOW_CONTEXT)
         return _verdict(TOO_SHORT)
 
     # 3. 근거를 거의 안 씀 (근거를 줬는데 인용률이 하한 미만).

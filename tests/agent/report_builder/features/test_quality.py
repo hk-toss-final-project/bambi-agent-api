@@ -31,12 +31,24 @@ def test_no_citations_triggers_regeneration() -> None:
     assert "인용" in verdict.correction        # 교정 지시가 있다
 
 
-def test_too_short_triggers_regeneration() -> None:
-    """본문이 최소 길이에 못 미치면 재생성 대상이다."""
+def test_too_short_triggers_regeneration_when_context_is_enough() -> None:
+    """근거가 충분한데 본문이 짧으면 재생성 대상이다 (더 쓸 수 있으니까)."""
     verdict = quality.evaluate_report(_content("짧음[P1]."), context_count=3)
 
     assert verdict.outcome == quality.TOO_SHORT
     assert verdict.should_regenerate is True
+
+
+def test_too_short_with_low_context_does_not_regenerate() -> None:
+    """근거가 부족하면 짧아도 재생성하지 않는다 (다시 써도 못 늘림).
+
+    실측: 근거 1개짜리 리포트는 재생성해도 300자를 못 채워, 헛재생성만 발생했다.
+    """
+    verdict = quality.evaluate_report(_content("짧음[L1]."), context_count=1)
+
+    assert verdict.outcome == quality.TOO_SHORT_LOW_CONTEXT
+    assert verdict.should_regenerate is False
+    assert quality.TOO_SHORT_LOW_CONTEXT not in quality.REGENERATABLE
 
 
 def test_ignores_context_triggers_regeneration() -> None:
