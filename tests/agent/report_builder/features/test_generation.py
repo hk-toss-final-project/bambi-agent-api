@@ -106,6 +106,15 @@ def _long_cited_body() -> str:
     return "PostgreSQL 버전 관리 분석[P1]. " + "상세한 설명 문장입니다. " * 40
 
 
+def _enough_contexts() -> list:
+    """길이 재생성이 트리거되는 최소 근거 수(3개)를 만든다.
+
+    근거가 부족하면 짧아도 재생성하지 않으므로(quality 튜닝), 길이 재생성을
+    검증하려면 근거가 충분해야 한다.
+    """
+    return [_context("P1"), _context("G1"), _context("L1")]
+
+
 def test_quality_retry_regenerates_when_first_is_too_short(monkeypatch: pytest.MonkeyPatch) -> None:
     """1차 결과가 품질 미달이면 교정 지시를 붙여 재생성한다."""
     calls: list[str] = []
@@ -119,7 +128,7 @@ def test_quality_retry_regenerates_when_first_is_too_short(monkeypatch: pytest.M
     monkeypatch.setattr(generation, "complete", _complete)
 
     result = generation.generate_report_content_with_quality(
-        topic="주제", content_type="card", language="ko", contexts=[_context()], model="m"
+        topic="주제", content_type="card", language="ko", contexts=_enough_contexts(), model="m"
     )
 
     assert len(calls) == 2                            # 재생성 1회 발생
@@ -138,7 +147,7 @@ def test_quality_retry_stops_after_one_regeneration(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(generation, "complete", _complete)
 
     result = generation.generate_report_content_with_quality(
-        topic="주제", content_type="card", language="ko", contexts=[_context()], model="m"
+        topic="주제", content_type="card", language="ko", contexts=_enough_contexts(), model="m"
     )
 
     assert len(calls) == 2                            # 1차 + 재생성 1회로 멈춤 (무한 아님)
