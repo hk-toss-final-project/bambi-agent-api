@@ -177,7 +177,7 @@ def test_run_report_generation_chains_search_generate_persist(
         return []
 
     def fake_generate(**kwargs: Any) -> str:
-        """생성 입력을 검증하고 고정 콘텐츠를 반환한다."""
+        """생성 입력을 검증하고 고정 콘텐츠를 반환한다(품질 루프 래퍼를 대체)."""
         order.append("generate")
         assert kwargs["contexts"] == ["context-1"]
         assert kwargs["language"] == "ko"
@@ -194,7 +194,7 @@ def test_run_report_generation_chains_search_generate_persist(
     monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
     monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
     monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
-    monkeypatch.setattr(agent_graph, "generate_report_content", fake_generate)
+    monkeypatch.setattr(agent_graph, "generate_report_content_with_quality", fake_generate)
     monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect_live_context)
     monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
 

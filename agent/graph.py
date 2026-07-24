@@ -27,7 +27,7 @@ from agent.report_builder.api import (
     report_018,
     report_020,
     report_021,
-    generate_report_content,
+    generate_report_content_with_quality,
     collect_live_context,
     select_generation_context,
 )
@@ -289,8 +289,11 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 actor_id="report-generation-graph",
                 user_id=state["user_id"],
                 payload={
+                    # 생성 후 무료 품질 검사를 거쳐, 근거 미인용·너무 짧음 등이면
+                    # 교정 지시를 붙여 한 번 재생성한다(품질 루프). load_context의
+                    # 위키 검색 흐름은 건드리지 않고 생성 단계 안에서만 동작한다.
                     "implementation": lambda: to_thread(
-                        generate_report_content,
+                        generate_report_content_with_quality,
                         topic=state["topic"],
                         content_type=state["content_type"],
                         language=state["language"],

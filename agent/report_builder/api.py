@@ -15,6 +15,7 @@ from .features.generation import (
     report_009,
     report_010,
     generate_report_content,
+    generate_report_content_with_quality,
     parse_report_generation,
 )
 from .features.citations import report_011
