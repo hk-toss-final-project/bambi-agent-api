@@ -41,6 +41,11 @@ WORKDIR /app
 
 COPY --from=build --chown=agent:agent /app /app
 
+# WORKDIR 이 만든 /app 자체는 root 소유로 남는다(COPY --chown 은 복사되는 항목만 바꾼다).
+# 그대로 두면 비루트 실행 시 app/logging_config.py 의 logs 디렉터리 생성이 거부된다
+# (PermissionError: 'logs'). /app 과 기본 로그 디렉터리 소유권을 명시적으로 넘긴다.
+RUN mkdir -p /app/logs && chown agent:agent /app /app/logs
+
 # pyproject 에 [build-system] 이 없어 uv 가 virtual project 로 다룬다(의존성만 설치, 패키지 설치 X).
 # 따라서 app·workers 패키지는 설치본이 아니라 소스 경로로 임포트된다 → PYTHONPATH 를 명시한다.
 # (pytest 설정의 pythonpath=["."] 와 같은 전제)
