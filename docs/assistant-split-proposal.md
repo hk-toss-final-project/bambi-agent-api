@@ -90,10 +90,17 @@
   회귀 테스트 3종 추가(플래그 전달 확인, 이력 미증가, 기본값 True 유지).
   자세한 내용은 [keyword-assistant.md](keyword-assistant.md) "소비 맥락 플래그" 절 참조.
 
-### Step 1 — 수집 일원화
+### Step 1 — 수집 일원화 — ✅ **완료 (2026-07-27)**
 RSS를 col_001 재사용으로 교체하고 YouTube·Reddit provider를 connectors로 이식. assistant는 connectors를 import해서 사용(동작 동일). global-collector가 5개 소스(GDELT·Naver·GoogleNews·YouTube·Reddit)를 키워드로 수집 가능해짐.
 - 효과: 수집 코드 단일 소유, G 풀의 소스 커버리지 확대.
 - 주의: youtube-search-python의 httpx 핀(<0.28) 의존성이 sources 계층으로 따라감.
+- 구현 메모(2026-07-27): httpx 핀은 **이미 pyproject 전역 제약**이었고 공용 커넥터(`latest.py`·`url.py`)가 이미 httpx를 쓰고 있어, 이식으로 새로 생긴 제약은 없다.
+  뉴스 RSS는 이 단계 이전에 이미 공용 Provider로 전환돼 있었다. 이번에 옮긴 것은
+  **YouTube·Reddit 검색**이며, `YouTubeSearchProvider`·`RedditSearchProvider`로
+  `LatestInformationProvider` 규약을 따른다. 자막 조회·요약은 소비 단계 관심사라
+  비서에 남겼다(뉴스가 목록 수집 → Jina 본문 확보로 나뉜 것과 같은 분리).
+  비서의 `search_videos`·`search_posts`는 겉모습을 유지한 채 Provider에 위임하므로
+  파이프라인 동작은 동일하다.
 
 ### Step 2 — 선별 추출
 clustering·scoring·dedup·outcomes·embeddings를 `agent/selection`으로 이동, 이력 경계를 Protocol로 주입. assistant 그래프의 select 노드와 report_builder의 컨텍스트 선별(report_006 자리)이 같은 함수를 쓰게 한다.

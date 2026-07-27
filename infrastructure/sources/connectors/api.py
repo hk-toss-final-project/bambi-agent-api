@@ -30,6 +30,8 @@ from .features.latest import (
     NaverNewsProvider,
     NewsApiProvider,
 )
+from .features.youtube import YouTubeSearchProvider
+from .features.reddit import RedditSearchProvider
 from .features.custom import col_012
 
 __all__ = [
@@ -42,6 +44,8 @@ __all__ = [
     "LatestProviderError",
     "NaverNewsProvider",
     "NewsApiProvider",
+    "RedditSearchProvider",
+    "YouTubeSearchProvider",
     "fetch_url_raw_via_jina",
     "fetch_url_via_jina",
     "parse_jina_reader_response",

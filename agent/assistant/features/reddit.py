@@ -107,6 +107,38 @@ def _fetch_feed(feed_url: str):
     return parsed
 
 
+def _search_articles(keyword: str, limit: int):
+    """공용 Reddit 커넥터로 검색한다 (네트워크 경계, 테스트에서 대체 가능)."""
+    import asyncio
+
+    from infrastructure.sources.connectors.api import RedditSearchProvider
+
+    return asyncio.run(
+        RedditSearchProvider().search(query=keyword, limit=limit, language=None)
+    )
+
+
+def _articles_to_posts(articles) -> list[dict[str, object]]:
+    """공용 최신 문서를 비서 파이프라인이 쓰는 게시글 딕셔너리로 변환한다."""
+    posts: list[dict[str, object]] = []
+    for article in articles:
+        published_at = article.published_at
+        source_name = str(article.source_name or "")
+        posts.append(
+            {
+                "id": article.url,
+                "title": article.title,
+                "url": article.url,
+                # Provider는 "r/이름" 형태로 주므로 접두사를 떼어 기존 계약을 지킨다.
+                "subreddit": source_name.removeprefix("r/") or None,
+                "body": article.description,
+                "published": published_at.isoformat() if published_at else "",
+                "published_ts": int(published_at.timestamp()) if published_at else 0,
+            }
+        )
+    return posts
+
+
 def search_posts(
     keyword: str,
     limit: int = 4,
@@ -130,6 +162,11 @@ def search_posts(
 
     Returns:
         {id, title, url, subreddit, body, published, published_ts} 딕셔너리 리스트
+
+    검색 자체는 공용 수집 커넥터(RedditSearchProvider)에 위임한다 — Global 수집
+    워커와 같은 코드를 써서 수집 경로가 갈라지지 않게 한다(레이트리밋 재시도·캐시도
+    Provider가 갖고 있다). 여기서는 최근성 필터와 비서 파이프라인이 기대하는
+    딕셔너리 모양만 담당한다.
     """
     # 경과 시간으로 걸러내면 대부분 탈락하므로 피드가 주는 최대치(약 25건)를 받아온다.
     fetch_limit = 25
@@ -139,11 +176,7 @@ def search_posts(
     if cached is not None and cached[0] > time.time():
         return list(cached[1])
 
-    query = quote_plus(keyword)
-    feed_url = f"{_SEARCH_RSS_URL}?q={query}&limit={fetch_limit}&sort=new"
-    parsed = _fetch_feed(feed_url)
-
-    posts = _parse_posts(parsed.entries, fetch_limit)
+    posts = _articles_to_posts(_search_articles(keyword, fetch_limit))
     posts = feeds.filter_recent_entries(posts, max_age_hours=max_age_hours, reference_now=reference_now)
     posts = posts[:limit]
 
