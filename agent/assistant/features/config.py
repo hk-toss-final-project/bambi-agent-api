@@ -35,8 +35,21 @@ def _env_float(name: str, default: float) -> float:
 
 
 # ── 1. 수집 범위 ──────────────────────────────────────────────────────────
-# 매일 실행 시 최근 며칠치 문서만 수집할지.
+# 매일 실행 시 최근 며칠치 문서만 수집할지 (뉴스형 토픽 기준).
 COLLECT_WINDOW_DAYS: int = _env_int("COLLECT_WINDOW_DAYS", 3)
+
+# 개념형(에버그린) 토픽의 수집 창. 뉴스형과 같은 3일을 쓰면 개념 토픽만 선택적으로
+# 전멸한다 — 개념·튜토리얼은 "어제 누가 이 글을 썼나"로 찾는 자료가 아니기 때문이다.
+#
+# 실측(2026-07-27): 'DDD(Domain-Driven Design)' 리포트가 66초를 쓰고도 실시간
+# 자료 0건이었다. 수집 14건 중 9건이 outside_window로 잘렸고, 그 안에는
+# 'DDD의 재발견', '마이크로서비스의 6가지 베스트 프랙티스'처럼 주제에 정확히
+# 맞는 글이 있었다. 자료가 없어서가 아니라 3일 벽에 막힌 것이었다.
+#
+# 90일은 "분기 안에 나온 개념 글"을 기준으로 잡았다. 이보다 오래된 자료는
+# 신선도 점수(LAMBDA_EVERGREEN, 반감기 약 1년)가 완만하게 정렬한다 —
+# 하드 컷은 넓게 두고 순위는 점수에 맡기는 것이 이 파이프라인의 원칙이다.
+EVERGREEN_WINDOW_DAYS: int = _env_int("EVERGREEN_WINDOW_DAYS", 90)
 
 # 기초 필터: 임베딩 입력으로 쓸 텍스트(제목+요지)가 이보다 짧으면 스팸/빈 글로 본다.
 MIN_DOC_CHARS: int = _env_int("MIN_DOC_CHARS", 15)
@@ -69,6 +82,15 @@ def collect_window_days() -> int:
     return COLLECT_WINDOW_DAYS
 
 
-def collect_window_hours() -> float:
-    """수집 창을 시간 단위로 반환한다 (COLLECT_WINDOW_DAYS × 24)."""
-    return COLLECT_WINDOW_DAYS * 24.0
+def collect_window_hours(intent: str = "news") -> float:
+    """토픽 성격에 맞는 수집 창을 시간 단위로 반환한다.
+
+    Args:
+        intent: "evergreen"(개념형) 또는 그 외(뉴스형). 판정은 topic_intent 모듈이
+            개인 Wiki의 document_kind로 수행하며, 판정 불가 시 뉴스형으로 온다.
+
+    Returns:
+        수집 창 시간. 개념형은 EVERGREEN_WINDOW_DAYS, 그 외는 COLLECT_WINDOW_DAYS 기준.
+    """
+    days = EVERGREEN_WINDOW_DAYS if intent == "evergreen" else COLLECT_WINDOW_DAYS
+    return days * 24.0

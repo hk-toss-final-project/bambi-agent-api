@@ -31,11 +31,26 @@ _EVERGREEN_TITLE_PATTERN = re.compile(
 )
 
 
-def classify_content_type(doc: dict[str, object]) -> str:
+def classify_content_type(doc: dict[str, object], *, topic_intent: str = "") -> str:
     """문서를 "news" 또는 "evergreen"으로 분류한다.
 
-    제목의 개념/튜토리얼 키워드로 판단하는 휴리스틱이다. 해당 없으면 뉴스로 본다.
+    topic_intent가 주어지면 그것을 따른다. 토픽 성격은 개인 Wiki의 노드 종류로
+    판정한 결과라(agent.assistant.features.topic_intent) 제목 휴리스틱보다 정확하다.
+
+    topic_intent가 없을 때만 제목의 개념/튜토리얼 키워드로 판단한다. 이 휴리스틱은
+    실측에서 취약했다 — 'DDD의 재발견', '마이크로서비스의 6가지 베스트 프랙티스'가
+    모두 news로 분류됐다(2026-07-27). 개념 글 제목이 항상 '튜토리얼·입문·가이드'
+    같은 단어를 쓰지는 않기 때문이다. 그래서 토픽 성격을 우선한다.
+
+    Args:
+        doc: {title} 키를 가진 문서 딕셔너리
+        topic_intent: 토픽 단위 성격 판정 결과("news"|"evergreen"). 빈 값이면 미판정.
+
+    Returns:
+        "news" 또는 "evergreen"
     """
+    if topic_intent in ("news", "evergreen"):
+        return topic_intent
     title = str(doc.get("title") or "")
     if _EVERGREEN_TITLE_PATTERN.search(title):
         return "evergreen"
@@ -98,6 +113,7 @@ def score_document(
     boost: float = 1.0,
     now: datetime | None = None,
     cold_start: bool = False,
+    topic_intent: str = "",
 ) -> dict[str, float | str]:
     """문서 하나의 점수 구성 요소와 final_score를 계산해 딕셔너리로 반환한다.
 
@@ -108,7 +124,7 @@ def score_document(
     Returns:
         {content_type, similarity, freshness, source_weight, cluster_boost, final_score}
     """
-    content_type = classify_content_type(doc)
+    content_type = classify_content_type(doc, topic_intent=topic_intent)
     published = doc.get("published")
     freshness = freshness_score(
         published if isinstance(published, datetime) else None,

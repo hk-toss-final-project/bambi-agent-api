@@ -31,6 +31,7 @@ from agent.assistant.features import (
 )
 from agent.assistant.features.dates import extract_published
 from agent.assistant.features.summarize import complete
+from agent.assistant.features.topic_intent import resolve_topic_intent
 
 # 선별(관련도·클러스터·점수·중복)은 리포트 생성과 공유하는 공용 라이브러리다.
 from agent.selection import api as selection
@@ -317,6 +318,7 @@ def _build_clusters(
     *,
     now: datetime,
     cold_start: bool,
+    topic_intent: str = "",
 ) -> list[dict[str, object]]:
     """클러스터링과 스코어링을 수행해 클러스터 목록을 만든다.
 
@@ -331,7 +333,12 @@ def _build_clusters(
         for index in group:
             doc = docs[index]
             score = selection.score_document(
-                doc, similarities[index], boost=boost, now=now, cold_start=cold_start
+                doc,
+                similarities[index],
+                boost=boost,
+                now=now,
+                cold_start=cold_start,
+                topic_intent=topic_intent,
             )
             members.append({**doc, "score": score, "embedding": doc_embeddings[index]})
         representative = max(members, key=lambda m: m["score"]["final_score"])
@@ -423,8 +430,17 @@ def run_daily(
     query = (search_query or "").strip() or normalized
 
     now = reference_now or datetime.now(UTC)
-    window_hours = config.collect_window_hours()
-    log: dict[str, object] = {"exclusions": [], "search_query": query}
+    # 토픽 성격(뉴스형/개념형)을 한 번 판정해 수집 창과 신선도 감쇠에 함께 쓴다.
+    # 창만 넓히고 감쇠를 그대로 두면 넓게 모은 개념 자료가 뉴스 기준(λ=0.5)으로
+    # 깎여 결국 같은 결과가 된다 — 두 곳이 같은 판정을 따라야 한다.
+    intent = resolve_topic_intent(normalized, normalized_user)
+    window_hours = config.collect_window_hours(intent)
+    log: dict[str, object] = {
+        "exclusions": [],
+        "search_query": query,
+        "topic_intent": intent,
+        "collect_window_hours": window_hours,
+    }
 
     # 콜드 스타트 판정은 수집 기록(first_seen 기록)이 일어나기 전에 해야 한다.
     cold_start = not history.has_collect_history(normalized_user, normalized)
@@ -497,7 +513,12 @@ def run_daily(
 
             # 6. 클러스터링 + 7. 스코어링
             clusters = _build_clusters(
-                filtered_docs, filtered_embeddings, similarities, now=now, cold_start=cold_start
+                filtered_docs,
+                filtered_embeddings,
+                similarities,
+                now=now,
+                cold_start=cold_start,
+                topic_intent=intent,
             )
             log["clusters"] = len(clusters)
 

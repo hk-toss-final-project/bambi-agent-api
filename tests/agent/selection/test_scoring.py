@@ -19,12 +19,31 @@ def test_freshness_news_half_life() -> None:
 
 
 def test_freshness_evergreen_decays_slowly() -> None:
-    """에버그린 타입은 λ=0.05로 거의 감쇠하지 않는다."""
+    """에버그린 타입은 뉴스보다 훨씬 느리게 감쇠한다."""
     published = _NOW - timedelta(days=2)
     news = scoring.freshness_score(published, "news", now=_NOW)
     evergreen = scoring.freshness_score(published, "evergreen", now=_NOW)
     assert evergreen == pytest.approx(math.exp(-config.LAMBDA_EVERGREEN * 2))
     assert evergreen > news
+
+
+def test_freshness_evergreen_survives_months() -> None:
+    """개념 문서는 몇 달이 지나도 발행 후보로 남을 만큼 신선도를 유지한다.
+
+    이전 λ=0.05(반감기 약 14일)에서는 개념형 키워드의 실시간 자료가 통째로
+    탈락했다(2026-07-27 'DDD' 리포트 실측 0건). 공식을 되뇌는 대신 "얼마나
+    오래 살아남아야 하는가"를 못박아, 값이 뉴스 쪽으로 되돌아가면 실패시킨다.
+    """
+    half_year = scoring.freshness_score(_NOW - timedelta(days=180), "evergreen", now=_NOW)
+    one_year = scoring.freshness_score(_NOW - timedelta(days=365), "evergreen", now=_NOW)
+
+    # 반년 전 개념 글이 최신 대비 절반 이상의 신선도를 유지해야 한다.
+    assert half_year > 0.5
+    # 1년 전 글도 완전히 죽지 않아야 한다(반감기 ≈ 1년).
+    assert one_year > 0.45
+
+    # 같은 시점의 뉴스는 사실상 소멸해 있어야 한다 — 두 타입이 구분되는지 확인.
+    assert scoring.freshness_score(_NOW - timedelta(days=180), "news", now=_NOW) < 0.01
 
 
 def test_freshness_cold_start_is_neutral() -> None:
@@ -165,3 +184,38 @@ def test_config_invalid_env_falls_back_to_default(monkeypatch) -> None:
     finally:
         monkeypatch.undo()
         importlib.reload(config)
+
+
+def test_topic_intent_overrides_title_heuristic() -> None:
+    """토픽 성격이 주어지면 제목 휴리스틱보다 우선한다.
+
+    제목 정규식은 실측에서 취약했다 — 'DDD의 재발견'처럼 개념 글인데 '튜토리얼·
+    입문·가이드' 같은 단어가 없으면 news로 오분류된다. 개인 Wiki가 concept으로
+    분류한 토픽이면 그 판단을 따라야 수집 창을 넓힌 효과가 살아난다.
+    """
+    doc = {"title": "DDD의 재발견 - 브런치"}
+
+    # 성격 미지정: 기존 휴리스틱대로 news (제목에 개념 키워드가 없다)
+    assert scoring.classify_content_type(doc) == "news"
+    # 성격 지정: Wiki 판단을 따른다
+    assert scoring.classify_content_type(doc, topic_intent="evergreen") == "evergreen"
+    assert scoring.classify_content_type(doc, topic_intent="news") == "news"
+
+
+def test_score_document_uses_topic_intent_for_decay() -> None:
+    """토픽이 개념형이면 오래된 문서도 신선도를 유지해 점수가 살아남는다.
+
+    창을 넓혀도 문서가 news로 분류되면 λ=0.5로 깎여 결국 탈락한다. 창과 감쇠가
+    같은 판정을 따라야 개념형 토픽에서 실시간 자료가 0건이 되지 않는다.
+    """
+    old_doc = {"title": "DDD의 재발견 - 브런치", "published": _NOW - timedelta(days=60)}
+
+    without_intent = scoring.score_document(old_doc, 0.5, now=_NOW)
+    with_intent = scoring.score_document(old_doc, 0.5, now=_NOW, topic_intent="evergreen")
+
+    assert without_intent["content_type"] == "news"
+    assert with_intent["content_type"] == "evergreen"
+    # 60일 지난 문서: 뉴스 기준이면 사실상 소멸, 개념 기준이면 대부분 유지된다.
+    assert without_intent["freshness"] < 0.01
+    assert with_intent["freshness"] > 0.85
+    assert with_intent["final_score"] > without_intent["final_score"] * 50
