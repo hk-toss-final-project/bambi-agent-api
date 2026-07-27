@@ -10,16 +10,18 @@ from shared.wiki_models import InterestCandidate
 
 
 class _FakeRepository:
-    """결정적인 Wiki 문서와 저장 호출 기록을 제공하는 저장소 대역."""
+    """결정적인 Wiki 노드와 저장 호출 기록을 제공하는 저장소 대역."""
 
     def __init__(
         self,
         *,
         wiki_version_id: object,
+        node_count: int = 1,
         signals: Sequence[Mapping[str, object]] = (),
     ) -> None:
-        """활성 Wiki Version 존재 여부와 행동 신호를 구성한다."""
+        """활성 Wiki Version 존재 여부와 노드 수·행동 신호를 구성한다."""
         self._wiki_version_id = wiki_version_id
+        self._node_count = node_count
         self._signals = list(signals)
         self.saved_candidates: Sequence[InterestCandidate] | None = None
 
@@ -30,17 +32,23 @@ class _FakeRepository:
         return self._signals
 
     async def load_interest_documents(self, user_id: str) -> Mapping[str, object]:
-        """활성 Wiki Build와 문서 한 건을 반환한다."""
+        """활성 Wiki Build와 Entity·Concept 노드를 반환한다."""
         return {
             "wiki_version_id": self._wiki_version_id,
             "documents": [
                 {
-                    "document_id": "document-1",
-                    "title": "LangGraph Agent",
-                    "summary": "LangGraph 기반 에이전트 오케스트레이션",
+                    "document_id": f"document-{index}",
+                    "document_kind": "entity",
+                    "document_key": f"node-{index}",
+                    "title": f"LangGraph Agent {index}",
                     "domain": "technology",
-                    "source_metadata": {"tags": ["Python"]},
+                    "source_metadata": {"aliases": []},
+                    "degree": float(self._node_count - index),
+                    "source_count": 1,
+                    "source_types": ["web_clipping"],
+                    "last_activity_at": "2026-07-20T00:00:00+00:00",
                 }
+                for index in range(self._node_count)
             ],
         }
 
@@ -61,8 +69,8 @@ class _FakeRepository:
         }
 
 
-def test_int_011_extracts_and_saves_new_profile() -> None:
-    """활성 Wiki 문서에서 후보를 추출해 저장하고 Payload를 반환하는지 검증한다."""
+def test_int_011_extracts_scores_and_saves_new_profile() -> None:
+    """Wiki 노드에서 후보를 추출해 점수를 계산하고 저장하는지 검증한다."""
     repository = _FakeRepository(wiki_version_id="wiki-version-1")
 
     payload = asyncio.run(int_011(repository, "user-1", limit=5))
@@ -70,7 +78,20 @@ def test_int_011_extracts_and_saves_new_profile() -> None:
     assert payload["wiki_version_id"] == "wiki-version-1"
     assert repository.saved_candidates is not None
     topics = {candidate.topic for candidate in repository.saved_candidates}
-    assert "LangGraph Agent" in topics
+    assert "LangGraph Agent 0" in topics
+    evidence = repository.saved_candidates[0].evidence
+    assert "behavior_intensity" in evidence
+    assert "recency_factor" in evidence
+
+
+def test_int_011_saves_at_most_the_requested_limit() -> None:
+    """후보를 넓게 추출하더라도 저장은 limit 개수를 넘지 않는지 검증한다."""
+    repository = _FakeRepository(wiki_version_id="wiki-version-1", node_count=12)
+
+    asyncio.run(int_011(repository, "user-1", limit=3))
+
+    assert repository.saved_candidates is not None
+    assert len(repository.saved_candidates) == 3
 
 
 def test_int_011_requires_active_wiki() -> None:
