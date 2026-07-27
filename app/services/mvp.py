@@ -11,6 +11,8 @@ from app.exceptions import AgentApiError, ErrorDetail
 from app.schemas.mvp import (
     AcceptedJobResponse,
     ContentMarkRequest,
+    FeedbackSignalsRequest,
+    FeedbackSignalsResponse,
     GenerationRequest,
     JobResultResponse,
     JobStatus,
@@ -29,6 +31,7 @@ from app.services.agent_jobs import (
 from domain.jobs.api import job_002
 from domain.personal_wiki.source_events.api import wse_001, wse_011
 from infrastructure.persistence.api import (
+    GeneratedContentNotFoundError,
     StaleContextVersionError,
     UserContextRequiredError,
 )
@@ -125,18 +128,52 @@ class AgentApiMvpService:
         payload: ContentMarkRequest,
         request_id: str,
     ) -> AcceptedJobResponse:
-        """[SVC-004] 위키마킹 접수 — 처리 Handler 구현 전까지 명시적 미구현.
+        """생성 콘텐츠를 content_mark 원본으로 물질화하고 Wiki Build Job을 접수한다.
 
-        과거에는 인메모리 유령 Job으로 접수만 되고 아무도 처리하지 않았다.
-        Handler(personal_wiki_content_mark)가 구현되기 전까지 501을 반환해
-        미구현 상태를 호출자에게 정직하게 노출한다.
+        REPORT-021(자동 편입 금지)의 사용자 선택 경로다. 대상 콘텐츠 본문을
+        원본 Version으로 복사해 클리핑과 같은 Build 파이프라인을 태우므로
+        별도 Handler 없이 기존 personal_wiki_build Worker가 처리한다.
         """
-        raise AgentApiError(
-            status.HTTP_501_NOT_IMPLEMENTED,
-            ErrorDetail(
-                code="NOT_IMPLEMENTED",
-                message="위키마킹 처리는 아직 구현되지 않았습니다.",
-            ),
+        try:
+            submission = await self._agent_jobs.submit_content_mark(
+                user_id=user_id,
+                source_event_id=payload.source_event_id,
+                content_id=payload.content_id,
+                occurred_at=payload.occurred_at,
+                memo=payload.memo,
+                request_id=request_id,
+            )
+        except GeneratedContentNotFoundError as exc:
+            raise AgentApiError(
+                status.HTTP_404_NOT_FOUND,
+                ErrorDetail(
+                    code="GENERATED_CONTENT_NOT_FOUND",
+                    message="위키마킹할 생성 콘텐츠를 찾을 수 없습니다.",
+                ),
+            ) from exc
+        return self._accepted_job_response(submission)
+
+    async def submit_feedback_signals(
+        self,
+        *,
+        user_id: str,
+        payload: FeedbackSignalsRequest,
+        request_id: str,
+    ) -> FeedbackSignalsResponse:
+        """행동 신호 Batch를 이벤트로 저장한다 — Wiki 문서는 만들지 않는다.
+
+        좋아요 같은 가벼운 선호는 Wiki 편입 대상이 아니라 관심사 신호다.
+        저장된 신호는 다음 관심사 재계산(INT-011) 때 INT-005가 점수에 반영한다.
+        즉시 반영이 필요하면 재계산 API를 이어서 호출한다.
+        """
+        accepted = await self._agent_jobs.submit_feedback_signals(
+            user_id=user_id,
+            signals=[signal.model_dump() for signal in payload.signals],
+        )
+        return FeedbackSignalsResponse(
+            user_id=user_id,
+            accepted_count=accepted,
+            request_id=request_id,
         )
 
     async def submit_generation(

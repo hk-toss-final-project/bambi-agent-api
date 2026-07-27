@@ -15,10 +15,12 @@ from app.schemas.generated_content import (
     GeneratedContentDetailResponse,
     GeneratedContentListResponse,
 )
-from app.schemas.interests import InterestProfileResponse
+from app.schemas.interests import InterestProfileResponse, InterestRebuildRequest
 from app.schemas.mvp import (
     AcceptedJobResponse,
     ContentMarkRequest,
+    FeedbackSignalsRequest,
+    FeedbackSignalsResponse,
     GenerationRequest,
     JobResultResponse,
     JobStatusResponse,
@@ -26,6 +28,8 @@ from app.schemas.mvp import (
     UserContextResponse,
     UserContextUpsertRequest,
     WebClippingRequest,
+    WikiDocumentDeletionResponse,
+    WikiSourceDeletionRequest,
 )
 from app.schemas.wiki import (
     WikiBuildDetailResponse,
@@ -38,6 +42,8 @@ from app.routers.service.api import (
     svc_001,
     svc_002,
     svc_003,
+    svc_004,
+    svc_006,
     svc_008,
     svc_013,
     svc_014,
@@ -133,8 +139,56 @@ async def request_content_mark(
     request: Request,
     service: AgentApiMvpService = Depends(get_mvp_service),
 ) -> AcceptedJobResponse:
-    """[SVC-004] 위키마킹 접수. 처리 Handler 구현 전까지 501을 반환한다."""
-    return await service.submit_content_mark(
+    """[SVC-004] 사용자가 선택한 생성 콘텐츠를 Wiki Build Job으로 등록한다."""
+    return await svc_004(
+        service,
+        user_id=user_id,
+        payload=payload,
+        request_id=_request_id(request),
+    )
+
+
+@router.post(
+    "/users/{user_id}/wiki-sources/deletions",
+    response_model=WikiDocumentDeletionResponse,
+    operation_id="wba_015_delete",
+    summary="개인 Wiki 문서 삭제",
+)
+async def delete_wiki_document(
+    user_id: UserId,
+    payload: WikiSourceDeletionRequest,
+    request: Request,
+    service: WikiDocumentService = Depends(get_wiki_document_service),
+) -> WikiDocumentDeletionResponse:
+    """[WBA-015] delete 이벤트를 기록하고 문서를 soft-delete한다 (동기, 멱등).
+
+    Chunk는 즉시 검색에서 제외된다. 같은 개념이 새 클리핑으로 재등장하면
+    새 문서로 되살아난다(D1 잠정: 기본 부활 — tombstone 옵션은 팀 결정 후).
+    관심사 반영이 급하면 재계산 API를 이어서 호출한다.
+    """
+    return await service.delete_document(
+        user_id, payload, request_id=_request_id(request)
+    )
+
+
+@router.post(
+    "/users/{user_id}/feedback-signals",
+    response_model=FeedbackSignalsResponse,
+    operation_id="svc_006",
+    summary="사용자 피드백 신호 전달",
+)
+async def submit_feedback_signals(
+    user_id: UserId,
+    payload: FeedbackSignalsRequest,
+    request: Request,
+    service: AgentApiMvpService = Depends(get_mvp_service),
+) -> FeedbackSignalsResponse:
+    """[SVC-006] 좋아요·숨김·신고 신호를 관심사 반영 이벤트로 접수한다.
+
+    Wiki 문서를 만들지 않으며, 다음 관심사 재계산 때 점수에 반영된다.
+    """
+    return await svc_006(
+        service,
         user_id=user_id,
         payload=payload,
         request_id=_request_id(request),
@@ -245,6 +299,25 @@ async def get_active_interests(
 ) -> InterestProfileResponse:
     """[INT-001] 개인 Wiki에서 계산된 활성 관심 Topic을 조회한다."""
     return await service.get_active(user_id)
+
+
+@router.post(
+    "/users/{user_id}/interest-profiles/rebuild",
+    response_model=InterestProfileResponse,
+    operation_id="int_011_rebuild",
+    summary="관심 키워드 재계산",
+)
+async def rebuild_interest_profile(
+    user_id: UserId,
+    payload: InterestRebuildRequest,
+    service: InterestService = Depends(get_interest_service),
+) -> InterestProfileResponse:
+    """[INT-011] 활성 개인 Wiki에서 관심 키워드를 재계산해 새 Profile로 활성화한다.
+
+    Wiki Build 완료 시 자동 재계산되므로 평시에는 호출할 필요가 없다.
+    사용자 "관심사 새로고침" UX와 운영 복구를 위한 수동 경로다.
+    """
+    return await service.rebuild(user_id, limit=payload.limit)
 
 
 @router.get(

@@ -88,6 +88,28 @@ class _FakeWikiDocumentRepository:
             ],
         }
 
+    async def delete_wiki_document(
+        self,
+        user_id: str,
+        *,
+        document_id: str,
+        source_event_id: str,
+        occurred_at: object,
+        memo: str | None,
+    ) -> Mapping[str, object]:
+        """알려진 문서만 soft-delete 결과로 반환한다."""
+        from infrastructure.persistence.api import WikiDocumentNotFoundError
+
+        if document_id != "document-1":
+            raise WikiDocumentNotFoundError(document_id)
+        return {
+            "document_id": document_id,
+            "document_kind": "entity",
+            "document_key": "obsidian",
+            "already_deleted": source_event_id == "delete-again",
+            "unsearchable_chunk_count": 2,
+        }
+
     @staticmethod
     def _summary() -> dict[str, object]:
         """목록과 상세가 공유하는 Wiki 문서 요약을 반환한다."""
@@ -146,6 +168,38 @@ def test_wiki_document_detail_hides_missing_document() -> None:
     with _client() as client:
         response = client.get(
             "/internal/v1/users/user-1/wiki/documents/missing-document"
+        )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "WIKI_DOCUMENT_NOT_FOUND"
+
+
+def test_wiki_document_deletion_soft_deletes_and_is_idempotent() -> None:
+    """삭제 요청이 soft-delete 결과를 반환하고 재요청이 멱등인지 검증한다."""
+    with _client() as client:
+        deleted = client.post(
+            "/internal/v1/users/user-1/wiki-sources/deletions",
+            json={"source_event_id": "delete-1", "document_id": "document-1"},
+        )
+        repeated = client.post(
+            "/internal/v1/users/user-1/wiki-sources/deletions",
+            json={"source_event_id": "delete-again", "document_id": "document-1"},
+        )
+
+    assert deleted.status_code == 200
+    assert deleted.json()["document_key"] == "obsidian"
+    assert deleted.json()["already_deleted"] is False
+    assert deleted.json()["unsearchable_chunk_count"] == 2
+    assert repeated.status_code == 200
+    assert repeated.json()["already_deleted"] is True
+
+
+def test_wiki_document_deletion_returns_404_for_unknown_document() -> None:
+    """존재하지 않는 문서 삭제가 404 공통 오류를 반환하는지 검증한다."""
+    with _client() as client:
+        response = client.post(
+            "/internal/v1/users/user-1/wiki-sources/deletions",
+            json={"source_event_id": "delete-x", "document_id": "missing"},
         )
 
     assert response.status_code == 404

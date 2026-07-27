@@ -38,6 +38,12 @@ class InterestProfileRepository(Protocol):
         """새 관심 Profile Version과 근거를 저장한다."""
         ...
 
+    async def load_recent_feedback_signals(
+        self, user_id: str
+    ) -> Sequence[Mapping[str, object]]:
+        """최근 사용자 행동 신호를 Topic 단위로 반환한다."""
+        ...
+
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def int_011(
@@ -69,7 +75,9 @@ async def int_011(
     document_rows = documents if isinstance(documents, list) else []
     candidate_pool = min(_MAX_CANDIDATE_POOL, limit * _CANDIDATE_POOL_MULTIPLIER)
     candidates = await int_001(document_rows, limit=max(candidate_pool, limit))
-    scored = await int_005(candidates, limit=limit)
+    # 행동 신호가 없어도 Wiki 근거 기반 기본 점수는 항상 계산한다.
+    signals = await repository.load_recent_feedback_signals(user_id)
+    scored = await int_005(candidates, signals=signals, limit=limit)
     return await repository.save_interest_profile(
         user_id, wiki_version_id=wiki_version_id, candidates=scored
     )

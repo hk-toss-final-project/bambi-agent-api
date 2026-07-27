@@ -15,6 +15,8 @@ def assist_daily_agent(
     *,
     user_id: str,
     model: str = "gpt-4.1-mini",
+    record_history: bool = True,
+    include_report: bool = True,
 ) -> dict[str, object]:
     """리서치 에이전트를 실행해 일간 보고서를 생성한다.
 
@@ -26,8 +28,18 @@ def assist_daily_agent(
         keyword: 사용자 관심 토픽
         user_id: 사용자 식별자
         model: 재구성·요약·보고서 생성에 쓸 OpenAI 모델
+        record_history: 수집·보고 이력을 기록할지. 브리핑은 True(기본),
+            리포트 생성처럼 근거만 가져가는 호출은 False로 둔다 — 그래야 리포트
+            생성이 사용자의 브리핑에서 같은 소식을 가리지 않는다.
+        include_report: 브리핑 Markdown을 생성할지. 근거만 필요하면 False.
 
     Returns:
         assist_daily 결과 + {agent_trace: [str], attempts: [str]}
     """
-    return graph.run_agent(keyword, user_id, model=model)
+    return graph.run_agent(
+        keyword,
+        user_id,
+        model=model,
+        record_history=record_history,
+        include_report=include_report,
+    )

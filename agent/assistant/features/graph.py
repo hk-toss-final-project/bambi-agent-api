@@ -117,6 +117,10 @@ class AgentState(TypedDict, total=False):
     route_decision: str
     report_markdown: str
     trace: list[dict[str, object]]   # 구조화된 판단 이벤트
+    # 소비 맥락 플래그. 브리핑은 둘 다 True(기본), 리포트 생성은 둘 다 False로
+    # 호출해 이력 오염과 불필요한 보고서 LLM 호출을 피한다.
+    record_history: bool
+    include_report: bool
 
 
 def _event(
@@ -179,6 +183,7 @@ def _select(state: AgentState) -> AgentState:
         model=str(state.get("model") or "gpt-4.1-mini"),
         reference_now=state.get("reference_now"),
         search_query=query,
+        record_history=bool(state.get("record_history", True)),
     )
     duration_ms = int((time.monotonic() - started) * 1000)
 
@@ -371,10 +376,29 @@ def _reformulate(state: AgentState) -> AgentState:
 
 
 def _write_report(state: AgentState) -> AgentState:
-    """선별 결과로 최종 보고서를 작성한다(LLM 노드)."""
+    """선별 결과로 최종 보고서를 작성한다(LLM 노드).
+
+    include_report=False(리포트 생성이 근거만 가져가는 경로)면 LLM을 호출하지
+    않고 건너뛴다. 그 경로는 브리핑 Markdown을 쓰지 않고 버리므로, 생성하면
+    비용만 든다.
+    """
     selection = dict(state.get("selection") or {})
     model = str(state.get("model") or "gpt-4.1-mini")
     trace = list(state.get("trace") or [])
+
+    if not state.get("include_report", True):
+        return {
+            "report_markdown": "",
+            "trace": [
+                *trace,
+                _event(
+                    "write_report",
+                    STATUS_OK,
+                    reason="skipped",
+                    message="보고서 작성: 근거만 필요한 호출이라 생성을 건너뜁니다.",
+                ),
+            ],
+        }
 
     started = time.monotonic()
     try:
@@ -466,6 +490,8 @@ def run_agent(
     model: str = "gpt-4.1-mini",
     reference_now: datetime | None = None,
     max_reformulations: int | None = None,
+    record_history: bool = True,
+    include_report: bool = True,
 ) -> dict[str, object]:
     """리서치 에이전트 그래프를 실행하고 최종 선별 결과·보고서를 반환한다.
 
@@ -475,6 +501,10 @@ def run_agent(
         model: 재구성·요약·보고서에 쓸 OpenAI 모델
         reference_now: "지금" 기준 시각(테스트용). 생략하면 실제 현재 시각.
         max_reformulations: 검색어 재구성 최대 횟수. 생략하면 MAX_REFORMULATIONS.
+        record_history: 수집·보고 이력을 기록할지. 리포트 생성처럼 근거만
+            가져가는 호출은 False로 두어 브리핑 이력 오염을 막는다.
+        include_report: 브리핑 Markdown을 생성할지. 근거만 필요한 호출은
+            False로 두어 보고서 LLM 비용을 아낀다.
 
     Returns:
         run_daily 결과(keyword, user_id, mode, cold_start, items, log)에 더해
@@ -496,6 +526,8 @@ def run_agent(
         "max_reformulations": (
             MAX_REFORMULATIONS if max_reformulations is None else max_reformulations
         ),
+        "record_history": record_history,
+        "include_report": include_report,
     }
     final = _get_graph().invoke(initial)
 

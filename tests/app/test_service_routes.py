@@ -86,15 +86,36 @@ def test_generation_job_result_flow(
     assert completed.json()["result"] == {"content_id": "content-1"}
 
 
-def test_content_mark_returns_not_implemented(client: TestClient) -> None:
-    """위키마킹 접수가 Handler 구현 전까지 명시적 501을 반환하는지 검증한다."""
-    response = client.post(
-        "/internal/v1/users/user-1/wiki-sources/content-marks",
-        json={"source_event_id": "mark-1", "content_id": "content-1"},
+def test_content_mark_enqueues_wiki_build_job(
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
+) -> None:
+    """위키마킹이 생성 콘텐츠를 Wiki Build Job으로 멱등 접수하는지 검증한다."""
+    agent_jobs_fake.register_generated_content("user-1", "content-1")
+    payload = {"source_event_id": "mark-1", "content_id": "content-1"}
+
+    first = client.post(
+        "/internal/v1/users/user-1/wiki-sources/content-marks", json=payload
+    )
+    duplicate = client.post(
+        "/internal/v1/users/user-1/wiki-sources/content-marks", json=payload
     )
 
-    assert response.status_code == 501
-    assert response.json()["code"] == "NOT_IMPLEMENTED"
+    assert first.status_code == 202
+    assert first.json()["feature_id"] == "SVC-004"
+    assert first.json()["source_document_version_id"] is not None
+    assert duplicate.status_code == 202
+    assert first.json()["job_id"] == duplicate.json()["job_id"]
+
+
+def test_content_mark_rejects_unknown_generated_content(client: TestClient) -> None:
+    """존재하지 않는 생성 콘텐츠 위키마킹이 404를 반환하는지 검증한다."""
+    response = client.post(
+        "/internal/v1/users/user-1/wiki-sources/content-marks",
+        json={"source_event_id": "mark-unknown", "content_id": "missing-content"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "GENERATED_CONTENT_NOT_FOUND"
 
 
 def test_generation_requires_user_context(client: TestClient) -> None:
@@ -148,3 +169,135 @@ def test_unknown_job_returns_not_found(client: TestClient) -> None:
 
     assert response.status_code == 404
     assert response.json()["code"] == "JOB_NOT_FOUND"
+
+
+def test_interest_rebuild_returns_new_active_profile(
+    client: TestClient, container
+) -> None:
+    """수동 재계산 요청이 새 활성 관심 Profile을 반환하는지 검증한다."""
+    from datetime import UTC, datetime
+
+    from app.services.interests import InterestService
+
+    class _FakeInterestRepository:
+        """활성 Wiki 한 건으로 재계산이 성공하는 저장소 대역."""
+
+        async def load_interest_documents(self, user_id: str) -> dict:
+            """관심사 계산에 쓸 활성 Wiki 문서 한 건을 반환한다."""
+            return {
+                "wiki_version_id": "wiki-version-1",
+                "documents": [
+                    {
+                        "document_id": "document-1",
+                        "title": "LangGraph",
+                        "summary": "그래프 오케스트레이션",
+                        "domain": "technology",
+                        "source_metadata": {"tags": ["Python"]},
+                    }
+                ],
+            }
+
+        async def save_interest_profile(
+            self, user_id: str, *, wiki_version_id: str, candidates
+        ) -> dict:
+            """계산된 후보를 활성 Profile 응답 형태로 반환한다."""
+            return {
+                "profile_id": "profile-1",
+                "user_id": user_id,
+                "wiki_version_id": wiki_version_id,
+                "version": 2,
+                "status": "active",
+                "calculated_at": datetime.now(UTC),
+                "interests": [
+                    {
+                        "interest_id": "interest-1",
+                        "topic": candidate.topic,
+                        "category": candidate.category,
+                        "score": candidate.score,
+                        "confidence": candidate.confidence,
+                        "document_ids": list(candidate.document_ids),
+                        "evidence": dict(candidate.evidence),
+                    }
+                    for candidate in candidates
+                ],
+            }
+
+        async def list_interests(self, user_id: str) -> dict | None:
+            """활성 Profile 조회는 이 테스트에서 사용하지 않는다."""
+            return None
+
+        async def load_recent_feedback_signals(self, user_id: str) -> list:
+            """행동 신호가 없는 상태를 반환한다."""
+            return []
+
+    container.interest_service = InterestService(_FakeInterestRepository())
+
+    response = client.post(
+        "/internal/v1/users/user-1/interest-profiles/rebuild",
+        json={"limit": 5},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["version"] == 2
+    assert body["status"] == "active"
+    assert body["interests"][0]["topic"] == "LangGraph"
+
+
+def test_interest_rebuild_requires_ready_service(client: TestClient) -> None:
+    """관심 Profile 저장소가 준비되지 않으면 503을 반환하는지 검증한다."""
+    response = client.post(
+        "/internal/v1/users/user-1/interest-profiles/rebuild",
+        json={},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "SERVICE_NOT_READY"
+
+
+def test_feedback_signals_accepts_batch_idempotently(client: TestClient) -> None:
+    """행동 신호 Batch가 저장되고 같은 이벤트 재전송은 집계에서 빠지는지 검증한다."""
+    payload = {
+        "signals": [
+            {
+                "source_event_id": "signal-1",
+                "signal_type": "like",
+                "topics": ["LangGraph"],
+                "content_id": "content-1",
+            },
+            {
+                "source_event_id": "signal-2",
+                "signal_type": "hide",
+                "topics": ["Crypto"],
+            },
+        ]
+    }
+
+    first = client.post("/internal/v1/users/user-1/feedback-signals", json=payload)
+    duplicate = client.post(
+        "/internal/v1/users/user-1/feedback-signals", json=payload
+    )
+
+    assert first.status_code == 200
+    assert first.json()["accepted_count"] == 2
+    assert duplicate.status_code == 200
+    assert duplicate.json()["accepted_count"] == 0
+
+
+def test_feedback_signals_rejects_unknown_type(client: TestClient) -> None:
+    """정의되지 않은 신호 유형이 422 검증 오류를 반환하는지 검증한다."""
+    response = client.post(
+        "/internal/v1/users/user-1/feedback-signals",
+        json={
+            "signals": [
+                {
+                    "source_event_id": "signal-x",
+                    "signal_type": "view",
+                    "topics": ["LangGraph"],
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "REQUEST_VALIDATION_ERROR"

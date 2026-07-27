@@ -26,7 +26,8 @@
 - [x] `SVC-001` 사용자 컨텍스트 전달 — `user_context_snapshots` 저장, `STALE_CONTEXT_VERSION` 검증
 - [x] `SVC-002` 웹 클리핑 처리 요청 — 원본·Version·Job 한 Transaction Commit 후 202
 - [x] `SVC-003` URL 처리 요청 — URL Head 저장 + `personal_wiki_url` 수집 Job 등록
-- [ ] `SVC-004` 위키마킹 처리 요청 — ❌ `personal_wiki_content_mark` Handler 미구현. 인메모리 유령 접수를 제거하고 접수 API가 명시적 `501`을 반환하도록 정리(2026-07-20 리팩토링)
+- [x] `SVC-004` 위키마킹 처리 요청 — 생성 후보 본문을 `content_mark` 원본 Version으로 물질화 후 기존 `personal_wiki_build` Job으로 처리 (별도 Handler 불필요, 2026-07-27 구현. 대상 콘텐츠 없으면 404)
+- [x] `SVC-006` 사용자 피드백 전달 — 좋아요·숨김·신고 신호를 `feedback` 이벤트로 멱등 저장(Wiki 문서 미생성). 다음 재계산 때 INT-005가 점수 반영 (2026-07-27 구현)
 - [x] `SVC-008` 콘텐츠 생성 요청 — `generation_requests` + `report_generation` Job 멱등 등록, `scheduled_at` 예약 실행 지원
 - [x] `SVC-013` Agent Job 상태 조회
 - [x] `SVC-014` Agent 결과 조회 — 미완료 시 `JOB_RESULT_NOT_READY`
@@ -57,8 +58,8 @@
 
 - [x] `INT-001` 관심사 Topic 추출 — 활성 Wiki의 Entity·Concept 노드를 후보로 삼고 관계 유형 가중 연결 수(degree)로 정렬 (2026-07-23 텍스트 토큰화 폐기, 로직 소유 `domain/interests`)
 - [ ] `INT-002` 관심사 Category 분류 — ❌ 독립 기능 미구현. 추출(INT-001)이 노드 `domain`을 Category로 옮길 뿐 서비스 분류 체계 매핑은 없음 (2026-07-21 스텁 복원)
-- [x] `INT-005` 관심사 점수 계산 — 근거 원문의 수·종류(행동 강도)와 반감기 감쇠(최신성)를 INT-001 구조 가중치에 곱해 최종 점수 계산 (2026-07-23 구현, 로직 소유 `domain/interests`)
-- [x] `INT-011` 관심사 프로필 재계산 — ⚠️ 수동 rebuild API만 있고 Wiki 변경 시 자동 재계산 없음. `INT-001 → INT-005 → 저장` 오케스트레이션 소유 `domain/interests`
+- [x] `INT-005` 관심사 점수 계산 — 2층 계산(2026-07-27 병합). ① 기본 점수: 근거 원문의 수·종류(행동 강도)와 반감기 감쇠(최신성, 90일)를 INT-001 구조 가중치에 곱한다. ② 행동 보정: 좋아요·숨김 신호에 시간 감쇠(반감기 14일)를 적용해 기본 점수에 더하고, Wiki에 없는 Topic도 양의 신호가 쌓이면 행동 전용 후보로 추가한다. 신호 가중치·신호 반감기는 D2 잠정값. 로직 소유 `domain/interests`
+- [x] `INT-011` 관심사 프로필 재계산 — Wiki Build 완료 시 자동 재계산(`run_personal_wiki_build` 훅, 실패해도 Build 결과 유지) + 수동 rebuild API. 행동 신호가 없어도 기본 점수는 항상 계산한다. 오케스트레이션 로직 소유 `domain/interests`
 
 ### 외부 데이터 자동 수집
 
@@ -98,6 +99,7 @@
 - [x] `SW-009` 발행 완료 ACK — 단건 + 부분 성공 Batch ACK
 - [x] `WBA-001` Incremental Wiki Build
 - [x] `WBA-003` Wiki 문서 정규화 — Build 파이프라인에 포함
+- [x] `WBA-015` Wiki 삭제 반영 — delete 이벤트 기록 + 문서 soft-delete + Chunk 검색 제외 (동기·멱등, 2026-07-27 구현. 실행 경로는 삭제 API→Repository이며 wba_015는 커넥션 보유 호출자용 facade. D1 잠정: 재등장 시 기본 부활, tombstone 없음)
 - [x] `JOB-001` Agent Job 생성 — 원본 저장과 같은 Transaction
 - [x] `JOB-002` Agent Job 조회
 - [x] `JOB-006` Agent Job 진행률 관리 — ⚠️ progress 값만 갱신(0→5→100), 단계별(정규화·Chunking·Embedding) 기록 없음
@@ -120,6 +122,7 @@
 | SVC-002 | 웹 클리핑 처리 요청 | 클리핑 Markdown을 영속 저장하고 Personal Wiki Builder Job을 등록한다. |
 | SVC-003 | URL 처리 요청 | 입력된 URL을 개인 Wiki 처리 작업으로 전달한다. |
 | SVC-004 | 위키마킹 처리 요청 | 사용자가 선택한 콘텐츠의 Wiki 편입을 요청한다. |
+| SVC-006 | 사용자 피드백 전달 | 좋아요, 숨김, 신고 등의 신호를 전달한다. |
 | SVC-008 | 콘텐츠 생성 요청 | 리포트 생성기의 콘텐츠 생성을 요청한다. |
 | SVC-013 | Agent Job 상태 조회 | 비동기 작업 상태를 조회한다. |
 | SVC-014 | Agent 결과 조회 | 생성 및 처리 결과를 Agent API에서 조회한다. |
@@ -236,6 +239,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 |---|---|---|
 | WBA-001 | Incremental Wiki Build | 새로 저장된 사용자 원본 Version만 증분 처리한다. |
 | WBA-003 | Wiki 문서 정규화 | 저장된 Markdown과 Metadata를 Chunking 가능한 공통 구조로 정리한다. |
+| WBA-015 | Wiki 삭제 반영 | 삭제된 사용자 원천과 파생 데이터를 제거한다. |
 | JOB-001 | Agent Job 생성 | 클리핑 저장 Transaction에서 Personal Wiki Build Job을 함께 생성한다. |
 | JOB-002 | Agent Job 조회 | API와 Worker가 클리핑 Job 상태와 진행률을 조회한다. |
 | JOB-006 | Agent Job 진행률 관리 | 정규화, Chunking, Embedding, 관심사 갱신 단계를 기록한다. |

@@ -104,7 +104,16 @@ def collect_live_context(
         점수 내림차순 근거 문서 목록. 수집 실패 시 빈 목록.
     """
     try:
-        result = assist_daily_agent(topic, user_id=user_id, model=model)
+        # 근거(items)만 쓰고 브리핑 Markdown은 버리므로 보고서를 만들지 않는다.
+        # 이력도 기록하지 않는다 — 리포트 생성이 사용자의 일간 브리핑에서 같은
+        # 소식을 7일간 가려버리는 이력 오염을 막기 위해서다.
+        result = assist_daily_agent(
+            topic,
+            user_id=user_id,
+            model=model,
+            record_history=False,
+            include_report=False,
+        )
     except Exception as error:
         logger.warning("실시간 자료 수집 실패, 개인 Wiki만 사용한다: %s", error)
         return []

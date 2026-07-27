@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import UTC, datetime
 
 from agent.assistant.features.summarize import summarize_text
 
@@ -93,6 +94,29 @@ def filter_recent_videos(
     return recent
 
 
+def _video_id_from_url(url: str) -> str | None:
+    """YouTube URL에서 video_id를 뽑는다. 형식을 못 알아보면 None."""
+    match = re.search(r"(?:v=|youtu\.be/|/shorts/)([\w-]{11})", url)
+    return match.group(1) if match else None
+
+
+def _relative_expression(published_at: "datetime | None") -> str:
+    """발행 시각을 파이프라인이 파싱하는 상대 표현("3 hours ago")으로 되돌린다.
+
+    Provider는 상대 표현을 시각으로 환산해 주지만, 비서 파이프라인은 다시 상대
+    표현을 기대한다(_relative_age_hours). 두 변환이 같은 단위 표를 쓰므로
+    왕복해도 경과 시간이 보존된다.
+    """
+    if published_at is None:
+        return ""
+    hours = max((datetime.now(UTC) - published_at).total_seconds() / 3600.0, 0.0)
+    if hours < 1:
+        return f"{max(int(hours * 60), 1)} minutes ago"
+    if hours < 24:
+        return f"{int(hours)} hours ago"
+    return f"{int(hours // 24)} days ago"
+
+
 def search_videos(keyword: str, limit: int = 4) -> list[dict[str, object]]:
     """키워드로 YouTube 영상을 검색해 메타데이터 목록을 반환한다.
 
@@ -102,26 +126,35 @@ def search_videos(keyword: str, limit: int = 4) -> list[dict[str, object]]:
 
     Returns:
         {video_id, title, url, channel, duration, published_time} 딕셔너리 리스트
-    """
-    from youtubesearchpython import VideosSearch
 
-    raw = VideosSearch(keyword, limit=limit).result()
-    # raw.get("result", [])는 키가 아예 없을 때만 기본값을 쓴다. 검색 결과가 없거나
-    # youtubesearchpython 내부에서 오류가 나면 키는 있고 값이 None인 응답을 주므로,
-    # `or []`로 None 값 자체를 걸러야 순회 시 TypeError가 나지 않는다.
+    검색 자체는 공용 수집 커넥터(YouTubeSearchProvider)에 위임한다 — Global 수집
+    워커와 같은 코드를 써서 수집 경로가 갈라지지 않게 한다. 여기서는 비서
+    파이프라인이 기대하는 딕셔너리 모양으로만 되돌린다.
+    """
+    import asyncio
+
+    from infrastructure.sources.connectors.api import YouTubeSearchProvider
+
+    articles = asyncio.run(
+        YouTubeSearchProvider().search(query=keyword, limit=limit, language=None)
+    )
+
     videos: list[dict[str, object]] = []
-    for item in raw.get("result") or []:
-        video_id = item.get("id")
+    for article in articles:
+        video_id = _video_id_from_url(str(article.url))
         videos.append(
             {
                 "video_id": video_id,
-                "title": item.get("title"),
-                "url": item.get("link"),
-                "channel": (item.get("channel") or {}).get("name"),
-                "duration": item.get("duration"),
-                "published_time": item.get("publishedTime"),
-                # video_id만으로 조립 가능한 공식 썸네일 URL (API 키 불필요).
-                "thumbnail_url": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" if video_id else None,
+                "title": article.title,
+                "url": article.url,
+                "channel": article.source_name,
+                "duration": None,
+                # 파이프라인은 상대 표현을 다시 시간으로 환산하므로, Provider가
+                # 계산한 published_at을 같은 의미의 상대 표현으로 되돌린다.
+                "published_time": _relative_expression(article.published_at),
+                "thumbnail_url": (
+                    f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" if video_id else None
+                ),
             }
         )
     return videos

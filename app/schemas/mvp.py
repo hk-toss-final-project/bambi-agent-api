@@ -2,6 +2,7 @@
 
 from datetime import date, datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import (
     AliasChoices,
@@ -151,6 +152,70 @@ class ContentMarkRequest(WikiSourceRequestBase):
     """생성 콘텐츠의 위키마킹 처리를 요청하는 모델."""
 
     content_id: str = Field(min_length=1, max_length=128, description="생성 콘텐츠 ID")
+
+
+class FeedbackSignalItem(ImmutableSchema):
+    """관심사 점수에 반영할 행동 신호 한 건."""
+
+    source_event_id: str = Field(
+        min_length=1, max_length=128, description="멱등 처리를 위한 신호 이벤트 ID"
+    )
+    signal_type: Literal["like", "unlike", "hide", "report"] = Field(
+        description="행동 유형 (가중치는 Agent가 관리)"
+    )
+    topics: list[str] = Field(
+        min_length=1,
+        max_length=10,
+        description="신호가 가리키는 관심 Topic 목록 (Service가 해석해 전달)",
+    )
+    content_id: str | None = Field(
+        default=None, max_length=128, description="행동 대상 콘텐츠 ID"
+    )
+    occurred_at: datetime | None = Field(
+        default=None, description="행동 발생 시각 (시간 감쇠 기준)"
+    )
+
+
+class FeedbackSignalsRequest(ImmutableSchema):
+    """행동 신호 Batch를 전달하는 요청."""
+
+    signals: list[FeedbackSignalItem] = Field(
+        min_length=1, max_length=100, description="행동 신호 목록"
+    )
+
+
+class FeedbackSignalsResponse(ImmutableSchema):
+    """행동 신호 접수 결과."""
+
+    user_id: str = Field(description="신호를 반영할 사용자 ID")
+    accepted_count: int = Field(
+        ge=0, description="신규 저장된 신호 수 (source_event_id 중복 제외)"
+    )
+    request_id: str = Field(description="요청 추적 ID")
+
+
+class WikiSourceDeletionRequest(WikiSourceRequestBase):
+    """개인 Wiki 문서 삭제를 요청하는 모델."""
+
+    document_id: str = Field(
+        min_length=1, max_length=128, description="삭제할 Wiki 문서 ID"
+    )
+
+
+class WikiDocumentDeletionResponse(ImmutableSchema):
+    """Wiki 문서 삭제 반영 결과."""
+
+    user_id: str = Field(description="문서를 삭제한 사용자 ID")
+    document_id: str = Field(description="삭제된 Wiki 문서 ID")
+    document_kind: str = Field(description="삭제된 문서 종류 (entity·concept 등)")
+    document_key: str = Field(description="삭제된 문서 키")
+    already_deleted: bool = Field(
+        description="이미 삭제된 문서에 대한 멱등 재요청이었는지"
+    )
+    unsearchable_chunk_count: int = Field(
+        ge=0, description="검색에서 제외 처리된 Chunk 수"
+    )
+    request_id: str = Field(description="요청 추적 ID")
 
 
 class GenerationRequest(ImmutableSchema):

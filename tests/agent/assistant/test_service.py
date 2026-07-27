@@ -7,7 +7,7 @@ def test_assist_daily_agent_delegates_to_graph(monkeypatch) -> None:
     """assist_daily_agent는 리서치 에이전트 그래프에 위임하고 그 결과를 그대로 돌려준다."""
     captured: dict[str, object] = {}
 
-    def fake_run_agent(topic, user_id, *, model="gpt-4.1-mini"):
+    def fake_run_agent(topic, user_id, *, model="gpt-4.1-mini", record_history=True, include_report=True):
         captured.update(topic=topic, user_id=user_id, model=model)
         return {"keyword": topic, "mode": "daily", "report_markdown": "브리핑", "agent_trace": ["단계"]}
 

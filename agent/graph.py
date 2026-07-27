@@ -8,6 +8,7 @@ Transaction을 소유하고, LLM 노드는 Transaction 밖(스레드)에서 실�
 
 from __future__ import annotations
 
+import logging
 from asyncio import to_thread
 from datetime import UTC, datetime
 from time import monotonic
@@ -33,15 +34,19 @@ from agent.report_builder.api import (
 )
 from agent.state import ReportGenerationState, PersonalWikiBuildState
 from agent.wiki_builder.api import classify_source_for_wiki, wba_003
+from domain.interests.api import int_011
 from domain.personal_wiki.documents.api import pwiki_002
 from domain.personal_wiki.retrieval.api import prag_003, prag_006, prag_007
 from infrastructure.persistence.api import (
+    ConnectionInterestProfileRepository,
     get_user_source_document_version_for_agent,
     list_existing_wiki_entries,
     list_existing_wiki_relations,
     set_personal_wiki_scope,
 )
 from shared.contracts import FeatureRequest
+
+logger = logging.getLogger("agent.graph")
 
 type DictRow = dict[str, Any]
 
@@ -186,6 +191,31 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
     return graph.compile()
 
 
+async def _recalculate_interest_profile(
+    connection: AsyncConnection[DictRow], *, user_id: str
+) -> None:
+    """Build 완료 직후 관심사 프로필을 재계산한다(INT-011 자동 훅).
+
+    프로필은 Wiki의 파생물이므로, 재계산 실패가 이미 저장된 Build 성공을
+    실패로 뒤집으면 안 된다. 실패는 경고 로그로만 남긴다(다음 Build 또는
+    수동 rebuild API가 복구 경로다).
+    """
+    try:
+        repository = ConnectionInterestProfileRepository(connection)
+        profile = await int_011(repository, user_id)
+        logger.info(
+            "관심사 프로필 자동 재계산 완료 (user=%s, version=%s)",
+            user_id,
+            profile.get("version"),
+        )
+    except Exception:  # noqa: BLE001 — 파생물 갱신 실패는 Build 결과에 영향 없음
+        logger.warning(
+            "관심사 프로필 자동 재계산 실패 — Wiki Build 결과는 유지 (user=%s)",
+            user_id,
+            exc_info=True,
+        )
+
+
 async def run_personal_wiki_build(
     connection: AsyncConnection[DictRow],
     *,
@@ -197,6 +227,8 @@ async def run_personal_wiki_build(
     """Personal Wiki Build 그래프를 실행하고 Job 결과 Payload를 반환한다.
 
     개발 API와 Worker가 공유하는 유일한 Wiki Build 실행 진입점이다.
+    Build 성공 후에는 관심사 프로필을 자동 재계산해(INT-011) 프로필이
+    항상 최신 Wiki를 따라가게 한다 — Wiki가 원천, 프로필은 파생물.
     """
     graph = build_personal_wiki_graph(connection)
     state = await graph.ainvoke(
@@ -207,6 +239,7 @@ async def run_personal_wiki_build(
             "model": model,
         }
     )
+    await _recalculate_interest_profile(connection, user_id=user_id)
     return dict(state["result"])
 
 

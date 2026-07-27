@@ -58,7 +58,15 @@ def _patch_run_daily(monkeypatch, handler) -> list[str]:
     """run_daily를 대체하고, 실제로 사용된 검색어 목록을 반환한다."""
     calls: list[str] = []
 
-    def fake_run_daily(topic, user_id, *, model="gpt-4.1-mini", reference_now=None, search_query=None):
+    def fake_run_daily(
+        topic,
+        user_id,
+        *,
+        model="gpt-4.1-mini",
+        reference_now=None,
+        search_query=None,
+        record_history=True,
+    ):
         calls.append(search_query)
         return handler(search_query, len(calls))
 

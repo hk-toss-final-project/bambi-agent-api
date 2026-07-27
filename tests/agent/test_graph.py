@@ -113,6 +113,14 @@ def test_run_personal_wiki_build_assembles_result(
         assert kwargs["job_id"] == "job-1"
         return _fake_persisted()
 
+    async def fake_int_011(
+        repository: Any, user_id: str, *, limit: int = 20
+    ) -> dict[str, Any]:
+        """Build 완료 후 재계산 훅 호출을 기록하고 고정 Profile을 반환한다."""
+        order.append("recalculate")
+        assert user_id == "user-1"
+        return {"version": 7}
+
     monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
     monkeypatch.setattr(
         agent_graph, "get_user_source_document_version_for_agent", fake_get_source
@@ -122,6 +130,7 @@ def test_run_personal_wiki_build_assembles_result(
     monkeypatch.setattr(agent_graph, "classify_source_for_wiki", fake_classify)
     monkeypatch.setattr(agent_graph, "wba_003", fake_wba_003)
     monkeypatch.setattr(agent_graph, "pwiki_002", fake_pwiki_002)
+    monkeypatch.setattr(agent_graph, "int_011", fake_int_011)
 
     connection = _FakeConnection()
     result = asyncio.run(
@@ -134,7 +143,7 @@ def test_run_personal_wiki_build_assembles_result(
         )
     )
 
-    assert order == ["load_source", "classify", "plan", "persist"]
+    assert order == ["load_source", "classify", "plan", "persist", "recalculate"]
     assert result["source_document_id"] == "source-1"
     assert result["wiki_version_id"] == "wiki-version-1"
     assert result["chunk_count"] == 2
@@ -145,6 +154,72 @@ def test_run_personal_wiki_build_assembles_result(
     assert "embedding_count" not in result
     assert result["affected_documents"][0]["document_key"] == "entity-key"
     assert result["artifacts"]["index"] == "index"
+
+
+def test_run_personal_wiki_build_survives_interest_recalc_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """관심사 재계산 훅이 실패해도 Build 결과 Payload는 그대로 반환된다."""
+    plan = SimpleNamespace(
+        index=SimpleNamespace(content="index"),
+        source_manifest=SimpleNamespace(content="manifest"),
+        log_entry=SimpleNamespace(content="log"),
+        extracted_relation_count=0,
+        isolated_node_count=0,
+        relation_warnings=[],
+    )
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """테스트에서 DB 사용자 Scope 설정을 생략한다."""
+        return None
+
+    async def fake_get_source(connection: Any, **kwargs: Any) -> SimpleNamespace:
+        """고정 원본을 반환한다."""
+        return _fake_source()
+
+    async def fake_listing(connection: Any, **kwargs: Any) -> list[object]:
+        """기존 Wiki 상태가 비어 있는 것으로 반환한다."""
+        return []
+
+    async def fake_wba_003(**kwargs: Any) -> SimpleNamespace:
+        """고정 Build 계획을 반환한다."""
+        return plan
+
+    async def fake_pwiki_002(connection: Any, **kwargs: Any) -> SimpleNamespace:
+        """고정 저장 결과를 반환한다."""
+        return _fake_persisted()
+
+    async def failing_int_011(
+        repository: Any, user_id: str, *, limit: int = 20
+    ) -> dict[str, Any]:
+        """재계산이 실패하는 상황을 재현한다."""
+        raise RuntimeError("재계산 실패")
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(
+        agent_graph, "get_user_source_document_version_for_agent", fake_get_source
+    )
+    monkeypatch.setattr(agent_graph, "list_existing_wiki_entries", fake_listing)
+    monkeypatch.setattr(agent_graph, "list_existing_wiki_relations", fake_listing)
+    monkeypatch.setattr(
+        agent_graph, "classify_source_for_wiki", lambda **kwargs: "classification"
+    )
+    monkeypatch.setattr(agent_graph, "wba_003", fake_wba_003)
+    monkeypatch.setattr(agent_graph, "pwiki_002", fake_pwiki_002)
+    monkeypatch.setattr(agent_graph, "int_011", failing_int_011)
+
+    result = asyncio.run(
+        agent_graph.run_personal_wiki_build(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            source_document_version_id="source-version-1",
+            job_id="job-1",
+            model="test-model",
+        )
+    )
+
+    assert result["wiki_version_id"] == "wiki-version-1"
+    assert result["chunk_count"] == 2
 
 
 def test_run_report_generation_chains_search_generate_persist(

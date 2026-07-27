@@ -24,6 +24,8 @@ from app.services.agent_jobs import (
 from infrastructure.persistence.api import (
     ClaimedAgentJob,
     db_002,
+    save_content_mark_and_enqueue,
+    save_feedback_signals_for_user,
     claim_agent_job_by_id,
     complete_agent_job,
     enqueue_personal_wiki_build_job,
@@ -141,6 +143,50 @@ class PostgresAgentJobRepository:
                     clipped_on=clipped_on,
                     description=description,
                     tags=tags,
+                    occurred_at=occurred_at,
+                    memo=memo,
+                    request_id=request_id,
+                )
+                stored = await get_agent_job(connection, job_id=saved.job_id)
+                if stored is None:
+                    raise RuntimeError(f"저장한 Wiki Job을 찾을 수 없습니다: {saved.job_id}")
+        return SubmittedSourceJob(
+            job=self._to_job_record(stored),
+            source_document_id=saved.source_document_id,
+            source_document_version_id=saved.source_document_version_id,
+        )
+
+    async def submit_feedback_signals(
+        self,
+        *,
+        user_id: str,
+        signals: list[dict[str, Any]],
+    ) -> int:
+        """행동 신호 Batch를 feedback 이벤트로 멱등 저장하고 신규 수를 반환한다."""
+        async with self._pool.connection() as connection:
+            return await save_feedback_signals_for_user(
+                connection, user_id=user_id, signals=signals
+            )
+
+    async def submit_content_mark(
+        self,
+        *,
+        user_id: str,
+        source_event_id: str,
+        content_id: str,
+        occurred_at: datetime | None,
+        memo: str | None,
+        request_id: str,
+    ) -> SubmittedSourceJob:
+        """위키마킹 원본과 Wiki Build Job을 저장하고 조회 가능한 결과를 반환한다."""
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await set_personal_wiki_scope(connection, user_id=user_id)
+                saved = await save_content_mark_and_enqueue(
+                    connection,
+                    user_id=user_id,
+                    source_event_id=source_event_id,
+                    content_id=content_id,
                     occurred_at=occurred_at,
                     memo=memo,
                     request_id=request_id,

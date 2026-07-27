@@ -7,6 +7,7 @@ wiki_document_relations를 읽어 Obsidian 스타일 Graph 응답으로 조립�
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Any
 
 from psycopg.rows import dict_row
@@ -15,6 +16,11 @@ from psycopg_pool import AsyncConnectionPool
 
 from shared.hashing import compute_content_hash
 from shared.wiki_models import InterestCandidate
+from infrastructure.persistence.api import (
+    delete_wiki_document_and_record_event,
+    load_recent_feedback_signals_for_user,
+    save_interest_profile_for_user,
+)
 from infrastructure.sources.connectors.api import LatestArticle
 
 
@@ -629,116 +635,41 @@ class PostgresWikiGraphRepository:
     ) -> Mapping[str, object]:
         """계산된 관심 후보를 새 Profile Version과 근거 Row로 저장한다."""
         async with self._pool.connection() as connection:
-            async with connection.transaction():
-                await self._set_user_scope(connection, user_id=user_id)
-                await connection.execute(
-                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                    (f"interest/{user_id}",),
-                )
-                version_cursor = await connection.execute(
-                    """
-                    SELECT COALESCE(MAX(version), 0) + 1 AS next_version
-                    FROM agent.user_interest_profiles
-                    WHERE user_id = %s
-                    """,
-                    (user_id,),
-                )
-                version_row = await version_cursor.fetchone()
-                profile_version = int(version_row["next_version"])
-                await connection.execute(
-                    """
-                    UPDATE agent.user_interest_profiles
-                    SET status = 'retired'
-                    WHERE user_id = %s AND status = 'active'
-                    """,
-                    (user_id,),
-                )
-                profile_cursor = await connection.execute(
-                    """
-                    INSERT INTO agent.user_interest_profiles (
-                        user_id,
-                        version,
-                        wiki_version_id,
-                        status
-                    ) VALUES (%s, %s, %s, 'building')
-                    RETURNING id, calculated_at
-                    """,
-                    (user_id, profile_version, wiki_version_id),
-                )
-                profile = await profile_cursor.fetchone()
-                items: list[dict[str, object]] = []
-                for candidate in candidates:
-                    interest_cursor = await connection.execute(
-                        """
-                        INSERT INTO agent.user_interests (
-                            profile_id,
-                            user_id,
-                            topic,
-                            category,
-                            score,
-                            confidence,
-                            attributes
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        RETURNING id
-                        """,
-                        (
-                            profile["id"],
-                            user_id,
-                            candidate.topic,
-                            candidate.category,
-                            candidate.score,
-                            candidate.confidence,
-                            Jsonb(candidate.evidence),
-                        ),
-                    )
-                    interest = await interest_cursor.fetchone()
-                    for document_id in candidate.document_ids:
-                        await connection.execute(
-                            """
-                            INSERT INTO agent.interest_evidence (
-                                interest_id,
-                                user_id,
-                                document_id,
-                                weight,
-                                evidence
-                            ) VALUES (%s, %s, %s, %s, %s)
-                            """,
-                            (
-                                interest["id"],
-                                user_id,
-                                document_id,
-                                candidate.evidence.get("weight", 1),
-                                Jsonb(candidate.evidence),
-                            ),
-                        )
-                    items.append(
-                        {
-                            "interest_id": str(interest["id"]),
-                            "topic": candidate.topic,
-                            "category": candidate.category,
-                            "score": candidate.score,
-                            "confidence": candidate.confidence,
-                            "document_ids": list(candidate.document_ids),
-                            "evidence": candidate.evidence,
-                        }
-                    )
-                await connection.execute(
-                    """
-                    UPDATE agent.user_interest_profiles
-                    SET status = 'active'
-                    WHERE id = %s
-                    """,
-                    (profile["id"],),
-                )
-        return {
-            "profile_id": str(profile["id"]),
-            "user_id": user_id,
-            "wiki_version_id": wiki_version_id,
-            "version": profile_version,
-            "status": "active",
-            "calculated_at": profile["calculated_at"],
-            "interests": items,
-        }
+            return await save_interest_profile_for_user(
+                connection,
+                user_id=user_id,
+                wiki_version_id=wiki_version_id,
+                candidates=candidates,
+            )
+
+    async def load_recent_feedback_signals(
+        self, user_id: str
+    ) -> list[dict[str, object]]:
+        """최근 사용자 행동 신호를 Topic 단위로 반환한다."""
+        async with self._pool.connection() as connection:
+            return await load_recent_feedback_signals_for_user(
+                connection, user_id=user_id
+            )
+
+    async def delete_wiki_document(
+        self,
+        user_id: str,
+        *,
+        document_id: str,
+        source_event_id: str,
+        occurred_at: datetime | None,
+        memo: str | None,
+    ) -> dict[str, object]:
+        """delete 이벤트를 기록하고 Wiki 문서를 soft-delete한다."""
+        async with self._pool.connection() as connection:
+            return await delete_wiki_document_and_record_event(
+                connection,
+                user_id=user_id,
+                document_id=document_id,
+                source_event_id=source_event_id,
+                occurred_at=occurred_at,
+                memo=memo,
+            )
 
     async def list_interests(self, user_id: str) -> Mapping[str, object] | None:
         """사용자의 활성 관심 Profile과 Topic·근거 문서 목록을 조회한다."""

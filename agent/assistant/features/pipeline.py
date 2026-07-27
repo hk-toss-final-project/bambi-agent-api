@@ -205,12 +205,17 @@ def _resolve_dates(
     user_id: str,
     keyword: str,
     now: datetime,
+    record_history: bool = True,
 ) -> None:
     """각 문서의 발행일을 폴백 체인으로 확정하고 first_seen을 기록한다 (제자리 수정).
 
     발행일 추출이 전부 실패하면 first_seen(최초 발견 시각)을 발행일 대용으로 쓴다.
     본문 HTML은 수집 단계에서 확보하지 않으므로 pubDate → URL 패턴 → first_seen
     순으로 동작한다(메타태그·본문 파싱 단계는 HTML이 있을 때만 작동한다).
+
+    record_history=False면 이력에 쓰지 않고 기존 기록만 읽는다. 리포트 생성이
+    사용자의 브리핑 이력을 오염시키지 않게 하기 위한 경로다. 이때도 발행일
+    확정에는 기존 first_seen을 그대로 활용한다(읽기는 유지).
     """
     for doc in docs:
         published, method = extract_published(
@@ -218,14 +223,19 @@ def _resolve_dates(
             html=str(doc.get("html") or ""),
             url=str(doc.get("url") or ""),
         )
-        first_seen = history.record_collected(
-            user_id,
-            keyword,
-            str(doc.get("url_key") or ""),
-            str(doc.get("title") or ""),
-            str(doc.get("url") or ""),
-            first_seen=now,
-        )
+        url_key = str(doc.get("url_key") or "")
+        if record_history:
+            first_seen = history.record_collected(
+                user_id,
+                keyword,
+                url_key,
+                str(doc.get("title") or ""),
+                str(doc.get("url") or ""),
+                first_seen=now,
+            )
+        else:
+            # 쓰지 않고 읽기만 한다. 기록이 없으면 이번 실행 시각을 쓴다.
+            first_seen = history.get_first_seen(user_id, keyword, url_key) or now
         doc["first_seen"] = first_seen
         if published is None:
             published, method = first_seen, "first_seen"
@@ -375,6 +385,7 @@ def run_daily(
     model: str = "gpt-4.1-mini",
     reference_now: datetime | None = None,
     search_query: str | None = None,
+    record_history: bool = True,
 ) -> dict[str, object]:
     """일간 파이프라인 전체를 실행하고 보고서 소재를 반환한다.
 
@@ -383,6 +394,10 @@ def run_daily(
         user_id: 사용자 식별자
         model: 통합 요약에 쓸 OpenAI 모델
         reference_now: "지금" 기준 시각(테스트용). 생략하면 실제 현재 시각.
+        record_history: 수집·보고 이력을 기록할지. 브리핑(True)은 기록하고,
+            리포트 생성(False)은 기록하지 않는다. 리포트가 사용자의 브리핑
+            이력을 오염시켜 같은 소식을 7일간 가리는 것을 막는다. False여도
+            기존 이력 읽기(중복 판정·발행일 확정)는 그대로 수행한다.
         search_query: 수집기(뉴스·YouTube·Reddit)에 실제로 던질 검색어. 생략하면
             keyword를 그대로 쓴다. 에이전트가 결과가 빈약할 때 검색어를 재구성해
             넘기더라도, 이력·중복·유사도는 여전히 keyword(토픽) 기준으로 판단해
@@ -426,7 +441,13 @@ def run_daily(
     log["collected"] = len(docs)
 
     # 2. 날짜 추출 (+ first_seen 기록)
-    _resolve_dates(docs, user_id=normalized_user, keyword=normalized, now=now)
+    _resolve_dates(
+        docs,
+        user_id=normalized_user,
+        keyword=normalized,
+        now=now,
+        record_history=record_history,
+    )
 
     # 3. 기초 필터 (스팸/짧은 글/URL 중복/수집 창 밖)
     docs = _basic_filter(docs, now=now, window_hours=window_hours, log=log)
@@ -482,7 +503,7 @@ def run_daily(
             log["clusters"] = len(clusters)
 
             # 수집 이력에 점수를 기록해 주간 트렌드 폴백에서 쓸 수 있게 한다.
-            for cluster in clusters:
+            for cluster in clusters if record_history else []:
                 for member in cluster["members"]:
                     history.record_collected(
                         normalized_user,
@@ -577,7 +598,10 @@ def run_daily(
                 }
             )
         # 11. 보고서 아이템 임베딩을 중복 방지 이력에 저장 (같은 url_key는 덮어씀)
-        dedup.record_report_items(normalized_user, normalized, items, now=now)
+        # record_history=False(리포트 생성 경로)면 기록하지 않는다 — 이 실행이
+        # 사용자의 브리핑에서 같은 소식을 7일간 가려버리는 것을 막는다.
+        if record_history:
+            dedup.record_report_items(normalized_user, normalized, items, now=now)
         # 반환 아이템에서 임베딩은 제거한다 (보고서 렌더링에 불필요).
         for item in items:
             item.pop("embedding", None)

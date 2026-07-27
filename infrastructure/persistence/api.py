@@ -68,9 +68,11 @@ from .features.jobs import (
     set_system_job_scope,
 )
 from .features.source_ingestion import (
+    GeneratedContentNotFoundError,
     PersistedSourceSubmission,
     db_002,
     register_url_and_enqueue,
+    save_content_mark_and_enqueue,
     save_web_clipping_and_enqueue,
 )
 from .features.generation_runtime import (
@@ -87,6 +89,17 @@ from .features.events import db_027
 from .features.api_keys import db_028
 from .features.usage import db_029
 from .features.audit import db_030
+from .features.interest_profiles import (
+    ConnectionInterestProfileRepository,
+    load_interest_documents_for_user,
+    load_recent_feedback_signals_for_user,
+    save_feedback_signals_for_user,
+    save_interest_profile_for_user,
+)
+from .features.wiki_deletion import (
+    WikiDocumentNotFoundError,
+    delete_wiki_document_and_record_event,
+)
 
 __all__ = [
     "db_001",

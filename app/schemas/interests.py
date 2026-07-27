@@ -37,6 +37,6 @@ class InterestProfileResponse(InterestSchema):
 
 
 class InterestRebuildRequest(InterestSchema):
-    """관심 Profile을 다시 계산하는 개발용 요청."""
+    """관심 Profile을 다시 계산하는 요청 (Service 수동 새로고침·개발 공용)."""
 
     limit: int = Field(default=20, ge=1, le=100, description="저장할 최대 관심 Topic 수")

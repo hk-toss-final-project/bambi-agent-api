@@ -348,3 +348,45 @@ def test_news_documents_reuse_global_body_when_available(monkeypatch) -> None:
     assert "저장된 전체 본문" in str(by_url["https://n.example/full"]["text"])
     assert "**" not in str(by_url["https://n.example/full"]["text"])
     assert "짧은 설명만 있음" in str(by_url["https://n.example/short"]["text"])
+
+
+def test_record_history_false_does_not_write_history(monkeypatch) -> None:
+    """record_history=False면 수집·보고 이력을 남기지 않는다 (이력 오염 차단).
+
+    리포트 생성이 비서를 호출할 때 쓰는 경로다. 이력을 남기면 그 사용자의 일간
+    브리핑에서 같은 소식이 최대 7일간 가려진다.
+    """
+    _seed_collect_history()
+    _patch_collect(monkeypatch, _make_docs)
+
+    before_collect = len(history.get_collected_entries("minji", _TOPIC))
+    before_reports = len(
+        dedup.load_recent_report_items(
+            "minji", _TOPIC, now=_NOW, lookback_days=365, exclude_today=False
+        )
+    )
+
+    result = pipeline.run_daily(_TOPIC, "minji", reference_now=_NOW, record_history=False)
+
+    assert result["items"]  # 선별은 정상 동작한다
+    # 이력은 한 건도 늘지 않는다.
+    assert len(history.get_collected_entries("minji", _TOPIC)) == before_collect
+    assert (
+        len(
+            dedup.load_recent_report_items(
+                "minji", _TOPIC, now=_NOW, lookback_days=365, exclude_today=False
+            )
+        )
+        == before_reports
+    )
+
+
+def test_record_history_true_still_writes_history(monkeypatch) -> None:
+    """기본값(True)은 기존대로 이력을 기록한다 (회귀 방지)."""
+    _seed_collect_history()
+    _patch_collect(monkeypatch, _make_docs)
+
+    before = len(history.get_collected_entries("minji", _TOPIC))
+    pipeline.run_daily(_TOPIC, "minji", reference_now=_NOW)
+
+    assert len(history.get_collected_entries("minji", _TOPIC)) > before

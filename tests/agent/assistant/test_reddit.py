@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 import pytest
 
 from agent.assistant.features import reddit
+from infrastructure.sources.connectors.features import reddit as reddit_provider
 
 # 최신성 필터(48시간) 검증에 쓰는 고정 기준 시각.
 _NOW = datetime(2026, 7, 14, 9, 0, tzinfo=UTC)
@@ -33,6 +34,8 @@ def _entry(title: str, published_dt: datetime | None = _NOW, **overrides):
 def _no_delay(monkeypatch):
     """재시도 대기를 0으로 만들고, 검색 캐시를 테스트마다 비운다."""
     monkeypatch.setattr(reddit.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(reddit_provider.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(reddit_provider, "_search_cache", {})
     monkeypatch.setattr(reddit, "_search_cache", {})
 
 
@@ -87,6 +90,7 @@ def test_search_posts_raises_on_rate_limit_status(monkeypatch) -> None:
         return FakeParsed(status=429)
 
     monkeypatch.setattr("feedparser.parse", fake_parse)
+    monkeypatch.setattr(reddit_provider, "_search_cache", {})
 
     with pytest.raises(RuntimeError):
         reddit.search_posts("키워드", limit=2)
@@ -100,7 +104,7 @@ def test_search_posts_retries_after_rate_limit_then_succeeds(monkeypatch) -> Non
 
     call_count = {"n": 0}
     sleep_calls: list[float] = []
-    monkeypatch.setattr(reddit.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+    monkeypatch.setattr(reddit_provider.time, "sleep", lambda seconds: sleep_calls.append(seconds))
 
     def fake_parse(url, request_headers=None):
         call_count["n"] += 1
@@ -113,6 +117,7 @@ def test_search_posts_retries_after_rate_limit_then_succeeds(monkeypatch) -> Non
         return parsed
 
     monkeypatch.setattr("feedparser.parse", fake_parse)
+    monkeypatch.setattr(reddit_provider, "_search_cache", {})
 
     posts = reddit.search_posts("키워드", limit=1, reference_now=_NOW)
 
@@ -131,6 +136,7 @@ def test_search_posts_raises_after_second_failure(monkeypatch) -> None:
         return FakeParsed(status=429)
 
     monkeypatch.setattr("feedparser.parse", fake_parse)
+    monkeypatch.setattr(reddit_provider, "_search_cache", {})
 
     with pytest.raises(RuntimeError):
         reddit.search_posts("다른 키워드", limit=1)
@@ -151,6 +157,7 @@ def test_search_posts_caches_repeated_keyword(monkeypatch) -> None:
         return parsed
 
     monkeypatch.setattr("feedparser.parse", fake_parse)
+    monkeypatch.setattr(reddit_provider, "_search_cache", {})
 
     first = reddit.search_posts("캐시 키워드", limit=1, reference_now=_NOW)
     second = reddit.search_posts("캐시 키워드", limit=1, reference_now=_NOW)
@@ -180,6 +187,7 @@ def test_search_posts_keeps_only_recent_by_default(monkeypatch) -> None:
         return parsed
 
     monkeypatch.setattr("feedparser.parse", fake_parse)
+    monkeypatch.setattr(reddit_provider, "_search_cache", {})
 
     posts = reddit.search_posts("키워드", limit=5, reference_now=_NOW)
 
@@ -208,6 +216,7 @@ def test_search_posts_parses_feed_entries(monkeypatch) -> None:
         return FakeParsed(status=200)
 
     monkeypatch.setattr("feedparser.parse", fake_parse)
+    monkeypatch.setattr(reddit_provider, "_search_cache", {})
 
     posts = reddit.search_posts("키워드", limit=1, reference_now=_NOW)
 
