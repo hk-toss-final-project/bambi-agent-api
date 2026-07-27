@@ -128,9 +128,13 @@ Google News RSS는 **양쪽에서 중복 수집**된다. 그리고 경로 B(중�
 **Q. 당장 뭐부터?**
 ① Step 0(이력 오염 차단, 반나절), ② 관심사 루프 연결의 소유권 협의(Service팀 — 스케줄·정책은 Service 소유가 CLAUDE.md 원칙), ③ agent-contract.md의 L citation 갱신(Service Gateway 구현 착수 전 필수).
 
+**Q. 관심사 프로필 없이 report_builder가 wiki를 직접 읽으면 되지 않나?**
+근거 검색은 이미 wiki를 직접 읽는다(prag_003 — 프로필 미사용). 프로필의 역할은 "찾기"가 아니라 "무엇을 위해 움직일지 고르기"(수집 키워드·카드 매칭·스케줄)이며, 그 자리에는 ① Service에 내보낼 수 있는 요약 형태(Spring은 agent-db를 직접 못 읽음), ② wiki가 담지 못하는 신호(좋아요·차단·최신성)의 반영 지점, ③ 안정된 키워드 셋과 감사 가능성이 필요하다. 프로필은 wiki와 경쟁하는 별도 소스가 아니라 **wiki를 읽어 계산한 materialized view**(INT-001의 입력이 wiki 문서)이고, 진짜 문제는 refresh가 수동이라는 것 — "wiki build 완료 → 자동 재계산 훅"이 해법이다. 전체 데이터 흐름·편집 정책·작업 분해는 [wiki-interest-subscription-design.md](wiki-interest-subscription-design.md) 참조.
+
 ## 참고 문서
 
 - [langgraph-agents-review-2026-07-26.md](langgraph-agents-review-2026-07-26.md) — 두 그래프 심층 리뷰 (48개 개선점 코드 검증, P0/P1/P2)
 - [assistant-split-proposal.md](assistant-split-proposal.md) — assistant 분해 실행안 (파일별 이동 매핑, Step 0~4, 결정 필요 사항 5가지)
+- [wiki-interest-subscription-design.md](wiki-interest-subscription-design.md) — 지식 파이프라인 설계 (입력원 원칙 → Wiki → 관심사 프로필 → 구독, 편집 의미론, 작업 백로그 Track A~D)
 - [keyword-assistant.md](keyword-assistant.md) — 키워드 비서 명세와 피벗 경위
 - `/dev/graphs` — 그래프 3개 실시간 시각화 (가드 테스트로 코드와 정합 보장)
