@@ -126,7 +126,65 @@ graph TB
 | D3 | "내 리포트 저장" UX | 명시적 저장 버튼 / 저장 제안 프롬프트 | REPORT-021 원칙 내에서의 형태 |
 | D4 | 편집·행동 이벤트의 Service↔Agent 계약 | agent-contract.md 확장 범위 | 소라(Gateway)·영현(북마크 도메인) 협의 |
 
-## 7. 기존 문서와의 관계
+## 7. Service 연동 API 구현 계획 (Swagger 노출 기준)
+
+> 현재 라우터 전수 조사 결과(2026-07-27, `app/routers/service/routes.py` · `service_worker/routes.py`)를
+> "이미 있음 / 보강 / 신설"로 구분한 실행 계획. Phase 순서 = 의존성·리스크 낮은 순.
+
+### 현재 이미 Swagger에 있는 것 (Spring은 호출만 하면 됨)
+
+| operation_id | 경로 | 역할 |
+|---|---|---|
+| svc_001 | `PUT /users/{id}/context` | 사용자 컨텍스트 반영 — **blocked_interest_ids(관심사 차단) 포함** → 구독 정책 전달 경로 존재 |
+| svc_002 / svc_003 | `POST /users/{id}/wiki-sources/clippings` · `/urls` | 클리핑·URL → Personal Wiki Build Job 등록 (202) |
+| pwiki_003 계열 5종 | `GET .../personal-wiki/*` | Wiki Graph·상위 Node·문서 목록·상세·Build 상세 조회 |
+| int_001_get | `GET /users/{id}/interests` | 활성 관심 Profile 조회 |
+| report_018_list/detail · svc_008 · svc_013/014 | 생성물 조회·생성 요청·Job 상태/결과 | 리포트 흐름 |
+| sw_004 / sw_009 (+batch) | service-worker: Publish Snapshot Claim/ACK | 발행물 소비 |
+
+### Phase 1 — Agent 변경 없이 연결 (Spring·Frontend 작업)
+
+MockAgentClient → 실호출 전환: svc_002/003(저장 → Wiki), pwiki_003 계열("내 위키" 화면), int_001_get(관심사 표시), svc_001(차단 목록 반영). Spring Contract Test(AgentContextContractTest 패턴)에 계약 추가.
+
+### Phase 2 — 프로필 자동화 (Track A, agent-api 소규모)
+
+| 항목 | 형태 | 내용 |
+|---|---|---|
+| A1 재계산 훅 | 내부 (라우트 아님) | wiki build Job 완료 시 INT-011 실행. 편집(Phase 5) 완료 시에도 동일 훅 재사용 |
+| A2 수동 재계산 승격 | `POST /users/{id}/interest-profiles/rebuild` (service 라우터, `int_011_rebuild`) | dev 전용 라우트를 운영 승격 — "관심사 새로고침" UX·복구용. 멱등 |
+| (선택) 프로필 갱신 알림 | event_outbox `INTEREST_PROFILE_READY` + sw claim 확장 | Service가 폴링 대신 이벤트로 동기화. CONTENT_READY 패턴 재사용 |
+
+### Phase 3 — 저장 편입 완성 (Track C)
+
+| 항목 | 형태 | 내용 |
+|---|---|---|
+| svc_004 처리 구현 | 기존 라우트 보강 (현재 **접수 후 501**) | `content-marks`(내 생성 콘텐츠 위키마킹) → `wiki_source_events(content_mark)` → build Job. REPORT-021 원칙: Service가 사용자 액션 시에만 호출 |
+| content-saves 신설 | `POST /users/{id}/wiki-sources/content-saves` | 피드에서 북마크한 타 사용자 콘텐츠 편입. 본문은 Service가 전달(클리핑과 동형) → `content_save` 이벤트 → build Job |
+
+### Phase 4 — 행동 신호 (Track B, 결정 D2 선행)
+
+| 항목 | 형태 | 내용 |
+|---|---|---|
+| 관심 신호 수신 신설 | `POST /users/{id}/interest-signals` (batch 허용) | `[{signal_type: like/unlike/view, content_id, occurred_at, ...}]` → 이벤트 적재(`interest_evidence.source_event_id` 경로). **반영은 다음 재계산 시**(INT-005가 행동 항 가산) — 프로필=파생 뷰 원칙 유지 |
+
+### Phase 5 — 위키 편집 (Track D, 결정 D1 선행)
+
+기존 `wiki-sources/*` URL 체계를 그대로 확장한다 (모두 202 + Job, 원칙 4 "편집도 이벤트로"):
+
+| 항목 | 형태 | 내용 |
+|---|---|---|
+| 편집 | `POST /users/{id}/wiki-sources/edits` | `edit` 이벤트 (document_key + 변경 내용) → build 파이프라인 반영 |
+| 메모 | `POST /users/{id}/wiki-sources/memos` | `memo` 이벤트 |
+| 삭제 | `POST /users/{id}/wiki-sources/deletions` | `delete` 이벤트 (+ tombstone 옵션 — D1 결정 반영), **WBA-015 구현** |
+
+### 공통 체크리스트
+
+- 계약 문서 동기화: agent-contract.md·service-integration-guide.md에 신설·보강 엔드포인트 반영 (L citation 갱신과 함께)
+- Spring Contract Test 추가 (기존 AgentContextContractTest 패턴)
+- 편집 반영이 그래프 노드를 추가하면 /dev/graphs 레지스트리·가드 테스트 갱신 (AGENTS.md 규칙 10)
+- INT-005·편집 반영은 LLM 미사용(결정론)이면 tests만, LLM 사용 시 bench 신설 (규칙 8)
+
+## 8. 기존 문서와의 관계
 
 - [agent-structure-and-collection-loop.md](agent-structure-and-collection-loop.md) — 구조 진단(입구 문서). 이 문서는 그 §6 "결론"의 지식·관심사 축을 구체화한다.
 - [assistant-split-proposal.md](assistant-split-proposal.md) — 수집 정리. 본 문서의 프로필(구독 키워드)이 그 문서의 수집 워커 키워드 소스가 된다(끊긴 링크 연결 시).
