@@ -99,6 +99,27 @@ report_012  개인화 → report_008/009 생성 → report_011 인용 → report
 수집 실패는 생성을 막지 않는다. 실시간 자료를 못 얻으면 경고 로그를 남기고 개인 Wiki
 근거만으로 생성한다.
 
+### 소비 맥락 플래그 (2026-07-27, Step 0)
+
+리포트 생성은 비서에서 **근거(items)만** 가져가고 브리핑 Markdown은 버린다. 그래서
+`assist_daily_agent`를 호출할 때 두 플래그를 끈다:
+
+```python
+assist_daily_agent(topic, user_id=..., record_history=False, include_report=False)
+```
+
+| 플래그 | 기본(브리핑) | 리포트 | 끄는 이유 |
+|---|---|---|---|
+| `record_history` | True | **False** | 리포트 생성이 이력을 남기면 그 사용자의 일간 브리핑에서 같은 소식이 최대 7일간 가려진다(이력 오염) |
+| `include_report` | True | **False** | 쓰지 않고 버릴 브리핑 Markdown 생성에 LLM 비용이 든다 |
+
+`record_history=False`여도 **기존 이력 읽기는 그대로** 한다 — 중복 판정과 발행일 확정
+(`first_seen`)에 필요하기 때문이다. 쓰기만 건너뛴다.
+
+> 이 조치는 [assistant-split-proposal.md](assistant-split-proposal.md)의 **Step 0**이다.
+> 구조 변경 없이 이력 오염을 즉시 차단하는 즉효 패치이며, 근본 해법(수집·선별 책임을
+> 워커·공용 라이브러리로 이관)은 같은 문서의 Step 1~4에서 다룬다.
+
 ## 이력 저장소 (2026-07-22 DB 이전)
 
 비서는 개인화를 위해 "이 사용자에게 무엇을 이미 보여줬는지"를 기억한다. 저장 위치는

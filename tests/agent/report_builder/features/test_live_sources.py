@@ -27,7 +27,7 @@ def test_collect_live_context_converts_items(monkeypatch) -> None:
     monkeypatch.setattr(
         live_sources,
         "assist_daily_agent",
-        lambda topic, user_id, model="gpt-4.1-mini": {
+        lambda topic, user_id, model="gpt-4.1-mini", **kwargs: {
             "mode": "daily",
             "attempts": ["코스피"],
             "items": [
@@ -58,6 +58,26 @@ def test_collect_live_context_converts_items(monkeypatch) -> None:
     assert document.namespace_key == "live-source"
 
 
+def test_collect_live_context_does_not_pollute_history_or_write_report(monkeypatch) -> None:
+    """리포트 근거 수집은 이력을 기록하지 않고 브리핑도 생성하지 않는다.
+
+    이 호출이 이력을 남기면 사용자의 일간 브리핑에서 같은 소식이 최대 7일간
+    가려지고(이력 오염), 버릴 브리핑 Markdown을 만들면 LLM 비용만 든다.
+    """
+    captured: dict = {}
+
+    def fake_agent(topic, user_id, model="gpt-4.1-mini", **kwargs):
+        captured.update(kwargs)
+        return {"items": []}
+
+    monkeypatch.setattr(live_sources, "assist_daily_agent", fake_agent)
+
+    live_sources.collect_live_context("코스피", "minji")
+
+    assert captured["record_history"] is False
+    assert captured["include_report"] is False
+
+
 def test_collect_live_context_survives_failure(monkeypatch) -> None:
     """실시간 수집이 실패해도 예외를 올리지 않고 빈 목록을 준다.
 
@@ -77,7 +97,7 @@ def test_collect_live_context_skips_empty_items(monkeypatch) -> None:
     monkeypatch.setattr(
         live_sources,
         "assist_daily_agent",
-        lambda topic, user_id, model="gpt-4.1-mini": {
+        lambda topic, user_id, model="gpt-4.1-mini", **kwargs: {
             "items": [{"title": "", "summary": "", "sources": []}, "문자열아이템"]
         },
     )
@@ -93,7 +113,7 @@ def test_collect_live_context_skips_items_without_source_url(monkeypatch) -> Non
     monkeypatch.setattr(
         live_sources,
         "assist_daily_agent",
-        lambda topic, user_id, model="gpt-4.1-mini": {
+        lambda topic, user_id, model="gpt-4.1-mini", **kwargs: {
             "items": [
                 {"title": "출처 없는 개념 정리", "summary": "요약", "sources": []},
                 {
