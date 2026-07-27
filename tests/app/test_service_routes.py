@@ -86,15 +86,36 @@ def test_generation_job_result_flow(
     assert completed.json()["result"] == {"content_id": "content-1"}
 
 
-def test_content_mark_returns_not_implemented(client: TestClient) -> None:
-    """위키마킹 접수가 Handler 구현 전까지 명시적 501을 반환하는지 검증한다."""
-    response = client.post(
-        "/internal/v1/users/user-1/wiki-sources/content-marks",
-        json={"source_event_id": "mark-1", "content_id": "content-1"},
+def test_content_mark_enqueues_wiki_build_job(
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
+) -> None:
+    """위키마킹이 생성 콘텐츠를 Wiki Build Job으로 멱등 접수하는지 검증한다."""
+    agent_jobs_fake.register_generated_content("user-1", "content-1")
+    payload = {"source_event_id": "mark-1", "content_id": "content-1"}
+
+    first = client.post(
+        "/internal/v1/users/user-1/wiki-sources/content-marks", json=payload
+    )
+    duplicate = client.post(
+        "/internal/v1/users/user-1/wiki-sources/content-marks", json=payload
     )
 
-    assert response.status_code == 501
-    assert response.json()["code"] == "NOT_IMPLEMENTED"
+    assert first.status_code == 202
+    assert first.json()["feature_id"] == "SVC-004"
+    assert first.json()["source_document_version_id"] is not None
+    assert duplicate.status_code == 202
+    assert first.json()["job_id"] == duplicate.json()["job_id"]
+
+
+def test_content_mark_rejects_unknown_generated_content(client: TestClient) -> None:
+    """존재하지 않는 생성 콘텐츠 위키마킹이 404를 반환하는지 검증한다."""
+    response = client.post(
+        "/internal/v1/users/user-1/wiki-sources/content-marks",
+        json={"source_event_id": "mark-unknown", "content_id": "missing-content"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "GENERATED_CONTENT_NOT_FOUND"
 
 
 def test_generation_requires_user_context(client: TestClient) -> None:

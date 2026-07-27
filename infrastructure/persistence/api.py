@@ -68,9 +68,11 @@ from .features.jobs import (
     set_system_job_scope,
 )
 from .features.source_ingestion import (
+    GeneratedContentNotFoundError,
     PersistedSourceSubmission,
     db_002,
     register_url_and_enqueue,
+    save_content_mark_and_enqueue,
     save_web_clipping_and_enqueue,
 )
 from .features.generation_runtime import (

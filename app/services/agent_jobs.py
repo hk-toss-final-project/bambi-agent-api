@@ -123,6 +123,19 @@ class AgentJobRepository(Protocol):
         """URL 원본 Head와 URL 수집 Job을 저장한다."""
         ...
 
+    async def submit_content_mark(
+        self,
+        *,
+        user_id: str,
+        source_event_id: str,
+        content_id: str,
+        occurred_at: datetime | None,
+        memo: str | None,
+        request_id: str,
+    ) -> SubmittedSourceJob:
+        """위키마킹한 생성 콘텐츠를 원본 Version으로 물질화하고 Build Job을 저장한다."""
+        ...
+
     async def submit_generation(
         self,
         *,

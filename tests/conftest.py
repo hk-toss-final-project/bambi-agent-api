@@ -34,6 +34,7 @@ from app.services.agent_jobs import (
 from app.services.mvp import AgentApiMvpService
 from app.services.publish_snapshots import PublishSnapshotService
 from infrastructure.persistence.api import (
+    GeneratedContentNotFoundError,
     StaleContextVersionError,
     UserContextRequiredError,
 )
@@ -49,10 +50,15 @@ class InMemoryAgentJobRepository:
     """PostgreSQL Agent Job 저장소의 계약을 흉내 내는 테스트 대역."""
 
     def __init__(self) -> None:
-        """컨텍스트, Job과 멱등 키 저장소를 초기화한다."""
+        """컨텍스트, Job, 멱등 키와 생성 콘텐츠 저장소를 초기화한다."""
         self._contexts: dict[str, StoredUserContextRecord] = {}
         self._jobs: dict[str, AgentJobRecord] = {}
         self._idempotency: dict[tuple[str, str, str], str] = {}
+        self._generated_contents: set[tuple[str, str]] = set()
+
+    def register_generated_content(self, user_id: str, content_id: str) -> None:
+        """위키마킹 대상이 될 생성 콘텐츠를 테스트용으로 등록한다."""
+        self._generated_contents.add((user_id, content_id))
 
     def _submit_job(
         self,
@@ -165,6 +171,32 @@ class InMemoryAgentJobRepository:
             job=record,
             source_document_id=f"source-{record.job_id[:8]}",
             source_document_version_id=None,
+        )
+
+    async def submit_content_mark(
+        self,
+        *,
+        user_id: str,
+        source_event_id: str,
+        content_id: str,
+        occurred_at: datetime | None,
+        memo: str | None,
+        request_id: str,
+    ) -> SubmittedSourceJob:
+        """등록된 생성 콘텐츠만 멱등 접수하고 Wiki Build Job을 반환한다."""
+        if (user_id, content_id) not in self._generated_contents:
+            raise GeneratedContentNotFoundError(content_id)
+        record, _created = self._submit_job(
+            feature_id="SVC-004",
+            job_type="personal_wiki_build",
+            user_id=user_id,
+            idempotency_key=source_event_id,
+            request_id=request_id,
+        )
+        return SubmittedSourceJob(
+            job=record,
+            source_document_id=f"source-{record.job_id[:8]}",
+            source_document_version_id=f"version-{record.job_id[:8]}",
         )
 
     async def submit_generation(

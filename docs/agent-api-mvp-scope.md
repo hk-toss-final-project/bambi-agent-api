@@ -26,7 +26,7 @@
 - [x] `SVC-001` 사용자 컨텍스트 전달 — `user_context_snapshots` 저장, `STALE_CONTEXT_VERSION` 검증
 - [x] `SVC-002` 웹 클리핑 처리 요청 — 원본·Version·Job 한 Transaction Commit 후 202
 - [x] `SVC-003` URL 처리 요청 — URL Head 저장 + `personal_wiki_url` 수집 Job 등록
-- [ ] `SVC-004` 위키마킹 처리 요청 — ❌ `personal_wiki_content_mark` Handler 미구현. 인메모리 유령 접수를 제거하고 접수 API가 명시적 `501`을 반환하도록 정리(2026-07-20 리팩토링)
+- [x] `SVC-004` 위키마킹 처리 요청 — 생성 후보 본문을 `content_mark` 원본 Version으로 물질화 후 기존 `personal_wiki_build` Job으로 처리 (별도 Handler 불필요, 2026-07-27 구현. 대상 콘텐츠 없으면 404)
 - [x] `SVC-008` 콘텐츠 생성 요청 — `generation_requests` + `report_generation` Job 멱등 등록, `scheduled_at` 예약 실행 지원
 - [x] `SVC-013` Agent Job 상태 조회
 - [x] `SVC-014` Agent 결과 조회 — 미완료 시 `JOB_RESULT_NOT_READY`

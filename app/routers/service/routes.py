@@ -38,6 +38,7 @@ from app.routers.service.api import (
     svc_001,
     svc_002,
     svc_003,
+    svc_004,
     svc_008,
     svc_013,
     svc_014,
@@ -133,8 +134,9 @@ async def request_content_mark(
     request: Request,
     service: AgentApiMvpService = Depends(get_mvp_service),
 ) -> AcceptedJobResponse:
-    """[SVC-004] 위키마킹 접수. 처리 Handler 구현 전까지 501을 반환한다."""
-    return await service.submit_content_mark(
+    """[SVC-004] 사용자가 선택한 생성 콘텐츠를 Wiki Build Job으로 등록한다."""
+    return await svc_004(
+        service,
         user_id=user_id,
         payload=payload,
         request_id=_request_id(request),

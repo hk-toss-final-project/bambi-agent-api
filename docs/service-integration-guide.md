@@ -125,12 +125,14 @@ flowchart LR
 | `POST /users/{user_id}/interest-profiles/rebuild` | 관심 키워드 수동 재계산 (Wiki Build 완료 시 자동 재계산되므로 새로고침·복구용) |
 | `GET /users/{user_id}/generated-contents` (+`/{candidate_id}`) | 생성 콘텐츠 목록·상세(본문·Citation) |
 
-### 3.7 연동 보류 항목
+### 3.7 위키마킹 (2026-07-27 구현 완료)
 
-- **위키마킹** (`POST .../wiki-sources/content-marks`): 처리 Handler가
-  미구현이라 현재 `501 NOT_IMPLEMENTED`를 반환합니다(2026-07-20부터,
-  이전의 "접수만 되는 유령 Job" 동작을 정리). Handler 구현 전까지 연동을
-  보류하세요.
+- **위키마킹** (`POST .../wiki-sources/content-marks`): 사용자가 선택한 생성
+  콘텐츠(`content_id` = 후보 ID 또는 논리 content_id)를 `content_mark` 원본
+  Version으로 물질화하고 기존 `personal_wiki_build` Job으로 처리합니다(202).
+  대상 콘텐츠가 없으면 `404 GENERATED_CONTENT_NOT_FOUND`. `source_event_id`
+  기준 멱등 접수입니다. **사용자가 명시적으로 저장을 선택했을 때만 호출**
+  하세요 — 자동 호출은 REPORT-021(자동 Wiki 편입 금지) 위반입니다.
 
 ## 4. service-worker가 구현할 것 — 발행 폴링 루프
 

@@ -4,6 +4,7 @@ from typing import Protocol
 
 from app.schemas.mvp import (
     AcceptedJobResponse,
+    ContentMarkRequest,
     UrlWikiSourceRequest,
     WebClippingRequest,
 )
@@ -23,6 +24,12 @@ class WikiSourceSubmissionService(Protocol):
         self, *, user_id: str, payload: UrlWikiSourceRequest, request_id: str
     ) -> AcceptedJobResponse:
         """URL 원천을 Wiki 처리 작업으로 접수한다."""
+        ...
+
+    async def submit_content_mark(
+        self, *, user_id: str, payload: ContentMarkRequest, request_id: str
+    ) -> AcceptedJobResponse:
+        """위키마킹한 생성 콘텐츠를 Wiki 처리 작업으로 접수한다."""
         ...
 
 
@@ -61,12 +68,20 @@ async def svc_003(
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
-async def svc_004(request: FeatureRequest) -> FeatureResult:
+async def svc_004(
+    service: WikiSourceSubmissionService,
+    *,
+    user_id: str,
+    payload: ContentMarkRequest,
+    request_id: str,
+) -> AcceptedJobResponse:
     """[SVC-004] 위키마킹 처리 요청.
 
     사용자가 선택한 콘텐츠의 Wiki 편입을 요청한다.
     """
-    raise NotImplementedError("[SVC-004] 기능 구현이 필요합니다.")
+    return await service.submit_content_mark(
+        user_id=user_id, payload=payload, request_id=request_id
+    )
 
 
 async def svc_005(request: FeatureRequest) -> FeatureResult:
