@@ -20,7 +20,17 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
-from agent.assistant.features import clustering, config, dedup, feeds, history, reddit, scoring, youtube
+from agent.assistant.features import (
+    clustering,
+    config,
+    content_store,
+    dedup,
+    feeds,
+    history,
+    reddit,
+    scoring,
+    youtube,
+)
 from agent.assistant.features.dates import extract_published
 from agent.assistant.features.embeddings import embed_texts
 from agent.assistant.features.summarize import complete
@@ -59,21 +69,33 @@ def _news_documents(keyword: str, now: datetime) -> list[dict[str, object]]:
     """공용 뉴스 Provider(Naver·GDELT·Google News RSS)에서 후보 문서를 수집한다.
 
     Global 수집과 같은 소스 풀을 쓰며, 날짜 추출 전 원시 상태로 반환한다.
+    Global 저장소에 이미 수집된 본문이 있으면 짧은 Provider 설명 대신 본문을
+    텍스트로 써서, 추가 네트워크 호출 없이 유사도 필터·요약 품질을 높인다.
     """
     entries = feeds.fetch_provider_entries(keyword)
     unique = feeds.deduplicate(entries)[:_NEWS_POOL]
+    bodies = content_store.fetch_global_article_texts(
+        [str(entry.get("link") or "") for entry in unique]
+    )
+    if bodies:
+        logger.info("Global 저장 본문 재사용 %d건 (keyword=%s)", len(bodies), keyword)
     docs: list[dict[str, object]] = []
     for entry in unique:
         title = str(entry.get("title") or "")
         url = str(entry.get("link") or "")
-        snippet = feeds._clean_text(entry, None, 500)
+        body = bodies.get(url)
+        if body:
+            text = f"{title}\n{feeds.clean_article_body(body)}"
+        else:
+            snippet = feeds._clean_text(entry, None, 500)
+            text = f"{title}\n{snippet}".strip()
         docs.append(
             {
                 "source_type": "news",
                 "title": title,
                 "url": url,
                 "url_key": feeds.canonical_url(url),
-                "text": f"{title}\n{snippet}".strip(),
+                "text": text,
                 "published_ts": entry.get("published_ts", 0),
                 "published_raw": entry.get("published", ""),
                 # url은 Google News 리다이렉트 주소라 도메인이 전부 news.google.com이다.
