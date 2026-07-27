@@ -1,0 +1,32 @@
+# 이미지에 들어갈 필요 없는 것 — 빌드 컨텍스트에서 제외한다.
+# (없으면 .venv·.git 까지 통째로 전송돼 이미지·빌드 시간이 크게 늘어난다)
+
+.git
+.github
+.venv
+venv
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# 비밀정보 — 절대 이미지에 굽지 않는다 (AGENTS.md 규칙 6)
+.env
+.env.*
+!.env.example
+
+# 개발·문서 자산
+docs/
+bench/
+tests/
+logs/
+*.md
+!README.md
+
+# 로컬 전용
+compose.yaml
+Dockerfile
+.dockerignore
