@@ -143,6 +143,16 @@ flowchart LR
   기준 멱등 접수입니다. **사용자가 명시적으로 저장을 선택했을 때만 호출**
   하세요 — 자동 호출은 REPORT-021(자동 Wiki 편입 금지) 위반입니다.
 
+### 3.8 개인 Wiki 문서 삭제 (2026-07-27 구현)
+
+- **문서 삭제** (`POST .../wiki-sources/deletions`): `document_id`의 Wiki 문서를
+  soft-delete하고 Chunk를 검색에서 즉시 제외합니다(동기 200, `source_event_id`
+  멱등 — 이미 삭제된 문서 재요청은 `already_deleted=true`). 없는 문서는
+  `404 WIKI_DOCUMENT_NOT_FOUND`. **삭제 정책 판단(권한·확인 UX)은 Service
+  소유**이며 Agent는 실행만 합니다. 같은 개념이 새 클리핑으로 재등장하면 새
+  문서로 되살아납니다(D1 잠정: 기본 부활 — 억제(tombstone) 옵션은 팀 결정 후).
+  관심사 반영이 급하면 `POST .../interest-profiles/rebuild`를 이어서 호출하세요.
+
 ## 4. service-worker가 구현할 것 — 발행 폴링 루프
 
 생성 완료 콘텐츠를 service-db로 옮기는 유일한 경로입니다. **10~30초 주기의

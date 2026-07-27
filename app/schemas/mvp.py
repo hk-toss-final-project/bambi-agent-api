@@ -194,6 +194,30 @@ class FeedbackSignalsResponse(ImmutableSchema):
     request_id: str = Field(description="요청 추적 ID")
 
 
+class WikiSourceDeletionRequest(WikiSourceRequestBase):
+    """개인 Wiki 문서 삭제를 요청하는 모델."""
+
+    document_id: str = Field(
+        min_length=1, max_length=128, description="삭제할 Wiki 문서 ID"
+    )
+
+
+class WikiDocumentDeletionResponse(ImmutableSchema):
+    """Wiki 문서 삭제 반영 결과."""
+
+    user_id: str = Field(description="문서를 삭제한 사용자 ID")
+    document_id: str = Field(description="삭제된 Wiki 문서 ID")
+    document_kind: str = Field(description="삭제된 문서 종류 (entity·concept 등)")
+    document_key: str = Field(description="삭제된 문서 키")
+    already_deleted: bool = Field(
+        description="이미 삭제된 문서에 대한 멱등 재요청이었는지"
+    )
+    unsearchable_chunk_count: int = Field(
+        ge=0, description="검색에서 제외 처리된 Chunk 수"
+    )
+    request_id: str = Field(description="요청 추적 ID")
+
+
 class GenerationRequest(ImmutableSchema):
     """리포트 생성기 개인화 콘텐츠 생성을 요청하는 모델."""
 

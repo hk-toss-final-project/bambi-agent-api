@@ -28,6 +28,8 @@ from app.schemas.mvp import (
     UserContextResponse,
     UserContextUpsertRequest,
     WebClippingRequest,
+    WikiDocumentDeletionResponse,
+    WikiSourceDeletionRequest,
 )
 from app.schemas.wiki import (
     WikiBuildDetailResponse,
@@ -143,6 +145,29 @@ async def request_content_mark(
         user_id=user_id,
         payload=payload,
         request_id=_request_id(request),
+    )
+
+
+@router.post(
+    "/users/{user_id}/wiki-sources/deletions",
+    response_model=WikiDocumentDeletionResponse,
+    operation_id="wba_015_delete",
+    summary="개인 Wiki 문서 삭제",
+)
+async def delete_wiki_document(
+    user_id: UserId,
+    payload: WikiSourceDeletionRequest,
+    request: Request,
+    service: WikiDocumentService = Depends(get_wiki_document_service),
+) -> WikiDocumentDeletionResponse:
+    """[WBA-015] delete 이벤트를 기록하고 문서를 soft-delete한다 (동기, 멱등).
+
+    Chunk는 즉시 검색에서 제외된다. 같은 개념이 새 클리핑으로 재등장하면
+    새 문서로 되살아난다(D1 잠정: 기본 부활 — tombstone 옵션은 팀 결정 후).
+    관심사 반영이 급하면 재계산 API를 이어서 호출한다.
+    """
+    return await service.delete_document(
+        user_id, payload, request_id=_request_id(request)
     )
 
 

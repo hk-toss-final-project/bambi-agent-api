@@ -7,6 +7,7 @@ wiki_document_relations를 읽어 Obsidian 스타일 Graph 응답으로 조립�
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Any
 
 from psycopg.rows import dict_row
@@ -16,6 +17,7 @@ from psycopg_pool import AsyncConnectionPool
 from shared.hashing import compute_content_hash
 from shared.wiki_models import InterestCandidate
 from infrastructure.persistence.api import (
+    delete_wiki_document_and_record_event,
     load_interest_documents_for_user,
     load_recent_feedback_signals_for_user,
     save_interest_profile_for_user,
@@ -534,6 +536,26 @@ class PostgresWikiGraphRepository:
         async with self._pool.connection() as connection:
             return await load_recent_feedback_signals_for_user(
                 connection, user_id=user_id
+            )
+
+    async def delete_wiki_document(
+        self,
+        user_id: str,
+        *,
+        document_id: str,
+        source_event_id: str,
+        occurred_at: datetime | None,
+        memo: str | None,
+    ) -> dict[str, object]:
+        """delete 이벤트를 기록하고 Wiki 문서를 soft-delete한다."""
+        async with self._pool.connection() as connection:
+            return await delete_wiki_document_and_record_event(
+                connection,
+                user_id=user_id,
+                document_id=document_id,
+                source_event_id=source_event_id,
+                occurred_at=occurred_at,
+                memo=memo,
             )
 
     async def list_interests(self, user_id: str) -> Mapping[str, object] | None:

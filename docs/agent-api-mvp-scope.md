@@ -99,6 +99,7 @@
 - [x] `SW-009` 발행 완료 ACK — 단건 + 부분 성공 Batch ACK
 - [x] `WBA-001` Incremental Wiki Build
 - [x] `WBA-003` Wiki 문서 정규화 — Build 파이프라인에 포함
+- [x] `WBA-015` Wiki 삭제 반영 — delete 이벤트 기록 + 문서 soft-delete + Chunk 검색 제외 (동기·멱등, 2026-07-27 구현. 실행 경로는 삭제 API→Repository이며 wba_015는 커넥션 보유 호출자용 facade. D1 잠정: 재등장 시 기본 부활, tombstone 없음)
 - [x] `JOB-001` Agent Job 생성 — 원본 저장과 같은 Transaction
 - [x] `JOB-002` Agent Job 조회
 - [x] `JOB-006` Agent Job 진행률 관리 — ⚠️ progress 값만 갱신(0→5→100), 단계별(정규화·Chunking·Embedding) 기록 없음
@@ -238,6 +239,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 |---|---|---|
 | WBA-001 | Incremental Wiki Build | 새로 저장된 사용자 원본 Version만 증분 처리한다. |
 | WBA-003 | Wiki 문서 정규화 | 저장된 Markdown과 Metadata를 Chunking 가능한 공통 구조로 정리한다. |
+| WBA-015 | Wiki 삭제 반영 | 삭제된 사용자 원천과 파생 데이터를 제거한다. |
 | JOB-001 | Agent Job 생성 | 클리핑 저장 Transaction에서 Personal Wiki Build Job을 함께 생성한다. |
 | JOB-002 | Agent Job 조회 | API와 Worker가 클리핑 Job 상태와 진행률을 조회한다. |
 | JOB-006 | Agent Job 진행률 관리 | 정규화, Chunking, Embedding, 관심사 갱신 단계를 기록한다. |

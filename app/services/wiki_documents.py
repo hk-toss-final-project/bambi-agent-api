@@ -1,4 +1,4 @@
-"""개인 Wiki 문서 목록·상세·Build 조회 애플리케이션 서비스.
+"""개인 Wiki 문서 목록·상세·Build 조회와 삭제 반영 애플리케이션 서비스.
 
 PostgreSQL Repository 결과를 API Schema로 검증하고 사용자에게 존재하지 않는
 문서를 안전한 404 오류로 변환한다.
@@ -9,12 +9,17 @@ from typing import Mapping, Protocol
 from fastapi import status
 
 from app.exceptions import AgentApiError, ErrorDetail
+from app.schemas.mvp import (
+    WikiDocumentDeletionResponse,
+    WikiSourceDeletionRequest,
+)
 from app.schemas.wiki import (
     WikiBuildDetailResponse,
     WikiDocumentDetailResponse,
     WikiDocumentListResponse,
 )
 from domain.personal_wiki.documents.api import pwiki_003, pwiki_006
+from infrastructure.persistence.api import WikiDocumentNotFoundError
 
 
 class WikiDocumentRepository(Protocol):
@@ -41,6 +46,18 @@ class WikiDocumentRepository(Protocol):
         self, user_id: str, wiki_version_id: str
     ) -> Mapping[str, object] | None:
         """특정 Wiki Build Snapshot을 반환한다."""
+        ...
+
+    async def delete_wiki_document(
+        self,
+        user_id: str,
+        *,
+        document_id: str,
+        source_event_id: str,
+        occurred_at: object,
+        memo: str | None,
+    ) -> Mapping[str, object]:
+        """delete 이벤트를 기록하고 문서를 soft-delete한다."""
         ...
 
 
@@ -104,3 +121,47 @@ class WikiDocumentService:
                 ),
             )
         return WikiBuildDetailResponse.model_validate(result)
+
+    async def delete_document(
+        self,
+        user_id: str,
+        payload: WikiSourceDeletionRequest,
+        request_id: str,
+    ) -> WikiDocumentDeletionResponse:
+        """delete 이벤트를 기록하고 문서를 soft-delete한다(멱등).
+
+        같은 개념이 새 클리핑으로 재등장하면 새 문서로 되살아난다
+        (D1 잠정: 기본 부활, tombstone 없음).
+        """
+        try:
+            result = await self._repository.delete_wiki_document(
+                user_id,
+                document_id=payload.document_id,
+                source_event_id=payload.source_event_id,
+                occurred_at=payload.occurred_at,
+                memo=payload.memo,
+            )
+        except WikiDocumentNotFoundError as exc:
+            raise AgentApiError(
+                status.HTTP_404_NOT_FOUND,
+                ErrorDetail(
+                    code="WIKI_DOCUMENT_NOT_FOUND",
+                    message="삭제할 개인 Wiki 문서를 찾을 수 없습니다.",
+                ),
+            ) from exc
+        return WikiDocumentDeletionResponse(
+            user_id=user_id,
+            request_id=request_id,
+            **{
+                key: value
+                for key, value in dict(result).items()
+                if key
+                in {
+                    "document_id",
+                    "document_kind",
+                    "document_key",
+                    "already_deleted",
+                    "unsearchable_chunk_count",
+                }
+            },
+        )
