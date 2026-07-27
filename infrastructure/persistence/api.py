@@ -87,6 +87,11 @@ from .features.events import db_027
 from .features.api_keys import db_028
 from .features.usage import db_029
 from .features.audit import db_030
+from .features.interest_profiles import (
+    ConnectionInterestProfileRepository,
+    load_interest_documents_for_user,
+    save_interest_profile_for_user,
+)
 
 __all__ = [
     "db_001",

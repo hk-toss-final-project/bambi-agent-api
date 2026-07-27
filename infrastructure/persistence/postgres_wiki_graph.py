@@ -15,6 +15,10 @@ from psycopg_pool import AsyncConnectionPool
 
 from shared.hashing import compute_content_hash
 from shared.wiki_models import InterestCandidate
+from infrastructure.persistence.api import (
+    load_interest_documents_for_user,
+    save_interest_profile_for_user,
+)
 from infrastructure.sources.connectors.api import LatestArticle
 
 
@@ -501,60 +505,10 @@ class PostgresWikiGraphRepository:
 
     async def load_interest_documents(self, user_id: str) -> Mapping[str, object]:
         """활성 Wiki Build와 관심 키워드 계산에 사용할 현재 문서를 조회한다."""
-        namespace_key = f"user/{user_id}"
         async with self._pool.connection() as connection:
-            async with connection.transaction():
-                await self._set_user_scope(connection, user_id=user_id)
-                version_cursor = await connection.execute(
-                    """
-                    SELECT id, version
-                    FROM agent.wiki_versions
-                    WHERE user_id = %s AND status = 'active'
-                    ORDER BY version DESC
-                    LIMIT 1
-                    """,
-                    (user_id,),
-                )
-                wiki_version = await version_cursor.fetchone()
-                document_cursor = await connection.execute(
-                    """
-                    SELECT
-                        document.id AS document_id,
-                        document.document_kind,
-                        document.document_key,
-                        document.domain,
-                        version.title,
-                        version.summary,
-                        version.source_metadata
-                    FROM agent.wiki_documents AS document
-                    JOIN agent.wiki_document_versions AS version
-                      ON version.document_id = document.id
-                     AND version.namespace_key = document.namespace_key
-                     AND version.version = document.current_version
-                    WHERE document.namespace_key = %s
-                      AND document.deleted_at IS NULL
-                    ORDER BY document.document_kind, document.document_key
-                    """,
-                    (namespace_key,),
-                )
-                documents = await document_cursor.fetchall()
-        return {
-            "user_id": user_id,
-            "wiki_version_id": (
-                str(wiki_version["id"]) if wiki_version is not None else None
-            ),
-            "wiki_version": (
-                int(wiki_version["version"]) if wiki_version is not None else None
-            ),
-            "documents": [
-                {
-                    **dict(document),
-                    "document_id": str(document["document_id"]),
-                    "source_metadata": dict(document["source_metadata"] or {}),
-                }
-                for document in documents
-            ],
-        }
+            return await load_interest_documents_for_user(
+                connection, user_id=user_id
+            )
 
     async def save_interest_profile(
         self,
@@ -565,116 +519,12 @@ class PostgresWikiGraphRepository:
     ) -> Mapping[str, object]:
         """계산된 관심 후보를 새 Profile Version과 근거 Row로 저장한다."""
         async with self._pool.connection() as connection:
-            async with connection.transaction():
-                await self._set_user_scope(connection, user_id=user_id)
-                await connection.execute(
-                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                    (f"interest/{user_id}",),
-                )
-                version_cursor = await connection.execute(
-                    """
-                    SELECT COALESCE(MAX(version), 0) + 1 AS next_version
-                    FROM agent.user_interest_profiles
-                    WHERE user_id = %s
-                    """,
-                    (user_id,),
-                )
-                version_row = await version_cursor.fetchone()
-                profile_version = int(version_row["next_version"])
-                await connection.execute(
-                    """
-                    UPDATE agent.user_interest_profiles
-                    SET status = 'retired'
-                    WHERE user_id = %s AND status = 'active'
-                    """,
-                    (user_id,),
-                )
-                profile_cursor = await connection.execute(
-                    """
-                    INSERT INTO agent.user_interest_profiles (
-                        user_id,
-                        version,
-                        wiki_version_id,
-                        status
-                    ) VALUES (%s, %s, %s, 'building')
-                    RETURNING id, calculated_at
-                    """,
-                    (user_id, profile_version, wiki_version_id),
-                )
-                profile = await profile_cursor.fetchone()
-                items: list[dict[str, object]] = []
-                for candidate in candidates:
-                    interest_cursor = await connection.execute(
-                        """
-                        INSERT INTO agent.user_interests (
-                            profile_id,
-                            user_id,
-                            topic,
-                            category,
-                            score,
-                            confidence,
-                            attributes
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        RETURNING id
-                        """,
-                        (
-                            profile["id"],
-                            user_id,
-                            candidate.topic,
-                            candidate.category,
-                            candidate.score,
-                            candidate.confidence,
-                            Jsonb(candidate.evidence),
-                        ),
-                    )
-                    interest = await interest_cursor.fetchone()
-                    for document_id in candidate.document_ids:
-                        await connection.execute(
-                            """
-                            INSERT INTO agent.interest_evidence (
-                                interest_id,
-                                user_id,
-                                document_id,
-                                weight,
-                                evidence
-                            ) VALUES (%s, %s, %s, %s, %s)
-                            """,
-                            (
-                                interest["id"],
-                                user_id,
-                                document_id,
-                                candidate.evidence.get("weight", 1),
-                                Jsonb(candidate.evidence),
-                            ),
-                        )
-                    items.append(
-                        {
-                            "interest_id": str(interest["id"]),
-                            "topic": candidate.topic,
-                            "category": candidate.category,
-                            "score": candidate.score,
-                            "confidence": candidate.confidence,
-                            "document_ids": list(candidate.document_ids),
-                            "evidence": candidate.evidence,
-                        }
-                    )
-                await connection.execute(
-                    """
-                    UPDATE agent.user_interest_profiles
-                    SET status = 'active'
-                    WHERE id = %s
-                    """,
-                    (profile["id"],),
-                )
-        return {
-            "profile_id": str(profile["id"]),
-            "user_id": user_id,
-            "wiki_version_id": wiki_version_id,
-            "version": profile_version,
-            "status": "active",
-            "calculated_at": profile["calculated_at"],
-            "interests": items,
-        }
+            return await save_interest_profile_for_user(
+                connection,
+                user_id=user_id,
+                wiki_version_id=wiki_version_id,
+                candidates=candidates,
+            )
 
     async def list_interests(self, user_id: str) -> Mapping[str, object] | None:
         """사용자의 활성 관심 Profile과 Topic·근거 문서 목록을 조회한다."""

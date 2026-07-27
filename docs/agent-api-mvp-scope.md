@@ -58,7 +58,7 @@
 - [x] `INT-001` 관심사 Topic 추출 — 활성 Wiki 문서 기반 후보 추출 (Category 부여·Wiki 기반 점수 포함, 로직 소유 `domain/interests`)
 - [ ] `INT-002` 관심사 Category 분류 — ❌ 독립 기능 미구현. 추출(INT-001)이 자체 Category를 부여할 뿐 서비스 분류 체계 매핑은 없음 (2026-07-21 스텁 복원)
 - [ ] `INT-005` 관심사 점수 계산 — ❌ 독립 기능 미구현. 추출(INT-001)의 Wiki 기반 점수만 있고 사용자 행동 강도·최신성 미반영 (2026-07-21 스텁 복원)
-- [x] `INT-011` 관심사 프로필 재계산 — ⚠️ 수동 rebuild API만 있고 Wiki 변경 시 자동 재계산 없음 (재계산 오케스트레이션 로직 소유 `domain/interests`)
+- [x] `INT-011` 관심사 프로필 재계산 — Wiki Build 완료 시 자동 재계산(`run_personal_wiki_build` 훅, 실패해도 Build 결과 유지) + 수동 rebuild API (재계산 오케스트레이션 로직 소유 `domain/interests`)
 
 ### 외부 데이터 자동 수집
 
