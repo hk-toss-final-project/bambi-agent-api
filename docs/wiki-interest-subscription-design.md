@@ -82,6 +82,13 @@ graph TB
 
 ## 5. 작업 항목 백로그
 
+> **구현 현황 (2026-07-27, feature/llm-wiki 브랜치):**
+> - **A1·A2 완료** — Wiki Build 완료 시 INT-011 자동 재계산 훅(`run_personal_wiki_build`, 실패 시 Build 유지) + rebuild 운영 라우트(`int_011_rebuild`) 승격.
+> - **B1·B2 완료(잠정값)** — `POST .../feedback-signals`(SVC-006)로 신호 수신, INT-005가 시간 감쇠(반감기 14일)로 점수 보정. **가중치·반감기는 D2 잠정값** — 팀 확정 시 `domain/interests/features/scoring.py` 상수만 교체.
+> - **C1 부분 완료** — 내 리포트 저장(위키마킹, SVC-004)은 구현(생성 후보 본문을 `content_mark` 원본으로 물질화 → 기존 Build Job). **피드 타 사용자 콘텐츠 편입은 별도 엔드포인트 대신 svc_002(클리핑) 재사용을 잠정 방침으로** — 기능 ID 체계(명세 1~43절 고정) 제약상 신규 ID를 만들 수 없어, Service가 본문을 클리핑 형태로 전달한다. C2(Spring 발행)는 Service 몫.
+> - **D-2 부분 완료(잠정값)** — 삭제(`POST .../wiki-sources/deletions`, WBA-015: soft-delete + Chunk 검색 제외, 멱등)만 구현. **D1은 잠정 '기본 부활'로 진행**(tombstone 없음 — 팀 확정 시 억제 옵션 추가). 편집·메모(edit/memo) 이벤트와 D-3(삭제 후 자동 재계산)는 미구현 — 삭제 직후 반영이 필요하면 rebuild API 호출.
+> - 상세 계약은 [service-integration-guide.md](service-integration-guide.md) §3.6-1·§3.7·§3.8 참조.
+
 > 우선순위는 루트 CLAUDE.md 기준(좋아요·피드·수집은 P1 트랙)과 정합하게 배치.
 > 소유 후보는 CLAUDE.md 역할표 기준의 제안일 뿐, 배정은 팀에서 확정한다.
 
