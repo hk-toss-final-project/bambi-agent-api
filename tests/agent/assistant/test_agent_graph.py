@@ -9,7 +9,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from agent.assistant.features import graph, outcomes
+from agent.assistant.features import graph
+from agent.selection.features import outcomes
 
 _NOW = datetime(2026, 7, 20, 9, 0, tzinfo=UTC)
 

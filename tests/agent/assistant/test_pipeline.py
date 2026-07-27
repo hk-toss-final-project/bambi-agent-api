@@ -9,7 +9,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from agent.assistant.features import dedup, history, pipeline
+from agent.assistant.features import history, pipeline, storage
+from agent.selection.features import dedup
 
 _NOW = datetime(2026, 7, 20, 9, 0, tzinfo=UTC)
 
@@ -106,6 +107,7 @@ def test_duplicate_cluster_is_excluded(monkeypatch) -> None:
     dedup.record_report_items(
         "minji", _TOPIC,
         [{"url_key": "https://old.com/1", "title": "어제 보고", "embedding": [0.46, 0.888, 0.0]}],
+        history=storage.get_store(),
         now=_NOW - timedelta(days=1),
     )
 
@@ -238,7 +240,8 @@ def test_same_day_rerun_is_idempotent(monkeypatch) -> None:
 
     # 보고 임베딩 이력은 url_key당 1건만 유지된다(재실행해도 중복 누적 없음).
     recorded = dedup.load_recent_report_items(
-        "minji", _TOPIC, now=_NOW, lookback_days=365, exclude_today=False
+        "minji", _TOPIC, history=storage.get_store(), now=_NOW,
+        lookback_days=365, exclude_today=False,
     )
     assert len(recorded) == 2
 
@@ -362,7 +365,8 @@ def test_record_history_false_does_not_write_history(monkeypatch) -> None:
     before_collect = len(history.get_collected_entries("minji", _TOPIC))
     before_reports = len(
         dedup.load_recent_report_items(
-            "minji", _TOPIC, now=_NOW, lookback_days=365, exclude_today=False
+            "minji", _TOPIC, history=storage.get_store(), now=_NOW,
+            lookback_days=365, exclude_today=False,
         )
     )
 
@@ -374,7 +378,8 @@ def test_record_history_false_does_not_write_history(monkeypatch) -> None:
     assert (
         len(
             dedup.load_recent_report_items(
-                "minji", _TOPIC, now=_NOW, lookback_days=365, exclude_today=False
+                "minji", _TOPIC, history=storage.get_store(), now=_NOW,
+                lookback_days=365, exclude_today=False,
             )
         )
         == before_reports

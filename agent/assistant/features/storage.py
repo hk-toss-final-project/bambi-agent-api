@@ -26,7 +26,7 @@ import json
 import logging
 import os
 import threading
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -548,9 +548,3 @@ def set_store(store: HistoryStore | None) -> None:
     global _store
     with _store_lock:
         _store = store
-
-
-def lookback_cutoff(reference: datetime, lookback_days: int | None = None) -> datetime:
-    """중복 검사 조회 하한 시각을 계산한다."""
-    days = config.DEDUP_LOOKBACK_DAYS if lookback_days is None else lookback_days
-    return reference - timedelta(days=days)

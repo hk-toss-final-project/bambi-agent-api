@@ -27,16 +27,20 @@
 | RSS·Jina | [features/feeds.py](../agent/assistant/features/feeds.py) | Google News RSS 조회, Jina Reader 정제, 최신순 정렬 + 중복 제거 |
 | Reddit | [features/reddit.py](../agent/assistant/features/reddit.py) | search.rss 조회(레이트리밋 대응), 게시글 요약 |
 | 날짜 추출 | [features/dates.py](../agent/assistant/features/dates.py) | pubDate → 메타태그 → URL 패턴 → 본문 파싱 → first_seen 폴백 |
-| 스코어링 | [features/scoring.py](../agent/assistant/features/scoring.py) | 유사도 × 신선도 × 소스가중 × 클러스터부스트 |
-| 클러스터링 | [features/clustering.py](../agent/assistant/features/clustering.py) | 임베딩 그리디 묶기(멤버 전체 비교) |
-| 중복 제거 | [features/dedup.py](../agent/assistant/features/dedup.py) | 최근 7일 보고 임베딩 대비 신규/중복/업데이트 판정 |
-| 원인 분류 | [features/outcomes.py](../agent/assistant/features/outcomes.py) | 결과 빈약 원인을 구조화(재시도 판단 근거) |
+| 스코어링 | [selection/features/scoring.py](../agent/selection/features/scoring.py) ※ | 유사도 × 신선도 × 소스가중 × 클러스터부스트 |
+| 클러스터링 | [selection/features/clustering.py](../agent/selection/features/clustering.py) ※ | 임베딩 그리디 묶기(멤버 전체 비교) |
+| 중복 제거 | [selection/features/dedup.py](../agent/selection/features/dedup.py) ※ | 최근 7일 보고 임베딩 대비 신규/중복/업데이트 판정 |
+| 원인 분류 | [selection/features/outcomes.py](../agent/selection/features/outcomes.py) ※ | 결과 빈약 원인을 구조화(재시도 판단 근거) |
 | 선별 파이프라인 | [features/pipeline.py](../agent/assistant/features/pipeline.py) | 수집→선별→통합요약 (결정론) |
 | 리서치 에이전트 | [features/graph.py](../agent/assistant/features/graph.py) | LangGraph 단일 그래프(검색어 재구성 루프) |
 | 보고서 | [features/report.py](../agent/assistant/features/report.py) | 워터폴(당일/주간/개념 정리) Markdown 생성 |
 | 요약 | [features/summarize.py](../agent/assistant/features/summarize.py) | ChatOpenAI 기반 한국어 요약 헬퍼 |
 | 오케스트레이션 | [features/service.py](../agent/assistant/features/service.py) | 진입점 3종 결합 (소스별 실패 격리) |
 | 웹 | [app/assistant/web.py](../app/assistant/web.py) | `/assistant/` 키워드 폼, `/assistant/search` 결과 페이지 |
+
+※ 표시한 선별 모듈은 비서 전용이 아니라 **리포트 생성과 공유하는 공용 라이브러리**(`agent/selection`)다. 임계값도 [selection/features/config.py](../agent/selection/features/config.py)가 단독으로 소유한다. 외부에서는 [selection/api.py](../agent/selection/api.py) facade로만 호출한다.
+
+중복 이력 저장소는 `DedupHistory` Protocol로 **주입**한다. 저장소를 넘기지 않으면 기록하지 않으므로, 리포트 생성처럼 사용자의 브리핑 이력을 건드리면 안 되는 소비자가 실수로 기록할 수 없다(기본값이 안전한 쪽).
 
 ## 사용 라이브러리
 
@@ -169,7 +173,7 @@ uv run python scripts/migrate_assistant_history.py --data-dir agent/data
 
 [pipeline.py](../agent/assistant/features/pipeline.py)는 수집한 문서를 유사도 필터 → 클러스터링 →
 스코어링 → 중복 검사 → 발행 판정 순으로 거른다. 이 중 **두 임계값은 고정값이 아니라
-"절대 하한 + 상대 비율" 하이브리드**를 쓴다. 설정은 [config.py](../agent/assistant/features/config.py)에 있다.
+"절대 하한 + 상대 비율" 하이브리드**를 쓴다. 설정은 [config.py](../agent/selection/features/config.py)에 있다.
 
 ```
 유사도 컷 = max(SIMILARITY_FLOOR 0.25, 이번 실행 최고 유사도 × SIMILARITY_RATIO 0.75)
@@ -206,7 +210,7 @@ uv run python scripts/migrate_assistant_history.py --data-dir agent/data
 실측('코스피' 뉴스 26건, 문서쌍 325개): 최대 0.737 / 중앙 0.433. 같은 사건을 다룬
 기사쌍은 0.68~0.74에 몰렸고, 0.60 아래로 내리면 서로 다른 이슈가 섞였다.
 
-[clustering.greedy_clusters](../agent/assistant/features/clustering.py)는 클러스터의 **어느
+[clustering.greedy_clusters](../agent/selection/features/clustering.py)는 클러스터의 **어느
 멤버와든** 기준을 넘으면 편입한다(시드 문서와만 비교하지 않는다). 같은 사건 기사라도
 표현 차이로 A-B 0.70, B-C 0.70인데 A-C 0.60인 경우가 흔해, 시드 비교로는 같은 사건이
 여러 클러스터로 쪼개지기 때문이다.
@@ -224,7 +228,7 @@ Google News RSS의 `link`는 리다이렉트 주소(`news.google.com/rss/article
 
 RSS가 원본 발행처를 `<source url="https://www.chosun.com" title="조선일보">`로 따로 주므로,
 [feeds.\_extract\_source](../agent/assistant/features/feeds.py)로 이를 뽑아 `source_url`에 담고
-[scoring.score_document](../agent/assistant/features/scoring.py)가 그 값으로 가중치를 조회한다.
+[scoring.score_document](../agent/selection/features/scoring.py)가 그 값으로 가중치를 조회한다.
 **추가 HTTP 요청이 필요 없다.**
 
 ### 근거가 없으면 생성하지 않는다
@@ -251,7 +255,7 @@ START → plan(토픽을 1차 검색어로)
 
 ### 재시도는 "검색어로 고칠 수 있는 원인"일 때만 한다
 
-[features/outcomes.py](../agent/assistant/features/outcomes.py)가 결과를 아래로 분류하고,
+[features/outcomes.py](../agent/selection/features/outcomes.py)가 결과를 아래로 분류하고,
 `no_results`·`low_relevance`일 때만 재구성한다.
 
 | 원인 | 의미 | 재구성 |

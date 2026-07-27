@@ -165,9 +165,10 @@ def test_every_runtime_feature_has_exactly_one_scaffold() -> None:
 
 
 # 명세 1~43절 기능 영역 facade 43개에, 기능 ID 체계 밖의 기능 영역 facade를 더한 수.
-# 키워드 비서(agent/assistant)는 별도 제품 라인이라 기능 ID를 부여하지 않지만,
-# "구현은 features/, 공개는 api.py" 구조 규칙은 동일하게 따른다.
-EXPECTED_API_FACADES = 44
+#   +1 agent/assistant  — 리포트 기능을 한 화면에서 돌려보는 통합 실행/뷰어 경로
+#   +1 agent/selection  — 브리핑과 리포트가 공유하는 선별 공용 라이브러리
+# 둘 다 기능 ID를 부여하지 않지만 "구현은 features/, 공개는 api.py" 규칙은 동일하게 따른다.
+EXPECTED_API_FACADES = 45
 
 
 def test_api_facades_export_every_runtime_feature() -> None:

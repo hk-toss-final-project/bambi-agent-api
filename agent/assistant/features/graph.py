@@ -44,10 +44,10 @@ from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from agent.assistant.features import outcomes
 from agent.assistant.features.pipeline import run_daily
 from agent.assistant.features.report import generate_daily_report
 from agent.assistant.features.summarize import complete
+from agent.selection.api import outcomes
 
 logger = logging.getLogger("agent.assistant.features.graph")
 

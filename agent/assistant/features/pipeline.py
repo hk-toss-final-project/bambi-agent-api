@@ -21,19 +21,20 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from agent.assistant.features import (
-    clustering,
     config,
     content_store,
-    dedup,
     feeds,
     history,
     reddit,
-    scoring,
+    storage,
     youtube,
 )
 from agent.assistant.features.dates import extract_published
-from agent.assistant.features.embeddings import embed_texts
 from agent.assistant.features.summarize import complete
+
+# 선별(관련도·클러스터·점수·중복)은 리포트 생성과 공유하는 공용 라이브러리다.
+from agent.selection import api as selection
+from agent.selection.api import cosine_similarity, embed_texts
 
 logger = logging.getLogger("agent.assistant.features.pipeline")
 
@@ -322,14 +323,14 @@ def _build_clusters(
     각 클러스터는 대표 문서(최고 final_score)와 대표 점수(클러스터 내 최고
     final_score), cluster_boost가 반영된 멤버 점수를 가진다.
     """
-    groups = clustering.greedy_clusters(doc_embeddings)
+    groups = selection.greedy_clusters(doc_embeddings)
     clusters: list[dict[str, object]] = []
     for group in groups:
-        boost = scoring.cluster_boost(len(group))
+        boost = selection.cluster_boost(len(group))
         members: list[dict[str, object]] = []
         for index in group:
             doc = docs[index]
-            score = scoring.score_document(
+            score = selection.score_document(
                 doc, similarities[index], boost=boost, now=now, cold_start=cold_start
             )
             members.append({**doc, "score": score, "embedding": doc_embeddings[index]})
@@ -375,7 +376,7 @@ def _weekly_trend_items(
             }
         )
     candidates.sort(key=lambda item: item["score"], reverse=True)
-    return candidates[: config.MAX_DAILY_ITEMS]
+    return candidates[: selection.config.MAX_DAILY_ITEMS]
 
 
 def run_daily(
@@ -468,15 +469,13 @@ def run_daily(
             topic_embedding, doc_embeddings = vectors[0], vectors[1:]
 
             # 5. 유사도 필터 (이번 실행 최고 유사도에 상대적인 컷)
-            from agent.assistant.features.embeddings import cosine_similarity
-
             scored = [
                 (doc, embedding, cosine_similarity(topic_embedding, embedding))
                 for doc, embedding in zip(docs, doc_embeddings, strict=True)
             ]
             # 컷을 이번 실행의 최고 유사도로부터 계산한다. 키워드마다 유사도 스케일이
             # 달라 고정 임계값으로는 어떤 키워드가 통째로 탈락하기 때문이다.
-            sim_cutoff = config.similarity_cutoff(max(s for _, _, s in scored))
+            sim_cutoff = selection.config.similarity_cutoff(max(s for _, _, s in scored))
             log["similarity_cutoff"] = round(sim_cutoff, 4)
 
             filtered_docs: list[dict[str, object]] = []
@@ -516,18 +515,24 @@ def run_daily(
                     )
 
             # 8. 최근 7일 보고서와 중복 검사
-            history_items = dedup.load_recent_report_items(
-                normalized_user, normalized, now=now, exclude_today=True
+            # 읽기는 항상 허용한다 — 이미 본 소식을 다시 싣지 않기 위한 조회일 뿐
+            # 사용자 이력을 바꾸지 않는다.
+            history_items = selection.load_recent_report_items(
+                normalized_user,
+                normalized,
+                history=storage.get_store(),
+                now=now,
+                exclude_today=True,
             )
             for cluster in clusters:
                 rep = cluster["representative"]
-                status, matched, sim = dedup.check_duplicate(
+                status, matched, sim = selection.check_duplicate(
                     rep["embedding"],
                     rep.get("published") if isinstance(rep.get("published"), datetime) else None,
                     history_items,
                 )
                 cluster["dup_status"] = status
-                if status == dedup.STATUS_DUPLICATE:
+                if status == selection.STATUS_DUPLICATE:
                     matched_title = str((matched or {}).get("title") or "")
                     _exclude(
                         log,
@@ -536,13 +541,13 @@ def run_daily(
                         f"already_reported({sim:.2f}, 기존: {matched_title[:30]})",
                     )
 
-            survivors = [c for c in clusters if c["dup_status"] != dedup.STATUS_DUPLICATE]
+            survivors = [c for c in clusters if c["dup_status"] != selection.STATUS_DUPLICATE]
 
             # 9. 임계값 판정 (미달 아이템을 억지로 채우지 않는다)
             # 유사도와 같은 이유로 상대 기준을 쓴다. final_score는 similarity를
             # 곱해 만들므로 유사도 스케일 차이를 그대로 물려받기 때문이다.
             if survivors:
-                pub_cutoff = config.publish_cutoff(max(c["final_score"] for c in survivors))
+                pub_cutoff = selection.config.publish_cutoff(max(c["final_score"] for c in survivors))
                 log["publish_cutoff"] = round(pub_cutoff, 4)
                 for cluster in survivors:
                     if cluster["final_score"] < pub_cutoff:
@@ -556,7 +561,7 @@ def run_daily(
                     (c for c in survivors if c["final_score"] >= pub_cutoff),
                     key=lambda c: c["final_score"],
                     reverse=True,
-                )[: config.MAX_DAILY_ITEMS]
+                )[: selection.config.MAX_DAILY_ITEMS]
 
     # 10. 워터폴 판정과 아이템 조립
     if daily_clusters:
@@ -570,7 +575,7 @@ def run_daily(
             except Exception as error:
                 errors.append(f"통합 요약 실패: {type(error).__name__}: {error}")
                 summary = str(rep.get("text") or "")[:300]
-            status = "업데이트" if cluster.get("dup_status") == dedup.STATUS_UPDATE else "신규"
+            status = "업데이트" if cluster.get("dup_status") == selection.STATUS_UPDATE else "신규"
             items.append(
                 {
                     "title": str(rep.get("title") or ""),
@@ -598,10 +603,16 @@ def run_daily(
                 }
             )
         # 11. 보고서 아이템 임베딩을 중복 방지 이력에 저장 (같은 url_key는 덮어씀)
-        # record_history=False(리포트 생성 경로)면 기록하지 않는다 — 이 실행이
-        # 사용자의 브리핑에서 같은 소식을 7일간 가려버리는 것을 막는다.
-        if record_history:
-            dedup.record_report_items(normalized_user, normalized, items, now=now)
+        # record_history=False(리포트 생성 경로)면 저장소를 아예 넘기지 않는다 —
+        # 선별 쪽에 기록할 수단이 없으므로, 플래그를 깜빡 놓치더라도 이 실행이
+        # 사용자의 브리핑에서 같은 소식을 7일간 가려버릴 수 없다.
+        selection.record_report_items(
+            normalized_user,
+            normalized,
+            items,
+            history=storage.get_store() if record_history else None,
+            now=now,
+        )
         # 반환 아이템에서 임베딩은 제거한다 (보고서 렌더링에 불필요).
         for item in items:
             item.pop("embedding", None)

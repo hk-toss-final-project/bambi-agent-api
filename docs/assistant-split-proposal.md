@@ -102,10 +102,28 @@ RSS를 col_001 재사용으로 교체하고 YouTube·Reddit provider를 connecto
   비서의 `search_videos`·`search_posts`는 겉모습을 유지한 채 Provider에 위임하므로
   파이프라인 동작은 동일하다.
 
-### Step 2 — 선별 추출
+### Step 2 — 선별 추출 — ✅ **완료 (2026-07-27)**
 clustering·scoring·dedup·outcomes·embeddings를 `agent/selection`으로 이동, 이력 경계를 Protocol로 주입. assistant 그래프의 select 노드와 report_builder의 컨텍스트 선별(report_006 자리)이 같은 함수를 쓰게 한다.
 - 효과: "선별 지능"이 두 소비자에 공식 공유. dedup 이력 맥락 분리 완성.
 - 주의: AGENTS.md 규칙 9(facade), 규칙 8(선별에 LLM 요약 포함 시 bench).
+- 구현 메모(2026-07-27):
+  - 선별 임계값의 단일 소유자를 `agent/selection/features/config.py`로 옮겼다.
+    수집 창(`COLLECT_WINDOW_DAYS`)·저장 경로처럼 선별과 무관한 값은 비서 쪽
+    `agent/assistant/features/config.py`에 남겼다 — 소유 기준은 "누가 이 값을
+    바꿔야 선별 결과가 바뀌는가"다.
+  - **이력 경계는 `DedupHistory` Protocol 주입으로 바꿨다.** `record_report_items`는
+    저장소를 받지 못하면 기록하지 않는다(기본값이 `None`). Step 0의
+    `record_history` 플래그는 "기록하지 말라고 말해야" 안전했지만, 이제는
+    **저장소를 건네야만 기록된다** — 기본 상태가 안전한 쪽이다. 비서는
+    `storage.get_store()`를 넘기고, 리포트 생성 경로는 넘기지 않는다.
+  - 조회(`load_recent_report_items`)도 저장소를 받아야 동작한다. 다만 조회는 이력을
+    바꾸지 않으므로 비서 파이프라인에서는 `record_history`와 무관하게 저장소를
+    넘겨 기존 동작(이미 본 소식 제외)을 유지했다.
+  - LLM 호출이 선별에 새로 들어가지 않았으므로(전부 결정론적 수치 판단) 규칙 8의
+    벤치마크 대상은 아니다. 그래프의 노드·엣지도 그대로라 규칙 10의 `/dev/graphs`
+    레지스트리 갱신도 불필요했다.
+  - report_builder가 이 라이브러리를 실제로 소비하는 것은 Step 3이다. 이번 단계는
+    **공용 라이브러리를 세우고 비서를 그 위로 옮긴 것**까지다.
 
 ### Step 3 — report_builder를 풀 소비로 전환
 `collect_live_context`(그래프 중첩 호출) 제거 → load_context = 풀 조회 + 콜드 키워드 on-demand(타임아웃 短) + selection 선별.
