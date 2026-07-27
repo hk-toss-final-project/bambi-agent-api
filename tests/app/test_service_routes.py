@@ -148,3 +148,83 @@ def test_unknown_job_returns_not_found(client: TestClient) -> None:
 
     assert response.status_code == 404
     assert response.json()["code"] == "JOB_NOT_FOUND"
+
+
+def test_interest_rebuild_returns_new_active_profile(
+    client: TestClient, container
+) -> None:
+    """수동 재계산 요청이 새 활성 관심 Profile을 반환하는지 검증한다."""
+    from datetime import UTC, datetime
+
+    from app.services.interests import InterestService
+
+    class _FakeInterestRepository:
+        """활성 Wiki 한 건으로 재계산이 성공하는 저장소 대역."""
+
+        async def load_interest_documents(self, user_id: str) -> dict:
+            """관심사 계산에 쓸 활성 Wiki 문서 한 건을 반환한다."""
+            return {
+                "wiki_version_id": "wiki-version-1",
+                "documents": [
+                    {
+                        "document_id": "document-1",
+                        "title": "LangGraph",
+                        "summary": "그래프 오케스트레이션",
+                        "domain": "technology",
+                        "source_metadata": {"tags": ["Python"]},
+                    }
+                ],
+            }
+
+        async def save_interest_profile(
+            self, user_id: str, *, wiki_version_id: str, candidates
+        ) -> dict:
+            """계산된 후보를 활성 Profile 응답 형태로 반환한다."""
+            return {
+                "profile_id": "profile-1",
+                "user_id": user_id,
+                "wiki_version_id": wiki_version_id,
+                "version": 2,
+                "status": "active",
+                "calculated_at": datetime.now(UTC),
+                "interests": [
+                    {
+                        "interest_id": "interest-1",
+                        "topic": candidate.topic,
+                        "category": candidate.category,
+                        "score": candidate.score,
+                        "confidence": candidate.confidence,
+                        "document_ids": list(candidate.document_ids),
+                        "evidence": dict(candidate.evidence),
+                    }
+                    for candidate in candidates
+                ],
+            }
+
+        async def list_interests(self, user_id: str) -> dict | None:
+            """활성 Profile 조회는 이 테스트에서 사용하지 않는다."""
+            return None
+
+    container.interest_service = InterestService(_FakeInterestRepository())
+
+    response = client.post(
+        "/internal/v1/users/user-1/interest-profiles/rebuild",
+        json={"limit": 5},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["version"] == 2
+    assert body["status"] == "active"
+    assert body["interests"][0]["topic"] == "LangGraph"
+
+
+def test_interest_rebuild_requires_ready_service(client: TestClient) -> None:
+    """관심 Profile 저장소가 준비되지 않으면 503을 반환하는지 검증한다."""
+    response = client.post(
+        "/internal/v1/users/user-1/interest-profiles/rebuild",
+        json={},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "SERVICE_NOT_READY"

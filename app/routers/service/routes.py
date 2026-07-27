@@ -15,7 +15,7 @@ from app.schemas.generated_content import (
     GeneratedContentDetailResponse,
     GeneratedContentListResponse,
 )
-from app.schemas.interests import InterestProfileResponse
+from app.schemas.interests import InterestProfileResponse, InterestRebuildRequest
 from app.schemas.mvp import (
     AcceptedJobResponse,
     ContentMarkRequest,
@@ -245,6 +245,25 @@ async def get_active_interests(
 ) -> InterestProfileResponse:
     """[INT-001] 개인 Wiki에서 계산된 활성 관심 Topic을 조회한다."""
     return await service.get_active(user_id)
+
+
+@router.post(
+    "/users/{user_id}/interest-profiles/rebuild",
+    response_model=InterestProfileResponse,
+    operation_id="int_011_rebuild",
+    summary="관심 키워드 재계산",
+)
+async def rebuild_interest_profile(
+    user_id: UserId,
+    payload: InterestRebuildRequest,
+    service: InterestService = Depends(get_interest_service),
+) -> InterestProfileResponse:
+    """[INT-011] 활성 개인 Wiki에서 관심 키워드를 재계산해 새 Profile로 활성화한다.
+
+    Wiki Build 완료 시 자동 재계산되므로 평시에는 호출할 필요가 없다.
+    사용자 "관심사 새로고침" UX와 운영 복구를 위한 수동 경로다.
+    """
+    return await service.rebuild(user_id, limit=payload.limit)
 
 
 @router.get(

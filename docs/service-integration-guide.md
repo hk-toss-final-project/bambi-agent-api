@@ -122,6 +122,7 @@ flowchart LR
 | `GET /users/{user_id}/wiki/graph` | Entity·Concept 관계 그래프 (Node·Edge·통계) |
 | `GET /users/{user_id}/wiki/graph/top-nodes?limit=10` | 연결 많은 순 상위 Node (rank·degree 포함 경량 응답) |
 | `GET /users/{user_id}/interests` | 활성 관심 키워드 (topic·score·evidence) |
+| `POST /users/{user_id}/interest-profiles/rebuild` | 관심 키워드 수동 재계산 (Wiki Build 완료 시 자동 재계산되므로 새로고침·복구용) |
 | `GET /users/{user_id}/generated-contents` (+`/{candidate_id}`) | 생성 콘텐츠 목록·상세(본문·Citation) |
 
 ### 3.7 연동 보류 항목
