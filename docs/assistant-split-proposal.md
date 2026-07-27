@@ -1,9 +1,26 @@
 # Assistant 분해 제안 (Draft)
 
-> 상태: **제안 — 팀 협의 전** · 작성일 2026-07-26
+> 상태: **분해 방향 팀 확인 완료(2026-07-27)** · 작성일 2026-07-26
 > 배경: [langgraph-agents-review-2026-07-26.md](langgraph-agents-review-2026-07-26.md)의 리뷰와
 > "관심사 기반 수집 루프 미연결" 확인(INT-001 ↛ global-collector, 수집 경로 이중화)에 따른 후속 설계.
 > 원칙: 그래프를 합치는 것이 아니라 **assistant가 겸직 중인 책임을 소유자에게 돌려주는 것.**
+
+## 팀 확인 (2026-07-27) — assistant의 위상 정정
+
+이 문서 초안은 assistant를 **"기능 ID 체계 밖의 별도 제품 라인"**으로 전제하고 썼다.
+팀 확인 결과 **그 전제는 사실과 다르다.**
+
+- assistant의 기능(데이터 수집 → 임베딩·유사도 검색 → 리포트 생성 → 뷰어)은 원래
+  **스캐폴드 구조에서 각자 소유자가 있던 역할**이며, 별도 제품으로 기획된 것이 아니다.
+  팀을 나눠 개발하면서 한곳에 모인 결과다.
+- 따라서 **분해 방향(Step 1~3)은 구조상 맞다**는 점이 확인됐다.
+- 다만 **웹 UI는 assistant에 남긴다.** 남기는 이유는 "독립 제품이라서"가 아니라
+  **분리된 기능을 한 번에 실행하고 눈으로 확인하는 테스트 뷰어**로 쓰기 위해서다.
+  (실제로 임계값 보정·클러스터링·품질 루프 검증이 모두 이 화면으로 이뤄졌다.)
+
+이 정정에 따라 아래 본문의 "브리핑 제품"은 **"테스트 뷰어"**로 읽는다. 결론(잔류
+대상 목록)은 같지만 근거가 다르므로, Step 3에서 "프로덕션 경로(report_builder)가
+테스트 뷰어를 호출하지 않는다"는 점이 더 분명한 근거를 갖는다.
 
 ---
 
@@ -15,7 +32,7 @@
 |---|---|---|---|
 | ① 수집 (fetch) | youtube.py(검색·자막) · feeds.py(Google News RSS + Jina) · reddit.py · dates.py(날짜 정규화) | 키워드 → 원시 아이템. 네트워크 I/O | **수집 워커** (infrastructure/sources + global-collector) |
 | ② 선별 (select) | embeddings.py · clustering.py · scoring.py · dedup.py · outcomes.py · summarize.py | 원시 아이템 → 순위·중복제거된 근거 집합. 결정론 + LLM 요약 | **공용 라이브러리** (브리핑·리포트 둘 다 소비) |
-| ③ 브리핑 제품 | graph.py(plan·reformulate·write_report) · report.py(워터폴 Markdown) · stocks.py(주가 차트) · web UI · history.py의 클릭/노출 이력 | 사용자에게 보이는 일간 브리핑 | **assistant 잔류** |
+| ③ 테스트 뷰어 | graph.py(plan·reformulate·write_report) · report.py(워터폴 Markdown) · stocks.py(주가 차트) · web UI · history.py의 클릭/노출 이력 | 분리된 기능을 한 번에 실행·확인하는 개발용 화면 | **assistant 잔류** |
 | ④ 이력 (storage) | storage.py · history.py의 수집 이력 | 개인화 기억. ②의 dedup 입력이자 ③의 노출 기록 | **분리** — 수집 dedup 이력은 ②로, 클릭/노출 이력은 ③으로 |
 
 문제는 이 4개가 `assist_daily_agent` 단일 진입점 뒤에 묶여 있어서, report_builder가 ①+②만 필요한데 ③+④의 부작용(보고서 생성, 이력 기록)까지 함께 실행된다는 것이다. 동시에 ①은 global-collector 워커와 소스가 겹친다(Google News RSS 이중 수집).
@@ -45,7 +62,7 @@
 
 1. **수집은 저장(풀)을 향하고, 요청 경로는 풀을 읽는다.** 신선도는 워커 주기가 담당하고, 풀에 없는 콜드 키워드만 타임아웃 있는 동기 수집으로 보충한다.
 2. **선별은 "이력을 읽되, 기록 여부는 호출자가 결정"하는 순수 경계로.** 브리핑은 기록하고, 리포트 생성은 기록하지 않는다(이력 오염 차단). dedup 이력에 소비 맥락(briefing/report) 차원을 추가한다.
-3. **assistant는 브리핑 제품만 남긴다.** 재구성 루프와 워터폴 보고서는 브리핑의 품질 장치이므로 잔류. 단 "재구성"의 의미는 (풀 재검색 → 부족 시 on-demand 수집 요청)으로 바뀐다.
+3. **assistant는 테스트 뷰어만 남긴다.** 재구성 루프와 워터폴 보고서는 브리핑의 품질 장치이므로 잔류. 단 "재구성"의 의미는 (풀 재검색 → 부족 시 on-demand 수집 요청)으로 바뀐다.
 
 ## 3. 파일별 이동 매핑
 
@@ -60,14 +77,18 @@
 | summarize.py | `agent/selection` (요약은 선별의 마지막 단계) 또는 `agent/llm` 헬퍼 | 요약 시점 결정 필요 (§5-1) |
 | pipeline.py | 해체 — 수집부는 sources 호출로, 선별부는 selection으로 | 현재 결정론 설계라 분해 용이 |
 | storage.py 수집 이력 · history.py 수집 이력 | `agent/selection` 소유 (Protocol 뒤) | purpose(briefing/report) 컬럼 추가 |
-| history.py 클릭/노출 이력 · stocks.py · report.py · graph.py · service.py · web UI | assistant 잔류 | 브리핑 제품 |
+| history.py 클릭/노출 이력 · stocks.py · report.py · graph.py · service.py · web UI | assistant 잔류 | 테스트 뷰어 |
 
 ## 4. 단계별 마이그레이션 (각 단계 독립 배포 가능, 리스크 낮은 순)
 
-### Step 0 — 즉효 패치 (반나절, 구조 변경 없음)
+### Step 0 — 즉효 패치 (반나절, 구조 변경 없음) — ✅ **완료 (2026-07-27)**
 `assist_daily_agent`에 `record_history=False`, `include_report=False` 옵션을 추가하고 `collect_live_context`가 그것으로 호출.
 - 효과: 이력 오염 즉시 차단(리뷰 P1), weekly 폴백 LLM 낭비 제거. 그래프 중첩은 아직 유지.
 - 검증: tests의 live_sources·pipeline mock 테스트 갱신.
+- 구현 메모: `record_history=False`여도 **이력 읽기는 유지**한다 — `first_seen`이 발행일
+  확정 폴백에 쓰이므로 읽기까지 막으면 날짜 로직이 깨진다. 쓰기만 건너뛴다.
+  회귀 테스트 3종 추가(플래그 전달 확인, 이력 미증가, 기본값 True 유지).
+  자세한 내용은 [keyword-assistant.md](keyword-assistant.md) "소비 맥락 플래그" 절 참조.
 
 ### Step 1 — 수집 일원화
 RSS를 col_001 재사용으로 교체하고 YouTube·Reddit provider를 connectors로 이식. assistant는 connectors를 import해서 사용(동작 동일). global-collector가 5개 소스(GDELT·Naver·GoogleNews·YouTube·Reddit)를 키워드로 수집 가능해짐.
@@ -94,7 +115,7 @@ global-collector를 CLI 배치에서 job_type 워커로 승격하고, Service가
 1. **요약 시점** — 자막·본문 LLM 요약을 수집 시(풀에 저장, 비용 선지불·재사용) vs 소비 시(신선, 매번 비용). 제안: 원문/자막 확보는 fetcher 단계, LLM 요약은 소비 시 + 결과를 풀 metadata에 캐시.
 2. **이력 분리 방식** — `assistant_collected_documents`에 purpose 컬럼 추가 vs 별도 테이블. 제안: 컬럼 추가(마이그레이션 최소).
 3. **selection의 위치** — `agent/selection` vs `domain/selection`. AI 파생 로직이므로 agent/ 제안. 팀 컨벤션 합의 필요.
-4. **기능 ID 부여** — assistant는 "기능 ID 없는 별도 제품 라인"이었으나, sources로 이식되는 수집기는 COL-*/GSP-* 체계에 편입되는 것이 자연스러움. 명세 문서 갱신 동반.
+4. **기능 ID 부여** — assistant는 명세상 "기능 ID 없는 별도 제품 라인"으로 적혀 있었으나(2026-07-27 정정: 실제로는 테스트 뷰어), sources로 이식되는 수집기는 COL-*/GSP-* 체계에 편입되는 것이 자연스러움. 명세 문서 갱신 동반.
 5. **재구성 루프의 새 정의** — 풀 조회 기반에서 "검색어 재구성"이 무엇을 다시 하는가(풀 재검색만? on-demand 수집 트리거까지?). 브리핑 품질 요구 수준에 따라 결정.
 
 ## 6. 이 분해가 해소하는 기존 리뷰 항목
@@ -112,5 +133,5 @@ global-collector를 CLI 배치에서 job_type 워커로 승격하고, Service가
 ## 7. 건드리지 않는 것 (비목표)
 
 - assistant 그래프와 report_builder 그래프의 병합 — 하지 않는다. 소비 맥락(브리핑 vs 리포트)이 다르므로 그래프는 각자 유지.
-- 브리핑 제품(워터폴 보고서·stocks 차트·UI)의 기능 변경 — 없음.
+- 테스트 뷰어(워터폴 보고서·stocks 차트·UI)의 기능 변경 — 없음.
 - pgvector 재도입, LLM 의미 판정 등 품질 고도화 — 이 문서 범위 밖(리뷰 P1 참조).
