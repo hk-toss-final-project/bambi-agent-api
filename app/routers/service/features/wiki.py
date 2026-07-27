@@ -5,6 +5,8 @@ from typing import Protocol
 from app.schemas.mvp import (
     AcceptedJobResponse,
     ContentMarkRequest,
+    FeedbackSignalsRequest,
+    FeedbackSignalsResponse,
     UrlWikiSourceRequest,
     WebClippingRequest,
 )
@@ -30,6 +32,12 @@ class WikiSourceSubmissionService(Protocol):
         self, *, user_id: str, payload: ContentMarkRequest, request_id: str
     ) -> AcceptedJobResponse:
         """위키마킹한 생성 콘텐츠를 Wiki 처리 작업으로 접수한다."""
+        ...
+
+    async def submit_feedback_signals(
+        self, *, user_id: str, payload: FeedbackSignalsRequest, request_id: str
+    ) -> FeedbackSignalsResponse:
+        """행동 신호 Batch를 관심사 반영 이벤트로 접수한다."""
         ...
 
 
@@ -92,12 +100,21 @@ async def svc_005(request: FeatureRequest) -> FeatureResult:
     raise NotImplementedError("[SVC-005] 기능 구현이 필요합니다.")
 
 
-async def svc_006(request: FeatureRequest) -> FeatureResult:
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
+async def svc_006(
+    service: WikiSourceSubmissionService,
+    *,
+    user_id: str,
+    payload: FeedbackSignalsRequest,
+    request_id: str,
+) -> FeedbackSignalsResponse:
     """[SVC-006] 사용자 피드백 전달.
 
     좋아요, 숨김, 신고 등의 신호를 전달한다.
     """
-    raise NotImplementedError("[SVC-006] 기능 구현이 필요합니다.")
+    return await service.submit_feedback_signals(
+        user_id=user_id, payload=payload, request_id=request_id
+    )
 
 
 async def svc_007(request: FeatureRequest) -> FeatureResult:

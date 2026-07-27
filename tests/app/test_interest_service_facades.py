@@ -18,6 +18,12 @@ class _FakeInterestRepository:
         """활성 Wiki Version 존재 여부를 구성한다."""
         self._wiki_version_id = wiki_version_id
 
+    async def load_recent_feedback_signals(
+        self, user_id: str
+    ) -> Sequence[Mapping[str, object]]:
+        """행동 신호가 없는 상태를 반환한다."""
+        return []
+
     async def load_interest_documents(self, user_id: str) -> Mapping[str, object]:
         """관심사 추출에 사용할 활성 Wiki 문서 한 건을 반환한다."""
         return {

@@ -226,6 +226,10 @@ def test_interest_rebuild_returns_new_active_profile(
             """활성 Profile 조회는 이 테스트에서 사용하지 않는다."""
             return None
 
+        async def load_recent_feedback_signals(self, user_id: str) -> list:
+            """행동 신호가 없는 상태를 반환한다."""
+            return []
+
     container.interest_service = InterestService(_FakeInterestRepository())
 
     response = client.post(
@@ -249,3 +253,51 @@ def test_interest_rebuild_requires_ready_service(client: TestClient) -> None:
 
     assert response.status_code == 503
     assert response.json()["code"] == "SERVICE_NOT_READY"
+
+
+def test_feedback_signals_accepts_batch_idempotently(client: TestClient) -> None:
+    """행동 신호 Batch가 저장되고 같은 이벤트 재전송은 집계에서 빠지는지 검증한다."""
+    payload = {
+        "signals": [
+            {
+                "source_event_id": "signal-1",
+                "signal_type": "like",
+                "topics": ["LangGraph"],
+                "content_id": "content-1",
+            },
+            {
+                "source_event_id": "signal-2",
+                "signal_type": "hide",
+                "topics": ["Crypto"],
+            },
+        ]
+    }
+
+    first = client.post("/internal/v1/users/user-1/feedback-signals", json=payload)
+    duplicate = client.post(
+        "/internal/v1/users/user-1/feedback-signals", json=payload
+    )
+
+    assert first.status_code == 200
+    assert first.json()["accepted_count"] == 2
+    assert duplicate.status_code == 200
+    assert duplicate.json()["accepted_count"] == 0
+
+
+def test_feedback_signals_rejects_unknown_type(client: TestClient) -> None:
+    """정의되지 않은 신호 유형이 422 검증 오류를 반환하는지 검증한다."""
+    response = client.post(
+        "/internal/v1/users/user-1/feedback-signals",
+        json={
+            "signals": [
+                {
+                    "source_event_id": "signal-x",
+                    "signal_type": "view",
+                    "topics": ["LangGraph"],
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "REQUEST_VALIDATION_ERROR"

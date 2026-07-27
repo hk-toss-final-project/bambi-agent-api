@@ -85,6 +85,7 @@ def test_openapi_contains_fastapi_mvp_operations(client: TestClient) -> None:
         "svc_002",
         "svc_003",
         "svc_004",
+        "svc_006",
         "svc_008",
         "svc_013",
         "svc_014",

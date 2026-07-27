@@ -11,6 +11,8 @@ from app.exceptions import AgentApiError, ErrorDetail
 from app.schemas.mvp import (
     AcceptedJobResponse,
     ContentMarkRequest,
+    FeedbackSignalsRequest,
+    FeedbackSignalsResponse,
     GenerationRequest,
     JobResultResponse,
     JobStatus,
@@ -150,6 +152,29 @@ class AgentApiMvpService:
                 ),
             ) from exc
         return self._accepted_job_response(submission)
+
+    async def submit_feedback_signals(
+        self,
+        *,
+        user_id: str,
+        payload: FeedbackSignalsRequest,
+        request_id: str,
+    ) -> FeedbackSignalsResponse:
+        """행동 신호 Batch를 이벤트로 저장한다 — Wiki 문서는 만들지 않는다.
+
+        좋아요 같은 가벼운 선호는 Wiki 편입 대상이 아니라 관심사 신호다.
+        저장된 신호는 다음 관심사 재계산(INT-011) 때 INT-005가 점수에 반영한다.
+        즉시 반영이 필요하면 재계산 API를 이어서 호출한다.
+        """
+        accepted = await self._agent_jobs.submit_feedback_signals(
+            user_id=user_id,
+            signals=[signal.model_dump() for signal in payload.signals],
+        )
+        return FeedbackSignalsResponse(
+            user_id=user_id,
+            accepted_count=accepted,
+            request_id=request_id,
+        )
 
     async def submit_generation(
         self,

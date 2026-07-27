@@ -27,6 +27,7 @@
 - [x] `SVC-002` 웹 클리핑 처리 요청 — 원본·Version·Job 한 Transaction Commit 후 202
 - [x] `SVC-003` URL 처리 요청 — URL Head 저장 + `personal_wiki_url` 수집 Job 등록
 - [x] `SVC-004` 위키마킹 처리 요청 — 생성 후보 본문을 `content_mark` 원본 Version으로 물질화 후 기존 `personal_wiki_build` Job으로 처리 (별도 Handler 불필요, 2026-07-27 구현. 대상 콘텐츠 없으면 404)
+- [x] `SVC-006` 사용자 피드백 전달 — 좋아요·숨김·신고 신호를 `feedback` 이벤트로 멱등 저장(Wiki 문서 미생성). 다음 재계산 때 INT-005가 점수 반영 (2026-07-27 구현)
 - [x] `SVC-008` 콘텐츠 생성 요청 — `generation_requests` + `report_generation` Job 멱등 등록, `scheduled_at` 예약 실행 지원
 - [x] `SVC-013` Agent Job 상태 조회
 - [x] `SVC-014` Agent 결과 조회 — 미완료 시 `JOB_RESULT_NOT_READY`
@@ -57,7 +58,7 @@
 
 - [x] `INT-001` 관심사 Topic 추출 — 활성 Wiki 문서 기반 후보 추출 (Category 부여·Wiki 기반 점수 포함, 로직 소유 `domain/interests`)
 - [ ] `INT-002` 관심사 Category 분류 — ❌ 독립 기능 미구현. 추출(INT-001)이 자체 Category를 부여할 뿐 서비스 분류 체계 매핑은 없음 (2026-07-21 스텁 복원)
-- [ ] `INT-005` 관심사 점수 계산 — ❌ 독립 기능 미구현. 추출(INT-001)의 Wiki 기반 점수만 있고 사용자 행동 강도·최신성 미반영 (2026-07-21 스텁 복원)
+- [x] `INT-005` 관심사 점수 계산 — 행동 신호(좋아요·숨김 등)에 시간 감쇠(반감기 14일)를 적용해 Wiki 기반 점수를 보정, 행동 전용 Topic 후보 추가 (가중치·반감기는 D2 잠정값, 2026-07-27 구현)
 - [x] `INT-011` 관심사 프로필 재계산 — Wiki Build 완료 시 자동 재계산(`run_personal_wiki_build` 훅, 실패해도 Build 결과 유지) + 수동 rebuild API (재계산 오케스트레이션 로직 소유 `domain/interests`)
 
 ### 외부 데이터 자동 수집
@@ -120,6 +121,7 @@
 | SVC-002 | 웹 클리핑 처리 요청 | 클리핑 Markdown을 영속 저장하고 Personal Wiki Builder Job을 등록한다. |
 | SVC-003 | URL 처리 요청 | 입력된 URL을 개인 Wiki 처리 작업으로 전달한다. |
 | SVC-004 | 위키마킹 처리 요청 | 사용자가 선택한 콘텐츠의 Wiki 편입을 요청한다. |
+| SVC-006 | 사용자 피드백 전달 | 좋아요, 숨김, 신고 등의 신호를 전달한다. |
 | SVC-008 | 콘텐츠 생성 요청 | 리포트 생성기의 콘텐츠 생성을 요청한다. |
 | SVC-013 | Agent Job 상태 조회 | 비동기 작업 상태를 조회한다. |
 | SVC-014 | Agent 결과 조회 | 생성 및 처리 결과를 Agent API에서 조회한다. |

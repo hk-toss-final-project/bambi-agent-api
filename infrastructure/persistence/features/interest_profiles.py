@@ -219,6 +219,116 @@ async def save_interest_profile_for_user(
     }
 
 
+# 행동 신호 조회 기본값 — 반감기 14일(D2 잠정) 기준으로 충분히 넓은 창.
+_FEEDBACK_LOOKBACK_DAYS = 30
+_FEEDBACK_EVENT_LIMIT = 500
+
+
+async def load_recent_feedback_signals_for_user(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    lookback_days: int = _FEEDBACK_LOOKBACK_DAYS,
+) -> list[dict[str, object]]:
+    """최근 feedback 이벤트를 Topic 단위 행동 신호로 평탄화해 반환한다.
+
+    이벤트 payload의 `topics` 목록을 펼쳐 `{topic, signal_type, occurred_at}`
+    신호로 만든다 — INT-005 점수 보정의 입력이다.
+    """
+    async with connection.transaction():
+        await set_personal_wiki_scope(connection, user_id=user_id)
+        cursor = await connection.execute(
+            """
+            SELECT payload, occurred_at
+            FROM agent.wiki_source_events
+            WHERE user_id = %s
+              AND source_type = 'feedback'
+              AND occurred_at >= clock_timestamp() - make_interval(days => %s)
+            ORDER BY occurred_at DESC
+            LIMIT %s
+            """,
+            (user_id, lookback_days, _FEEDBACK_EVENT_LIMIT),
+        )
+        rows = await cursor.fetchall()
+    signals: list[dict[str, object]] = []
+    for row in rows:
+        payload = dict(row["payload"] or {})
+        signal_type = str(payload.get("signal_type") or "")
+        topics = payload.get("topics")
+        if not signal_type or not isinstance(topics, list):
+            continue
+        for topic in topics:
+            value = str(topic or "").strip()
+            if value:
+                signals.append(
+                    {
+                        "topic": value,
+                        "signal_type": signal_type,
+                        "occurred_at": row["occurred_at"],
+                    }
+                )
+    return signals
+
+
+async def save_feedback_signals_for_user(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    signals: Sequence[Mapping[str, object]],
+) -> int:
+    """행동 신호를 feedback 이벤트로 멱등 저장하고 신규 저장 수를 반환한다.
+
+    신호는 Wiki 문서를 만들지 않고 이벤트로만 남으며(SVC-006), 다음 관심사
+    재계산(INT-011) 때 INT-005가 읽어 점수에 반영한다. `source_event_id`
+    중복은 건너뛴다.
+    """
+    async with connection.transaction():
+        await set_personal_wiki_scope(connection, user_id=user_id)
+        accepted = 0
+        for signal in signals:
+            payload = {
+                "signal_type": str(signal.get("signal_type") or ""),
+                "topics": [
+                    str(topic).strip()
+                    for topic in (signal.get("topics") or [])
+                    if str(topic).strip()
+                ],
+                "content_id": signal.get("content_id"),
+            }
+            cursor = await connection.execute(
+                """
+                INSERT INTO agent.wiki_source_events (
+                    user_id,
+                    source_event_id,
+                    source_type,
+                    occurred_at,
+                    source_content_id,
+                    payload,
+                    status
+                ) VALUES (
+                    %s, %s, 'feedback', COALESCE(%s, clock_timestamp()),
+                    %s, %s, 'completed'
+                )
+                ON CONFLICT (user_id, source_event_id) DO NOTHING
+                RETURNING id
+                """,
+                (
+                    user_id,
+                    str(signal.get("source_event_id") or ""),
+                    signal.get("occurred_at"),
+                    (
+                        str(signal["content_id"])
+                        if signal.get("content_id")
+                        else None
+                    ),
+                    Jsonb(payload),
+                ),
+            )
+            if await cursor.fetchone() is not None:
+                accepted += 1
+    return accepted
+
+
 class ConnectionInterestProfileRepository:
     """이미 열린 커넥션 위에서 관심사 재계산(INT-011) 저장소 계약을 제공한다.
 
@@ -250,4 +360,12 @@ class ConnectionInterestProfileRepository:
             user_id=user_id,
             wiki_version_id=wiki_version_id,
             candidates=candidates,
+        )
+
+    async def load_recent_feedback_signals(
+        self, user_id: str
+    ) -> list[dict[str, object]]:
+        """최근 사용자 행동 신호를 Topic 단위로 반환한다."""
+        return await load_recent_feedback_signals_for_user(
+            self._connection, user_id=user_id
         )

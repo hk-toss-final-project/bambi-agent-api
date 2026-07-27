@@ -125,6 +125,15 @@ flowchart LR
 | `POST /users/{user_id}/interest-profiles/rebuild` | 관심 키워드 수동 재계산 (Wiki Build 완료 시 자동 재계산되므로 새로고침·복구용) |
 | `GET /users/{user_id}/generated-contents` (+`/{candidate_id}`) | 생성 콘텐츠 목록·상세(본문·Citation) |
 
+### 3.6-1 행동 신호 전달 (2026-07-27 구현)
+
+- **피드백 신호** (`POST .../feedback-signals`): 좋아요·좋아요 취소·숨김·신고를
+  Batch(최대 100건)로 전달합니다. 각 신호에 `topics`(신호가 가리키는 관심
+  Topic, Service가 해석)와 `source_event_id`(멱등 키)를 포함하세요. Wiki
+  문서를 만들지 않으며, **다음 관심사 재계산 때** INT-005가 시간 감쇠와 함께
+  점수에 반영합니다(가중치는 잠정값 — D2 확정 시 변경 가능). 즉시 반영이
+  필요하면 `POST .../interest-profiles/rebuild`를 이어서 호출하세요.
+
 ### 3.7 위키마킹 (2026-07-27 구현 완료)
 
 - **위키마킹** (`POST .../wiki-sources/content-marks`): 사용자가 선택한 생성

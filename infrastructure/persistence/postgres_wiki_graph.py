@@ -17,6 +17,7 @@ from shared.hashing import compute_content_hash
 from shared.wiki_models import InterestCandidate
 from infrastructure.persistence.api import (
     load_interest_documents_for_user,
+    load_recent_feedback_signals_for_user,
     save_interest_profile_for_user,
 )
 from infrastructure.sources.connectors.api import LatestArticle
@@ -524,6 +525,15 @@ class PostgresWikiGraphRepository:
                 user_id=user_id,
                 wiki_version_id=wiki_version_id,
                 candidates=candidates,
+            )
+
+    async def load_recent_feedback_signals(
+        self, user_id: str
+    ) -> list[dict[str, object]]:
+        """최근 사용자 행동 신호를 Topic 단위로 반환한다."""
+        async with self._pool.connection() as connection:
+            return await load_recent_feedback_signals_for_user(
+                connection, user_id=user_id
             )
 
     async def list_interests(self, user_id: str) -> Mapping[str, object] | None:

@@ -55,10 +55,27 @@ class InMemoryAgentJobRepository:
         self._jobs: dict[str, AgentJobRecord] = {}
         self._idempotency: dict[tuple[str, str, str], str] = {}
         self._generated_contents: set[tuple[str, str]] = set()
+        self._feedback_events: set[tuple[str, str]] = set()
 
     def register_generated_content(self, user_id: str, content_id: str) -> None:
         """위키마킹 대상이 될 생성 콘텐츠를 테스트용으로 등록한다."""
         self._generated_contents.add((user_id, content_id))
+
+    async def submit_feedback_signals(
+        self,
+        *,
+        user_id: str,
+        signals: list[dict[str, Any]],
+    ) -> int:
+        """source_event_id 중복을 제외한 신호 저장 수를 반환한다."""
+        accepted = 0
+        for signal in signals:
+            key = (user_id, str(signal.get("source_event_id")))
+            if key in self._feedback_events:
+                continue
+            self._feedback_events.add(key)
+            accepted += 1
+        return accepted
 
     def _submit_job(
         self,

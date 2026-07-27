@@ -12,10 +12,22 @@ from shared.wiki_models import InterestCandidate
 class _FakeRepository:
     """결정적인 Wiki 문서와 저장 호출 기록을 제공하는 저장소 대역."""
 
-    def __init__(self, *, wiki_version_id: object) -> None:
-        """활성 Wiki Version 존재 여부를 구성한다."""
+    def __init__(
+        self,
+        *,
+        wiki_version_id: object,
+        signals: Sequence[Mapping[str, object]] = (),
+    ) -> None:
+        """활성 Wiki Version 존재 여부와 행동 신호를 구성한다."""
         self._wiki_version_id = wiki_version_id
+        self._signals = list(signals)
         self.saved_candidates: Sequence[InterestCandidate] | None = None
+
+    async def load_recent_feedback_signals(
+        self, user_id: str
+    ) -> Sequence[Mapping[str, object]]:
+        """구성된 행동 신호를 반환한다."""
+        return self._signals
 
     async def load_interest_documents(self, user_id: str) -> Mapping[str, object]:
         """활성 Wiki Build와 문서 한 건을 반환한다."""
@@ -68,3 +80,30 @@ def test_int_011_requires_active_wiki() -> None:
     with pytest.raises(ActiveWikiRequiredError):
         asyncio.run(int_011(repository, "user-1", limit=5))
     assert repository.saved_candidates is None
+
+
+def test_int_011_applies_feedback_signals_to_scores() -> None:
+    """재계산이 행동 신호(INT-005)를 반영해 점수를 보정하는지 검증한다."""
+    from datetime import UTC, datetime
+
+    repository = _FakeRepository(
+        wiki_version_id="wiki-version-1",
+        signals=[
+            {
+                "topic": "Python",
+                "signal_type": "like",
+                "occurred_at": datetime(2026, 7, 27, tzinfo=UTC),
+            }
+        ],
+    )
+
+    asyncio.run(int_011(repository, "user-1", limit=5))
+
+    assert repository.saved_candidates is not None
+    python = next(
+        candidate
+        for candidate in repository.saved_candidates
+        if candidate.topic.casefold() == "python"
+    )
+    assert "behavior:like" in python.evidence["reasons"]
+    assert float(python.evidence["behavior_boost"]) > 0

@@ -92,6 +92,8 @@ from .features.audit import db_030
 from .features.interest_profiles import (
     ConnectionInterestProfileRepository,
     load_interest_documents_for_user,
+    load_recent_feedback_signals_for_user,
+    save_feedback_signals_for_user,
     save_interest_profile_for_user,
 )
 

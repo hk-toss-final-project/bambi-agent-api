@@ -25,6 +25,7 @@ from infrastructure.persistence.api import (
     ClaimedAgentJob,
     db_002,
     save_content_mark_and_enqueue,
+    save_feedback_signals_for_user,
     claim_agent_job_by_id,
     complete_agent_job,
     enqueue_personal_wiki_build_job,
@@ -154,6 +155,18 @@ class PostgresAgentJobRepository:
             source_document_id=saved.source_document_id,
             source_document_version_id=saved.source_document_version_id,
         )
+
+    async def submit_feedback_signals(
+        self,
+        *,
+        user_id: str,
+        signals: list[dict[str, Any]],
+    ) -> int:
+        """행동 신호 Batch를 feedback 이벤트로 멱등 저장하고 신규 수를 반환한다."""
+        async with self._pool.connection() as connection:
+            return await save_feedback_signals_for_user(
+                connection, user_id=user_id, signals=signals
+            )
 
     async def submit_content_mark(
         self,

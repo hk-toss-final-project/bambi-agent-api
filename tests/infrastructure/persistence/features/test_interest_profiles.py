@@ -169,3 +169,78 @@ def test_connection_repository_delegates_to_row_functions() -> None:
 
     assert payload["documents"] == []
     assert connection.transactions == 1
+
+
+def test_save_feedback_signals_deduplicates_by_event_id() -> None:
+    """행동 신호 저장이 source_event_id 중복을 건너뛰는지 검증한다."""
+    from infrastructure.persistence.features.interest_profiles import (
+        save_feedback_signals_for_user,
+    )
+
+    connection = _FakeConnection([None, {"id": "event-1"}, None])
+
+    accepted = asyncio.run(
+        save_feedback_signals_for_user(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            signals=[
+                {
+                    "source_event_id": "signal-1",
+                    "signal_type": "like",
+                    "topics": ["LangGraph"],
+                    "content_id": "content-1",
+                    "occurred_at": None,
+                },
+                {
+                    "source_event_id": "signal-1",
+                    "signal_type": "like",
+                    "topics": ["LangGraph"],
+                    "content_id": None,
+                    "occurred_at": None,
+                },
+            ],
+        )
+    )
+
+    assert accepted == 1
+    insert_sql = connection.executed[1][0]
+    assert "'feedback'" in insert_sql
+    assert "ON CONFLICT (user_id, source_event_id) DO NOTHING" in insert_sql
+
+
+def test_load_recent_feedback_signals_flattens_topics() -> None:
+    """feedback 이벤트의 topics가 Topic 단위 신호로 펼쳐지는지 검증한다."""
+    from datetime import UTC, datetime
+
+    from infrastructure.persistence.features.interest_profiles import (
+        load_recent_feedback_signals_for_user,
+    )
+
+    occurred = datetime(2026, 7, 27, tzinfo=UTC)
+    connection = _FakeConnection(
+        [
+            None,
+            [
+                {
+                    "payload": {
+                        "signal_type": "like",
+                        "topics": ["LangGraph", "  ", "Python"],
+                    },
+                    "occurred_at": occurred,
+                },
+                {"payload": {"signal_type": "", "topics": ["무시"]}, "occurred_at": occurred},
+            ],
+        ]
+    )
+
+    signals = asyncio.run(
+        load_recent_feedback_signals_for_user(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+        )
+    )
+
+    assert signals == [
+        {"topic": "LangGraph", "signal_type": "like", "occurred_at": occurred},
+        {"topic": "Python", "signal_type": "like", "occurred_at": occurred},
+    ]

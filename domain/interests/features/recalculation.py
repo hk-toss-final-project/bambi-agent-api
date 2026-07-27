@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 from domain.interests.features.extraction import int_001
+from domain.interests.features.scoring import int_005
 from shared.wiki_models import InterestCandidate
 
 
@@ -31,6 +32,12 @@ class InterestProfileRepository(Protocol):
         candidates: Sequence[InterestCandidate],
     ) -> Mapping[str, object]:
         """새 관심 Profile Version과 근거를 저장한다."""
+        ...
+
+    async def load_recent_feedback_signals(
+        self, user_id: str
+    ) -> Sequence[Mapping[str, object]]:
+        """최근 사용자 행동 신호를 Topic 단위로 반환한다."""
         ...
 
 
@@ -62,6 +69,9 @@ async def int_011(
     documents = source.get("documents")
     document_rows = documents if isinstance(documents, list) else []
     candidates = await int_001(document_rows, limit=limit)
+    signals = await repository.load_recent_feedback_signals(user_id)
+    if signals:
+        candidates = (await int_005(candidates, signals=signals))[:limit]
     return await repository.save_interest_profile(
         user_id, wiki_version_id=wiki_version_id, candidates=candidates
     )
