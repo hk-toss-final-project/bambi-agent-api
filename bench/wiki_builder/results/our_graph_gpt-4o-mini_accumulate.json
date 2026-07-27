@@ -1,0 +1,303 @@
+{
+  "label": "자사 Builder",
+  "nodes": {
+    "어도어": [
+      "ador",
+      "어도어"
+    ],
+    "뉴진스": [
+      "newjeans",
+      "뉴진스"
+    ],
+    "다니엘": [
+      "danielle",
+      "다니엘"
+    ],
+    "민희진": [
+      "min hee jin",
+      "민희진"
+    ],
+    "해린": [
+      "haerin",
+      "해린"
+    ],
+    "혜인": [
+      "hyein",
+      "혜인"
+    ],
+    "하니": [
+      "hanni",
+      "하니"
+    ],
+    "민지": [
+      "minji",
+      "민지"
+    ],
+    "하이브": [
+      "hybe",
+      "하이브"
+    ],
+    "전속계약 위반": [
+      "전속계약 위반"
+    ],
+    "newjeans": [
+      "newjeans"
+    ],
+    "ador": [
+      "ador"
+    ],
+    "min hee jin": [
+      "min hee jin"
+    ],
+    "minji": [
+      "minji"
+    ],
+    "hanni": [
+      "hanni"
+    ],
+    "danielle": [
+      "danielle"
+    ],
+    "haerin": [
+      "haerin"
+    ],
+    "hyein": [
+      "hyein"
+    ],
+    "hybe": [
+      "hybe"
+    ],
+    "제주항공": [
+      "제주항공"
+    ],
+    "일본": [
+      "일본"
+    ],
+    "고베": [
+      "고베"
+    ],
+    "후쿠오카": [
+      "후쿠오카"
+    ],
+    "도쿄": [
+      "나리타",
+      "도쿄"
+    ],
+    "선택과 집중 전략": [
+      "선택과 집중 전략"
+    ],
+    "고유가": [
+      "고유가"
+    ],
+    "뉴진스 사태": [
+      "뉴진스 사태"
+    ],
+    "레드벨벳": [
+      "red velvet",
+      "레드벨벳"
+    ],
+    "sm엔터테인먼트": [
+      "sm엔터테인먼트"
+    ],
+    "2026 red velvet fan con": [
+      "2026 red velvet fan con"
+    ],
+    "오태석": [
+      "오태석"
+    ],
+    "누리호": [
+      "kslv ii",
+      "누리호"
+    ],
+    "우주항공청": [
+      "우주항공청"
+    ],
+    "한화에어로스페이스": [
+      "한화에어로스페이스"
+    ],
+    "누리호 발사": [
+      "누리호 발사"
+    ]
+  },
+  "kinds": {
+    "어도어": "entity",
+    "뉴진스": "entity",
+    "다니엘": "entity",
+    "민희진": "entity",
+    "해린": "entity",
+    "혜인": "entity",
+    "하니": "entity",
+    "민지": "entity",
+    "하이브": "entity",
+    "전속계약 위반": "concept",
+    "newjeans": "entity",
+    "ador": "entity",
+    "min hee jin": "entity",
+    "minji": "entity",
+    "hanni": "entity",
+    "danielle": "entity",
+    "haerin": "entity",
+    "hyein": "entity",
+    "hybe": "entity",
+    "제주항공": "entity",
+    "일본": "entity",
+    "고베": "entity",
+    "후쿠오카": "entity",
+    "도쿄": "entity",
+    "선택과 집중 전략": "concept",
+    "고유가": "concept",
+    "뉴진스 사태": "concept",
+    "레드벨벳": "entity",
+    "sm엔터테인먼트": "entity",
+    "2026 red velvet fan con": "concept",
+    "오태석": "entity",
+    "누리호": "entity",
+    "우주항공청": "entity",
+    "한화에어로스페이스": "entity",
+    "누리호 발사": "concept"
+  },
+  "edges": [
+    [
+      "뉴진스",
+      "뉴진스 사태"
+    ],
+    [
+      "newjeans",
+      "전속계약 위반"
+    ],
+    [
+      "어도어",
+      "전속계약 위반"
+    ],
+    [
+      "누리호 발사",
+      "우주항공청"
+    ],
+    [
+      "뉴진스",
+      "전속계약 위반"
+    ],
+    [
+      "민희진",
+      "어도어"
+    ],
+    [
+      "누리호 발사",
+      "한화에어로스페이스"
+    ],
+    [
+      "고유가",
+      "제주항공"
+    ],
+    [
+      "sm엔터테인먼트",
+      "레드벨벳"
+    ],
+    [
+      "누리호",
+      "누리호 발사"
+    ],
+    [
+      "다니엘",
+      "어도어"
+    ],
+    [
+      "선택과 집중 전략",
+      "제주항공"
+    ],
+    [
+      "뉴진스",
+      "다니엘"
+    ],
+    [
+      "ador",
+      "전속계약 위반"
+    ],
+    [
+      "민희진",
+      "전속계약 위반"
+    ]
+  ],
+  "rows": [
+    {
+      "id": "'뉴진스 조합' 진짜였나..연예기획 목적, 비용 지급됐다 주장스타이슈",
+      "entities": 9,
+      "concepts": 1,
+      "relations": 2,
+      "latency": 16.870484099999885,
+      "error": ""
+    },
+    {
+      "id": "NewJeans set to restart activities in 2026; boosting HYBE outlook",
+      "entities": 3,
+      "concepts": 0,
+      "relations": 0,
+      "latency": 4.664531200000056,
+      "error": ""
+    },
+    {
+      "id": "NewJeans Signal Return As 4 Members With New Photos, Videos",
+      "entities": 8,
+      "concepts": 1,
+      "relations": 1,
+      "latency": 20.062078999999358,
+      "error": ""
+    },
+    {
+      "id": "Who is NewJeans",
+      "entities": 9,
+      "concepts": 1,
+      "relations": 2,
+      "latency": 13.359572699999262,
+      "error": ""
+    },
+    {
+      "id": "고유가에 日 노선 늘렸다…제주항공 '선택과 집중' 전략",
+      "entities": 5,
+      "concepts": 2,
+      "relations": 2,
+      "latency": 24.67289570000139,
+      "error": ""
+    },
+    {
+      "id": "뉴진스 “脫어도어” → 법원 “계약 유효”… 3명은 복귀, 수백억 소송 남아10문10답",
+      "entities": 9,
+      "concepts": 2,
+      "relations": 2,
+      "latency": 17.892214200001035,
+      "error": ""
+    },
+    {
+      "id": "레드벨벳 완전체, 8월 전격 컴백 공식",
+      "entities": 2,
+      "concepts": 1,
+      "relations": 1,
+      "latency": 7.430924600001163,
+      "error": ""
+    },
+    {
+      "id": "어도어 다니엘, 이중계약 은폐 vs 돈 안 받았으니 위반 아냐",
+      "entities": 4,
+      "concepts": 1,
+      "relations": 3,
+      "latency": 9.496045899999444,
+      "error": ""
+    },
+    {
+      "id": "어도어, 뉴진스 5人 해외 회사와 이중계약 체결 언급…“다니엘만 함구” 주장",
+      "entities": 8,
+      "concepts": 2,
+      "relations": 2,
+      "latency": 13.494058999996923,
+      "error": ""
+    },
+    {
+      "id": "오태석 우주청장 다음주 누리호 총조립 개시…9월 발사 추진",
+      "entities": 4,
+      "concepts": 1,
+      "relations": 3,
+      "latency": 24.147748700001102,
+      "error": ""
+    }
+  ]
+}
