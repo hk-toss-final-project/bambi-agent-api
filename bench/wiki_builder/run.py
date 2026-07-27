@@ -21,6 +21,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from dotenv import load_dotenv
+
+# OPENAI_API_KEY를 .env에서 읽는다(앱 진입점과 같은 방식).
+load_dotenv(PROJECT_ROOT / ".env")
+
 from agent.llm.api import complete_with_usage
 from agent.wiki_builder.features import classification
 
@@ -88,7 +93,17 @@ def _expected_relation_signature(
     )
 
 
-def _score(result: object, expected: dict[str, Any]) -> tuple[bool, list[str]]:
+def _reversed_signature(
+    signature: tuple[str, str, str, str, str],
+) -> tuple[str, str, str, str, str]:
+    """방향만 뒤집은 관계 Signature를 만든다."""
+    source_kind, source_name, target_kind, target_name, relation_type = signature
+    return (target_kind, target_name, source_kind, source_name, relation_type)
+
+
+def _score(
+    result: object, expected: dict[str, Any]
+) -> tuple[bool, list[str], dict[str, int]]:
     """노드·관계 추출 결과를 Dataset의 품질 기준으로 채점한다."""
     errors: list[str] = []
     entities = _names(result.entities, "name")
@@ -134,18 +149,38 @@ def _score(result: object, expected: dict[str, Any]) -> tuple[bool, list[str]]:
         if term.casefold() not in summary:
             errors.append(f"missing summary term: {term}")
     relations = {_relation_signature(relation) for relation in result.relations}
+    stats = {"tp": 0, "fn": 0, "forbidden_hit": 0, "reversed_only": 0}
     for expected_relation in expected.get("relations", []):
         signature = _expected_relation_signature(expected_relation)
-        if signature not in relations:
+        if signature in relations:
+            stats["tp"] += 1
+            continue
+        stats["fn"] += 1
+        # 옵시디언 위키링크는 방향이 모호할 수 있어 역방향 일치를 따로 센다.
+        if _reversed_signature(signature) in relations:
+            stats["reversed_only"] += 1
+        errors.append(
+            "missing relation: "
+            f"{expected_relation['source_name']} -> "
+            f"{expected_relation['target_name']} / "
+            f"{expected_relation['relation_type']}"
+        )
+    for forbidden in expected.get("forbidden_relations", []):
+        signature = _expected_relation_signature(forbidden)
+        if signature in relations or _reversed_signature(signature) in relations:
+            stats["forbidden_hit"] += 1
             errors.append(
-                "missing relation: "
-                f"{expected_relation['source_name']} -> "
-                f"{expected_relation['target_name']} / "
-                f"{expected_relation['relation_type']}"
+                "forbidden relation: "
+                f"{forbidden['source_name']} -> {forbidden['target_name']}"
             )
+    judged = len(expected.get("relations", [])) + len(
+        expected.get("forbidden_relations", [])
+    )
+    stats["unjudged"] = max(0, len(relations) - stats["tp"] - stats["forbidden_hit"])
+    stats["judged"] = judged
     if len(relations) > expected.get("max_relations", 10_000):
         errors.append(f"too many relations: {len(relations)}")
-    return not errors, errors
+    return not errors, errors, stats
 
 
 def _prompt_revision() -> str:
@@ -205,15 +240,25 @@ def main() -> None:
                     existing_concepts=[],
                     model=args.model,
                 )
-                passed, errors = _score(result, case["expected"])
+                passed, errors, stats = _score(result, case["expected"])
             except Exception as error:
                 passed = False
                 errors = [f"{type(error).__name__}: {error}"]
+                expected = case["expected"]
+                stats = {
+                    "tp": 0,
+                    "fn": len(expected.get("relations", [])),
+                    "forbidden_hit": 0,
+                    "reversed_only": 0,
+                    "unjudged": 0,
+                    "judged": 0,
+                }
             rows.append(
                 {
                     "id": case["id"],
                     "passed": passed,
                     "errors": errors,
+                    "stats": stats,
                     "latency": time.perf_counter() - started,
                     "input_tokens": usage.input_tokens - before_input,
                     "output_tokens": usage.output_tokens - before_output,
@@ -225,6 +270,13 @@ def main() -> None:
     now = datetime.now(UTC)
     passed_count = sum(int(row["passed"]) for row in rows)
     total_latency = sum(float(row["latency"]) for row in rows)
+    tp = sum(int(row["stats"]["tp"]) for row in rows)
+    fn = sum(int(row["stats"]["fn"]) for row in rows)
+    forbidden_hit = sum(int(row["stats"]["forbidden_hit"]) for row in rows)
+    reversed_only = sum(int(row["stats"]["reversed_only"]) for row in rows)
+    unjudged = sum(int(row["stats"]["unjudged"]) for row in rows)
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    precision = tp / (tp + forbidden_hit) if tp + forbidden_hit else 0.0
     input_cost = usage.input_tokens * args.input_cost_per_million / 1_000_000
     output_cost = usage.output_tokens * args.output_cost_per_million / 1_000_000
     result_dir = ROOT / "results"
@@ -240,7 +292,11 @@ def main() -> None:
         f"- 프롬프트 버전: {_prompt_revision()}",
         f"- 케이스: {len(rows)}",
         f"- 성공: {passed_count}",
-        f"- 정확도: {passed_count / len(rows):.2%}",
+        f"- 정확도(케이스 전체 통과): {passed_count / len(rows):.2%}",
+        f"- 연결 Recall: {recall:.2%} — 정답 연결 {tp}/{tp + fn}건 생성",
+        f"- 연결 Precision(판정 가능 범위): {precision:.2%} — 금지 연결 위반 {forbidden_hit}건",
+        f"- 방향만 다른 일치: {reversed_only}건 (정답지와 반대 방향)",
+        f"- 정답지 밖 연결: {unjudged}건 (판정 대상 아님)",
         f"- 평균 지연시간: {total_latency / len(rows):.3f}s",
         f"- 입력 토큰: {usage.input_tokens}",
         f"- 출력 토큰: {usage.output_tokens}",

@@ -48,9 +48,13 @@ UI만 쓸 경우에는 필요 없습니다.
 ### 2. Agent API 서버 + Swagger
 
 ```bash
-uv run uvicorn app.main:app --port 8000 --reload
+uv run uvicorn app.main:app --port 8000 --reload --loop app.main:selector_event_loop
 ```
 
+- `--loop app.main:selector_event_loop`는 **DB 연결에 필요합니다.** Windows의
+  uvicorn 기본 루프(ProactorEventLoop)에서는 psycopg 비동기 Pool이 붙지 못해
+  DB를 쓰는 모든 요청이 `SERVICE_NOT_READY`로 실패합니다. Linux·macOS에서는
+  Selector 루프가 기본이라 동작이 달라지지 않으므로 그대로 두면 됩니다.
 - Swagger UI: <http://127.0.0.1:8000/docs> — 우측 상단 버튼으로 다크·라이트
   모드를 전환할 수 있고, 선택한 테마는 브라우저에 저장됩니다.
 - ReDoc: <http://127.0.0.1:8000/redoc> · OpenAPI JSON: <http://127.0.0.1:8000/openapi.json>

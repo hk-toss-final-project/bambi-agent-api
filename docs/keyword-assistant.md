@@ -58,7 +58,7 @@
 키워드 비서 웹 UI는 **Agent API 서버와 같은 프로세스**에서 제공된다.
 
 ```bash
-uv run uvicorn app.main:app --port 8000
+uv run uvicorn app.main:app --port 8000 --loop app.main:selector_event_loop
 ```
 
 - 키워드 비서 UI : <http://127.0.0.1:8000/assistant/>  ← 브라우저로 접속해 키워드 입력

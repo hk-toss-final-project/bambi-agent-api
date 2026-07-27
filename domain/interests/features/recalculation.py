@@ -1,8 +1,8 @@
 """관심사 프로필 재계산 기능 구현.
 
-INT-011의 실제 구현 위치다. 활성 Wiki Build의 문서를 읽어 INT-001로
-관심 후보를 추출하고, 주입된 저장소 경계에 새 관심 Profile Version으로
-저장한다.
+INT-011의 실제 구현 위치다. 활성 Wiki Build의 Entity·Concept 노드를 읽어
+INT-001로 관심 후보를 추출하고, INT-005로 최신성·행동 강도 점수를 계산한 뒤,
+주입된 저장소 경계에 새 관심 Profile Version으로 저장한다.
 """
 
 from collections.abc import Mapping, Sequence
@@ -11,6 +11,10 @@ from typing import Protocol
 from domain.interests.features.extraction import int_001
 from domain.interests.features.scoring import int_005
 from shared.wiki_models import InterestCandidate
+
+# 점수 계산 전에 후보를 성급히 잘라내지 않도록 저장 한도보다 넓게 추출한다.
+_CANDIDATE_POOL_MULTIPLIER = 3
+_MAX_CANDIDATE_POOL = 100
 
 
 class ActiveWikiRequiredError(Exception):
@@ -47,7 +51,8 @@ async def int_011(
 ) -> Mapping[str, object]:
     """[INT-011] 관심사 프로필 재계산.
 
-    활성 Wiki 문서에서 관심 후보를 다시 추출해 새 Profile로 저장한다.
+    활성 Wiki 노드에서 관심 후보를 다시 추출하고(INT-001) 최신성·행동 강도
+    점수를 계산해(INT-005) 새 Profile로 저장한다.
 
     Args:
         repository: 관심사 문서 조회·Profile 저장 경계
@@ -68,10 +73,11 @@ async def int_011(
         )
     documents = source.get("documents")
     document_rows = documents if isinstance(documents, list) else []
-    candidates = await int_001(document_rows, limit=limit)
+    candidate_pool = min(_MAX_CANDIDATE_POOL, limit * _CANDIDATE_POOL_MULTIPLIER)
+    candidates = await int_001(document_rows, limit=max(candidate_pool, limit))
+    # 행동 신호가 없어도 Wiki 근거 기반 기본 점수는 항상 계산한다.
     signals = await repository.load_recent_feedback_signals(user_id)
-    if signals:
-        candidates = (await int_005(candidates, signals=signals))[:limit]
+    scored = await int_005(candidates, signals=signals, limit=limit)
     return await repository.save_interest_profile(
-        user_id, wiki_version_id=wiki_version_id, candidates=candidates
+        user_id, wiki_version_id=wiki_version_id, candidates=scored
     )

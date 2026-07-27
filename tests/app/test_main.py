@@ -1,10 +1,34 @@
 """FastAPI 애플리케이션 팩토리의 기본 조립 결과를 검증한다."""
 
+import asyncio
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from uvicorn.config import Config
 
 from app.config import Settings
-from app.main import create_app
+from app.main import create_app, selector_event_loop
+
+
+def test_selector_event_loop_is_psycopg_compatible() -> None:
+    """psycopg 비동기 연결이 요구하는 Selector 루프를 만드는지 검증한다."""
+    loop = selector_event_loop()
+    try:
+        assert isinstance(loop, asyncio.SelectorEventLoop)
+    finally:
+        loop.close()
+
+
+def test_uvicorn_resolves_the_loop_factory_from_import_string() -> None:
+    """uvicorn --loop 옵션이 이 팩토리를 그대로 찾아 쓰는지 검증한다.
+
+    실행 설정과 문서가 `--loop app.main:selector_event_loop`를 지정하므로,
+    uvicorn이 커스텀 팩토리를 해석하는 경로가 깨지면 서버가 Windows에서 다시
+    ProactorEventLoop로 떠 DB Pool이 실패한다.
+    """
+    config = Config("app.main:app", loop="app.main:selector_event_loop")
+
+    assert config.get_loop_factory() is selector_event_loop
 
 
 def test_create_app_uses_settings_metadata() -> None:

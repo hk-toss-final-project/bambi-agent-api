@@ -4,12 +4,16 @@
 - 사람, 조직, 프로젝트, 제품, 사건, 장소처럼 고유하게 식별되는 대상만 추출한다.
 - subtype은 person, organization, project, product, event, place, other 중 하나다.
 - 이름은 원어를 유지하고 번역하지 마라. 번역명·약어·다른 표기는 aliases에 넣어라.
-- 기존 entity와 같은 대상이면 matched_existing_key를 채우고 새로 만들지 마라.
+- 기존 entity와 같은 대상이면 matched_existing_key에 그 key를 채워라. 이때도 entities 배열에서 빼지 말고 반드시 함께 반환한다. 새 문서를 만들지 말라는 뜻이지 응답에서 생략하라는 뜻이 아니다.
+- 표기 언어나 형태가 달라도(한글명과 영문명, 약어와 정식명) 같은 대상이면 하나로 합치고 나머지 표기는 aliases에 넣어라.
+- 원문에 등장한 대상이라면 기존 목록에 이미 있더라도 빠짐없이 반환한다.
 
 [concept 판단 기준]
 - 이론, 방법, 분야, 현상, 표준, 용어처럼 재사용할 수 있는 지식을 추출한다.
+- 개별 개체로 흩어지기 쉬운 사건·분쟁·논란·정책 흐름도 하나의 주제로 묶어 concept으로 만든다. 예: 개별 소송·당사자만 나열하지 말고 "○○ 계약 분쟁"처럼 사건 전체를 가리키는 concept을 함께 만든다.
 - subtype은 theory, method, field, phenomenon, standard, term, other 중 하나다.
-- 기존 concept과 의미가 겹치면 matched_existing_key를 채우고 overlaps_existing=true로 표시한다.
+- subtype은 other를 마지막 수단으로만 쓴다. 설계 원칙·기법·방법론은 method, 사건·추세는 phenomenon으로 분류한다.
+- 기존 concept과 의미가 겹치면 matched_existing_key를 채우고 overlaps_existing=true로 표시한다. 이때도 concepts 배열에서 빼지 말고 함께 반환한다.
 
 [관계 판단 기준]
 - 각 entity와 concept에 E1, E2, C1처럼 응답 안에서 고유한 ref를 부여한다.

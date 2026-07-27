@@ -56,10 +56,10 @@
 
 ### DB 기반 관심사 분류
 
-- [x] `INT-001` 관심사 Topic 추출 — 활성 Wiki 문서 기반 후보 추출 (Category 부여·Wiki 기반 점수 포함, 로직 소유 `domain/interests`)
-- [ ] `INT-002` 관심사 Category 분류 — ❌ 독립 기능 미구현. 추출(INT-001)이 자체 Category를 부여할 뿐 서비스 분류 체계 매핑은 없음 (2026-07-21 스텁 복원)
-- [x] `INT-005` 관심사 점수 계산 — 행동 신호(좋아요·숨김 등)에 시간 감쇠(반감기 14일)를 적용해 Wiki 기반 점수를 보정, 행동 전용 Topic 후보 추가 (가중치·반감기는 D2 잠정값, 2026-07-27 구현)
-- [x] `INT-011` 관심사 프로필 재계산 — Wiki Build 완료 시 자동 재계산(`run_personal_wiki_build` 훅, 실패해도 Build 결과 유지) + 수동 rebuild API (재계산 오케스트레이션 로직 소유 `domain/interests`)
+- [x] `INT-001` 관심사 Topic 추출 — 활성 Wiki의 Entity·Concept 노드를 후보로 삼고 관계 유형 가중 연결 수(degree)로 정렬 (2026-07-23 텍스트 토큰화 폐기, 로직 소유 `domain/interests`)
+- [ ] `INT-002` 관심사 Category 분류 — ❌ 독립 기능 미구현. 추출(INT-001)이 노드 `domain`을 Category로 옮길 뿐 서비스 분류 체계 매핑은 없음 (2026-07-21 스텁 복원)
+- [x] `INT-005` 관심사 점수 계산 — 2층 계산(2026-07-27 병합). ① 기본 점수: 근거 원문의 수·종류(행동 강도)와 반감기 감쇠(최신성, 90일)를 INT-001 구조 가중치에 곱한다. ② 행동 보정: 좋아요·숨김 신호에 시간 감쇠(반감기 14일)를 적용해 기본 점수에 더하고, Wiki에 없는 Topic도 양의 신호가 쌓이면 행동 전용 후보로 추가한다. 신호 가중치·신호 반감기는 D2 잠정값. 로직 소유 `domain/interests`
+- [x] `INT-011` 관심사 프로필 재계산 — Wiki Build 완료 시 자동 재계산(`run_personal_wiki_build` 훅, 실패해도 Build 결과 유지) + 수동 rebuild API. 행동 신호가 없어도 기본 점수는 항상 계산한다. 오케스트레이션 로직 소유 `domain/interests`
 
 ### 외부 데이터 자동 수집
 
