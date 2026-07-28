@@ -281,7 +281,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         #      죽은 것으로 보고 같은 Job을 다시 돌린다(리포트 중복·LLM 비용 2배).
         #   2. 외부 API 한도 — 사용자마다 뉴스·YouTube·Reddit을 직접 호출하면
         #      금방 차단된다(2026-07-28 실측: GDELT 429). 풀은 한 번 모아 여럿이 쓴다.
-        #   3. 출처 증빙 — 풀 문서는 version_id가 있는 G 참조가 된다. 실시간 자료는
+        #   3. 출처 증빙 — 풀 문서는 캐시 문서 ID(gsrc:)가 있는 G 참조가 된다. 실시간 자료는
         #      URL이 유일한 증빙이라 원문이 바뀌면 근거를 확인할 수 없다.
         #
         # 판정이 헐거우면 오히려 손해다. 잡음 수준 문서로 수집을 건너뛰면 리포트가

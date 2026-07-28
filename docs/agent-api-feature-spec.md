@@ -728,7 +728,7 @@
 | DB-007 | 사용자 관심사 저장 | 관심사 프로필, 계층, 관계를 저장한다. |
 | DB-008 | Global Source 저장 | 외부 수집 Source와 설정을 저장한다. |
 | DB-009 | Global Collection Run 저장 | 수집 실행 결과와 상태를 저장한다. |
-| DB-010 | Global 문서 저장 | 수집된 외부 문서와 버전을 저장한다. |
+| DB-010 | Global 문서 저장 | 수집된 외부 문서를 수집 캐시에 저장한다. |
 | DB-011 | Global Chunk 저장 | Global Source 검색용 Chunk를 저장한다. |
 | DB-012 | Global Embedding 저장 | Global Source의 Vector 데이터를 저장한다. |
 | DB-013 | Global Trend 저장 | 탐지된 트렌드와 문서 그룹을 저장한다. |

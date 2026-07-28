@@ -228,7 +228,7 @@ async def enqueue_report_generation_job(
             content_type,
             context["plan"],
             resolved_language,
-            Jsonb({"retrieval": "personal-global-keyword-v1"}),
+            Jsonb({"retrieval": "personal-wiki-global-cache-keyword-v2"}),
         ),
     )
     generation_request = await request_cursor.fetchone()
@@ -251,16 +251,23 @@ async def load_report_context(
     query: str,
     top_k_per_scope: int = 5,
 ) -> list[ReportContextDocument]:
-    """개인 Wiki와 Global 최신 문서의 Keyword·Trigram 검색 Context를 조회한다."""
+    """개인 Wiki와 Global 수집 캐시의 Keyword·Trigram 검색 Context를 조회한다.
+
+    개인 Wiki는 `wiki_chunks`에서, Global 최신 자료는 수집 캐시
+    (`global_source_documents`)에서 각각 검색해 Scope별 top-k로 합친다.
+    캐시 문서는 Wiki Version·Chunk가 없으므로 참조 식별자를
+    `gsrc:<캐시 문서 UUID>` 형태로 만들어 반환한다 — Citation 저장 시
+    이 접두사로 캐시 출처를 구분한다.
+    """
     if not 1 <= top_k_per_scope <= 20:
         raise ValueError("Report Builder 검색 top_k는 1에서 20 사이여야 합니다.")
     namespace_key = f"user/{user_id}"
     cursor = await connection.execute(
         """
-        WITH scored AS (
+        WITH personal AS (
             SELECT
-                version.id AS document_version_id,
-                chunk.id AS chunk_id,
+                version.id::text AS document_version_id,
+                chunk.id::text AS chunk_id,
                 document.namespace_key,
                 version.title,
                 chunk.content,
@@ -268,7 +275,7 @@ async def load_report_context(
                 GREATEST(
                     similarity(chunk.content, %s),
                     ts_rank(chunk.search_vector, plainto_tsquery('simple', %s))
-                ) + CASE WHEN document.namespace_key = %s THEN 0.05 ELSE 0 END AS score
+                ) + 0.05 AS score
             FROM agent.wiki_chunks AS chunk
             JOIN agent.wiki_document_versions AS version
               ON version.id = chunk.document_version_id
@@ -277,13 +284,36 @@ async def load_report_context(
               ON document.id = version.document_id
              AND document.namespace_key = version.namespace_key
              AND document.current_version = version.version
-            WHERE chunk.namespace_key IN (%s, 'global')
+            WHERE chunk.namespace_key = %s
               AND chunk.is_searchable
               AND document.deleted_at IS NULL
               AND (
                     similarity(chunk.content, %s) > 0.05
                     OR chunk.search_vector @@ plainto_tsquery('simple', %s)
               )
+        ), global_cache AS (
+            SELECT
+                'gsrc:' || cache.id AS document_version_id,
+                'gsrc:' || cache.id AS chunk_id,
+                'global' AS namespace_key,
+                cache.title,
+                cache.markdown AS content,
+                COALESCE(cache.resolved_url, cache.canonical_url) AS url,
+                GREATEST(
+                    similarity(cache.markdown, %s),
+                    ts_rank(cache.search_vector, plainto_tsquery('simple', %s))
+                ) AS score
+            FROM agent.global_source_documents AS cache
+            WHERE cache.content_status = 'fetched'
+              AND cache.markdown IS NOT NULL
+              AND (
+                    similarity(cache.markdown, %s) > 0.05
+                    OR cache.search_vector @@ plainto_tsquery('simple', %s)
+              )
+        ), scored AS (
+            SELECT * FROM personal
+            UNION ALL
+            SELECT * FROM global_cache
         ), ranked AS (
             SELECT *, row_number() OVER (
                 PARTITION BY namespace_key = 'global'
@@ -296,25 +326,34 @@ async def load_report_context(
         WHERE scope_rank <= %s
         ORDER BY (namespace_key = 'global'), score DESC
         """,
-        (query, query, namespace_key, namespace_key, query, query, top_k_per_scope),
+        (
+            query,
+            query,
+            namespace_key,
+            query,
+            query,
+            query,
+            query,
+            query,
+            query,
+            top_k_per_scope,
+        ),
     )
     rows = await cursor.fetchall()
     if not rows:
         fallback_cursor = await connection.execute(
             """
-            WITH recent AS (
+            WITH personal AS (
                 SELECT
-                    version.id AS document_version_id,
-                    chunk.id AS chunk_id,
+                    version.id::text AS document_version_id,
+                    chunk.id::text AS chunk_id,
                     document.namespace_key,
                     version.title,
                     chunk.content,
                     COALESCE(document.canonical_url, version.source_metadata->>'url') AS url,
                     0::float AS score,
-                    row_number() OVER (
-                        PARTITION BY document.namespace_key = 'global'
-                        ORDER BY document.updated_at DESC, chunk.chunk_index
-                    ) AS scope_rank
+                    document.updated_at AS recency,
+                    chunk.chunk_index AS tiebreak
                 FROM agent.wiki_chunks AS chunk
                 JOIN agent.wiki_document_versions AS version
                   ON version.id = chunk.document_version_id
@@ -323,11 +362,43 @@ async def load_report_context(
                   ON document.id = version.document_id
                  AND document.namespace_key = version.namespace_key
                  AND document.current_version = version.version
-                WHERE chunk.namespace_key IN (%s, 'global')
+                WHERE chunk.namespace_key = %s
                   AND chunk.is_searchable
                   AND document.deleted_at IS NULL
+            ), global_cache AS (
+                SELECT
+                    'gsrc:' || cache.id AS document_version_id,
+                    'gsrc:' || cache.id AS chunk_id,
+                    'global' AS namespace_key,
+                    cache.title,
+                    cache.markdown AS content,
+                    COALESCE(cache.resolved_url, cache.canonical_url) AS url,
+                    0::float AS score,
+                    cache.updated_at AS recency,
+                    0 AS tiebreak
+                FROM agent.global_source_documents AS cache
+                WHERE cache.content_status = 'fetched'
+                  AND cache.markdown IS NOT NULL
+            ), merged AS (
+                SELECT * FROM personal
+                UNION ALL
+                SELECT * FROM global_cache
+            ), recent AS (
+                SELECT *, row_number() OVER (
+                    PARTITION BY namespace_key = 'global'
+                    ORDER BY recency DESC, tiebreak
+                ) AS scope_rank
+                FROM merged
             )
-            SELECT * FROM recent
+            SELECT
+                document_version_id,
+                chunk_id,
+                namespace_key,
+                title,
+                content,
+                url,
+                score
+            FROM recent
             WHERE scope_rank <= %s
             ORDER BY (namespace_key = 'global'), scope_rank
             """,
@@ -363,8 +434,10 @@ def _uuid_or_none(value: str) -> str | None:
     """UUID 형식이 아닌 문서 식별자를 None으로 바꾼다.
 
     실시간 외부 자료(live_sources)는 Wiki 문서가 아니라서 Version·Chunk UUID가
-    없고 참조 ID(L1 등)를 대신 담는다. citations의 uuid 컬럼·FK에 그대로 넣으면
-    저장이 실패하므로 URL만 출처 증빙으로 남긴다.
+    없고 참조 ID(L1 등)를 대신 담는다. Global 수집 캐시 문서도 `gsrc:` 접두사
+    식별자를 담는다. citations의 Wiki uuid 컬럼·FK에 그대로 넣으면 저장이
+    실패하므로 여기서는 None으로 바꾸고, 캐시 출처는 별도 컬럼
+    (global_source_document_id)이, 실시간 자료는 URL이 증빙을 맡는다.
     """
     if not value:
         return None
@@ -373,6 +446,26 @@ def _uuid_or_none(value: str) -> str | None:
     except ValueError:
         return None
     return value
+
+
+# Global 수집 캐시 문서를 가리키는 검색 Context 식별자 접두사.
+_GLOBAL_CACHE_PREFIX = "gsrc:"
+
+
+def _global_cache_id_or_none(value: str) -> str | None:
+    """'gsrc:<uuid>' 형태의 Global 캐시 참조에서 캐시 문서 UUID를 꺼낸다.
+
+    Wiki 문서 UUID·실시간 참조(L1 등)는 None을 반환해 citations의
+    global_source_document_id FK에 잘못 저장되지 않게 한다.
+    """
+    if not value or not value.startswith(_GLOBAL_CACHE_PREFIX):
+        return None
+    candidate = value[len(_GLOBAL_CACHE_PREFIX):]
+    try:
+        UUID(candidate)
+    except ValueError:
+        return None
+    return candidate
 
 
 async def persist_report_generation(
@@ -501,12 +594,13 @@ async def persist_report_generation(
                 ordinal,
                 document_version_id,
                 chunk_id,
+                global_source_document_id,
                 title,
                 url,
                 quoted_text,
                 claim_paths,
                 citation_hash
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -515,6 +609,7 @@ async def persist_report_generation(
                 ordinal,
                 _uuid_or_none(context.document_version_id),
                 _uuid_or_none(context.chunk_id),
+                _global_cache_id_or_none(context.document_version_id),
                 context.title,
                 context.url,
                 context.content[:500],
@@ -618,47 +713,45 @@ async def load_global_document_freshness(
     connection: AsyncConnection[DictRow],
     document_version_ids: Sequence[str],
 ) -> dict[str, datetime]:
-    """Global 풀 문서의 발행 시각을 document_version_id로 일괄 조회한다.
+    """Global 풀 문서의 발행 시각을 검색 Context 식별자로 일괄 조회한다.
 
-    수집 워커가 `metadata.published_at`에 ISO 문자열로 남긴 값을 읽는다. Report
-    Builder가 "풀 자료가 실시간 수집을 대체할 만큼 신선한가"를 판정할 때 쓴다.
+    풀 문서는 수집 캐시(`global_source_documents`)에 살고, 검색 Context에는
+    `gsrc:<캐시 문서 UUID>` 식별자로 나타난다. Report Builder가 "풀 자료가
+    실시간 수집을 대체할 만큼 신선한가"를 판정할 때 쓴다.
 
-    발행일이 없거나 형식이 잘못된 문서는 결과에서 빠진다 — 호출자는 "모르는 것"과
-    "오래된 것"을 구분해 처리해야 한다(모른다는 이유로 버리면 쓸 수 있는 근거가
-    사라진다).
+    발행일이 없는 문서는 결과에서 빠진다 — 호출자는 "모르는 것"과 "오래된
+    것"을 구분해 처리해야 한다(모른다는 이유로 버리면 쓸 수 있는 근거가
+    사라진다). `gsrc:` 형태가 아닌 식별자(개인 Wiki·테스트 더미)는 그대로
+    무시한다.
 
     Args:
         connection: DB 연결
-        document_version_ids: 조회할 Wiki 문서 Version ID 목록
+        document_version_ids: 검색 Context의 문서 식별자 목록
 
     Returns:
-        {document_version_id: 발행 시각(UTC)}
+        {전달받은 식별자 그대로: 발행 시각(UTC)}
     """
-    targets = [str(value) for value in document_version_ids if str(value or "").strip()]
-    if not targets:
+    cache_ids: dict[str, str] = {}
+    for value in document_version_ids:
+        identifier = str(value or "").strip()
+        cache_id = _global_cache_id_or_none(identifier)
+        if cache_id is not None:
+            cache_ids[cache_id] = identifier
+    if not cache_ids:
         return {}
     cursor = await connection.execute(
         """
-        SELECT version.id AS document_version_id,
-               document.metadata->>'published_at' AS published_at
-        FROM agent.wiki_document_versions AS version
-        JOIN agent.wiki_documents AS document
-          ON document.id = version.document_id
-         AND document.namespace_key = version.namespace_key
-        WHERE version.namespace_key = 'global'
-          AND version.id = ANY(%s)
-          AND document.metadata->>'published_at' IS NOT NULL
+        SELECT id, published_at
+        FROM agent.global_source_documents
+        WHERE id = ANY(%s)
+          AND published_at IS NOT NULL
         """,
-        (targets,),
+        (list(cache_ids),),
     )
     freshness: dict[str, datetime] = {}
     for row in await cursor.fetchall():
-        raw = str(row["published_at"] or "")
-        try:
-            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=UTC)
-        freshness[str(row["document_version_id"])] = parsed
+        published = row["published_at"]
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=UTC)
+        freshness[cache_ids[str(row["id"])]] = published
     return freshness

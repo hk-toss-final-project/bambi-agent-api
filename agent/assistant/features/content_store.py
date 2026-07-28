@@ -1,13 +1,14 @@
-"""Global 본문 저장소 조회 경계 (비서 전용, 동기).
+"""Global 수집 캐시 조회 경계 (비서 전용, 동기).
 
 Global 뉴스 파이프라인(global_content_fetcher)이 Jina Reader로 수집해 둔 기사
 본문을 비서가 재사용한다. 소스 커버리지 통합으로 두 파이프라인이 같은 기사를
-보게 되면서, 본문이 이미 저장돼 있으면 짧은 Provider 설명 대신 전체 본문을
+보게 되면서, 본문이 이미 캐시에 있으면 짧은 Provider 설명 대신 전체 본문을
 유사도 필터·통합 요약 입력으로 쓸 수 있다 — 추가 네트워크 호출 없이.
 
 비서는 DB 없이도 동작해야 하므로(이력 저장소 storage.py와 같은 원칙) 연결
-문자열이 없거나 조회가 실패하면 빈 결과로 폴백한다. Global 문서 SELECT는
-RLS 정책상 접근 Scope 설정 없이 허용된다(wiki_document_read).
+문자열이 없거나 조회가 실패하면 빈 결과로 폴백한다. 수집 캐시
+(`global_source_documents`)는 소유자가 없는 공유 데이터라 RLS 정책상 접근
+Scope 설정 없이 SELECT가 허용된다.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ logger = logging.getLogger("agent.assistant.content_store")
 
 
 def fetch_global_article_texts(urls: Sequence[str]) -> dict[str, str]:
-    """canonical_url이 일치하는 fetched Global 문서의 본문을 일괄 조회한다.
+    """canonical_url이 일치하는 fetched 캐시 문서의 본문을 일괄 조회한다.
 
     Args:
         urls: 조회할 기사 URL 목록 (Provider가 준 원본 URL 그대로)
@@ -38,16 +39,11 @@ def fetch_global_article_texts(urls: Sequence[str]) -> dict[str, str]:
         with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT document.canonical_url, version.normalized_content
-                FROM agent.wiki_documents AS document
-                JOIN agent.wiki_document_versions AS version
-                  ON version.document_id = document.id
-                 AND version.namespace_key = document.namespace_key
-                 AND version.version = document.current_version
-                WHERE document.namespace_key = 'global'
-                  AND document.deleted_at IS NULL
-                  AND document.metadata->>'content_status' = 'fetched'
-                  AND document.canonical_url = ANY(%s)
+                SELECT canonical_url, markdown
+                FROM agent.global_source_documents
+                WHERE content_status = 'fetched'
+                  AND markdown IS NOT NULL
+                  AND canonical_url = ANY(%s)
                 """,
                 (targets,),
             )
@@ -58,7 +54,7 @@ def fetch_global_article_texts(urls: Sequence[str]) -> dict[str, str]:
             }
     except Exception as error:
         logger.warning(
-            "Global 본문 조회 실패, Provider 설명 스니펫으로 계속한다: %s: %s",
+            "Global 캐시 본문 조회 실패, Provider 설명 스니펫으로 계속한다: %s: %s",
             type(error).__name__,
             error,
         )

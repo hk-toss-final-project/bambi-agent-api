@@ -172,12 +172,12 @@ Source 입력은 URL과 클리핑의 Discriminated Union으로 정의해 Swagger
 | 검색 Chunk·Embedding | `wiki_chunks`, `wiki_embeddings` |
 | 관심 키워드와 근거 | `user_interest_profiles`, `user_interests`, `interest_evidence` |
 | 최신 정보 수집 실행 | `global_sources`, `global_collection_runs` |
-| 정규화된 최신 문서 | `wiki_documents`·`wiki_document_versions`의 `namespace_key = global` |
+| 정규화된 최신 문서 | `global_source_documents` (소유권 없는 수집 캐시, 0008) |
 | 생성 요청·실행·결과 | `generation_requests`, `generation_runs`, `generated_content_candidates` |
 | 생성 근거 | `citations` |
 
 최신 검색 결과를 개인 Wiki Namespace에 복사하지 않는다. 최신 자료는 Global
-Namespace에 보존하고, 생성 결과가 실제 사용한 개인·Global 문서 Version을
+수집 캐시에 보존하고, 생성 결과가 실제 사용한 개인 문서 Version과 캐시 문서를
 Citation으로 연결한다.
 
 ## 6. 구현 순서와 Sprint 계획

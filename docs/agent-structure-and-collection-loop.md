@@ -29,7 +29,7 @@
 리포트의 근거 인용 체계 세 종류를 먼저 알아두면 이후가 쉽다:
 
 - **P{n}** — 개인 Wiki 문서 (wiki_builder가 만든 것)
-- **G{n}** — Global 수집 풀 문서 (`namespace_key='global'`, 수집 워커가 채우는 저장소)
+- **G{n}** — Global 수집 풀 문서 (`agent.global_source_documents` 캐시, 수집 워커가 채우는 소유권 없는 저장소. 0008에서 Wiki global namespace 방식 폐기)
 - **L{n}** — 실시간(live) 외부 자료 (리포트 생성 순간에 assistant가 즉석 수집한 것. DB에 문서로 저장되어 있지 않아 url만 증빙)
 
 ## 2. 관계: 데이터 의존 하나, 실행 의존 하나
@@ -65,8 +65,8 @@ graph TB
 놀랍게도 **부품은 전부 존재한다**:
 
 - **INT-001 관심 키워드 추출** — 구현됨. Wiki 문서의 제목·별칭·태그·요약에서 결정적으로 관심 후보를 뽑는다 (`domain/interests/features/extraction.py`). INT-011이 활성 Wiki 기준으로 재계산해 관심 Profile로 저장하고, `GET /users/{user_id}/interests`로 Service에 노출된다 (`app/routers/service/routes.py:236-248`).
-- **global-collector 수집 워커** — 구현됨. GDELT·Naver·Google News RSS를 **키워드로 검색**해 `global` namespace에 URL을 저장하고(`workers/features/global_source_collector.py`), 별도 Jina 워커(global-content)가 본문을 2단계로 채운다.
-- **G 풀 검색** — 구현됨. report_builder의 `prag_003`이 개인+global namespace를 함께 검색한다 (`infrastructure/persistence/features/generation_runtime.py:280`).
+- **global-collector 수집 워커** — 구현됨. GDELT·Naver·Google News RSS를 **키워드로 검색**해 Global 수집 캐시에 URL을 저장하고(`workers/features/global_source_collector.py`), 별도 Jina 워커(global-content)가 본문을 2단계로 채운다.
+- **G 풀 검색** — 구현됨. report_builder의 `prag_003`이 개인 Wiki(`wiki_chunks`)와 Global 수집 캐시(`global_source_documents`)를 각각 검색해 Scope별 top-k로 합친다 (`infrastructure/persistence/features/generation_runtime.py`의 `load_report_context`).
 
 그러나 **접착부 3곳이 전부 미연결**이다:
 
