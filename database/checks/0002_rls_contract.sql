@@ -9,6 +9,7 @@ GRANT USAGE ON SCHEMA agent TO agent_rls_contract_role;
 GRANT SELECT ON agent.user_context_snapshots TO agent_rls_contract_role;
 GRANT SELECT, DELETE ON agent.wiki_documents TO agent_rls_contract_role;
 GRANT SELECT, DELETE ON agent.user_source_documents TO agent_rls_contract_role;
+GRANT SELECT, DELETE ON agent.global_source_documents TO agent_rls_contract_role;
 GRANT SELECT, DELETE ON agent.wiki_document_relations TO agent_rls_contract_role;
 GRANT SELECT, DELETE ON agent.wiki_version_documents TO agent_rls_contract_role;
 
@@ -35,11 +36,6 @@ INSERT INTO agent.wiki_documents (
     domain
 )
 VALUES
-    (
-        'global', 'global', NULL, 'news_api',
-        'https://rls-contract.invalid/global', repeat('a', 64),
-        'document', 'global-source', 'documents/global-source.md', NULL
-    ),
     (
         'personal', 'user/rls-user-a', 'rls-user-a', 'llm_wiki',
         'https://rls-contract.invalid/user-a', repeat('b', 64),
@@ -144,6 +140,22 @@ VALUES
     ('rls-user-a', 'user/rls-user-a', 'url', 'https://rls-contract.invalid/source-a', repeat('d', 64)),
     ('rls-user-b', 'user/rls-user-b', 'url', 'https://rls-contract.invalid/source-b', repeat('e', 64));
 
+INSERT INTO agent.global_source_documents (
+    canonical_url,
+    url_key,
+    provider,
+    title,
+    content_status
+)
+VALUES
+    (
+        'https://rls-contract.invalid/global-cache',
+        'rls-global-cache-key',
+        'gdelt',
+        'Global 수집 캐시 문서',
+        'pending'
+    );
+
 SET ROLE agent_rls_contract_role;
 SET LOCAL app.user_id = 'rls-user-a';
 SET LOCAL app.access_scope = 'user';
@@ -227,23 +239,36 @@ $$;
 DO $$
 DECLARE
     visible_rows integer;
-    deleted_rows integer;
 BEGIN
     SELECT count(*) INTO visible_rows
     FROM agent.wiki_documents
     WHERE canonical_url LIKE 'https://rls-contract.invalid/%';
 
-    IF visible_rows <> 2 THEN
-        RAISE EXCEPTION 'user scope expected global and own Wiki rows but saw %', visible_rows;
+    IF visible_rows <> 1 THEN
+        RAISE EXCEPTION 'user scope expected only own Wiki rows but saw %', visible_rows;
+    END IF;
+END;
+$$;
+
+DO $$
+DECLARE
+    visible_rows integer;
+    deleted_rows integer;
+BEGIN
+    SELECT count(*) INTO visible_rows
+    FROM agent.global_source_documents
+    WHERE canonical_url = 'https://rls-contract.invalid/global-cache';
+
+    IF visible_rows <> 1 THEN
+        RAISE EXCEPTION 'user scope expected 1 readable global cache row but saw %', visible_rows;
     END IF;
 
-    DELETE FROM agent.wiki_documents
-    WHERE knowledge_scope = 'global'
-      AND canonical_url = 'https://rls-contract.invalid/global';
+    DELETE FROM agent.global_source_documents
+    WHERE canonical_url = 'https://rls-contract.invalid/global-cache';
     GET DIAGNOSTICS deleted_rows = ROW_COUNT;
 
     IF deleted_rows <> 0 THEN
-        RAISE EXCEPTION 'user scope deleted % global Wiki rows', deleted_rows;
+        RAISE EXCEPTION 'user scope deleted % global cache rows', deleted_rows;
     END IF;
 END;
 $$;
@@ -283,6 +308,14 @@ BEGIN
 
     IF visible_rows <> 2 THEN
         RAISE EXCEPTION 'system scope expected 2 Wiki version documents but saw %', visible_rows;
+    END IF;
+
+    SELECT count(*) INTO visible_rows
+    FROM agent.global_source_documents
+    WHERE canonical_url = 'https://rls-contract.invalid/global-cache';
+
+    IF visible_rows <> 1 THEN
+        RAISE EXCEPTION 'system scope expected 1 global cache row but saw %', visible_rows;
     END IF;
 END;
 $$;

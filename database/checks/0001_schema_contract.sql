@@ -21,6 +21,7 @@ DECLARE
         'user_interests',
         'global_sources',
         'global_collection_runs',
+        'global_source_documents',
         'global_trends',
         'discovery_candidates',
         'generation_requests',

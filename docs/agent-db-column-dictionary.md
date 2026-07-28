@@ -1,9 +1,10 @@
 # Agent DB 컬럼 사전
 
-> 기준: 2026-07-22. 43개 테이블, 497개 컬럼을 0001_initial.sql,
+> 기준: 2026-07-28. 44개 테이블을 0001_initial.sql,
 > 0002_publish_snapshot_batches.sql, 0003_web_clipping_markdown.sql,
 > 0004_separate_user_sources_from_llm_wiki.sql,
-> 0005_structure_llm_wiki_documents.sql 기준으로 정리했습니다. 컬럼을 추가하지
+> 0005_structure_llm_wiki_documents.sql,
+> 0008_extract_global_source_cache.sql 기준으로 정리했습니다. 컬럼을 추가하지
 > 않고 생성 Job 값을 이전하는 0006_rename_report_builder_contracts.sql도 반영합니다.
 
 이 문서는 Agent DB의 모든 테이블과 컬럼을 물리 Schema 수준에서 설명합니다.
@@ -501,6 +502,39 @@ Source별 수집 실행 상태, 처리 건수, 재시작 Cursor를 기록합니�
 | started_at | timestamptz | 자동 | 수집 시작 시각 |
 | completed_at | timestamptz | 선택 | 수집 종료 시각 |
 
+### global_source_documents
+
+수집한 외부 기사 URL과 Jina Reader 본문을 담는 소유권 없는 공유 캐시입니다.
+LLM Wiki 문서가 아니라 "한 번 읽은 URL 본문을 모두가 재사용"하기 위한 원본
+풀이며, user_source_documents(사용자 소유 원본)와 대칭입니다 (0008 추가).
+
+| 컬럼 | 타입 | 필수·기본값 | 설명 |
+|---|---|---|---|
+| id | uuid | 자동, PK | 캐시 문서 내부 식별자 |
+| canonical_url | text | 필수, Unique | 수집 당시 기사 URL (중복 제거 기준) |
+| url_key | text | 필수, Unique | URL SHA-256 앞 24자. 안정적 캐시 Key |
+| provider | text | 필수 | 수집 Provider (gdelt, naver, google_news 등) |
+| search_query | text | 선택 | 수집에 사용한 검색 키워드 |
+| source_name | text | 선택 | 언론사·Domain |
+| language | text | 자동, und | 기사 언어 |
+| title | text | 자동, 빈 문자열 | 기사 제목 (본문 수집 시 Jina 제목으로 갱신) |
+| description | text | 선택 | Provider가 준 기사 설명·Snippet |
+| markdown | text | 선택 | Jina Reader가 채운 본문. pending 동안 NULL |
+| content_hash | text | 선택 | 본문 SHA-256 (64자) |
+| content_status | text | 자동, pending | pending, fetching, fetched, failed 상태 머신 |
+| resolved_url | text | 선택 | Jina가 리다이렉트까지 반영한 최종 URL |
+| fetch_error_code | text | 선택 | 본문 수집 실패 분류 Code |
+| fetch_error_message | text | 선택 | 본문 수집 실패 상세 (500자 제한) |
+| published_at | timestamptz | 선택 | 기사 발행 시각. 풀 신선도 판정에 사용 |
+| fetched_at | timestamptz | 선택 | 본문 수집 완료 시각 |
+| search_vector | tsvector | 자동, 생성 컬럼 | 제목+설명+본문 FTS 색인 (fetched 검색용) |
+| created_at | timestamptz | 자동 | 캐시 등록 시각 |
+| updated_at | timestamptz | 자동 | 마지막 상태 변경 시각 |
+
+읽기는 모든 Scope에 허용하고 쓰기는 System Scope만 허용합니다. Report Builder
+검색은 fetched 문서를 `gsrc:<id>` 참조로 소비하고, 비서 리포트는 canonical_url로
+본문을 재사용합니다.
+
 ### global_trends
 
 여러 수집 문서에서 탐지한 Global Trend와 평가 점수를 저장합니다.
@@ -628,8 +662,9 @@ content_id와 version의 조합은 유일합니다.
 | candidate_id | uuid | 필수, FK | 대상 generated_content_candidates 식별자 |
 | user_id | text | 필수 | RLS를 위한 사용자 식별자 |
 | ordinal | integer | 필수 | 후보 안에서 0부터 시작하는 인용 순서 |
-| document_version_id | uuid | 선택, FK | 인용한 wiki_document_versions 식별자 |
-| chunk_id | uuid | 선택, FK | 인용한 wiki_chunks 식별자 |
+| document_version_id | uuid | 선택, FK | 인용한 wiki_document_versions 식별자 (개인 Wiki 출처) |
+| chunk_id | uuid | 선택, FK | 인용한 wiki_chunks 식별자 (개인 Wiki 출처) |
+| global_source_document_id | uuid | 선택, FK | 인용한 global_source_documents 캐시 문서 식별자 (0008 추가) |
 | title | text | 필수 | 화면에 표시할 출처 제목 |
 | url | text | 선택 | 외부 출처 URL |
 | quoted_text | text | 선택 | 주장을 뒷받침하는 짧은 인용문 |
@@ -637,7 +672,7 @@ content_id와 version의 조합은 유일합니다.
 | citation_hash | text | 선택 | 인용 내용 무결성을 확인하는 64자 Hash |
 | created_at | timestamptz | 자동 | 인용 생성 시각 |
 
-document_version_id와 url 중 적어도 하나는 반드시 존재합니다.
+document_version_id, global_source_document_id, url 중 적어도 하나는 반드시 존재합니다.
 
 ### content_assets
 

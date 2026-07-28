@@ -1,6 +1,6 @@
 # Agent DB PostgreSQL 설계
 
-테이블 43개의 영역·성격·관계·RLS·런타임 연결 상태는
+테이블 44개의 영역·성격·관계·RLS·런타임 연결 상태는
 [Agent DB 테이블 카탈로그](agent-db-table-catalog.md)에서 확인합니다.
 각 컬럼의 타입·필수 여부·기본값·의미는
 [Agent DB 컬럼 사전](agent-db-column-dictionary.md)에서 확인합니다.
@@ -17,7 +17,7 @@
 | 내부 ID | Agent가 생성하는 Entity는 UUID |
 | 경계 ID | `user_id`, `content_id`, `source_event_id` 등 Service 소유 ID는 `text`, service-db 외래키 금지 |
 | 개인 지식 격리 | `namespace_key = user/{user_id}`, RLS와 애플리케이션 사용자 조건을 함께 적용 |
-| Global 지식 | `namespace_key = global`, 사용자는 읽을 수 있고 시스템 Scope만 쓸 수 있음 |
+| Global 수집 원문 | 소유권 없는 캐시 `global_source_documents`. 모든 사용자가 읽고 시스템 Scope만 씀. Wiki namespace가 아님 (0008) |
 | 검색 | pgvector Cosine HNSW + PostgreSQL FTS + `pg_trgm` Hybrid Search |
 | 원문·Asset | 웹 클리핑 Markdown은 DB에 보존하고 대용량 HTML·PDF·Binary는 GCS URI만 저장 |
 | 이벤트 | Transactional Outbox와 Consumer Inbox로 멱등성 경계 제공 |
@@ -93,9 +93,9 @@ erDiagram
 | DB-007 | 사용자 관심사 저장 | `user_interest_profiles`, `user_interests`, `interest_evidence` |
 | DB-008 | Global Source 저장 | `global_sources` |
 | DB-009 | Global Collection Run 저장 | `global_collection_runs` |
-| DB-010 | Global 문서 저장 | `wiki_documents`, `wiki_document_versions`의 `global` Namespace |
-| DB-011 | Global Chunk 저장 | `wiki_chunks`의 `global` Namespace |
-| DB-012 | Global Embedding 저장 | `wiki_embeddings`의 `global` Namespace |
+| DB-010 | Global 문서 저장 | `global_source_documents` (0008에서 Wiki `global` Namespace 방식 폐기) |
+| DB-011 | Global Chunk 저장 | `global_source_documents.search_vector` FTS·trgm 색인이 대체 (별도 Chunk 없음) |
+| DB-012 | Global Embedding 저장 | 미사용 — Global은 지식 그래프가 아닌 수집 캐시로 한정 (0008 결정) |
 | DB-013 | Global Trend 저장 | `global_trends`, `global_trend_documents` |
 | DB-014 | Discovery Candidate 저장 | `discovery_candidates` |
 | DB-015 | Generation Request 저장 | `generation_requests` |
@@ -127,13 +127,18 @@ erDiagram
 - `context_version`, `source_event_id`, `idempotency_key`, `content_id + version`에 Unique 제약을 둡니다.
 - Publish Snapshot Hash는 현재 FastAPI 계약과 동일하게 불투명 문자열로 보존하고 Version과 함께 검증합니다.
 
-### Personal과 Global 지식
+### Personal 지식과 Global 수집 캐시
 
-Agent가 만든 `wiki_documents`, `wiki_document_versions`, `wiki_chunks`, `wiki_embeddings`는 같은 구조를 재사용하되 `namespace_key`로 검색 범위를 분리합니다. 사용자가 제출한 원본은 `user_source_documents` 계열에만 저장합니다.
+LLM Wiki(`wiki_documents` 계열)와 Global 수집 원문은 성격이 다른 데이터이므로
+테이블을 분리합니다 (0008). 원칙: **`namespace_key`는 맥락 주체(개인, 이후
+팀)를 나누는 축이고, Wiki 테이블에는 맥락 주체가 있는 LLM 파생물만 둔다.**
+Global 수집 원문은 누구의 맥락도 아닌 원재료라서 이 축에 속하지 않는다.
 
-- 개인 Wiki: `knowledge_scope = personal`, `namespace_key = user/{user_id}`
-- Global Source: `knowledge_scope = global`, `namespace_key = global`
-- 자동 수집 Global 문서는 사용자의 선택 없이 Personal Namespace로 이동하지 않습니다.
+- 개인 Wiki: `wiki_documents` 계열, `knowledge_scope = personal`, `namespace_key = user/{user_id}` — 사용자 맥락을 LLM이 읽게 하는 파생 노드(entity·concept·schema)
+- 사용자 원본: `user_source_documents` 계열 — 사용자가 저장한 클리핑·URL 원문. 소유권과 삭제 정책이 사용자를 따라감
+- Global 수집 원문: `global_source_documents` — 워커가 수집한 뉴스 URL과 Jina 본문의 소유권 없는 공유 캐시. LLM이 URL을 직접 읽을 수 없으므로 한 번 읽은 본문을 모두가 재사용
+- Global 지식 그래프(공유 entity·concept)는 만들지 않습니다. LLM에 부족한 것은 사용자 맥락(개인 Wiki 담당)과 최신 정보(수집 캐시 담당)이며, 공유 백과 노드는 모델이 이미 아는 지식의 재구축이기 때문입니다.
+- 수집 캐시 문서는 사용자의 선택 없이 개인 지식으로 이동하지 않습니다. 승격 시 사용자 원본으로 편입한 뒤 개인 Wiki 노드로 해석하는 경로를 사용합니다.
 - Personal LLM Wiki 문서 삭제 시 Version → 출처 연결·Chunk → Embedding 순서가 Foreign Key Cascade로 정리됩니다. 사용자 원본은 별도 삭제 요청 전까지 영향을 받지 않습니다.
 
 ### Obsidian LLM Wiki Vault 구조
@@ -147,7 +152,7 @@ Personal LLM Wiki의 Entity, Concept, Schema는 서로 다른 Table이 아니라
 | `entity` | `entities/{document_key}.md` | 서로 다른 구체 대상당 한 문서. 같은 Key는 새 Row 대신 새 Version 생성 |
 | `concept` | `concepts/{document_key}.md` | 둘 이상 Entity가 공유하는 설계 패턴당 한 문서 |
 | `schema` | `schema/schema.md` | Namespace당 항상 하나만 유지하고 Entity·관계 변경 시 새 Version 생성 |
-| `document` | `documents/{document_key}.md` | 0005 이전 문서와 구조화되지 않은 일반·Global 문서 호환 유형 |
+| `document` | `documents/{document_key}.md` | 0005 이전 문서와 구조화되지 않은 일반 문서 호환 유형 |
 
 - `document_key`는 문서 내용이 변경되어도 같은 논리 대상을 찾는 Upsert Key입니다.
 - `file_path`는 Obsidian으로 내보낼 Vault 경로이며 Namespace 내 활성 문서 사이에서 Unique합니다.
@@ -183,7 +188,7 @@ Concept의 2개 이상 Entity 공유, 기존 Concept과 70% 이상 중복, 실�
 - 의미 검색: `wiki_embeddings.embedding vector(1536)`과 Cosine HNSW Index
 - 일반 FTS: `wiki_chunks.search_vector`의 GIN Index
 - 한국어 및 다국어 부분 일치: `wiki_chunks.content`의 `pg_trgm` GIN Index
-- 검색 시 반드시 `namespace_key IN ('global', 'user/{user_id}')` 조건을 먼저 적용합니다.
+- Wiki 검색은 반드시 `namespace_key = 'user/{user_id}'` 조건을 먼저 적용합니다. Global 최신 자료 검색은 `global_source_documents`의 `content_status = 'fetched'` 문서를 따로 조회해 Scope별 top-k로 합칩니다(Report Builder `load_report_context` 참조).
 - MVP의 Embedding 차원은 1536으로 고정합니다. 다른 차원의 모델을 활성화할 때는 기존 Column을 혼용하지 않고 별도 Migration과 Index를 추가합니다.
 
 Cloud SQL의 pgvector는 ANN Index를 지원하며 HNSW 예시는 [Cloud SQL Vector 문서](https://docs.cloud.google.com/sql/docs/postgres/generate-manage-vector-embeddings)에 설명되어 있습니다. 데이터가 작을 때는 Filter가 적용된 Exact Search가 더 단순할 수 있으므로 실제 Query Plan과 Recall을 측정한 뒤 HNSW Parameter를 조정합니다.
@@ -198,12 +203,12 @@ SET LOCAL app.user_id = 'user-123';
 SET LOCAL app.access_scope = 'user';
 SELECT *
 FROM agent.wiki_documents
-WHERE namespace_key IN ('global', 'user/user-123');
+WHERE namespace_key = 'user/user-123';
 COMMIT;
 ```
 
 - Production Runtime Role은 Table Owner가 아니어야 합니다. PostgreSQL Table Owner는 기본적으로 RLS를 우회할 수 있습니다.
-- 사용자 Scope는 자신의 Personal Row와 Global 지식만 읽습니다.
+- 사용자 Scope는 자신의 Personal Row와 Global 수집 캐시만 읽습니다.
 - Scheduler, Global Collector, Migration은 별도 Service Account/DB Role을 사용합니다.
 - `system` Scope는 일반 API 요청에서 설정할 수 없고 Worker 내부 경계에서만 사용합니다.
 - API Key 원문과 Provider Secret은 DB에 저장하지 않습니다. Hash 또는 Secret Manager Resource Name만 저장합니다.

@@ -33,6 +33,12 @@ REPORT_BUILDER_RENAME_MIGRATION_PATH = (
     / "migrations"
     / "0006_rename_report_builder_contracts.sql"
 )
+GLOBAL_SOURCE_CACHE_MIGRATION_PATH = (
+    PROJECT_ROOT
+    / "database"
+    / "migrations"
+    / "0008_extract_global_source_cache.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
@@ -40,6 +46,7 @@ MIGRATION_PATHS = (
     SOURCE_SEPARATION_MIGRATION_PATH,
     STRUCTURED_WIKI_MIGRATION_PATH,
     REPORT_BUILDER_RENAME_MIGRATION_PATH,
+    GLOBAL_SOURCE_CACHE_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
@@ -155,6 +162,7 @@ def test_migration_contains_all_agent_db_feature_tables() -> None:
         "user_interests",
         "global_sources",
         "global_collection_runs",
+        "global_source_documents",
         "global_trends",
         "discovery_candidates",
         "generation_requests",
@@ -640,8 +648,10 @@ def test_database_rls_contract_is_available() -> None:
 
     assert "CREATE ROLE agent_rls_contract_role NOLOGIN" in rls_check
     assert "user scope expected 1 row" in rls_check
-    assert "user scope expected global and own Wiki rows" in rls_check
-    assert "user scope deleted % global Wiki rows" in rls_check
+    assert "user scope expected only own Wiki rows" in rls_check
+    assert "user scope expected 1 readable global cache row" in rls_check
+    assert "user scope deleted % global cache rows" in rls_check
+    assert "system scope expected 1 global cache row" in rls_check
     assert "user scope expected 1 source row" in rls_check
     assert "user scope deleted % other-user source rows" in rls_check
     assert "user scope expected 1 Wiki relation" in rls_check

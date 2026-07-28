@@ -6,9 +6,10 @@
 > database/migrations/0003_web_clipping_markdown.sql,
 > database/migrations/0004_separate_user_sources_from_llm_wiki.sql,
 > database/migrations/0005_structure_llm_wiki_documents.sql,
-> database/migrations/0006_rename_report_builder_contracts.sql입니다.
+> database/migrations/0006_rename_report_builder_contracts.sql,
+> database/migrations/0008_extract_global_source_cache.sql입니다.
 
-이 문서는 Agent DB의 43개 테이블을 영역과 데이터 성격으로 분류하고, 각 테이블의
+이 문서는 Agent DB의 44개 테이블을 영역과 데이터 성격으로 분류하고, 각 테이블의
 책임, 핵심 관계·제약, RLS 적용 여부와 현재 애플리케이션 연결 상태를 정리합니다.
 데이터 소유권, 배포 구조와 운영 원칙은 agent-db-design.md를 함께 참고합니다.
 컬럼별 타입·필수 여부·기본값·의미는 agent-db-column-dictionary.md를 참고합니다.
@@ -22,8 +23,10 @@
 - 설정, 사용자 컨텍스트, Wiki, 관심사와 생성 콘텐츠는 현재 값을 덮어쓰기보다
   새 Version Row를 추가하는 방식을 우선합니다.
 - 개인 데이터 테이블은 user_id 또는 namespace_key를 기준으로 RLS를 적용합니다.
-- Global 지식은 namespace_key = global로 저장하며 읽기는 허용하고 쓰기는
-  System Scope에 한정합니다.
+- Global 수집 원문은 위키가 아니라 소유권 없는 캐시 테이블
+  global_source_documents에 저장하며, 읽기는 허용하고 쓰기는 System Scope에
+  한정합니다. wiki_documents의 namespace_key = global 방식은 0008에서
+  폐기했습니다.
 - JSONB는 Provider별 확장 Metadata와 정책 설정에 사용하되, 조회와 무결성에
   중요한 값은 명시적인 Column과 제약으로 관리합니다.
 
@@ -63,7 +66,7 @@ user_context_snapshots와 agent_jobs 대신 인메모리 저장소를 사용합�
 | 지식 문서·검색 공용 | wiki_documents, wiki_document_versions, wiki_document_sources, wiki_document_relations, wiki_chunks, wiki_embeddings |
 | Personal Wiki | wiki_versions, wiki_version_documents |
 | 사용자 관심사 | user_interest_profiles, user_interests, interest_evidence |
-| Global Source·Discovery | global_sources, global_collection_runs, global_trends, global_trend_documents, discovery_candidates |
+| Global Source·Discovery | global_sources, global_collection_runs, global_source_documents, global_trends, global_trend_documents, discovery_candidates |
 | 콘텐츠 생성 | generation_requests, generation_runs, generated_content_candidates, citations, content_assets |
 | 평가·추천 | quality_evaluations, safety_evaluations, recommendation_candidates |
 | 발행 | publish_snapshots, publish_attempts |
@@ -78,7 +81,9 @@ publish_snapshots, publish_attempts에 Lease 기반 Batch 처리 Column과 Index
 0005는 Wiki Head에 Entity·Concept·Schema 유형과 Vault 경로를 추가하고,
 문서 Graph·Wiki Build 구성 관계 테이블 2개를 추가합니다.
 0006은 새 테이블 없이 기존 생성 Job 유형과 콘텐츠 생성 기능 ID를
-Report Builder 계약으로 이전합니다.
+Report Builder 계약으로 이전합니다. 0008은 Global 수집 원문을 Wiki 테이블에서
+분리한 소유권 없는 캐시 테이블 global_source_documents를 추가하고, citations에
+캐시 출처 컬럼을 더합니다.
 
 ## 3. 설정
 
@@ -107,8 +112,9 @@ agent_jobs는 0002 Migration에서 lease_expires_at과 Claim 가능 Job 조회 I
 
 ## 5. 지식 문서와 검색
 
-아래 여섯 테이블은 Agent가 구성한 Personal LLM Wiki와 정규화된 Global 지식이
-공유합니다. knowledge_scope와 namespace_key가 데이터 경계를 결정합니다.
+아래 여섯 테이블은 Agent가 구성한 LLM Wiki가 사용합니다. namespace_key는
+맥락 주체(개인, 이후 팀)를 나누는 축이며, 0008부터 Global 수집 원문은 이
+테이블들이 아니라 global_source_documents 캐시에 저장합니다.
 
 | 테이블 | 성격 | 책임 | 핵심 관계·제약 | RLS | 현재 연결 |
 |---|---|---|---|---|---|
@@ -124,8 +130,8 @@ wiki_document_versions.normalized_content는 클리핑 원문이 아니라 Worke
 결과에서 다시 만들 수 있는 검색 파생 데이터입니다.
 
 Personal LLM Wiki의 신규 문서는 document_kind으로 entity, concept, schema를
-사용합니다. document는 0005 적용 전 문서와 정규화된 일반 Global 문서의
-호환 유형입니다. source_type은 유입 경로이므로 문서 구조 유형으로 재사용하지 않습니다.
+사용합니다. document는 0005 적용 전 문서의 호환 유형입니다. source_type은 유입
+경로이므로 문서 구조 유형으로 재사용하지 않습니다.
 
 ## 6. Personal Wiki
 
@@ -157,17 +163,20 @@ SNS 글은 Global Namespace의 wiki_documents 계열에 정규화해 저장하�
 |---|---|---|---|---|---|
 | global_sources | Master | RSS, News API, SNS 등 Connector 설정과 수집 정책 | source_key Unique, Secret 원문 대신 secret_ref, schedule/trust/quota | 없음 | Schema only |
 | global_collection_runs | History/Operational | Source별 수집 Cursor, 처리 건수와 오류 이력 | source_id FK, 선택적 job_id FK, running~failed 상태 | 없음 | Schema only |
+| global_source_documents | Cache/Operational | 수집한 외부 기사 URL과 Jina 본문의 소유권 없는 공유 캐시 | canonical_url·url_key Unique, content_status 상태 머신(pending~failed), FTS·trgm 검색 인덱스 | 읽기 전체 허용, 쓰기 system Scope | Collector·Fetcher Worker, Report Builder 검색, 비서 본문 재사용 |
 | global_trends | Derived | 시간 구간별 Global Topic과 신선도·중요도 점수 | 종료 시각이 시작 시각보다 커야 함, 점수 0~1 | 없음 | Schema only |
 | global_trend_documents | Relation | Trend와 근거 Global 문서의 다대다 연결 | trend_id + document_id Composite PK, 양쪽 Cascade | 없음 | Schema only |
 | discovery_candidates | Derived/Operational | 생성·추천 Pipeline에 넘길 Trend 또는 문서 후보 | trend_id 또는 document_id 필수, 점수 0~1, 만료 시각 | 없음 | Schema only |
 
-뉴스·RSS·SNS 본문 자체는 별도 유형별 테이블이 아니라 Global Namespace의
-wiki_documents와 wiki_document_versions에 저장합니다. global_sources는 Connector
+뉴스·RSS·SNS 수집 원문은 0008부터 wiki_documents가 아니라
+global_source_documents에 저장합니다(0008 이전의 Global Namespace 방식은
+폐기). 이 테이블은 위키 노드가 아니라 "LLM이 URL을 직접 읽을 수 없으니 한 번
+읽은 본문을 모두가 재사용"하는 캐시이며, user_source_documents(사용자 소유
+원본)와 대칭인 소유권 없는 원본 저장소입니다. global_sources는 Connector
 설정, global_collection_runs는 수집 실행 이력을 소유합니다.
 
-현재 wiki_documents에는 global_source_id나 collection_run_id FK가 없습니다.
-수집 Source와 Run 추적은 source_type과 metadata/source_metadata에 의존하므로,
-FK 수준의 출처 추적이 필요해지면 후속 Migration에서 명시적 관계를 추가해야 합니다.
+수집 Source와 Run 추적은 provider·search_query 컬럼에 의존하므로, FK 수준의
+출처 추적이 필요해지면 후속 Migration에서 명시적 관계를 추가해야 합니다.
 
 discovery_candidates에는 user_id가 있지만 현재 RLS가 적용되지 않습니다. 사용자별
 후보를 실제 운영에 사용하기 전 접근 범위와 RLS 적용 여부를 재검토해야 합니다.
