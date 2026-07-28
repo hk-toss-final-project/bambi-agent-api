@@ -178,9 +178,18 @@ curl -X POST http://localhost:8000/internal/v1/collection-schedules \
 
 Provider는 `naver`·`google_news`·`gdelt`·`newsapi` 넷을 지원합니다. 한국어 주제는
 `naver`, 영문 주제는 `google_news`가 정확합니다(실측: 'Cloudflare' 수집 시 Naver는
-10건 중 관련 3건, google_news는 5건 전부 관련). `google_news`는 원본 URL 디코딩
-때문에 키워드당 12초쯤 더 걸립니다. `gdelt`는 현재 429(IP 차단), `newsapi`는
-`.env`에 키가 없으면 등록해도 돌지 않습니다.
+10건 중 관련 3건, google_news는 5건 전부 관련).
+
+| Provider | 알아둘 점 |
+|---|---|
+| `naver` | 자격 증명 필요 (`NAVER_CLIENT_ID`·`NAVER_CLIENT_SECRET`). 일 25,000회 |
+| `google_news` | 자격 증명 불필요. 원본 URL 디코딩 때문에 키워드당 12초쯤 더 걸림 |
+| `gdelt` | 자격 증명 불필요. **짧은 간격으로 반복 호출하면 429** — 정기 주기에서는 정상 |
+| `newsapi` | `NEWS_API_KEY` 없으면 등록해도 안 돎. 무료 플랜 일 100회 |
+
+`gdelt`는 인증 없는 공개 API라 연속 호출을 제한합니다. 6시간 주기로 도는 스케줄에서는
+문제가 없지만, `--once --force`로 수동 점검을 몇 분 간격으로 반복하면 429가 납니다.
+그때도 실패는 Provider 단위로 격리되어 나머지 수집은 그대로 완료됩니다.
 
 **키워드는 각각 따로 검색합니다.** `["코스피","삼성전자"]`는 두 번의 개별 질의가
 됩니다. 하나의 문자열로 합치면(`"코스피 삼성전자"`) 두 단어를 모두 포함하는 기사만

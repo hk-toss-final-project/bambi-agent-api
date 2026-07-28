@@ -276,9 +276,8 @@ async def sch_001(
     Provider는 이것 하나이고, 피드 URL이 아니라 키워드로 검색한다는 점이
     다르다. 그래도 이 자리에 두는 편이 낫다고 판단했다 — 영문 키워드에서
     가장 정확한 Provider인데(2026-07-28 실측: 'Cloudflare' 수집 시 Naver는
-    10건 중 관련 3건, google_news는 5건 전부 관련) 스케줄에서 빠져 있었고,
-    gdelt는 429로 막혀 있고 newsapi는 키가 없어 실질적으로 도는 Provider가
-    naver 하나뿐이었기 때문이다.
+    10건 중 관련 3건, google_news는 5건 전부 관련) 스케줄에서 빠져 있었기
+    때문이다.
 
     다른 Provider보다 느리다. 기사 link가 Google 리다이렉트 주소라 원본 URL
     디코딩에 약 1.2초/건이 들어, 키워드 하나당 12초쯤 더 걸린다.
@@ -330,6 +329,12 @@ async def sch_003(
     """[SCH-003] GDELT 수집 스케줄.
 
     GDELT 수집 작업을 정기 등록한다. 판정·실행 규칙은 SCH-002와 같다.
+
+    GDELT는 인증 없는 공개 API라 짧은 간격 반복 호출에 429를 돌려준다
+    (2026-07-28 실측: 07:26:52 수집 성공, 3분 뒤 같은 키워드 재호출은 429).
+    영구 차단이 아니라 rate limit이므로 정기 주기에서는 정상 동작하고,
+    수동 점검을 몇 분 간격으로 반복할 때만 걸린다. 429가 나도 실패는 이
+    Provider 안에 갇혀 같은 tick의 다른 Provider 수집은 그대로 끝난다.
     """
     return await _run_scheduled_collection(
         connection,
