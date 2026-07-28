@@ -269,16 +269,49 @@ GDELT는 429(IP 차단)로 죽어 있는데, 원래 그 역할(글로벌 영문 
 `agent/selection`이 유사도 × 신선도로 판정하므로 낡았지만 정확한 기사와 신선하지만
 무관한 기사가 각각 제 축에서 감점된다. 수집 단계는 후보를 넓게 확보하는 데만 집중한다.
 
-**(2) `google_news` Provider가 기본에서 빠져 있었다.** 코드에는 구현돼 있는데
-CLI 기본값이 `gdelt,naver`였다. 영문 고유명사는 이쪽이 확연히 낫다.
+**(2) `google_news`는 시도했다가 되돌렸다 — 본문을 확보할 수 없다.**
+
+검색 정확도만 보면 Naver보다 확연히 낫다.
 
 ```
 Naver(date)  'Cloudflare' → "Morgan Stanley Downgrades Adobe"     무관
 google_news  'Cloudflare' → "Cloudflare Is Growing 28%" 외 5건 전부 정확
 ```
 
-→ 기본값을 `gdelt,naver,google_news`로 바꿨다. 이전에 0건이던 `DeepAgents`가
-google_news에서 2건 수집됐다(LangChain Deep Agents, Xiaohongshu DeepAgent).
+그래서 기본값에 넣었으나(`gdelt,naver,google_news`), **수집 2단계인 본문 채우기가
+전부 실패했다.** Jina Reader가 `news.google.com` 리다이렉트 URL에서 403을 반환한다.
+
+```
+JINA_HTTP_403   google_news 수집분 111건 전원
+```
+
+리다이렉트는 HTTP로 풀리지 않는다. 실측한 세 방법이 모두 막혔다.
+
+- `follow_redirects=True` — 최종 URL이 여전히 `news.google.com`(JS로 이동)
+- 응답 HTML 파싱 — 외부 링크가 `lh3.googleusercontent.com` 이미지뿐
+- RSS `<source url>` — 언론사 **홈페이지** 주소지 기사 주소가 아니다
+
+**본문 없이 저장된 내용도 근거로 쓸 수 없다.** 길이는 215~704자로 비어 있지 않지만
+내용이 "같은 사건을 다룬 여러 매체의 제목 나열"이다.
+
+```
+# 리센느, 역주행 '러브어택' 음방 1위… - v.daum.net
+  리센느, 역주행 '러브어택' 음방 1위…      v.daum.net
+  그룹 리센느, 지상파 음방 잇따라 석권…      news.sbs.co.kr
+  리센느, '꿈 이룬' 국민 걸그룹 눈물…        조선일보
+  ...
+```
+
+사실 정보가 제목뿐인데 **키워드가 반복돼 검색 점수만 높게 나온다.** 리포트가 이걸
+근거로 뽑으면 제목만 되풀이하게 된다. 일부 문서는 본문 자리에 또 Google 리다이렉트
+링크가 들어 있었다.
+
+→ 기본값을 `gdelt,naver`로 되돌리고 수집된 111건을 풀에서 제거했다(404 → 293건).
+정리 기준은 길이가 아니라 `content_status='fetched'`다 — 길이로 판정하면 RSS 요약이
+200자를 넘어 본문이 있는 것처럼 보인다.
+
+**원본 기사 URL을 얻는 방법을 찾으면 다시 넣을 가치가 있다.** 검색 정확도 이점은
+실재하고, 이전에 0건이던 `DeepAgents`도 google_news에서는 2건 잡혔다.
 
 ##### 남은 선결 조건
 
