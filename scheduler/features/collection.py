@@ -37,6 +37,7 @@ type DictRow = dict[str, Any]
 
 # 정기 수집 스케줄을 구현한 Provider와 담당 기능 ID.
 SCHEDULED_PROVIDERS = {
+    "google_news": "SCH-001",
     "naver": "SCH-002",
     "gdelt": "SCH-003",
     "newsapi": "SCH-004",
@@ -257,12 +258,39 @@ async def _run_scheduled_collection(
     return results
 
 
-async def sch_001(request: FeatureRequest) -> FeatureResult:
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
+async def sch_001(
+    connection: AsyncConnection[DictRow],
+    *,
+    database_url: str,
+    credentials: CollectionCredentials,
+    now: datetime,
+    force: bool = False,
+) -> list[CollectionScheduleResult]:
     """[SCH-001] RSS 수집 스케줄.
 
-    RSS Source 수집 작업을 정기 등록한다.
+    RSS Source 수집 작업을 정기 등록한다. 판정·실행 규칙은 SCH-002와 같다.
+
+    여기서 말하는 RSS Source는 Google News RSS(`google_news`, COL-001)다.
+    명세의 "RSS Source"는 임의의 피드 주소를 가리키지만 현재 구현된 RSS 기반
+    Provider는 이것 하나이고, 피드 URL이 아니라 키워드로 검색한다는 점이
+    다르다. 그래도 이 자리에 두는 편이 낫다고 판단했다 — 영문 키워드에서
+    가장 정확한 Provider인데(2026-07-28 실측: 'Cloudflare' 수집 시 Naver는
+    10건 중 관련 3건, google_news는 5건 전부 관련) 스케줄에서 빠져 있었고,
+    gdelt는 429로 막혀 있고 newsapi는 키가 없어 실질적으로 도는 Provider가
+    naver 하나뿐이었기 때문이다.
+
+    다른 Provider보다 느리다. 기사 link가 Google 리다이렉트 주소라 원본 URL
+    디코딩에 약 1.2초/건이 들어, 키워드 하나당 12초쯤 더 걸린다.
     """
-    raise NotImplementedError("[SCH-001] 기능 구현이 필요합니다.")
+    return await _run_scheduled_collection(
+        connection,
+        provider="google_news",
+        database_url=database_url,
+        credentials=credentials,
+        now=now,
+        force=force,
+    )
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.

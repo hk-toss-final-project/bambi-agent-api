@@ -125,15 +125,29 @@ def test_run_once_collects_every_provider(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(
         runtime,
         "PROVIDER_SCHEDULES",
-        {name: _recording(name) for name in ("naver", "gdelt", "newsapi")},
+        {
+            name: _recording(name)
+            for name in ("naver", "gdelt", "newsapi", "google_news")
+        },
     )
 
     scheduler = build_scheduler(_settings())
     results = asyncio.run(scheduler.run_once(now=_NOW))
 
-    assert called == ["naver", "gdelt", "newsapi"]
-    assert [result.status for result in results] == ["completed"] * 3
+    assert called == ["naver", "gdelt", "newsapi", "google_news"]
+    assert [result.status for result in results] == ["completed"] * 4
     assert connection.closed is True
+
+
+def test_every_scheduled_provider_has_a_feature() -> None:
+    """스케줄 대상 Provider와 실행 기능 매핑이 어긋나지 않는지 검증한다.
+
+    Provider를 추가하면서 한쪽만 고치면, 스케줄 등록은 되는데 tick에서 아무도
+    실행하지 않는 Source가 조용히 생긴다.
+    """
+    from scheduler.api import PROVIDER_SCHEDULES, SCHEDULED_PROVIDERS
+
+    assert set(PROVIDER_SCHEDULES) == set(SCHEDULED_PROVIDERS)
 
 
 def test_run_once_isolates_provider_failure(

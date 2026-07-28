@@ -89,12 +89,34 @@ def test_register_rejects_unsupported_provider() -> None:
         asyncio.run(
             sch_017(
                 _FakeConnection(),  # type: ignore[arg-type]
-                source_key="latest-rss",
-                provider="google_news",
+                source_key="latest-dart",
+                provider="dart",
                 schedule_cron="0 * * * *",
                 keywords=["AI"],
             )
         )
+
+
+def test_register_accepts_google_news(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RSS(google_news) Provider도 스케줄로 등록할 수 있는지 검증한다."""
+
+    async def fake_upsert(_connection: Any, **kwargs: Any) -> GlobalCollectionSchedule:
+        """저장 결과를 흉내 낸다."""
+        return _schedule(source_key="latest-google_news", provider="google_news")
+
+    monkeypatch.setattr(management, "upsert_collection_schedule", fake_upsert)
+
+    view = asyncio.run(
+        sch_017(
+            _FakeConnection(),  # type: ignore[arg-type]
+            source_key="latest-google_news",
+            provider="google_news",
+            schedule_cron="0 */6 * * *",
+            keywords=["Cloudflare"],
+        )
+    )
+
+    assert view.provider == "google_news"
 
 
 def test_register_rejects_invalid_cron() -> None:

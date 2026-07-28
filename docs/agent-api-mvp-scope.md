@@ -70,6 +70,7 @@
 - [x] `GSP-004` API 응답 정규화 — Provider 공통 문서 구조로 변환
 - [x] `GSP-006` 문서 중복 제거 — URL 기준 멱등 Upsert
 - [x] `GSP-015` 개인 Wiki 자동 반영 금지 — Global Namespace 분리 저장
+- [x] `SCH-001` RSS 수집 스케줄 — Google News RSS(`google_news`, COL-001) 정기 수집. 2026-07-28 범위 추가: 영문 키워드에서 가장 정확한 Provider인데(실측 'Cloudflare' 수집 시 Naver 10건 중 관련 3건, google_news 5건 전부 관련) 스케줄에서 빠져 있었고, gdelt는 429·newsapi는 키 부재로 실질 가동 Provider가 naver 하나뿐이었다. **명세의 "RSS Source"는 임의 피드 주소를 뜻하지만 이 구현은 키워드 검색이다** — 임의 피드 수집이 필요해지면 별도 Provider로 추가한다. 원본 URL 디코딩 때문에 키워드당 12초쯤 더 걸린다
 - [x] `SCH-002` Naver API 수집 스케줄 — 독립 Scheduler 프로세스(`scheduler/main.py`)가 tick마다 `agent.global_sources`의 `schedule_cron`·`keywords`를 읽어 실행 차례가 된 Source만 수집 Worker(WORKER-001)로 넘긴다. 판정 순서는 ① Cron 도달 ② 키워드 존재 ③ `quota_policy.daily_max_runs`
 - [x] `SCH-003` GDELT 수집 스케줄 — SCH-002와 동일한 판정·실행 규칙
 - [x] `SCH-004` NewsAPI 수집 스케줄 — 수집 Worker에 `newsapi` Provider(COL-004) 연결 포함. 무료 플랜 호출 한도(일 100회)가 낮아 기본 Provider 목록에서는 제외하고 `quota_policy.daily_max_runs`와 함께 쓴다. (참고: MVP 목록 외 `SCH-009` Wiki Build 조용 시간 트리거는 구현됨)
@@ -206,6 +207,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | GSP-004 | API 응답 정규화 | Source별 응답을 공통 문서 구조로 변환한다. |
 | GSP-006 | 문서 중복 제거 | 동일 URL과 유사 문서를 중복 제거한다. |
 | GSP-015 | 개인 Wiki 자동 반영 금지 | 수집 데이터를 사용자 선택 없이 개인 Wiki에 반영하지 않는다. |
+| SCH-001 | RSS 수집 스케줄 | RSS Source 수집 작업을 정기 등록한다. |
 | SCH-002 | Naver API 수집 스케줄 | Naver API 수집 작업을 정기 등록한다. |
 | SCH-003 | GDELT 수집 스케줄 | GDELT 수집 작업을 정기 등록한다. |
 | SCH-004 | NewsAPI 수집 스케줄 | NewsAPI 수집 작업을 정기 등록한다. |

@@ -15,6 +15,7 @@ from infrastructure.persistence.api import GlobalCollectionSchedule
 from scheduler.api import (
     CollectionCredentials,
     next_collection_run_at,
+    sch_001,
     sch_002,
     sch_003,
     sch_004,
@@ -234,6 +235,28 @@ def test_collects_when_cron_time_has_passed(
     assert results[0].status == "completed"
     assert calls[0]["providers"] == ["gdelt"]
     assert calls[0]["limit_per_provider"] == 25
+
+
+def test_rss_schedule_collects_google_news(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RSS 수집 스케줄이 google_news Provider만 지정해 수집하는지 검증한다."""
+    calls = _patch(
+        monkeypatch, [_schedule(provider="google_news", keywords=("Cloudflare",))]
+    )
+
+    results = asyncio.run(
+        sch_001(
+            _FakeConnection(),  # type: ignore[arg-type]
+            database_url="postgresql://fake",
+            credentials=_CREDENTIALS,
+            now=_NOW,
+        )
+    )
+
+    assert results[0].status == "completed"
+    assert calls[0]["providers"] == ["google_news"]
+    assert calls[0]["keywords"] == ["Cloudflare"]
 
 
 def test_force_skips_cron_but_keeps_daily_quota(

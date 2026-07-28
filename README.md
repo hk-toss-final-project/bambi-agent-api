@@ -132,7 +132,7 @@ Claim하므로 예약 생성 요청은 지정 시각에 처리됩니다.
 
 ### 6. 정기 수집 Scheduler
 
-Global 풀을 채우는 정기 수집(SCH-002·SCH-003·SCH-004)입니다. **API 서버를 띄우면
+Global 풀을 채우는 정기 수집(SCH-001·SCH-002·SCH-003·SCH-004)입니다. **API 서버를 띄우면
 같이 돕니다** — 별도 실행이 필요 없습니다. 기동 시 백그라운드 Task로 올라가
 tick(기본 60초)마다 실행 차례가 된 Source만 수집합니다.
 
@@ -175,6 +175,12 @@ curl -X POST http://localhost:8000/internal/v1/collection-schedules \
 | `keywords` | 수집할 주제 목록 | 비어 있으면 건너뛰고 사유 출력 |
 | `daily_max_runs` | 하루 최대 실행 횟수 | 제한 없음 |
 | `limit_per_provider` | 한 번에 수집할 기사 수 | 10건 |
+
+Provider는 `naver`·`google_news`·`gdelt`·`newsapi` 넷을 지원합니다. 한국어 주제는
+`naver`, 영문 주제는 `google_news`가 정확합니다(실측: 'Cloudflare' 수집 시 Naver는
+10건 중 관련 3건, google_news는 5건 전부 관련). `google_news`는 원본 URL 디코딩
+때문에 키워드당 12초쯤 더 걸립니다. `gdelt`는 현재 429(IP 차단), `newsapi`는
+`.env`에 키가 없으면 등록해도 돌지 않습니다.
 
 **키워드는 각각 따로 검색합니다.** `["코스피","삼성전자"]`는 두 번의 개별 질의가
 됩니다. 하나의 문자열로 합치면(`"코스피 삼성전자"`) 두 단어를 모두 포함하는 기사만

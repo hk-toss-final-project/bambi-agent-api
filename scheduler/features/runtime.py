@@ -26,6 +26,7 @@ from .collection import (
     SCHEDULED_PROVIDERS,
     CollectionCredentials,
     CollectionScheduleResult,
+    sch_001,
     sch_002,
     sch_003,
     sch_004,
@@ -36,10 +37,15 @@ type DictRow = dict[str, Any]
 logger = logging.getLogger(__name__)
 
 # Provider 이름과 정기 수집 스케줄 기능의 연결.
+#
+# 한 tick 안에서 이 순서대로 실행한다. 빠른 Provider를 앞에 둬서, 종료 신호로
+# tick이 중간에 끊겨도 값싼 수집은 이미 끝나 있게 한다. google_news는 원본 URL
+# 디코딩 때문에 키워드당 12초쯤 더 걸려 뒤에 둔다.
 PROVIDER_SCHEDULES: dict[str, Callable[..., Any]] = {
     "naver": sch_002,
     "gdelt": sch_003,
     "newsapi": sch_004,
+    "google_news": sch_001,
 }
 
 
