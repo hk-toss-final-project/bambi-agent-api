@@ -130,55 +130,75 @@ clustering·scoring·dedup·outcomes·embeddings를 `agent/selection`으로 이�
 - 효과: 리뷰의 P0 #4(lease 잠식) 완화, P1 순차 병목 대폭 축소, L 참조 대부분이 version_id 있는 G로 바뀌어 P0 #7(계약 드리프트) 단순화.
 - 주의: agent-contract.md citation 절 갱신과 같은 PR로. /dev/graphs 레지스트리·가드 테스트 갱신(규칙 10). report_generation bench 재실행(규칙 8).
 
-#### 범위 정정 (2026-07-28 실측) — "풀 조회" 기능은 아직 없다
+#### 범위 정정 (2026-07-28 실측) — 풀 검색은 **이미 구현돼 있다**
 
-이 항목의 "풀 조회"를 **기존 기능을 연결하기만 하면 되는 일**로 읽으면 안 된다.
-`content_store.fetch_global_article_texts`가 이미 있어 풀을 읽는 것처럼 보이지만,
-**그 함수는 키워드로 풀을 검색하지 않는다.**
+> 이 절의 앞선 버전은 "풀 검색 기능을 새로 만들어야 한다"고 적었다. **그 결론은
+> 틀렸다.** `content_store.fetch_global_article_texts`(URL 기반 보조 캐시)만 보고
+> 판단했는데, 실제로는 `prag_003`이 개인 Wiki와 Global 풀을 **함께 검색**한다.
+> 풀이 비어 있는 상태에서 코드만 읽어 내린 오판이었다. 아래는 풀을 채운 뒤 실제로
+> 실행해 확인한 내용이다.
 
-```python
-def fetch_global_article_texts(urls: Sequence[str]) -> dict[str, str]:
-    """canonical_url이 일치하는 fetched Global 문서의 본문을 일괄 조회한다."""
+**풀 검색은 만들 필요가 없다.** `generation_runtime.py:280`이 두 Scope를 함께 훑고,
+`P{n}`/`G{n}` 참조까지 붙여 반환한다.
+
+```sql
+WHERE chunk.namespace_key IN (%s, 'global')
+  AND chunk.is_searchable
 ```
 
-입력이 **URL 목록**이다. 즉 "리포트가 이미 인터넷에서 찾아낸 기사의 본문이 마침
-풀에도 있으면 재사용"하는 **보조 캐시**이지, "풀에서 기사를 찾는" 1차 저장소 조회가
-아니다. 수집 호출은 그대로 다 일어나므로 실행 시간도 줄지 않는다.
+실측(2026-07-28) — 풀에 5개 키워드로 48건 수집·43건 본문 확보 후 `prag_003` 직접 호출:
 
 ```
-현재:   인터넷 수집(전량) → URL이 풀에 있나? → 있으면 본문만 재사용
-Step 3: 풀을 키워드로 조회 → 부족한 만큼만 인터넷 수집
+[Anthropic]              개인 4 / Global 5
+[ChatGPT]                개인 5 / Global 5
+[주가]                    개인 5 / Global 5
+[Domain-Driven Design]   개인 5 / Global 2
 ```
 
-**방향이 반대다. Step 3의 핵심 작업은 "풀을 키워드로 검색하는 기능"을 새로 만드는
-것이다.**
+어제 리포트에 `G` 참조가 없었던 것은 **기능이 없어서가 아니라 풀이 0건이었기
+때문이다.** Global 문서 48건이 청크 91건으로 색인돼 검색 대상이 되어 있다.
 
-실측(2026-07-28): Global 풀을 5개 키워드로 채우고(48건 수집·43건 본문 확보) 같은
-키워드 `Anthropic`으로 리포트를 생성했으나 **풀 재사용 로그가 한 건도 찍히지 않았다.**
-두 경로가 서로 다른 기사를 가져오기 때문이다.
+##### 그래서 Step 3에 실제로 남는 일
+
+핵심은 **조회 기능이 아니라 실행 순서**다. 현재 `load_context`는 이렇게 돈다.
 
 ```
-리포트가 쓴 출처   news.google.com/rss/…(리다이렉트) · nytimes.com · thestar.com.my
-풀에 저장된 URL    koreabiomed.com · fntoday.co.kr · wikitree.co.kr · e-science.co.kr
+prag_003(개인 + 풀 검색)  →  collect_live_context(인터넷 전량 수집)  →  합침
 ```
 
-원인은 둘이 겹친 것이다.
-1. **소스 구성이 다르다.** 풀은 Naver로 수집(한국 매체 위주), 비서는 Google News
-   RSS·YouTube·Reddit(글로벌 위주). 같은 키워드라도 결과 기사가 다르다.
-2. **URL 형식이 다르다.** 비서가 Google News RSS에서 받은 링크는 리다이렉트 주소라,
-   설령 같은 기사여도 `canonical_url` 매칭이 성립하지 않는다.
+풀에서 이미 5건을 찾아놓고도 **인터넷 수집을 그대로 다 수행한다.** 실행 시간
+대부분이 여기서 나온다. Step 3는 "풀 결과가 충분하면 실시간 수집을 건너뛰고,
+부족할 때만 콜드 수집"으로 바꾸는 작업이다.
 
-따라서 Step 3에는 다음이 함께 필요하다.
-- 풀을 **키워드·임베딩으로 검색**하는 조회 함수(신규)
-- 풀과 비서의 **소스 구성 정렬** 또는 URL 정규화(2번 문제 해소)
-- 풀 커버리지가 없을 때의 콜드 경로(타임아웃 있는 동기 수집)
+- ✅ 풀 키워드 검색 — **이미 있음** (`prag_003`)
+- 남음: `collect_live_context` 무조건 호출 제거, 충분/부족 판정 기준
+- 남음: 콜드 경로(타임아웃 있는 동기 수집)
 
-같은 실측에서 확인한 부수 사항:
+##### 함께 확인된 문제 — 풀 검색에 점수 컷오프가 없다
+
+주제와 무관한 기사가 상위에 섞인다.
+
+```
+[Anthropic] → "암호화폐 버리고 AI로?…코인베이스 CEO"      score 0.061
+[ChatGPT]  → "HK이노엔 케이캡, NSAIDs 관련 궤양 예방 3상"  score 0.076
+[DDD]      → "[박준성의 SW] 에이전트 코딩, SW공학에 기반"   score 0.884
+```
+
+점수 자체는 변별력이 있다(0.06 vs 0.88). 하한선 없이 Scope별 상위 N건을 그대로
+반환하는 것이 문제다. 풀 소비로 전환하면 이 자료가 곧바로 생성 근거가 되므로,
+`agent/selection`의 상대 컷오프(`similarity_cutoff`) 방식을 적용할 후보다.
+
+##### 부수 확인
+
 - `--keywords`는 쉼표 목록을 **하나의 검색어로 이어붙인다**
   (`global_source_collector.py:109`의 `" ".join(...)`). 여러 주제를 모으려면 주제마다
   워커를 따로 실행해야 한다 — Step 4의 Job 발행 설계에서 전제할 것.
 - 개념형 키워드는 풀에서도 약하다. `Domain-Driven Design`으로 수집한 10건이 DDD와
   무관한 AI 기사였다(Naver 뉴스가 영문 기술 용어에 취약).
+- 풀과 비서의 소스 구성이 다르다(풀=Naver 한국 매체, 비서=Google News RSS·YouTube·
+  Reddit 글로벌). 비서 쪽 URL은 리다이렉트 주소라 `canonical_url` 매칭도 성립하지
+  않아, `fetch_global_article_texts`의 본문 재사용은 실측에서 0건이었다. 풀 소비로
+  전환하면 이 경로의 중요도는 낮아진다.
 
 ### Step 4 — 관심사 루프 연결 (별도 트랙, Service 협의 필요)
 global-collector를 CLI 배치에서 job_type 워커로 승격하고, Service가 INT-001/011 관심 topic으로 수집 Job을 발행. 리포트 생성 스케줄도 같은 관심사로.
