@@ -41,20 +41,19 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--providers",
-        # google_news는 기본에서 제외한다. 검색 정확도는 Naver보다 낫지만
-        # (2026-07-28 실측: 'Cloudflare' 수집 5건 모두 관련 기사 vs Naver 10건 중 3건)
-        # 기사 link가 Google 리다이렉트 주소라 **본문을 확보할 수 없다.**
-        # Jina Reader가 news.google.com URL에서 403을 반환해, 이 Provider로 수집한
-        # 111건이 전부 본문 없는 껍데기로 남았다.
+        # google_news를 기본에 포함한다. Naver는 한국어 키워드에 강하지만 영문
+        # 고유명사를 잘 찾지 못한다(2026-07-28 실측: 'Cloudflare' 수집 10건 중 관련
+        # 3건, google_news는 5건 전부 관련). 두 소스가 서로의 약점을 메운다.
         #
-        # 리다이렉트는 HTTP로 풀리지 않는다. follow_redirects로도 news.google.com에
-        # 머물고, 응답 HTML에도 원본 링크가 없다(JS로 이동시키는 방식). RSS의
-        # <source url>은 언론사 **홈페이지** 주소라 기사 본문을 가리키지 않는다.
-        #
-        # 본문 없는 문서는 청크가 없어 풀 검색(prag_003)에 걸리지도 않으므로
-        # 수집해도 이득이 없다. 원본 URL을 얻는 방법을 찾으면 다시 넣는다.
-        default="gdelt,naver",
-        help="global-collector 전용: 쉼표로 구분한 수집 Provider (기본 gdelt,naver)",
+        # 이 Provider는 한 번 철회했다가 되살렸다. 기사 link가 Google 리다이렉트
+        # 주소라 본문 확보가 전부 실패했었는데(JINA_HTTP_403, 111건 전원),
+        # googlenewsdecoder로 원본 URL을 복원해 해결했다. 디코딩에 실패한 기사는
+        # 수집 단계에서 제외하므로 본문 없는 문서가 풀에 쌓이지 않는다.
+        default="gdelt,naver,google_news",
+        help=(
+            "global-collector 전용: 쉼표로 구분한 수집 Provider "
+            "(기본 gdelt,naver,google_news)"
+        ),
     )
     parser.add_argument(
         "--limit-per-provider",

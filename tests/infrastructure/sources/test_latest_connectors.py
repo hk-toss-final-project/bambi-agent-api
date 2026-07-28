@@ -119,7 +119,11 @@ def test_google_news_rss_provider_normalizes_items() -> None:
         <link></link>
       </item>
     </channel></rss>"""
-    provider = GoogleNewsRssProvider(transport=_rss_transport(xml))
+    # 디코더는 주입한다 — 단위 테스트가 Google 내부 엔드포인트를 호출하면 안 된다.
+    provider = GoogleNewsRssProvider(
+        transport=_rss_transport(xml),
+        url_decoder=lambda url: "https://maeil.com/article/1",
+    )
 
     articles = asyncio.run(provider.search(query="코스피", limit=10, language="ko"))
 
@@ -127,12 +131,47 @@ def test_google_news_rss_provider_normalizes_items() -> None:
     article = articles[0]
     assert article.provider == "google_news"
     assert article.title == "코스피 급락 - 매일경제"
-    assert article.url == "https://news.google.com/rss/articles/abc"
+    # 저장되는 URL은 리다이렉트가 아니라 디코딩된 원본 기사 주소다.
+    assert article.url == "https://maeil.com/article/1"
     assert article.description == "코스피 급락"
     assert article.source_name == "매일경제"
-    assert article.source_url == "https://maeil.com"  # 신뢰도 판정용 발행처 URL
+    assert article.source_url == "https://maeil.com/article/1"
     assert article.published_at is not None
     assert article.language == "ko"
+
+
+def test_google_news_rss_provider_drops_undecodable_items() -> None:
+    """디코딩에 실패한 기사는 수집에서 제외한다.
+
+    리다이렉트 URL을 그대로 저장하면 Jina Reader가 403을 반환해 본문을 확보할 수
+    없고(2026-07-28 실측 111건 전원 실패), 풀에 제목만 남아 검색 점수만 높은
+    잡음이 된다. 실패는 조용히 버리는 편이 낫다.
+    """
+    xml = """<?xml version="1.0"?>
+    <rss version="2.0"><channel>
+      <item>
+        <title>디코딩 성공</title>
+        <link>https://news.google.com/rss/articles/ok</link>
+        <source url="https://maeil.com">매일경제</source>
+      </item>
+      <item>
+        <title>디코딩 실패</title>
+        <link>https://news.google.com/rss/articles/bad</link>
+        <source url="https://maeil.com">매일경제</source>
+      </item>
+    </channel></rss>"""
+
+    def decoder(url: str) -> str:
+        """'ok'가 든 URL만 성공으로 취급한다."""
+        return "https://maeil.com/article/1" if url.endswith("ok") else ""
+
+    provider = GoogleNewsRssProvider(
+        transport=_rss_transport(xml), url_decoder=decoder
+    )
+
+    articles = asyncio.run(provider.search(query="코스피", limit=10, language="ko"))
+
+    assert [article.title for article in articles] == ["디코딩 성공"]
 
 
 def test_google_news_rss_provider_applies_limit_and_rejects_bad_feed() -> None:

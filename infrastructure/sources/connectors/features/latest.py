@@ -5,14 +5,18 @@
 """
 
 import html
+import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+from collections.abc import Callable
 from typing import Protocol
 from xml.etree import ElementTree
 
 import httpx
+
+logger = logging.getLogger("infrastructure.sources.connectors.latest")
 
 _HTML_TAG = re.compile(r"<[^>]+>")
 
@@ -296,19 +300,70 @@ class GdeltNewsProvider:
         ]
 
 
+def decode_google_news_url(url: str) -> str:
+    """Google News 리다이렉트 URL을 원본 기사 주소로 푼다. 실패하면 빈 문자열.
+
+    RSS의 기사 link는 `news.google.com/rss/articles/CBMi…` 형태의 암호화된
+    중계 주소다. 이 상태로는 본문을 확보할 수 없다 — Jina Reader가 403을
+    반환하고(2026-07-28 실측 111건 전원 실패), 리다이렉트는 HTTP로 풀리지
+    않는다(JS 이동이라 follow_redirects도 news.google.com에 머문다).
+
+    googlenewsdecoder는 Google 내부 엔드포인트를 호출해 원본을 복원한다.
+    실측(2026-07-28): 31건 전원 성공, URL당 약 1.2초, 25건 연속 호출에도 429 없음.
+
+    Google이 방식을 바꾸면 깨질 수 있으므로 실패를 정상 경로로 다룬다. 호출자는
+    빈 문자열을 받으면 그 기사를 **수집에서 제외**해야 한다 — 본문 없는 문서를
+    풀에 남기면 제목만 반복돼 검색 점수만 높은 잡음이 된다.
+
+    Args:
+        url: Google News RSS의 기사 link
+
+    Returns:
+        원본 기사 URL. 디코딩 실패 시 빈 문자열.
+    """
+    if "news.google.com" not in url:
+        return url
+    try:
+        from googlenewsdecoder import gnewsdecoder
+
+        result = gnewsdecoder(url)
+    except Exception as error:  # noqa: BLE001 — 외부 서비스 의존, 실패는 제외로 처리
+        logger.info("Google News URL 디코딩 실패: %s", error)
+        return ""
+    if not result.get("status"):
+        logger.info("Google News URL 디코딩 실패: %s", result.get("message"))
+        return ""
+    decoded = str(result.get("decoded_url") or "").strip()
+    return decoded if decoded and "news.google.com" not in decoded else ""
+
+
 class GoogleNewsRssProvider:
     """Google News RSS 검색 결과를 공통 최신 문서로 정규화한다.
 
     API Key 없이 동작하는 유일한 뉴스 Provider라, 자격 증명이 없는 환경
-    (팀원 로컬 등)에서 기본 소스 역할을 한다. 기사 link는 Google 리다이렉트
-    주소이므로 매체 정보는 source 요소에서 읽는다.
+    (팀원 로컬 등)에서 기본 소스 역할을 한다.
+
+    기사 link는 Google 리다이렉트 주소라 그대로 저장하면 본문을 확보할 수 없다.
+    수집 시점에 원본 주소로 디코딩하고, 실패한 기사는 결과에서 제외한다
+    (decode_google_news_url 참고).
     """
 
     name = "google_news"
 
-    def __init__(self, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
-        """테스트용 HTTP Transport를 저장한다."""
+    def __init__(
+        self,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+        url_decoder: Callable[[str], str] | None = None,
+    ) -> None:
+        """테스트용 HTTP Transport와 URL 디코더를 저장한다.
+
+        url_decoder를 주입할 수 있게 둔 이유는 테스트가 Google 내부 엔드포인트를
+        호출하지 않게 하기 위해서다(단위 테스트는 네트워크 없이 결정적으로 돌아야
+        한다). 생략하면 실제 디코더를 쓴다.
+        """
         self._transport = transport
+        self._decode = url_decoder or decode_google_news_url
 
     async def search(
         self, *, query: str, limit: int, language: str | None
@@ -341,9 +396,16 @@ class GoogleNewsRssProvider:
                 f"Google News RSS 응답을 해석할 수 없습니다: {error}",
             ) from error
         articles: list[LatestArticle] = []
+        skipped = 0
         for item in root.iter("item"):
-            url = (item.findtext("link") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            if not link:
+                continue
+            # 리다이렉트 주소를 원본 기사 URL로 푼다. 실패하면 그 기사는 버린다 —
+            # 본문을 확보할 수 없어 풀에 제목만 남는 잡음이 되기 때문이다.
+            url = self._decode(link)
             if not url:
+                skipped += 1
                 continue
             try:
                 published_at = parsedate_to_datetime(item.findtext("pubDate") or "")
@@ -361,10 +423,15 @@ class GoogleNewsRssProvider:
                     published_at=published_at,
                     source_name=source_name or None,
                     language=lang,
-                    # link는 Google 리다이렉트 주소라 발행처는 source 요소에서 읽는다.
-                    source_url=source_url or None,
+                    # 디코딩된 기사 URL이 곧 발행처 주소다. source 요소의 url은
+                    # 언론사 홈페이지라 기사를 가리키지 않으므로 폴백으로만 쓴다.
+                    source_url=url or source_url or None,
                 )
             )
             if len(articles) >= limit:
                 break
+        if skipped:
+            logger.info(
+                "Google News 디코딩 실패로 %d건 제외 (수집 %d건)", skipped, len(articles)
+            )
         return articles
