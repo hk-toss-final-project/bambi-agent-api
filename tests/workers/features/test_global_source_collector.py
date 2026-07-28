@@ -18,6 +18,7 @@ from infrastructure.sources.connectors.api import (
     LatestArticle,
     LatestProviderError,
     NaverNewsProvider,
+    NewsApiProvider,
 )
 
 
@@ -189,6 +190,23 @@ def test_build_provider_selects_and_validates() -> None:
     )
     assert isinstance(google_news, GoogleNewsRssProvider)
 
+    newsapi = collector._build_provider(
+        "newsapi",
+        naver_client_id=None,
+        naver_client_secret=None,
+        gdelt_base_url=None,
+        news_api_key="news-api-key",
+    )
+    assert isinstance(newsapi, NewsApiProvider)
+
+    with pytest.raises(LatestProviderError):
+        collector._build_provider(
+            "newsapi",
+            naver_client_id=None,
+            naver_client_secret=None,
+            gdelt_base_url=None,
+            news_api_key=None,
+        )
     with pytest.raises(LatestProviderError):
         collector._build_provider(
             "naver",

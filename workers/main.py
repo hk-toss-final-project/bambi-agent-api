@@ -104,6 +104,11 @@ async def _run_batch_once(
             if settings.naver_client_secret
             else None
         )
+        news_api_key = (
+            settings.news_api_key.get_secret_value()
+            if settings.news_api_key
+            else None
+        )
         return await worker_001(
             database_url=settings.agent_database_url,
             keywords=keywords,
@@ -113,6 +118,7 @@ async def _run_batch_once(
             naver_client_id=settings.naver_client_id,
             naver_client_secret=naver_secret,
             gdelt_base_url=settings.gdelt_base_url,
+            news_api_key=news_api_key,
         )
     if args.worker == "global-content":
         return await run_global_content_fetch_batch(

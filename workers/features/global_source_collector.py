@@ -1,10 +1,13 @@
 """PostgreSQL Global Source Collector Worker.
 
-GDELT·Naver·Google News RSS를 키워드로 검색해 뉴스 기사 URL을 Global 수집
-캐시에 중복 없이 저장한다. 본문은 저장하지 않고 `content_status='pending'`
+GDELT·Naver·Google News RSS·NewsAPI를 키워드로 검색해 뉴스 기사 URL을 Global
+수집 캐시에 중복 없이 저장한다. 본문은 저장하지 않고 `content_status='pending'`
 상태로만 등록하며, 이후 Jina Reader Worker(global_content_fetcher)가 본문을
 채운다. Provider별 실패는 서로 격리해 한 Provider가 실패해도 나머지 수집을
 계속한다.
+
+NewsAPI는 자격 증명과 무료 플랜 호출 한도(일 100회)가 있어 기본 Provider
+목록에서는 제외한다. 호출자가 명시적으로 지정할 때만 수집한다.
 """
 
 from typing import Any
@@ -22,22 +25,29 @@ from infrastructure.sources.connectors.api import (
     LatestInformationProvider,
     LatestProviderError,
     NaverNewsProvider,
+    NewsApiProvider,
     col_001,
     col_002,
     col_003,
+    col_004,
 )
 from infrastructure.sources.processing.api import gsp_004, gsp_006, gsp_015
 
 type DictRow = dict[str, Any]
 
 # 이 Worker가 지원하는 최신 뉴스 Provider 이름.
-_SUPPORTED_PROVIDERS = ("gdelt", "naver", "google_news")
+_SUPPORTED_PROVIDERS = ("gdelt", "naver", "google_news", "newsapi")
+
+# 호출자가 Provider를 지정하지 않았을 때 수집할 기본 Provider 이름.
+# NewsAPI는 무료 플랜 호출 한도가 낮아 기본값에서 제외한다.
+_DEFAULT_PROVIDERS = ("gdelt", "naver", "google_news")
 
 # Provider별 수집 기능(COL-*) 매핑.
 _PROVIDER_CONNECTORS = {
     "naver": col_002,
     "gdelt": col_003,
     "google_news": col_001,
+    "newsapi": col_004,
 }
 
 
@@ -47,14 +57,16 @@ def _build_provider(
     naver_client_id: str | None,
     naver_client_secret: str | None,
     gdelt_base_url: str | None,
+    news_api_key: str | None = None,
 ) -> LatestInformationProvider:
     """이름과 자격 증명으로 최신 뉴스 Provider를 구성한다.
 
     Args:
-        name: Provider 이름 (gdelt, naver 또는 google_news)
+        name: Provider 이름 (gdelt, naver, google_news 또는 newsapi)
         naver_client_id: Naver 검색 API Client ID
         naver_client_secret: Naver 검색 API Client Secret
         gdelt_base_url: GDELT API 기본 URL (없으면 기본값 사용)
+        news_api_key: NewsAPI Key (newsapi Provider에만 필요)
 
     Returns:
         키워드 검색이 가능한 Provider 인스턴스
@@ -74,6 +86,14 @@ def _build_provider(
         return GdeltNewsProvider(gdelt_base_url or "https://api.gdeltproject.org")
     if name == "google_news":
         return GoogleNewsRssProvider()
+    if name == "newsapi":
+        if not news_api_key:
+            raise LatestProviderError(
+                name,
+                "provider_not_ready",
+                "NEWS_API_KEY가 필요합니다.",
+            )
+        return NewsApiProvider(news_api_key)
     raise LatestProviderError(name, "unsupported_provider", "지원하지 않는 Provider입니다.")
 
 
@@ -87,8 +107,9 @@ async def run_global_source_collection_batch(
     naver_client_id: str | None = None,
     naver_client_secret: str | None = None,
     gdelt_base_url: str | None = None,
+    news_api_key: str | None = None,
 ) -> list[dict[str, object]]:
-    """키워드로 GDELT·Naver·Google News RSS 뉴스를 수집해 Global 수집 캐시에 저장한다.
+    """키워드로 GDELT·Naver·Google News RSS·NewsAPI 뉴스를 수집해 Global 수집 캐시에 저장한다.
 
     Provider별로 독립적인 Transaction과 오류 처리를 사용해, 한 Provider의 API
     실패나 저장 오류가 다른 Provider의 수집 결과를 되돌리지 않는다.
@@ -102,6 +123,7 @@ async def run_global_source_collection_batch(
         naver_client_id: Naver 검색 API Client ID
         naver_client_secret: Naver 검색 API Client Secret
         gdelt_base_url: GDELT API 기본 URL
+        news_api_key: NewsAPI Key
 
     Returns:
         Provider별 수집·저장 결과 또는 실패 정보 목록
@@ -109,7 +131,7 @@ async def run_global_source_collection_batch(
     query = " ".join(keyword.strip() for keyword in keywords if keyword.strip())
     if not query:
         raise ValueError("수집에 사용할 키워드가 필요합니다.")
-    selected = providers or list(_SUPPORTED_PROVIDERS)
+    selected = providers or list(_DEFAULT_PROVIDERS)
     connection: AsyncConnection[DictRow] = await AsyncConnection.connect(
         database_url,
         row_factory=dict_row,
@@ -123,6 +145,7 @@ async def run_global_source_collection_batch(
                     naver_client_id=naver_client_id,
                     naver_client_secret=naver_client_secret,
                     gdelt_base_url=gdelt_base_url,
+                    news_api_key=news_api_key,
                 )
                 connector = _PROVIDER_CONNECTORS[provider_name]
                 collected = await connector(
@@ -181,6 +204,7 @@ async def worker_001(
     naver_client_id: str | None = None,
     naver_client_secret: str | None = None,
     gdelt_base_url: str | None = None,
+    news_api_key: str | None = None,
 ) -> list[dict[str, object]]:
     """[WORKER-001] Global Source Collector Worker.
 
@@ -203,4 +227,5 @@ async def worker_001(
         naver_client_id=naver_client_id,
         naver_client_secret=naver_client_secret,
         gdelt_base_url=gdelt_base_url,
+        news_api_key=news_api_key,
     )
