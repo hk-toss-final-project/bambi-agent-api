@@ -219,6 +219,28 @@ docker compose exec -T -u postgres agent-db /bin/sh /usr/local/bin/initialize-ag
 기존 콘텐츠 생성 기능 ID를 `REPORT-*` 계약으로 이전합니다. 외부에 전달된
 기존 콘텐츠 식별자는 변경하지 않습니다.
 
+`0008`은 Global 뉴스 수집 원문을 Wiki 테이블에서 분리해 소유권 없는 수집
+캐시 `global_source_documents`로 옮깁니다. 이후 `wiki_documents`의
+`namespace_key = 'global'` 행은 만들지 않으며, 수집 워커·리포트 검색·비서
+본문 재사용이 모두 이 캐시를 사용합니다. `citations`에는 캐시 출처 컬럼
+`global_source_document_id`가 추가됩니다.
+
+### Migration 파일을 찾을 수 없다고 나올 때
+
+호스트의 `database/migrations`에 파일이 있는데도 초기화가
+`Migration 파일을 찾을 수 없습니다: /opt/bambi/migrations`로 실패하면,
+장시간 떠 있던 컨테이너의 bind mount가 stale해진 경우입니다(macOS Docker
+Desktop에서 발생). `docker compose up -d`는 Running 상태 컨테이너를
+재생성하지 않으므로 시작 스크립트를 반복 실행해도 복구되지 않습니다.
+
+컨테이너 안에서 마운트가 비어 있는지 확인한 뒤 컨테이너만 재생성합니다.
+DB 데이터는 named volume에 있어 유실되지 않습니다.
+
+```bash
+docker compose exec -T -u postgres agent-db ls /opt/bambi/migrations
+docker compose up -d --force-recreate agent-db && ./scripts/start_agent_db.sh
+```
+
 ```sql
 SELECT document.document_kind,
        document.document_key,
