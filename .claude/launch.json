@@ -9,11 +9,11 @@
         "uvicorn",
         "app.main:app",
         "--port",
-        "8010",
+        "8000",
         "--loop",
         "app.main:selector_event_loop"
       ],
-      "port": 8010
+      "port": 8000
     }
   ]
 }
