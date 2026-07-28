@@ -118,10 +118,7 @@ def test_collection_batch_isolates_provider_failure(
             [],  # set_system_job_scope
             [{"id": "source-1"}],  # INSERT global_sources
             [{"id": "run-1"}],  # INSERT global_collection_runs
-            [],  # 존재 SELECT → 없음
-            [{"id": "doc-1"}],  # INSERT wiki_documents
-            [{"id": "ver-1"}],  # INSERT wiki_document_versions
-            [],  # INSERT wiki_chunks
+            [{"id": "doc-1"}],  # INSERT global_source_documents → 새 캐시 문서
             [],  # UPDATE global_collection_runs
         ]
     )

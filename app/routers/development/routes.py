@@ -182,8 +182,8 @@ async def run_url_collection_worker(
     summary="최신 뉴스 수집 Worker 즉시 실행",
     description=(
         "키워드로 외부 뉴스 API(GDELT·Naver)를 호출해 최신 기사를 수집하고 "
-        "Global Namespace에 stub 문서로 저장하는 Worker를 즉시 실행한다. 본문은 "
-        "이후 본문 수집 Worker가 채운다."
+        "Global 수집 캐시에 본문 없는 pending 상태로 저장하는 Worker를 즉시 "
+        "실행한다. 본문은 이후 본문 수집 Worker가 채운다."
     ),
 )
 async def run_latest_news_worker(

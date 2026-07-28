@@ -1,7 +1,7 @@
 """PostgreSQL Global Source Collector Worker.
 
-GDELT·Naver·Google News RSS를 키워드로 검색해 뉴스 기사 URL을 Global
-Namespace에 중복 없이 저장한다. 본문은 저장하지 않고 `content_status='pending'`
+GDELT·Naver·Google News RSS를 키워드로 검색해 뉴스 기사 URL을 Global 수집
+캐시에 중복 없이 저장한다. 본문은 저장하지 않고 `content_status='pending'`
 상태로만 등록하며, 이후 Jina Reader Worker(global_content_fetcher)가 본문을
 채운다. Provider별 실패는 서로 격리해 한 Provider가 실패해도 나머지 수집을
 계속한다.
@@ -88,7 +88,7 @@ async def run_global_source_collection_batch(
     naver_client_secret: str | None = None,
     gdelt_base_url: str | None = None,
 ) -> list[dict[str, object]]:
-    """키워드로 GDELT·Naver·Google News RSS 뉴스를 수집해 Global Namespace에 저장한다.
+    """키워드로 GDELT·Naver·Google News RSS 뉴스를 수집해 Global 수집 캐시에 저장한다.
 
     Provider별로 독립적인 Transaction과 오류 처리를 사용해, 한 Provider의 API
     실패나 저장 오류가 다른 Provider의 수집 결과를 되돌리지 않는다.
@@ -136,7 +136,7 @@ async def run_global_source_collection_batch(
                 await gsp_015("global")
 
                 async def persist_articles() -> dict[str, int]:
-                    """정규화된 기사를 Global Namespace에 멱등 저장한다."""
+                    """정규화된 기사를 Global 수집 캐시에 멱등 저장한다."""
                     async with connection.transaction():
                         await set_system_job_scope(connection)
                         return await persist_collected_articles(

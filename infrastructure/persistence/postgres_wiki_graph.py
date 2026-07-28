@@ -5,7 +5,6 @@ wiki_document_relations를 읽어 Obsidian 스타일 Graph 응답으로 조립�
 """
 
 import hashlib
-import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
@@ -14,7 +13,6 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
-from shared.hashing import compute_content_hash
 from shared.wiki_models import InterestCandidate
 from infrastructure.persistence.api import (
     delete_wiki_document_and_record_event,
@@ -24,24 +22,6 @@ from infrastructure.persistence.api import (
 )
 from infrastructure.sources.connectors.api import LatestArticle
 
-
-def _global_article_markdown(article: LatestArticle) -> str:
-    """정규화된 최신 기사를 YAML Frontmatter와 Markdown 본문으로 변환한다."""
-    frontmatter = [
-        "---",
-        f"title: {json.dumps(article.title, ensure_ascii=False)}",
-        f"source: {json.dumps(article.url, ensure_ascii=False)}",
-        f"provider: {article.provider}",
-    ]
-    if article.published_at is not None:
-        frontmatter.append(f"published: {article.published_at.isoformat()}")
-    if article.source_name:
-        frontmatter.append(
-            f"source_name: {json.dumps(article.source_name, ensure_ascii=False)}"
-        )
-    frontmatter.extend(["---", "", f"# {article.title}", ""])
-    frontmatter.append(article.description or "원문 링크에서 내용을 확인하세요.")
-    return "\n".join(frontmatter).strip()
 
 type DictRow = dict[str, Any]
 
@@ -676,173 +656,70 @@ class PostgresWikiGraphRepository:
                 duplicate_count = 0
                 saved_items: list[Mapping[str, object]] = []
                 for article in articles:
-                    markdown = _global_article_markdown(article)
-                    content_hash = compute_content_hash(markdown)
-                    document_key = hashlib.sha256(
-                        article.url.encode("utf-8")
-                    ).hexdigest()[:24]
-                    head_cursor = await connection.execute(
+                    url = article.url.strip()
+                    if not url:
+                        continue
+                    url_key = hashlib.sha256(url.encode("utf-8")).hexdigest()[:24]
+                    insert_cursor = await connection.execute(
                         """
-                        SELECT id, current_version, content_hash
-                        FROM agent.wiki_documents
-                        WHERE namespace_key = 'global'
-                          AND deleted_at IS NULL
-                          AND (canonical_url = %s OR content_hash = %s)
-                        ORDER BY (canonical_url = %s) DESC, updated_at DESC
-                        LIMIT 1
-                        FOR UPDATE
+                        INSERT INTO agent.global_source_documents (
+                            canonical_url,
+                            url_key,
+                            provider,
+                            search_query,
+                            source_name,
+                            language,
+                            title,
+                            description,
+                            content_status,
+                            published_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s)
+                        ON CONFLICT (canonical_url) DO NOTHING
+                        RETURNING id
                         """,
-                        (article.url, content_hash, article.url),
+                        (
+                            url,
+                            url_key,
+                            provider,
+                            query,
+                            article.source_name or None,
+                            article.language or "und",
+                            article.title,
+                            article.description or None,
+                            article.published_at,
+                        ),
                     )
-                    head = await head_cursor.fetchone()
+                    head = await insert_cursor.fetchone()
                     if head is None:
-                        insert_cursor = await connection.execute(
+                        # 이미 캐시에 있는 URL — 기존 문서 ID를 찾아 응답에 담는다.
+                        existing_cursor = await connection.execute(
                             """
-                            INSERT INTO agent.wiki_documents (
-                                knowledge_scope,
-                                namespace_key,
-                                source_type,
-                                canonical_url,
-                                language,
-                                current_version,
-                                content_hash,
-                                metadata,
-                                document_kind,
-                                document_key,
-                                file_path,
-                                domain
-                            ) VALUES (
-                                'global', 'global', %s, %s, %s, 1, %s, %s,
-                                'document', %s, %s, %s
-                            )
-                            ON CONFLICT DO NOTHING
-                            RETURNING id, current_version, content_hash
+                            SELECT id
+                            FROM agent.global_source_documents
+                            WHERE canonical_url = %s
                             """,
-                            (
-                                provider,
-                                article.url,
-                                article.language or "und",
-                                content_hash,
-                                Jsonb({"provider": provider}),
-                                document_key,
-                                f"documents/{document_key}.md",
-                                article.source_name,
-                            ),
+                            (url,),
                         )
-                        head = await insert_cursor.fetchone()
-                        if head is None:
-                            retry_cursor = await connection.execute(
-                                """
-                                SELECT id, current_version, content_hash
-                                FROM agent.wiki_documents
-                                WHERE namespace_key = 'global'
-                                  AND deleted_at IS NULL
-                                  AND (canonical_url = %s OR content_hash = %s)
-                                ORDER BY (canonical_url = %s) DESC, updated_at DESC
-                                LIMIT 1
-                                FOR UPDATE
-                                """,
-                                (article.url, content_hash, article.url),
-                            )
-                            head = await retry_cursor.fetchone()
-                            if head is None:
-                                raise RuntimeError("Global 문서 Head를 저장하지 못했습니다.")
-                    latest_cursor = await connection.execute(
-                        """
-                        SELECT id, version, content_hash
-                        FROM agent.wiki_document_versions
-                        WHERE document_id = %s
-                        ORDER BY version DESC
-                        LIMIT 1
-                        FOR UPDATE
-                        """,
-                        (head["id"],),
-                    )
-                    latest = await latest_cursor.fetchone()
-                    created = latest is None or latest["content_hash"] != content_hash
-                    if created:
-                        version = int(latest["version"]) + 1 if latest else 1
-                        metadata = {
-                            "provider": provider,
-                            "url": article.url,
-                            "published_at": (
-                                article.published_at.isoformat()
-                                if article.published_at
-                                else None
-                            ),
-                            "source_name": article.source_name,
-                            "language": article.language,
-                        }
-                        version_cursor = await connection.execute(
-                            """
-                            INSERT INTO agent.wiki_document_versions (
-                                document_id,
-                                namespace_key,
-                                version,
-                                title,
-                                summary,
-                                normalized_content,
-                                content_hash,
-                                source_metadata
-                            ) VALUES (%s, 'global', %s, %s, %s, %s, %s, %s)
-                            RETURNING id
-                            """,
-                            (
-                                head["id"],
-                                version,
-                                article.title,
-                                article.description or None,
-                                markdown,
-                                content_hash,
-                                Jsonb(metadata),
-                            ),
-                        )
-                        version_row = await version_cursor.fetchone()
-                        await connection.execute(
-                            """
-                            INSERT INTO agent.wiki_chunks (
-                                document_version_id,
-                                namespace_key,
-                                chunk_index,
-                                content,
-                                metadata
-                            ) VALUES (%s, 'global', 0, %s, %s)
-                            """,
-                            (
-                                version_row["id"],
-                                markdown,
-                                Jsonb({"provider": provider, "query": query}),
-                            ),
-                        )
-                        await connection.execute(
-                            """
-                            UPDATE agent.wiki_documents
-                            SET
-                                current_version = %s,
-                                content_hash = %s,
-                                updated_at = clock_timestamp()
-                            WHERE id = %s
-                            """,
-                            (version, content_hash, head["id"]),
-                        )
-                        document_version_id = str(version_row["id"])
-                        created_count += 1
-                    else:
-                        version = int(latest["version"])
-                        document_version_id = str(latest["id"])
+                        existing = await existing_cursor.fetchone()
+                        if existing is None:
+                            raise RuntimeError("Global 캐시 문서를 저장하지 못했습니다.")
+                        document_id = str(existing["id"])
+                        created = False
                         duplicate_count += 1
+                    else:
+                        document_id = str(head["id"])
+                        created = True
+                        created_count += 1
                     saved_items.append(
                         {
                             "provider": provider,
                             "title": article.title,
-                            "url": article.url,
+                            "url": url,
                             "description": article.description,
                             "published_at": article.published_at,
                             "source_name": article.source_name,
                             "language": article.language,
-                            "document_id": str(head["id"]),
-                            "document_version_id": document_version_id,
-                            "version": version,
+                            "document_id": document_id,
                             "created": created,
                         }
                     )

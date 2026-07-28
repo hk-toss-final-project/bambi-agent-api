@@ -3,15 +3,19 @@
 DB-008, DB-009, DB-010, DB-011, DB-012, DB-013, DB-014 기능의 실제 구현 위치를 제공한다.
 
 이 파일은 위 스캐폴드 기능 함수와 함께, Global Source Collector Worker가
-GDELT·Naver로 수집한 뉴스 URL을 Global Namespace(`namespace_key='global'`)에
-저장하고, Jina Reader Worker가 그 URL의 본문을 채우기 위해 사용하는 실제
-PostgreSQL 함수를 제공한다.
+GDELT·Naver로 수집한 뉴스 URL을 소유권 없는 수집 캐시
+(`agent.global_source_documents`)에 저장하고, Jina Reader Worker가 그 URL의
+본문을 채우기 위해 사용하는 실제 PostgreSQL 함수를 제공한다.
+
+수집 캐시는 LLM Wiki가 아니다. Wiki(`wiki_documents`)는 맥락 주체(개인·팀)
+별 LLM 파생 노드를 담고, 이 캐시는 "LLM이 URL을 직접 읽을 수 없으니 한 번
+읽은 본문을 모두가 재사용"하기 위한 원문 풀이다 (0008 Migration 참조).
 
 수집과 본문 채우기는 두 단계로 분리된다.
 1. 수집 워커: URL 기준으로 중복을 제거하고, 아직 본문이 없는 문서를
-   `metadata.content_status = 'pending'` 상태로 저장한다.
-2. Jina 워커: pending 문서를 점유(`fetching`)해 본문을 새 Version으로 채우고
-   `metadata.content_status = 'fetched'`로 전환한다.
+   `content_status = 'pending'` 상태로 저장한다.
+2. Jina 워커: pending 문서를 점유(`fetching`)해 본문 Markdown을 채우고
+   `content_status = 'fetched'`로 전환한다.
 """
 
 import hashlib
@@ -35,24 +39,10 @@ class GlobalArticleToFetch:
 
     document_id: str
     url: str
-    current_version: int
-
-
-def _article_stub_markdown(article: LatestArticle) -> str:
-    """본문 수집 전 단계의 기사 메타데이터를 최소 Markdown으로 만든다.
-
-    수집 워커는 아직 본문을 모르므로 제목·설명·원문 링크만 저장한다. Jina
-    워커가 이후 전체 본문으로 대체한다.
-    """
-    lines = [f"# {article.title}".strip(), ""]
-    if article.description:
-        lines.extend([article.description.strip(), ""])
-    lines.append(f"[원문 링크]({article.url})")
-    return "\n".join(lines).strip() + "\n"
 
 
 def _document_key(url: str) -> str:
-    """URL을 안정적인 24자 Global 문서 Key로 변환한다."""
+    """URL을 안정적인 24자 캐시 Key로 변환한다."""
     return hashlib.sha256(url.encode("utf-8")).hexdigest()[:24]
 
 
@@ -64,12 +54,11 @@ async def persist_collected_articles(
     articles: list[LatestArticle],
     content_status: str = "pending",
 ) -> dict[str, object]:
-    """수집한 뉴스 기사 URL을 Global Namespace에 중복 없이 저장한다.
+    """수집한 뉴스 기사 URL을 Global 수집 캐시에 중복 없이 저장한다.
 
     같은 Transaction에서 Global Source(DB-008)와 Collection Run(DB-009)을
-    기록하고, URL 기준으로 아직 저장되지 않은 기사만 Global 문서·Version·
-    Chunk(DB-010, DB-011)로 새로 저장한다. 이미 있는 URL은 본문 수집 여부와
-    무관하게 건너뛴다.
+    기록하고, URL 기준으로 아직 저장되지 않은 기사만 캐시 문서(DB-010)로
+    새로 저장한다. 이미 있는 URL은 본문 수집 여부와 무관하게 건너뛴다.
 
     Args:
         connection: 시스템 Scope가 설정된 DB 연결
@@ -125,122 +114,48 @@ async def persist_collected_articles(
         url = article.url.strip()
         if not url:
             continue
-        existing_cursor = await connection.execute(
-            """
-            SELECT id
-            FROM agent.wiki_documents
-            WHERE namespace_key = 'global'
-              AND deleted_at IS NULL
-              AND canonical_url = %s
-            LIMIT 1
-            FOR UPDATE
-            """,
-            (url,),
-        )
-        if await existing_cursor.fetchone() is not None:
-            duplicate_count += 1
-            continue
-
-        markdown = _article_stub_markdown(article)
-        content_hash = compute_content_hash(markdown)
-        document_key = _document_key(url)
-        metadata = {
-            "provider": provider,
-            "query": query,
-            "content_status": content_status,
-            "source_name": article.source_name,
-            "language": article.language,
-            "published_at": (
-                article.published_at.isoformat() if article.published_at else None
-            ),
-        }
         insert_cursor = await connection.execute(
             """
-            INSERT INTO agent.wiki_documents (
-                knowledge_scope,
-                namespace_key,
-                source_type,
+            INSERT INTO agent.global_source_documents (
                 canonical_url,
+                url_key,
+                provider,
+                search_query,
+                source_name,
                 language,
-                current_version,
-                content_hash,
-                metadata,
-                document_kind,
-                document_key,
-                file_path,
-                domain
-            ) VALUES (
-                'global', 'global', %s, %s, %s, 1, %s, %s,
-                'document', %s, %s, %s
-            )
-            ON CONFLICT DO NOTHING
+                title,
+                description,
+                content_status,
+                published_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (canonical_url) DO NOTHING
             RETURNING id
             """,
             (
-                provider,
                 url,
-                article.language or "und",
-                content_hash,
-                Jsonb(metadata),
-                document_key,
-                f"documents/{document_key}.md",
+                _document_key(url),
+                provider,
+                query,
                 article.source_name or None,
+                article.language or "und",
+                article.title,
+                article.description or None,
+                content_status,
+                article.published_at,
             ),
         )
         head = await insert_cursor.fetchone()
         if head is None:
-            # 같은 Batch나 동시 수집이 먼저 저장한 URL이므로 중복으로 센다.
+            # 이미 캐시에 있는 URL이므로 중복으로 센다.
             duplicate_count += 1
             continue
-        document_id = str(head["id"])
-        version_cursor = await connection.execute(
-            """
-            INSERT INTO agent.wiki_document_versions (
-                document_id,
-                namespace_key,
-                version,
-                title,
-                summary,
-                normalized_content,
-                content_hash,
-                source_metadata
-            ) VALUES (%s, 'global', 1, %s, %s, %s, %s, %s)
-            RETURNING id
-            """,
-            (
-                document_id,
-                article.title,
-                article.description or None,
-                markdown,
-                content_hash,
-                Jsonb(metadata),
-            ),
-        )
-        version_row = await version_cursor.fetchone()
-        await connection.execute(
-            """
-            INSERT INTO agent.wiki_chunks (
-                document_version_id,
-                namespace_key,
-                chunk_index,
-                content,
-                metadata
-            ) VALUES (%s, 'global', 0, %s, %s)
-            """,
-            (
-                version_row["id"],
-                markdown,
-                Jsonb({"provider": provider, "query": query}),
-            ),
-        )
         created_count += 1
         saved_items.append(
             {
                 "provider": provider,
                 "title": article.title,
                 "url": url,
-                "document_id": document_id,
-                "document_version_id": str(version_row["id"]),
+                "document_id": str(head["id"]),
                 "content_status": content_status,
                 "published_at": (
                     article.published_at.isoformat()
@@ -287,7 +202,7 @@ async def claim_global_articles_for_fetch(
     *,
     limit: int,
 ) -> list[GlobalArticleToFetch]:
-    """본문이 없는 Global 기사(content_status='pending')를 점유해 반환한다.
+    """본문이 없는 캐시 문서(content_status='pending')를 점유해 반환한다.
 
     SKIP LOCKED로 pending 문서를 Batch 점유하고 즉시 `fetching` 상태로 바꿔
     다른 Worker가 같은 문서를 중복 수집하지 않게 한다.
@@ -297,7 +212,7 @@ async def claim_global_articles_for_fetch(
         limit: 한 번에 점유할 최대 문서 수
 
     Returns:
-        본문을 채울 문서 ID, URL, 현재 Version 목록
+        본문을 채울 캐시 문서 ID와 URL 목록
     """
     if not 1 <= limit <= 100:
         raise ValueError("Global 기사 Claim limit은 1에서 100 사이여야 합니다.")
@@ -305,22 +220,17 @@ async def claim_global_articles_for_fetch(
         """
         WITH claimable AS (
             SELECT id
-            FROM agent.wiki_documents
-            WHERE namespace_key = 'global'
-              AND deleted_at IS NULL
-              AND canonical_url IS NOT NULL
-              AND metadata->>'content_status' = 'pending'
+            FROM agent.global_source_documents
+            WHERE content_status = 'pending'
             ORDER BY updated_at
             FOR UPDATE SKIP LOCKED
             LIMIT %s
         )
-        UPDATE agent.wiki_documents AS document
-        SET
-            metadata = jsonb_set(document.metadata, '{content_status}', '"fetching"'),
-            updated_at = clock_timestamp()
+        UPDATE agent.global_source_documents AS document
+        SET content_status = 'fetching'
         FROM claimable
         WHERE document.id = claimable.id
-        RETURNING document.id, document.canonical_url, document.current_version
+        RETURNING document.id, document.canonical_url
         """,
         (limit,),
     )
@@ -329,7 +239,6 @@ async def claim_global_articles_for_fetch(
         GlobalArticleToFetch(
             document_id=str(row["id"]),
             url=row["canonical_url"],
-            current_version=int(row["current_version"]),
         )
         for row in rows
     ]
@@ -344,91 +253,44 @@ async def save_fetched_article_content(
     markdown: str,
     published_at: datetime | None,
 ) -> dict[str, object]:
-    """Jina Reader가 수집한 본문을 Global 문서의 새 Version으로 저장한다.
+    """Jina Reader가 수집한 본문을 캐시 문서에 채우고 fetched로 전환한다.
 
-    기존 stub Version은 보존하고, 전체 본문을 담은 새 Version과 Chunk를
-    추가한 뒤 Head의 최신 Version·Hash와 `content_status='fetched'`를 갱신한다.
+    수집 시점 발행일 메타가 이미 있으면 본문에서 파싱하지 못했더라도
+    보존한다(COALESCE).
 
     Args:
         connection: 시스템 Scope가 설정된 DB 연결
-        document_id: 본문을 채울 Global 문서 ID
+        document_id: 본문을 채울 캐시 문서 ID
         resolved_url: Jina Reader가 리다이렉트까지 반영한 최종 URL
         title: 수집한 본문 제목
         markdown: 수집한 전체 본문 Markdown
         published_at: 본문에서 파싱한 게시 시각 (없으면 None)
 
     Returns:
-        저장한 문서 ID, 새 Version 번호와 Version ID
+        저장한 캐시 문서 ID와 전환된 상태
     """
-    head_cursor = await connection.execute(
-        """
-        SELECT current_version, metadata
-        FROM agent.wiki_documents
-        WHERE id = %s AND namespace_key = 'global'
-        FOR UPDATE
-        """,
-        (document_id,),
-    )
-    head = await head_cursor.fetchone()
-    if head is None:
-        raise RuntimeError(f"Global 문서를 찾을 수 없습니다: {document_id}")
-    version = int(head["current_version"]) + 1
     content_hash = compute_content_hash(markdown)
-    metadata = dict(head["metadata"] or {})
-    metadata.update(
-        {
-            "content_status": "fetched",
-            "resolved_url": resolved_url,
-            "fetched_at": datetime.now().astimezone().isoformat(),
-            "published_at": (
-                published_at.isoformat() if published_at else metadata.get("published_at")
-            ),
-        }
-    )
-    version_cursor = await connection.execute(
+    cursor = await connection.execute(
         """
-        INSERT INTO agent.wiki_document_versions (
-            document_id,
-            namespace_key,
-            version,
-            title,
-            normalized_content,
-            content_hash,
-            source_metadata
-        ) VALUES (%s, 'global', %s, %s, %s, %s, %s)
+        UPDATE agent.global_source_documents
+        SET
+            title = %s,
+            markdown = %s,
+            content_hash = %s,
+            resolved_url = %s,
+            published_at = COALESCE(%s, published_at),
+            content_status = 'fetched',
+            fetched_at = clock_timestamp()
+        WHERE id = %s
         RETURNING id
         """,
-        (document_id, version, title, markdown, content_hash, Jsonb(metadata)),
+        (title, markdown, content_hash, resolved_url, published_at, document_id),
     )
-    version_row = await version_cursor.fetchone()
-    await connection.execute(
-        """
-        INSERT INTO agent.wiki_chunks (
-            document_version_id,
-            namespace_key,
-            chunk_index,
-            content,
-            metadata
-        ) VALUES (%s, 'global', 0, %s, %s)
-        """,
-        (version_row["id"], markdown, Jsonb({"source": "jina-reader"})),
-    )
-    await connection.execute(
-        """
-        UPDATE agent.wiki_documents
-        SET
-            current_version = %s,
-            content_hash = %s,
-            metadata = %s,
-            updated_at = clock_timestamp()
-        WHERE id = %s
-        """,
-        (version, content_hash, Jsonb(metadata), document_id),
-    )
+    updated = await cursor.fetchone()
+    if updated is None:
+        raise RuntimeError(f"Global 캐시 문서를 찾을 수 없습니다: {document_id}")
     return {
-        "document_id": document_id,
-        "document_version_id": str(version_row["id"]),
-        "version": version,
+        "document_id": str(updated["id"]),
         "content_status": "fetched",
     }
 
@@ -440,30 +302,21 @@ async def mark_global_article_fetch_failed(
     error_code: str,
     error_message: str,
 ) -> None:
-    """본문 수집에 실패한 Global 문서를 failed 상태로 표시한다.
+    """본문 수집에 실패한 캐시 문서를 failed 상태로 표시한다.
 
     무한 재시도를 막기 위해 `content_status='failed'`로 전환하고 오류 원인을
-    metadata에 보존한다. 관리자가 원인을 확인한 뒤 pending으로 되돌려 재수집할
-    수 있다.
+    보존한다. 관리자가 원인을 확인한 뒤 pending으로 되돌려 재수집할 수 있다.
     """
     await connection.execute(
         """
-        UPDATE agent.wiki_documents
+        UPDATE agent.global_source_documents
         SET
-            metadata = metadata || %s::jsonb,
-            updated_at = clock_timestamp()
-        WHERE id = %s AND namespace_key = 'global'
+            content_status = 'failed',
+            fetch_error_code = %s,
+            fetch_error_message = %s
+        WHERE id = %s
         """,
-        (
-            Jsonb(
-                {
-                    "content_status": "failed",
-                    "fetch_error_code": error_code,
-                    "fetch_error_message": error_message[:500],
-                }
-            ),
-            document_id,
-        ),
+        (error_code, error_message[:500], document_id),
     )
 
 
@@ -486,7 +339,7 @@ async def db_009(request: FeatureRequest) -> FeatureResult:
 async def db_010(request: FeatureRequest) -> FeatureResult:
     """[DB-010] Global 문서 저장.
 
-    수집된 외부 문서와 버전을 저장한다.
+    수집된 외부 문서를 수집 캐시에 저장한다.
     """
     raise NotImplementedError("[DB-010] 기능 구현이 필요합니다.")
 

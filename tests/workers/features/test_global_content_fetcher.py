@@ -78,15 +78,12 @@ def test_content_fetch_saves_body_and_isolates_failure(
         [
             [],  # set_system_job_scope (claim)
             [
-                {"id": "d1", "canonical_url": "https://a", "current_version": 1},
-                {"id": "d2", "canonical_url": "https://b", "current_version": 1},
+                {"id": "d1", "canonical_url": "https://a"},
+                {"id": "d2", "canonical_url": "https://b"},
             ],  # claim
             # d1 성공 저장 경로
             [],  # set_system_job_scope
-            [{"current_version": 1, "metadata": {}}],  # Head SELECT
-            [{"id": "v2"}],  # INSERT version
-            [],  # INSERT chunk
-            [],  # UPDATE head
+            [{"id": "d1"}],  # UPDATE 캐시 문서 → fetched
             # d2 실패 경로
             [],  # set_system_job_scope
             [],  # mark_failed UPDATE
@@ -116,7 +113,8 @@ def test_content_fetch_saves_body_and_isolates_failure(
 
     assert connection.closed is True
     assert results[0]["status"] == "completed"
-    assert results[0]["version"] == 2
+    assert results[0]["document_id"] == "d1"
+    assert results[0]["content_status"] == "fetched"
     assert results[1]["status"] == "failed"
     assert results[1]["error_code"] == "JINA_HTTP_404"
 

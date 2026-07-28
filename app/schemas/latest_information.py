@@ -46,7 +46,7 @@ class LatestInformationSearchRequest(LatestInformationSchema):
 
 
 class LatestInformationItem(LatestInformationSchema):
-    """Global Namespace에 저장된 정규화 최신 문서 한 건."""
+    """Global 수집 캐시에 저장된 정규화 최신 문서 한 건."""
 
     provider: LatestProviderName = Field(description="수집 Provider")
     title: str = Field(description="기사 제목")
@@ -55,10 +55,8 @@ class LatestInformationItem(LatestInformationSchema):
     published_at: datetime | None = Field(default=None, description="게시 시각")
     source_name: str | None = Field(default=None, description="언론사·Domain")
     language: str | None = Field(default=None, description="기사 언어")
-    document_id: str = Field(description="Global Wiki 문서 Head UUID")
-    document_version_id: str = Field(description="Global 문서 Version UUID")
-    version: int = Field(ge=1, description="Global 문서 Version")
-    created: bool = Field(description="이번 검색에서 새 문서 Version을 만들었는지 여부")
+    document_id: str = Field(description="Global 수집 캐시 문서 UUID")
+    created: bool = Field(description="이번 검색에서 캐시에 새로 저장했는지 여부")
 
 
 class LatestProviderFailure(LatestInformationSchema):

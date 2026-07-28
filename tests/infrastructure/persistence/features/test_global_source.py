@@ -2,6 +2,7 @@
 
 네트워크·실제 DB 없이 순서별 Row를 반환하는 Connection Test Double로,
 수집 워커의 중복 제거·저장과 Jina 워커의 본문 채우기 SQL 흐름을 확인한다.
+저장 대상은 소유권 없는 수집 캐시(`agent.global_source_documents`)다.
 """
 
 import asyncio
@@ -64,16 +65,13 @@ def _article(url: str, *, title: str = "제목") -> LatestArticle:
 
 
 def test_persist_skips_existing_url_and_saves_new_as_pending() -> None:
-    """이미 있는 URL은 건너뛰고 새 URL만 pending 문서로 저장하는지 검증한다."""
+    """이미 있는 URL은 건너뛰고 새 URL만 pending 캐시 문서로 저장하는지 검증한다."""
     connection = _FakeConnection(
         [
             [{"id": "source-1"}],  # INSERT global_sources
             [{"id": "run-1"}],  # INSERT global_collection_runs
-            [],  # 기사1 존재 SELECT → 없음
-            [{"id": "doc-1"}],  # INSERT wiki_documents
-            [{"id": "ver-1"}],  # INSERT wiki_document_versions
-            [],  # INSERT wiki_chunks
-            [{"id": "existing"}],  # 기사2 존재 SELECT → 중복
+            [{"id": "doc-1"}],  # 기사1 INSERT → 새 캐시 문서
+            [],  # 기사2 INSERT → ON CONFLICT DO NOTHING (중복)
             [],  # UPDATE global_collection_runs
         ]
     )
@@ -99,10 +97,11 @@ def test_persist_skips_existing_url_and_saves_new_as_pending() -> None:
     assert isinstance(items, list) and len(items) == 1
     assert items[0]["document_id"] == "doc-1"
     assert items[0]["content_status"] == "pending"
-    document_sql, document_params = connection.executed[3]
-    assert "INSERT INTO agent.wiki_documents" in document_sql
+    document_sql, document_params = connection.executed[2]
+    assert "INSERT INTO agent.global_source_documents" in document_sql
+    assert "ON CONFLICT (canonical_url) DO NOTHING" in document_sql
     assert document_params is not None
-    assert document_params[4].obj["content_status"] == "pending"
+    assert document_params[8] == "pending"
 
 
 def test_persist_returns_json_serializable_published_at() -> None:
@@ -116,10 +115,7 @@ def test_persist_returns_json_serializable_published_at() -> None:
         [
             [{"id": "source-1"}],  # INSERT global_sources
             [{"id": "run-1"}],  # INSERT global_collection_runs
-            [],  # 기사 존재 SELECT → 없음
-            [{"id": "doc-1"}],  # INSERT wiki_documents
-            [{"id": "ver-1"}],  # INSERT wiki_document_versions
-            [],  # INSERT wiki_chunks
+            [{"id": "doc-1"}],  # 기사 INSERT → 새 캐시 문서
             [],  # UPDATE global_collection_runs
         ]
     )
@@ -141,13 +137,12 @@ def test_persist_returns_json_serializable_published_at() -> None:
 
 
 def test_persist_counts_conflict_insert_as_duplicate() -> None:
-    """동시 수집으로 INSERT가 충돌하면 중복으로 세는지 검증한다."""
+    """이미 캐시에 있는 URL의 INSERT 충돌을 중복으로 세는지 검증한다."""
     connection = _FakeConnection(
         [
             [{"id": "source-1"}],
             [{"id": "run-1"}],
-            [],  # 존재 SELECT → 없음
-            [],  # INSERT wiki_documents → ON CONFLICT DO NOTHING (Row 없음)
+            [],  # INSERT → ON CONFLICT DO NOTHING (Row 없음)
             [],  # UPDATE global_collection_runs
         ]
     )
@@ -167,12 +162,12 @@ def test_persist_counts_conflict_insert_as_duplicate() -> None:
 
 
 def test_claim_returns_pending_articles() -> None:
-    """pending 문서를 점유해 문서 ID·URL·Version으로 반환하는지 검증한다."""
+    """pending 캐시 문서를 점유해 문서 ID·URL로 반환하는지 검증한다."""
     connection = _FakeConnection(
         [
             [
-                {"id": "doc-1", "canonical_url": "https://a", "current_version": 1},
-                {"id": "doc-2", "canonical_url": "https://b", "current_version": 1},
+                {"id": "doc-1", "canonical_url": "https://a"},
+                {"id": "doc-2", "canonical_url": "https://b"},
             ]
         ]
     )
@@ -182,11 +177,12 @@ def test_claim_returns_pending_articles() -> None:
     )
 
     assert claimed == [
-        GlobalArticleToFetch(document_id="doc-1", url="https://a", current_version=1),
-        GlobalArticleToFetch(document_id="doc-2", url="https://b", current_version=1),
+        GlobalArticleToFetch(document_id="doc-1", url="https://a"),
+        GlobalArticleToFetch(document_id="doc-2", url="https://b"),
     ]
     query, params = connection.executed[0]
-    assert "content_status" in query
+    assert "agent.global_source_documents" in query
+    assert "content_status = 'pending'" in query
     assert "SKIP LOCKED" in query
 
 
@@ -203,16 +199,9 @@ def test_claim_rejects_out_of_range_limit() -> None:
         raise AssertionError("범위를 벗어난 limit에서 ValueError가 필요합니다.")
 
 
-def test_save_fetched_content_appends_new_version() -> None:
-    """수집한 본문을 새 Version으로 추가하고 fetched로 전환하는지 검증한다."""
-    connection = _FakeConnection(
-        [
-            [{"current_version": 1, "metadata": {"provider": "gdelt"}}],  # Head SELECT
-            [{"id": "ver-2"}],  # INSERT version
-            [],  # INSERT chunk
-            [],  # UPDATE head
-        ]
-    )
+def test_save_fetched_content_fills_cache_document() -> None:
+    """수집한 본문을 캐시 문서에 채우고 fetched로 전환하는지 검증한다."""
+    connection = _FakeConnection([[{"id": "doc-1"}]])
 
     result = asyncio.run(
         save_fetched_article_content(
@@ -227,19 +216,36 @@ def test_save_fetched_content_appends_new_version() -> None:
 
     assert result == {
         "document_id": "doc-1",
-        "document_version_id": "ver-2",
-        "version": 2,
         "content_status": "fetched",
     }
-    version_sql, version_params = connection.executed[1]
-    assert "INSERT INTO agent.wiki_document_versions" in version_sql
-    assert version_params is not None
-    assert version_params[1] == 2
-    assert version_params[2] == "본문 제목"
-    head_sql, head_params = connection.executed[3]
-    assert "UPDATE agent.wiki_documents" in head_sql
-    assert head_params is not None
-    assert head_params[2].obj["content_status"] == "fetched"
+    update_sql, update_params = connection.executed[0]
+    assert "UPDATE agent.global_source_documents" in update_sql
+    assert "content_status = 'fetched'" in update_sql
+    assert update_params is not None
+    assert update_params[0] == "본문 제목"
+    assert update_params[1] == "# 전체 본문\n\n내용"
+    assert update_params[3] == "https://example.com/final"
+
+
+def test_save_fetched_content_raises_for_missing_document() -> None:
+    """존재하지 않는 캐시 문서에 본문을 저장하려 하면 RuntimeError를 낸다."""
+    connection = _FakeConnection([[]])
+
+    try:
+        asyncio.run(
+            save_fetched_article_content(
+                connection,  # type: ignore[arg-type]
+                document_id="missing",
+                resolved_url="https://example.com/final",
+                title="본문 제목",
+                markdown="본문",
+                published_at=None,
+            )
+        )
+    except RuntimeError:
+        pass
+    else:  # pragma: no cover - 실패 경로
+        raise AssertionError("없는 문서 저장에서 RuntimeError가 필요합니다.")
 
 
 def test_mark_failed_sets_failed_status() -> None:
@@ -256,7 +262,8 @@ def test_mark_failed_sets_failed_status() -> None:
     )
 
     query, params = connection.executed[0]
-    assert "UPDATE agent.wiki_documents" in query
+    assert "UPDATE agent.global_source_documents" in query
+    assert "content_status = 'failed'" in query
     assert params is not None
-    assert params[0].obj["content_status"] == "failed"
-    assert params[0].obj["fetch_error_code"] == "JINA_HTTP_404"
+    assert params[0] == "JINA_HTTP_404"
+    assert params[1] == "not found"

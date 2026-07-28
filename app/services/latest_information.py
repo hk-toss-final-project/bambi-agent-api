@@ -31,7 +31,7 @@ from infrastructure.sources.processing.api import gsp_004, gsp_006, gsp_015
 
 
 class LatestInformationRepository(Protocol):
-    """정규화된 최신 문서를 Global Namespace에 저장하는 계약."""
+    """정규화된 최신 문서를 Global 수집 캐시에 저장하는 계약."""
 
     async def save_latest_articles(
         self,
@@ -40,7 +40,7 @@ class LatestInformationRepository(Protocol):
         query: str,
         articles: Sequence[LatestArticle],
     ) -> list[dict[str, object]]:
-        """최신 문서 Version과 Chunk를 멱등 저장한다."""
+        """최신 문서를 수집 캐시에 멱등 저장한다."""
         ...
 
 
@@ -213,8 +213,6 @@ class LatestInformationService:
                             "source_name": saved.get("source_name"),
                             "language": saved.get("language"),
                             "document_id": saved["document_id"],
-                            "document_version_id": saved["document_version_id"],
-                            "version": 1,
                             "created": True,
                         }
                     )

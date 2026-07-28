@@ -1,10 +1,10 @@
 """PostgreSQL Global 뉴스 본문 수집 Worker (Jina Reader).
 
-Global Source Collector가 저장한 뉴스 기사 URL 중 아직 본문이 없는
-(`content_status='pending'`) 문서를 점유해, Jina Reader(r.jina.ai)로 원문
-본문을 정제해 가져온 뒤 Global 문서의 새 Version으로 저장한다. 문서별로
-독립적인 Transaction과 오류 처리를 사용해 한 URL의 실패가 다른 URL의 저장을
-되돌리지 않는다.
+Global Source Collector가 수집 캐시(`global_source_documents`)에 저장한 뉴스
+기사 URL 중 아직 본문이 없는(`content_status='pending'`) 문서를 점유해,
+Jina Reader(r.jina.ai)로 원문 본문을 정제해 가져온 뒤 캐시 문서에 채운다.
+문서별로 독립적인 Transaction과 오류 처리를 사용해 한 URL의 실패가 다른
+URL의 저장을 되돌리지 않는다.
 """
 
 from asyncio import to_thread
