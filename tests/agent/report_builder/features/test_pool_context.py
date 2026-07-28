@@ -232,3 +232,51 @@ def test_empty_cleaning_result_keeps_original() -> None:
     selected = select_pool_documents([document], now=_NOW)
 
     assert selected[0].content
+
+
+def test_menu_heavy_page_skips_to_article_body() -> None:
+    """메뉴가 긴 매체에서도 본문이 정제 결과에 들어온다.
+
+    앞에서부터 자르면 메뉴만 담긴다(2026-07-28 실측: 톱스타뉴스는 본문 전
+    7,221자, 뉴스투데이는 24,169자가 메뉴였다). 제목 위치를 찾아 그 앞을
+    버려야 본문에 닿는다.
+    """
+    menu = "\n".join(f"*   [메뉴{i}](https://news.example.com/cat/{i})" for i in range(200))
+    article = (
+        "# 코스피, 사이드카 이어 서킷브레이커…낙폭 8%대\n\n"
+        "28일 코스피가 8% 넘게 급락하며 서킷브레이커가 발동했다."
+    )
+    document = ReportContextDocument(
+        reference="G1",
+        document_version_id="gsrc:1",
+        chunk_id="gsrc:1",
+        namespace_key="global",
+        title="코스피, 사이드카 이어 서킷브레이커…낙폭 8%대",
+        content=f"{menu}\n\n{article}",
+        url="https://news.example.com/view/1",
+        score=0.098,
+    )
+
+    selected = select_pool_documents([document], now=_NOW)
+
+    cleaned = selected[0].content
+    assert "서킷브레이커가 발동했다" in cleaned
+    assert "메뉴199" not in cleaned
+
+
+def test_title_mismatch_falls_back_to_head() -> None:
+    """제목을 찾지 못하면 기존대로 앞에서부터 자른다 — 근거를 잃지 않는다."""
+    document = ReportContextDocument(
+        reference="G1",
+        document_version_id="gsrc:1",
+        chunk_id="gsrc:1",
+        namespace_key="global",
+        title="원문에 없는 제목입니다",
+        content="본문 시작 문장이 여기 있습니다. 이어지는 내용도 함께 남아야 한다.",
+        url=None,
+        score=0.098,
+    )
+
+    selected = select_pool_documents([document], now=_NOW)
+
+    assert "본문 시작 문장" in selected[0].content

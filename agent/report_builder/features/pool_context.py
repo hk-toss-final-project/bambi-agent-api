@@ -191,16 +191,16 @@ def _with_cleaned_content(document: ReportContextDocument) -> ReportContextDocum
     리포트가 풀 문서 4건을 받고도 개인 Wiki만 인용했다.
 
     비서 파이프라인이 쓰는 것과 같은 정제기를 통과시켜 표기를 걷어내고 길이를
-    맞춘다. 정제 결과가 비면 원문을 그대로 둔다 — 근거를 잃느니 지저분한 편이 낫다.
+    맞춘다. 제목을 함께 넘겨 메뉴 구간을 건너뛰고 본문부터 자른다 — 앞에서부터
+    자르면 메뉴가 긴 매체는 본문에 닿기 전에 잘린다(실측: 톱스타뉴스는 본문 전
+    7,221자, 뉴스투데이는 24,169자가 메뉴였다).
 
-    한계: 정제는 앞에서부터 자르므로 메뉴가 아주 긴 매체는 본문에 닿기 전에
-    잘린다(실측: 연합뉴스는 본문까지 들어왔고, 톱스타뉴스는 메뉴만 남았다).
-    본문 시작점을 찾아 자르는 개선은 별도 과제다.
+    정제 결과가 비면 원문을 그대로 둔다 — 근거를 잃느니 지저분한 편이 낫다.
     """
     content = str(getattr(document, "content", "") or "")
     if not content:
         return document
-    cleaned = clean_article_body(content)
+    cleaned = clean_article_body(content, title=str(getattr(document, "title", "") or ""))
     if not cleaned.strip():
         return document
     return replace(document, content=cleaned)

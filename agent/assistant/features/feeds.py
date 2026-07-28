@@ -242,13 +242,52 @@ def _extract_jina_image(text: str) -> str | None:
     return candidates[0] if candidates else None
 
 
-def clean_article_body(markdown: str, max_chars: int = 2000) -> str:
+def article_body_offset(markdown: str, title: str) -> int:
+    """원문에서 기사 본문이 시작하는 위치를 찾는다. 못 찾으면 0.
+
+    Jina Reader는 페이지 전체를 Markdown으로 옮기므로 앞부분이 사이트 메뉴·배너다.
+    앞에서부터 자르면 메뉴만 담기는 매체가 있다(2026-07-28 실측: 톱스타뉴스는
+    본문 전 7,221자, 뉴스투데이는 24,169자가 메뉴였다).
+
+    내비게이션은 기사 제목을 담지 않지만 본문 머리에는 제목이 그대로 나온다.
+    그 지점을 본문 시작으로 본다.
+
+    제목을 그대로 찾으면 실패한다(실측 1/8) — DB 제목과 원문의 따옴표·말줄임표
+    표기가 다르기 때문이다. 글자만 뽑아 사이에 기호가 끼어드는 것을 허용하는
+    패턴으로 찾으면 12/12로 맞았다.
+
+    Args:
+        markdown: Jina Reader 원문
+        title: 수집 시 저장한 기사 제목
+
+    Returns:
+        본문 시작 위치(문자 인덱스). 제목을 찾지 못하면 0.
+    """
+    import re
+
+    letters = re.findall(r"[0-9A-Za-z가-힣]", title)[:12]
+    # 글자가 너무 적으면 우연히 메뉴에 걸릴 수 있어 시도하지 않는다.
+    if len(letters) < 6:
+        return 0
+    pattern = r"[^0-9A-Za-z가-힣]{0,4}".join(re.escape(c) for c in letters)
+    match = re.search(pattern, markdown)
+    return match.start() if match else 0
+
+
+def clean_article_body(markdown: str, max_chars: int = 2000, *, title: str = "") -> str:
     """저장된 기사 본문 Markdown을 파이프라인 입력 텍스트로 정제한다.
 
     Global 저장소에서 재사용한 본문(마크다운)을 임베딩·통합 요약에 넣을 수
     있게 표기를 걷어내고 공백을 정리한다. 상한은 임베딩 입력 상한(2000자)에
     맞춘다.
+
+    title을 주면 메뉴 구간을 건너뛰고 본문부터 자른다(article_body_offset 참고).
+    주지 않으면 기존대로 처음부터 자른다 — 호출부를 깨지 않기 위한 기본값이다.
     """
+    if title:
+        offset = article_body_offset(markdown, title)
+        if offset:
+            markdown = markdown[offset:]
     text = _clean_jina_content(markdown)
     return " ".join(text.split())[:max_chars]
 
