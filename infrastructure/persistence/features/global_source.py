@@ -41,9 +41,400 @@ class GlobalArticleToFetch:
     url: str
 
 
+@dataclass(frozen=True, slots=True)
+class GlobalCollectionSchedule:
+    """Scheduler가 정기 수집을 판단할 때 필요한 Source 하나의 스케줄 설정.
+
+    수집 주기·키워드·쿼터는 모두 `agent.global_sources` row에 있고, 마지막
+    실행 시각과 오늘 실행 횟수는 `agent.global_collection_runs`에서 집계한다.
+    """
+
+    source_id: str
+    source_key: str
+    provider: str
+    schedule_cron: str
+    keywords: tuple[str, ...]
+    language: str | None
+    limit_per_provider: int
+    daily_max_runs: int | None
+    last_started_at: datetime | None
+    runs_today: int
+    status: str = "active"
+    display_name: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class GlobalCollectionRunRecord:
+    """수집 실행 이력 한 건. Service가 스케줄 동작을 확인할 때 사용한다."""
+
+    run_id: str
+    source_key: str
+    query: str | None
+    status: str
+    fetched_count: int
+    created_count: int
+    duplicate_count: int
+    failed_count: int
+    error_code: str | None
+    started_at: datetime
+    completed_at: datetime | None
+
+
+# Source 설정에 별도 지정이 없을 때 한 번에 수집할 Provider당 기사 수.
+_DEFAULT_LIMIT_PER_PROVIDER = 10
+
+
 def _document_key(url: str) -> str:
     """URL을 안정적인 24자 캐시 Key로 변환한다."""
     return hashlib.sha256(url.encode("utf-8")).hexdigest()[:24]
+
+
+def _positive_int(value: object, default: int | None) -> int | None:
+    """설정 값이 양의 정수일 때만 사용하고 아니면 기본값을 돌려준다."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return default
+    return value if value > 0 else default
+
+
+def _to_schedule(row: DictRow) -> GlobalCollectionSchedule:
+    """global_sources 조회 Row를 스케줄 설정 값 객체로 변환한다."""
+    connector_config = row.get("connector_config") or {}
+    quota_policy = row.get("quota_policy") or {}
+    languages = row.get("languages") or []
+    keywords = tuple(
+        keyword.strip()
+        for keyword in (row.get("keywords") or [])
+        if keyword and keyword.strip()
+    )
+    return GlobalCollectionSchedule(
+        source_id=str(row["id"]),
+        source_key=row["source_key"],
+        provider=row["connector_type"],
+        schedule_cron=(row.get("schedule_cron") or "").strip(),
+        keywords=keywords,
+        language=languages[0] if languages else None,
+        limit_per_provider=_positive_int(
+            connector_config.get("limit_per_provider"),
+            _DEFAULT_LIMIT_PER_PROVIDER,
+        ),
+        daily_max_runs=_positive_int(quota_policy.get("daily_max_runs"), None),
+        last_started_at=row.get("last_started_at"),
+        runs_today=int(row.get("runs_today") or 0),
+        status=row.get("status") or "active",
+        display_name=row.get("display_name") or "",
+    )
+
+
+# 스케줄 설정과 실행 이력 집계를 함께 읽는 공통 조회. 뒤에 WHERE 절을 붙인다.
+_SCHEDULE_SELECT = """
+        SELECT
+            source.id,
+            source.source_key,
+            source.connector_type,
+            source.display_name,
+            source.status,
+            source.schedule_cron,
+            source.keywords,
+            source.languages,
+            source.quota_policy,
+            source.connector_config,
+            last_run.started_at AS last_started_at,
+            COALESCE(today.run_count, 0) AS runs_today
+        FROM agent.global_sources AS source
+        LEFT JOIN LATERAL (
+            SELECT run.started_at
+            FROM agent.global_collection_runs AS run
+            WHERE run.source_id = source.id
+            ORDER BY run.started_at DESC
+            LIMIT 1
+        ) AS last_run ON true
+        LEFT JOIN LATERAL (
+            SELECT count(*) AS run_count
+            FROM agent.global_collection_runs AS run
+            WHERE run.source_id = source.id
+              AND run.started_at >= date_trunc('day', clock_timestamp())
+        ) AS today ON true
+"""
+
+
+async def load_collection_schedules(
+    connection: AsyncConnection[DictRow],
+    *,
+    only_scheduled: bool = True,
+) -> list[GlobalCollectionSchedule]:
+    """Global Source의 수집 스케줄 설정을 읽는다.
+
+    기본값은 Scheduler가 쓰는 조건이다 — status가 active이고 `schedule_cron`이
+    설정된 Source만 반환한다. Source별로 마지막 수집 실행 시각과 오늘 실행
+    횟수를 함께 집계해, 다음 실행 시각 계산(Cron)과 일일 호출 한도 판정을 한
+    번의 조회로 끝낸다.
+
+    `only_scheduled=False`는 Service의 스케줄 조회(SCH-022)용이다. 주기가 아직
+    없거나 중지된 Source도 함께 보여 줘야 조정할 대상을 찾을 수 있다.
+
+    Args:
+        connection: Agent DB 연결
+        only_scheduled: True면 활성·주기 설정된 Source만 반환한다
+
+    Returns:
+        source_key 순으로 정렬한 수집 스케줄 목록
+    """
+    condition = (
+        """
+        WHERE source.status = 'active'
+          AND source.schedule_cron IS NOT NULL
+          AND btrim(source.schedule_cron) <> ''
+        """
+        if only_scheduled
+        else "WHERE source.status <> 'deleted'"
+    )
+    cursor = await connection.execute(
+        f"{_SCHEDULE_SELECT}{condition} ORDER BY source.source_key"
+    )
+    return [_to_schedule(row) for row in await cursor.fetchall()]
+
+
+async def load_collection_schedule(
+    connection: AsyncConnection[DictRow], *, source_key: str
+) -> GlobalCollectionSchedule | None:
+    """source_key로 수집 스케줄 설정 하나를 읽는다. 없으면 None."""
+    cursor = await connection.execute(
+        f"{_SCHEDULE_SELECT} WHERE source.source_key = %s",
+        (source_key,),
+    )
+    row = await cursor.fetchone()
+    return _to_schedule(row) if row is not None else None
+
+
+async def upsert_collection_schedule(
+    connection: AsyncConnection[DictRow],
+    *,
+    source_key: str,
+    provider: str,
+    display_name: str | None = None,
+    schedule_cron: str,
+    keywords: list[str],
+    language: str | None = None,
+    limit_per_provider: int | None = None,
+    daily_max_runs: int | None = None,
+) -> GlobalCollectionSchedule:
+    """수집 스케줄을 등록하거나 같은 source_key의 설정을 덮어쓴다.
+
+    Source row는 수집 Worker가 첫 수집 때 자동으로 만들기도 하므로, 등록은
+    INSERT가 아니라 멱등 Upsert로 처리한다. 등록 시 status는 active로 되돌린다.
+
+    Args:
+        connection: Agent DB 연결
+        source_key: Source 식별 Key (예: latest-naver)
+        provider: 수집 Provider 이름 (connector_type)
+        display_name: 화면에 보일 이름 (없으면 Provider 기준 기본값)
+        schedule_cron: 수집 주기 Cron 식
+        keywords: 각각 따로 수집할 키워드 목록
+        language: 검색 언어 힌트
+        limit_per_provider: 한 번에 수집할 기사 수
+        daily_max_runs: 하루 최대 실행 횟수
+
+    Returns:
+        저장된 스케줄 설정
+    """
+    await connection.execute(
+        """
+        INSERT INTO agent.global_sources (
+            source_key,
+            connector_type,
+            display_name,
+            status,
+            schedule_cron,
+            keywords,
+            languages,
+            quota_policy,
+            connector_config
+        ) VALUES (%s, %s, %s, 'active', %s, %s, %s, %s, %s)
+        ON CONFLICT (source_key) DO UPDATE SET
+            connector_type = EXCLUDED.connector_type,
+            display_name = EXCLUDED.display_name,
+            status = 'active',
+            schedule_cron = EXCLUDED.schedule_cron,
+            keywords = EXCLUDED.keywords,
+            languages = EXCLUDED.languages,
+            quota_policy = agent.global_sources.quota_policy
+                || EXCLUDED.quota_policy,
+            connector_config = agent.global_sources.connector_config
+                || EXCLUDED.connector_config,
+            updated_at = clock_timestamp()
+        """,
+        (
+            source_key,
+            provider,
+            display_name or f"Latest {provider}",
+            schedule_cron,
+            keywords,
+            [language] if language else [],
+            Jsonb({} if daily_max_runs is None else {"daily_max_runs": daily_max_runs}),
+            Jsonb(
+                {}
+                if limit_per_provider is None
+                else {"limit_per_provider": limit_per_provider}
+            ),
+        ),
+    )
+    stored = await load_collection_schedule(connection, source_key=source_key)
+    if stored is None:  # pragma: no cover - Upsert 직후에는 항상 존재한다
+        raise RuntimeError(f"수집 스케줄 저장에 실패했습니다: {source_key}")
+    return stored
+
+
+async def update_collection_schedule(
+    connection: AsyncConnection[DictRow],
+    *,
+    source_key: str,
+    schedule_cron: str | None = None,
+    keywords: list[str] | None = None,
+    language: str | None = None,
+    limit_per_provider: int | None = None,
+    daily_max_runs: int | None = None,
+) -> GlobalCollectionSchedule | None:
+    """등록된 수집 스케줄의 지정한 항목만 변경한다.
+
+    None으로 넘긴 항목은 기존 값을 유지한다. jsonb 설정(쿼터·수집 수)은 통째로
+    덮어쓰지 않고 병합해, 서로 다른 항목을 각각 바꿔도 값이 사라지지 않게 한다.
+
+    Args:
+        connection: Agent DB 연결
+        source_key: 변경할 Source 식별 Key
+        schedule_cron: 새 수집 주기 Cron 식
+        keywords: 새 키워드 목록
+        language: 새 검색 언어 힌트
+        limit_per_provider: 새 수집 기사 수
+        daily_max_runs: 새 일일 실행 한도
+
+    Returns:
+        변경된 스케줄 설정. source_key가 없으면 None
+    """
+    assignments: list[str] = []
+    params: list[object] = []
+    if schedule_cron is not None:
+        assignments.append("schedule_cron = %s")
+        params.append(schedule_cron)
+    if keywords is not None:
+        assignments.append("keywords = %s")
+        params.append(keywords)
+    if language is not None:
+        assignments.append("languages = %s")
+        params.append([language] if language else [])
+    if limit_per_provider is not None:
+        assignments.append("connector_config = connector_config || %s")
+        params.append(Jsonb({"limit_per_provider": limit_per_provider}))
+    if daily_max_runs is not None:
+        assignments.append("quota_policy = quota_policy || %s")
+        params.append(Jsonb({"daily_max_runs": daily_max_runs}))
+    if not assignments:
+        return await load_collection_schedule(connection, source_key=source_key)
+
+    assignments.append("updated_at = clock_timestamp()")
+    params.append(source_key)
+    cursor = await connection.execute(
+        f"""
+        UPDATE agent.global_sources
+        SET {", ".join(assignments)}
+        WHERE source_key = %s
+        RETURNING source_key
+        """,
+        tuple(params),
+    )
+    if await cursor.fetchone() is None:
+        return None
+    return await load_collection_schedule(connection, source_key=source_key)
+
+
+async def set_collection_schedule_status(
+    connection: AsyncConnection[DictRow], *, source_key: str, status: str
+) -> GlobalCollectionSchedule | None:
+    """수집 스케줄의 활성 상태를 바꾼다 (중지·재개).
+
+    Args:
+        connection: Agent DB 연결
+        source_key: 상태를 바꿀 Source 식별 Key
+        status: active 또는 paused
+
+    Returns:
+        변경된 스케줄 설정. source_key가 없으면 None
+
+    Raises:
+        ValueError: 허용하지 않는 status를 넘겼을 때
+    """
+    if status not in ("active", "paused"):
+        raise ValueError("수집 스케줄 status는 active 또는 paused여야 합니다.")
+    cursor = await connection.execute(
+        """
+        UPDATE agent.global_sources
+        SET status = %s, updated_at = clock_timestamp()
+        WHERE source_key = %s
+        RETURNING source_key
+        """,
+        (status, source_key),
+    )
+    if await cursor.fetchone() is None:
+        return None
+    return await load_collection_schedule(connection, source_key=source_key)
+
+
+async def load_collection_runs(
+    connection: AsyncConnection[DictRow],
+    *,
+    source_key: str | None = None,
+    limit: int = 20,
+) -> list[GlobalCollectionRunRecord]:
+    """수집 실행 이력을 최근 순으로 읽는다.
+
+    Args:
+        connection: Agent DB 연결
+        source_key: 특정 Source만 볼 때 지정 (None이면 전체)
+        limit: 최대 반환 건수 (1~200)
+
+    Returns:
+        started_at 내림차순 실행 이력 목록
+    """
+    if not 1 <= limit <= 200:
+        raise ValueError("수집 이력 limit은 1에서 200 사이여야 합니다.")
+    cursor = await connection.execute(
+        """
+        SELECT
+            run.id,
+            source.source_key,
+            run.cursor_before ->> 'query' AS query,
+            run.status,
+            run.fetched_count,
+            run.created_count,
+            run.duplicate_count,
+            run.failed_count,
+            run.error_code,
+            run.started_at,
+            run.completed_at
+        FROM agent.global_collection_runs AS run
+        JOIN agent.global_sources AS source ON source.id = run.source_id
+        WHERE %s::text IS NULL OR source.source_key = %s
+        ORDER BY run.started_at DESC
+        LIMIT %s
+        """,
+        (source_key, source_key, limit),
+    )
+    return [
+        GlobalCollectionRunRecord(
+            run_id=str(row["id"]),
+            source_key=row["source_key"],
+            query=row.get("query"),
+            status=row["status"],
+            fetched_count=int(row["fetched_count"]),
+            created_count=int(row["created_count"]),
+            duplicate_count=int(row["duplicate_count"]),
+            failed_count=int(row["failed_count"]),
+            error_code=row.get("error_code"),
+            started_at=row["started_at"],
+            completed_at=row.get("completed_at"),
+        )
+        for row in await cursor.fetchall()
+    ]
 
 
 async def persist_collected_articles(

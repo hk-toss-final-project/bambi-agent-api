@@ -5,7 +5,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
@@ -37,14 +37,57 @@ def selector_event_loop() -> asyncio.AbstractEventLoop:
     return asyncio.SelectorEventLoop()
 
 
+async def _start_collection_scheduler(
+    application: FastAPI, settings: Settings
+) -> asyncio.Task[None] | None:
+    """수집 Scheduler를 백그라운드 Task로 띄운다.
+
+    Global 풀을 채우는 정기 수집(SCH-002·003·004)이 서버 기동만으로 돌게 한다.
+    수집 주기·키워드는 `agent.global_sources` row가 소유하므로, Service는 스케줄
+    관리 API로 그 값을 바꿔 주기를 조정한다.
+
+    **시계는 한 벌만 돌아야 한다.** API를 여러 인스턴스로 띄우면 같은 수집이
+    인스턴스 수만큼 중복 실행되므로, 그런 배포에서는
+    `ENABLE_COLLECTION_SCHEDULER=false`로 끄고 CLI Scheduler를 한 벌만 띄운다.
+
+    Returns:
+        기동한 Scheduler Task. 비활성이거나 DB가 없으면 None
+    """
+    if not settings.enable_collection_scheduler or not settings.agent_database_url:
+        return None
+    # 지연 import: Scheduler를 끄면 croniter 등 관련 의존성을 로드하지 않는다.
+    from scheduler.api import build_scheduler, run_collection_scheduler_loop
+
+    scheduler = build_scheduler(settings)
+    return asyncio.create_task(
+        run_collection_scheduler_loop(scheduler),
+        name="collection-scheduler",
+    )
+
+
+async def _stop_collection_scheduler(task: asyncio.Task[None] | None) -> None:
+    """수집 Scheduler Task를 취소하고 종료를 기다린다."""
+    if task is None:
+        return
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """[SYS-001, SYS-012] 시작 리소스 초기화와 안전한 종료 경계를 제공한다."""
     container: AppContainer = application.state.container
     await container.startup()
+    scheduler_task = await _start_collection_scheduler(
+        application, container.settings
+    )
+    application.state.collection_scheduler_task = scheduler_task
     try:
         yield
     finally:
+        await _stop_collection_scheduler(scheduler_task)
+        application.state.collection_scheduler_task = None
         await container.shutdown()
 
 

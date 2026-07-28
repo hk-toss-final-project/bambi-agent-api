@@ -5,11 +5,18 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 
 from app.dependencies import (
+    get_collection_schedule_service,
     get_mvp_service,
     get_interest_service,
     get_generated_content_service,
     get_wiki_document_service,
     get_wiki_graph_service,
+)
+from app.schemas.collection_schedules import (
+    CollectionScheduleListResponse,
+    CollectionScheduleRegisterRequest,
+    CollectionScheduleResponse,
+    CollectionScheduleUpdateRequest,
 )
 from app.schemas.generated_content import (
     GeneratedContentDetailResponse,
@@ -48,6 +55,7 @@ from app.routers.service.api import (
     svc_013,
     svc_014,
 )
+from app.services.collection_schedules import CollectionScheduleService
 from app.services.mvp import AgentApiMvpService
 from app.services.wiki_graph import WikiGraphService
 from app.services.wiki_documents import WikiDocumentService
@@ -402,3 +410,106 @@ async def get_job_result(
 ) -> JobResultResponse:
     """[SVC-014] 완료된 Agent Job의 기능별 결과를 조회한다."""
     return await svc_014(service, job_id)
+
+
+SourceKey = Annotated[
+    str,
+    Path(min_length=1, max_length=128, description="수집 Source 식별 Key"),
+]
+
+
+@router.get(
+    "/collection-schedules",
+    response_model=CollectionScheduleListResponse,
+    tags=["collection-schedules"],
+    operation_id="sch_022",
+    summary="수집 스케줄 목록·실행 이력 조회",
+    description=(
+        "Agent가 돌리는 Global 수집 스케줄의 현재 설정과 최근 실행 이력을 "
+        "반환한다. 주기가 아직 없거나 중지된 Source도 함께 보여 준다."
+    ),
+)
+async def list_collection_schedules(
+    source_key: Annotated[
+        str | None, Query(description="특정 Source만 조회할 때 지정")
+    ] = None,
+    history_limit: Annotated[
+        int, Query(ge=1, le=200, description="함께 반환할 최근 실행 이력 건수")
+    ] = 20,
+    service: CollectionScheduleService = Depends(get_collection_schedule_service),
+) -> CollectionScheduleListResponse:
+    """[SCH-022] 수집 스케줄별 실행 결과와 상태를 조회한다."""
+    return await service.list_schedules(
+        source_key=source_key, history_limit=history_limit
+    )
+
+
+@router.post(
+    "/collection-schedules",
+    response_model=CollectionScheduleResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["collection-schedules"],
+    operation_id="sch_017",
+    summary="수집 스케줄 등록",
+    description=(
+        "정기 수집 주기를 등록한다. 같은 source_key로 다시 등록하면 설정을 "
+        "덮어쓰고 중지 상태였더라도 다시 활성화한다(멱등). keywords는 각각 "
+        "따로 검색하므로 주제를 한 문자열에 합치지 않는다."
+    ),
+)
+async def register_collection_schedule(
+    payload: CollectionScheduleRegisterRequest,
+    service: CollectionScheduleService = Depends(get_collection_schedule_service),
+) -> CollectionScheduleResponse:
+    """[SCH-017] 새로운 정기 수집 작업을 등록한다."""
+    return await service.register(payload)
+
+
+@router.patch(
+    "/collection-schedules/{source_key}",
+    response_model=CollectionScheduleResponse,
+    tags=["collection-schedules"],
+    operation_id="sch_018",
+    summary="수집 스케줄 수정",
+    description=(
+        "등록된 수집 스케줄에서 넘긴 항목만 변경한다. 변경은 Scheduler의 다음 "
+        "확인 주기부터 반영되며 서버 재시작이 필요 없다."
+    ),
+)
+async def update_collection_schedule_route(
+    source_key: SourceKey,
+    payload: CollectionScheduleUpdateRequest,
+    service: CollectionScheduleService = Depends(get_collection_schedule_service),
+) -> CollectionScheduleResponse:
+    """[SCH-018] 기존 수집 작업의 실행 주기를 변경한다."""
+    return await service.update(source_key, payload)
+
+
+@router.post(
+    "/collection-schedules/{source_key}/pause",
+    response_model=CollectionScheduleResponse,
+    tags=["collection-schedules"],
+    operation_id="sch_019",
+    summary="수집 스케줄 중지",
+)
+async def pause_collection_schedule(
+    source_key: SourceKey,
+    service: CollectionScheduleService = Depends(get_collection_schedule_service),
+) -> CollectionScheduleResponse:
+    """[SCH-019] 정기 수집 실행을 일시 중지한다. 설정은 그대로 보존한다."""
+    return await service.pause(source_key)
+
+
+@router.post(
+    "/collection-schedules/{source_key}/resume",
+    response_model=CollectionScheduleResponse,
+    tags=["collection-schedules"],
+    operation_id="sch_020",
+    summary="수집 스케줄 재개",
+)
+async def resume_collection_schedule(
+    source_key: SourceKey,
+    service: CollectionScheduleService = Depends(get_collection_schedule_service),
+) -> CollectionScheduleResponse:
+    """[SCH-020] 중지된 정기 수집 작업을 다시 활성화한다."""
+    return await service.resume(source_key)

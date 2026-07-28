@@ -88,6 +88,19 @@ class Settings(BaseModel):
         le=1440,
         description="첫 대기 원본 발생 후 Wiki Build 최대 대기시간(분)",
     )
+    collection_scheduler_tick_seconds: int = Field(
+        default=60,
+        ge=10,
+        le=3600,
+        description="Scheduler가 수집 주기 도달 여부를 다시 확인하는 간격(초)",
+    )
+    enable_collection_scheduler: bool = Field(
+        default=True,
+        description=(
+            "서버 기동 시 수집 Scheduler를 함께 띄울지 여부. "
+            "API를 여러 인스턴스로 띄우면 수집이 중복되므로 그때는 끈다"
+        ),
+    )
 
     @property
     def dev_agent_api_enabled(self) -> bool:
@@ -152,4 +165,10 @@ def load_settings() -> Settings:
         ),
         wiki_build_quiet_minutes=_integer_env("WIKI_BUILD_QUIET_MINUTES", 10),
         wiki_build_max_wait_minutes=_integer_env("WIKI_BUILD_MAX_WAIT_MINUTES", 30),
+        collection_scheduler_tick_seconds=_integer_env(
+            "COLLECTION_SCHEDULER_TICK_SECONDS", 60
+        ),
+        enable_collection_scheduler=_boolean_env(
+            "ENABLE_COLLECTION_SCHEDULER", True
+        ),
     )

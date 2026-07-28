@@ -31,6 +31,8 @@ from .features.personal_wiki import (
 )
 from .features.global_source import (
     GlobalArticleToFetch,
+    GlobalCollectionRunRecord,
+    GlobalCollectionSchedule,
     claim_global_articles_for_fetch,
     db_008,
     db_009,
@@ -39,9 +41,15 @@ from .features.global_source import (
     db_012,
     db_013,
     db_014,
+    load_collection_runs,
+    load_collection_schedule,
+    load_collection_schedules,
     mark_global_article_fetch_failed,
     persist_collected_articles,
     save_fetched_article_content,
+    set_collection_schedule_status,
+    update_collection_schedule,
+    upsert_collection_schedule,
 )
 from .features.generation import db_015, db_016, db_017, db_018, db_019, db_020
 from .features.recommendation import db_021

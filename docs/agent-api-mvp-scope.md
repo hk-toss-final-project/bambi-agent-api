@@ -70,9 +70,14 @@
 - [x] `GSP-004` API 응답 정규화 — Provider 공통 문서 구조로 변환
 - [x] `GSP-006` 문서 중복 제거 — URL 기준 멱등 Upsert
 - [x] `GSP-015` 개인 Wiki 자동 반영 금지 — Global Namespace 분리 저장
-- [ ] `SCH-002` Naver API 수집 스케줄 — ❌ 정기 등록 미구현 (dev API 수동 실행만 가능)
-- [ ] `SCH-003` GDELT 수집 스케줄 — ❌
-- [ ] `SCH-004` NewsAPI 수집 스케줄 — ❌ (참고: MVP 목록 외 `SCH-009` Wiki Build 조용 시간 트리거는 구현됨)
+- [x] `SCH-002` Naver API 수집 스케줄 — 독립 Scheduler 프로세스(`scheduler/main.py`)가 tick마다 `agent.global_sources`의 `schedule_cron`·`keywords`를 읽어 실행 차례가 된 Source만 수집 Worker(WORKER-001)로 넘긴다. 판정 순서는 ① Cron 도달 ② 키워드 존재 ③ `quota_policy.daily_max_runs`
+- [x] `SCH-003` GDELT 수집 스케줄 — SCH-002와 동일한 판정·실행 규칙
+- [x] `SCH-004` NewsAPI 수집 스케줄 — 수집 Worker에 `newsapi` Provider(COL-004) 연결 포함. 무료 플랜 호출 한도(일 100회)가 낮아 기본 Provider 목록에서는 제외하고 `quota_policy.daily_max_runs`와 함께 쓴다. (참고: MVP 목록 외 `SCH-009` Wiki Build 조용 시간 트리거는 구현됨)
+- [x] `SCH-017` 스케줄 등록 — `POST /internal/v1/collection-schedules` (멱등 Upsert, Cron·키워드 검증)
+- [x] `SCH-018` 스케줄 수정 — `PATCH /internal/v1/collection-schedules/{source_key}` (부분 수정, 다음 tick부터 반영)
+- [x] `SCH-019` 스케줄 중지 — `POST .../{source_key}/pause` (설정 보존, status만 paused)
+- [x] `SCH-020` 스케줄 재개 — `POST .../{source_key}/resume`
+- [x] `SCH-022` 스케줄 이력 조회 — `GET /internal/v1/collection-schedules` (현재 설정 + 최근 실행 이력)
 
 ### 리포트 생성기 (Report Builder)
 
@@ -204,6 +209,18 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | SCH-002 | Naver API 수집 스케줄 | Naver API 수집 작업을 정기 등록한다. |
 | SCH-003 | GDELT 수집 스케줄 | GDELT 수집 작업을 정기 등록한다. |
 | SCH-004 | NewsAPI 수집 스케줄 | NewsAPI 수집 작업을 정기 등록한다. |
+| SCH-017 | 스케줄 등록 | 새로운 정기 작업을 등록한다. |
+| SCH-018 | 스케줄 수정 | 기존 작업의 실행 주기를 변경한다. |
+| SCH-019 | 스케줄 중지 | 정기 작업 실행을 일시 중지한다. |
+| SCH-020 | 스케줄 재개 | 중지된 정기 작업을 다시 활성화한다. |
+| SCH-022 | 스케줄 이력 조회 | 스케줄별 실행 결과와 상태를 조회한다. |
+
+> SCH-017·018·019·020·022는 2026-07-28에 MVP 범위로 추가했다. 수집 Scheduler를
+> Agent 서버가 직접 돌리기로 하면서(기존 협의안은 Service가 Job을 발행하는
+> 방향이었다), **Service가 수집 주기를 조정할 창구**가 필요해졌기 때문이다.
+> 스케줄 정책의 결정권은 여전히 Service에 있고 Agent는 실행만 담당한다.
+> [global-collection-scheduling-proposal.md](global-collection-scheduling-proposal.md)
+> §4.1의 발행 주기 결정은 이 API로 Service가 직접 넣는 것으로 대체된다.
 
 ## 5. 리포트 생성기 (Report Builder)
 
