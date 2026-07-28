@@ -11,9 +11,19 @@ import json
 import time
 from pathlib import Path
 
-from agent.report_builder.api import ReportContextDocument, generate_report_content
+from dotenv import load_dotenv
 
 ROOT = Path(__file__).parent
+PROJECT_ROOT = ROOT.parents[1]
+
+# OPENAI_API_KEY를 .env에서 읽는다(앱 진입점·다른 벤치마크와 같은 방식).
+# 이 줄이 없어 실행이 "Missing credentials"로 실패했다(2026-07-28). 키가 .env에
+# 있어도 읽으라고 명시하지 않으면 찾지 못한다. import보다 먼저 호출해야 모듈
+# 로딩 시점에 클라이언트를 만드는 경로에서도 키가 보인다.
+load_dotenv(PROJECT_ROOT / ".env")
+
+from agent.report_builder.api import ReportContextDocument, generate_report_content  # noqa: E402
+
 DATASET = ROOT / "dataset.jsonl"
 
 
