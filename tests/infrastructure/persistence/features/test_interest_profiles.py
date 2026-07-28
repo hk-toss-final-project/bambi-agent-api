@@ -67,8 +67,9 @@ def _candidate() -> InterestCandidate:
     )
 
 
-def test_load_interest_documents_reads_active_wiki_and_documents() -> None:
-    """활성 Wiki Version과 현재 문서를 한 조회 Transaction으로 읽는다."""
+def test_load_interest_documents_reads_weighted_relation_and_source_stats() -> None:
+    """자동 재계산 입력에 Wiki 구조·원본·최신성 신호를 함께 채운다."""
+    last_activity_at = datetime(2026, 7, 27, tzinfo=UTC)
     connection = _FakeConnection(
         [
             None,  # set_personal_wiki_scope
@@ -82,6 +83,10 @@ def test_load_interest_documents_reads_active_wiki_and_documents() -> None:
                     "title": "LangGraph",
                     "summary": "그래프 오케스트레이션",
                     "source_metadata": {"aliases": ["랭그래프"]},
+                    "degree": 3.5,
+                    "source_count": 2,
+                    "source_types": ["memo", "web_clipping"],
+                    "last_activity_at": last_activity_at,
                 }
             ],
         ]
@@ -102,6 +107,17 @@ def test_load_interest_documents_reads_active_wiki_and_documents() -> None:
     assert isinstance(documents, list)
     assert documents[0]["document_id"] == "doc-1"
     assert documents[0]["source_metadata"] == {"aliases": ["랭그래프"]}
+    assert documents[0]["degree"] == 3.5
+    assert documents[0]["source_count"] == 2
+    assert documents[0]["source_types"] == ["memo", "web_clipping"]
+    assert documents[0]["last_activity_at"] == last_activity_at
+
+    document_query = connection.executed[2][0]
+    assert "FROM agent.wiki_document_relations AS relation" in document_query
+    assert "WHEN 'related_concept' THEN 0.5" in document_query
+    assert "COUNT(DISTINCT source_document.id)" in document_query
+    assert "document.document_kind IN ('entity', 'concept')" in document_query
+    assert "document.status = 'active'" in document_query
 
 
 def test_load_interest_documents_handles_missing_active_wiki() -> None:
