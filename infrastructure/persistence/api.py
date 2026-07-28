@@ -81,6 +81,7 @@ from .features.generation_runtime import (
     StoredUserContext,
     UserContextRequiredError,
     enqueue_report_generation_job,
+    load_global_document_freshness,
     load_report_context,
     persist_report_generation,
     upsert_user_context_snapshot,

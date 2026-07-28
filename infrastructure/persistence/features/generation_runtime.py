@@ -7,7 +7,7 @@ Wiki와 Global 문서를 검색해 만든 콘텐츠·Citation·Publish Snapshot�
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Sequence
 from uuid import UUID
 
@@ -612,3 +612,53 @@ async def persist_report_generation(
         "snapshot_hash": snapshot_hash,
         "citations": citation_payloads,
     }
+
+
+async def load_global_document_freshness(
+    connection: AsyncConnection[DictRow],
+    document_version_ids: Sequence[str],
+) -> dict[str, datetime]:
+    """Global 풀 문서의 발행 시각을 document_version_id로 일괄 조회한다.
+
+    수집 워커가 `metadata.published_at`에 ISO 문자열로 남긴 값을 읽는다. Report
+    Builder가 "풀 자료가 실시간 수집을 대체할 만큼 신선한가"를 판정할 때 쓴다.
+
+    발행일이 없거나 형식이 잘못된 문서는 결과에서 빠진다 — 호출자는 "모르는 것"과
+    "오래된 것"을 구분해 처리해야 한다(모른다는 이유로 버리면 쓸 수 있는 근거가
+    사라진다).
+
+    Args:
+        connection: DB 연결
+        document_version_ids: 조회할 Wiki 문서 Version ID 목록
+
+    Returns:
+        {document_version_id: 발행 시각(UTC)}
+    """
+    targets = [str(value) for value in document_version_ids if str(value or "").strip()]
+    if not targets:
+        return {}
+    cursor = await connection.execute(
+        """
+        SELECT version.id AS document_version_id,
+               document.metadata->>'published_at' AS published_at
+        FROM agent.wiki_document_versions AS version
+        JOIN agent.wiki_documents AS document
+          ON document.id = version.document_id
+         AND document.namespace_key = version.namespace_key
+        WHERE version.namespace_key = 'global'
+          AND version.id = ANY(%s)
+          AND document.metadata->>'published_at' IS NOT NULL
+        """,
+        (targets,),
+    )
+    freshness: dict[str, datetime] = {}
+    for row in await cursor.fetchall():
+        raw = str(row["published_at"] or "")
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        freshness[str(row["document_version_id"])] = parsed
+    return freshness

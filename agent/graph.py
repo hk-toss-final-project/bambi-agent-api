@@ -30,6 +30,9 @@ from agent.report_builder.api import (
     report_021,
     generate_report_content_with_quality,
     collect_live_context,
+    GLOBAL_NAMESPACE,
+    is_pool_sufficient,
+    select_pool_documents,
     select_generation_context,
 )
 from agent.state import ReportGenerationState, PersonalWikiBuildState
@@ -42,8 +45,10 @@ from infrastructure.persistence.api import (
     get_user_source_document_version_for_agent,
     list_existing_wiki_entries,
     list_existing_wiki_relations,
+    load_global_document_freshness,
     set_personal_wiki_scope,
 )
+from agent.assistant.api import resolve_topic_intent
 from shared.contracts import FeatureRequest
 
 logger = logging.getLogger("agent.graph")
@@ -258,7 +263,54 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 user_id=state["user_id"],
                 query=state["topic"],
             )
-        contextualized = await prag_006(hybrid)
+            # 풀 문서의 신선도는 같은 조회 Transaction에서 함께 읽는다 — Scope가
+            # 이미 설정돼 있고, 왕복을 늘리지 않는다.
+            # 참조 ID가 없는 형태(테스트 더미 등)도 그대로 통과시킨다
+            # (select_generation_context와 같은 관용 규칙).
+            pool_freshness = await load_global_document_freshness(
+                connection,
+                [
+                    str(getattr(document, "document_version_id", "") or "")
+                    for document in hybrid
+                ],
+            )
+        # prag_003은 개인 Wiki와 Global 풀을 함께 검색한다. 풀에 **확실히 쓸 만한**
+        # 자료가 있으면 실시간 수집을 생략한다. 목적은 속도가 아니라 셋이다.
+        #
+        #   1. Job 이중 실행 방지 — 실행이 Worker lease(600초)에 근접하면 시스템이
+        #      죽은 것으로 보고 같은 Job을 다시 돌린다(리포트 중복·LLM 비용 2배).
+        #   2. 외부 API 한도 — 사용자마다 뉴스·YouTube·Reddit을 직접 호출하면
+        #      금방 차단된다(2026-07-28 실측: GDELT 429). 풀은 한 번 모아 여럿이 쓴다.
+        #   3. 출처 증빙 — 풀 문서는 version_id가 있는 G 참조가 된다. 실시간 자료는
+        #      URL이 유일한 증빙이라 원문이 바뀌면 근거를 확인할 수 없다.
+        #
+        # 판정이 헐거우면 오히려 손해다. 잡음 수준 문서로 수집을 건너뛰면 리포트가
+        # 얕아진다(같은 날 실측: 'Anthropic'이 잡음 5건으로 통과해 사실과 다른 서술
+        # 생성). select_pool_documents가 절대 하한으로 그 경우를 걸러낸다.
+        topic_intent = await to_thread(
+            resolve_topic_intent, state["topic"], state["user_id"]
+        )
+        pool_documents = select_pool_documents(
+            hybrid, published_at=pool_freshness, topic_intent=topic_intent
+        )
+        pool_is_enough = is_pool_sufficient(pool_documents)
+        logger.info(
+            "풀 근거 판정: topic=%s intent=%s 풀 채택 %d건 → 실시간 수집 %s",
+            state["topic"],
+            topic_intent,
+            len(pool_documents),
+            "생략" if pool_is_enough else "수행",
+        )
+
+        # 탈락시킨 풀 문서는 근거에서도 뺀다. 판정에만 쓰고 근거로는 그대로 넘기면
+        # 잡음이 뒷문으로 다시 들어가고(실측: 무관한 "Microsoft 사이버보안" 기사가
+        # 인용됨), 근거 상한(12건)을 먼저 차지해 실시간 수집분이 밀려난다.
+        personal_only = [
+            document
+            for document in hybrid
+            if getattr(document, "namespace_key", "") != GLOBAL_NAMESPACE
+        ]
+        contextualized = await prag_006([*personal_only, *pool_documents])
         personal = await report_004(
             FeatureRequest(
                 request_id=state["job_id"],
@@ -268,6 +320,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             )
         )
         personal_documents = personal.data.get("result", [])
+
         # REPORT-005: 실시간 외부 자료(뉴스 RSS·YouTube·Reddit)를 키워드 비서로 수집한다.
         # 이전에는 개인 Wiki 결과를 그대로 흘려보내는 패스스루라, 저장된 문서만 근거가 됐다.
         # 네트워크·LLM이 걸리는 동기 함수라 Transaction 밖 스레드에서 실행한다.
@@ -277,11 +330,15 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 actor_id="report-generation-graph",
                 user_id=state["user_id"],
                 payload={
-                    "implementation": lambda: to_thread(
-                        collect_live_context,
-                        state["topic"],
-                        state["user_id"],
-                        model=state["model"],
+                    "implementation": (
+                        (lambda: [])
+                        if pool_is_enough
+                        else lambda: to_thread(
+                            collect_live_context,
+                            state["topic"],
+                            state["user_id"],
+                            model=state["model"],
+                        )
                     )
                 },
             )

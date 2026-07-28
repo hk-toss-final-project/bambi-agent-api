@@ -11,6 +11,7 @@ AGENTS.md의 구조 규칙(구현은 features/, 공개는 api.py)은 그대로 �
 """
 
 from .features.config import collect_window_days
+from .features.topic_intent import resolve_topic_intent
 from .features.graph import build_graph as build_assistant_graph
 from .features.service import assist_daily_agent
 
@@ -18,4 +19,5 @@ __all__ = [
     "assist_daily_agent",
     "build_assistant_graph",
     "collect_window_days",
+    "resolve_topic_intent",
 ]
