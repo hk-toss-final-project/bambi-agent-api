@@ -41,8 +41,15 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--providers",
-        default="gdelt,naver",
-        help="global-collector 전용: 쉼표로 구분한 수집 Provider (기본 gdelt,naver)",
+        # google_news를 기본에 포함한다. Naver는 한국어 키워드에 강하지만 영문
+        # 고유명사를 잘 찾지 못한다(2026-07-28 실측: 'Cloudflare' 수집분 10건 중
+        # 관련 3건). 같은 키워드를 google_news로 수집하면 5건 모두 실제 Cloudflare
+        # 기사였다. 두 소스가 서로의 약점을 메운다.
+        default="gdelt,naver,google_news",
+        help=(
+            "global-collector 전용: 쉼표로 구분한 수집 Provider "
+            "(기본 gdelt,naver,google_news)"
+        ),
     )
     parser.add_argument(
         "--limit-per-provider",

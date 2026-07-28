@@ -174,3 +174,60 @@ def test_col_001_requires_google_news_provider() -> None:
         assert getattr(error, "error_code", "") == "provider_mismatch"
     else:
         raise AssertionError("provider_mismatch 오류가 발생해야 합니다.")
+
+
+def test_naver_provider_queries_both_sorts_and_dedupes() -> None:
+    """Naver는 최신순·관련도순을 모두 조회하고 URL로 중복을 제거한다.
+
+    정렬 하나만 쓰면 신선도와 관련도 중 하나를 잃는다(2026-07-28 실측:
+    'Cloudflare'가 sort=date에서 관련 3/10, sort=sim에서 관련 9/10이지만
+    평균 190일 전 기사). 두 축을 모두 확보해 선별 계층이 판단하게 한다.
+    """
+    requested_sorts: list[str] = []
+    shared = {
+        "title": "공통 기사",
+        "originallink": "https://example.com/shared",
+        "description": "양쪽 정렬에 모두 등장",
+        "pubDate": "Thu, 16 Jul 2026 09:00:00 +0900",
+    }
+    per_sort = {
+        "date": {"items": [shared, {**shared, "originallink": "https://example.com/fresh"}]},
+        "sim": {"items": [shared, {**shared, "originallink": "https://example.com/relevant"}]},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """요청된 sort를 기록하고 정렬별로 다른 응답을 돌려준다."""
+        sort = request.url.params.get("sort", "")
+        requested_sorts.append(sort)
+        payload = per_sort.get(sort, {"items": []})
+        return httpx.Response(200, content=json.dumps(payload).encode(), request=request)
+
+    provider = NaverNewsProvider("client", "secret", transport=httpx.MockTransport(handler))
+
+    articles = asyncio.run(provider.search(query="Cloudflare", limit=10, language="ko"))
+
+    assert sorted(requested_sorts) == ["date", "sim"]
+    urls = [article.url for article in articles]
+    # 양쪽에 걸친 기사는 한 번만 남고, 각 정렬 고유 기사는 모두 살아남는다.
+    assert urls.count("https://example.com/shared") == 1
+    assert "https://example.com/fresh" in urls
+    assert "https://example.com/relevant" in urls
+
+
+def test_naver_provider_propagates_failure() -> None:
+    """정렬 조회 중 하나라도 실패하면 Provider 오류로 올린다.
+
+    부분 결과를 조용히 반환하면 수집량이 왜 줄었는지 추적할 수 없다.
+    """
+    import pytest
+
+    from infrastructure.sources.connectors.api import LatestProviderError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """항상 5xx를 반환해 실패 경로를 재현한다."""
+        return httpx.Response(500, request=request)
+
+    provider = NaverNewsProvider("client", "secret", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(LatestProviderError):
+        asyncio.run(provider.search(query="AI", limit=5, language="ko"))

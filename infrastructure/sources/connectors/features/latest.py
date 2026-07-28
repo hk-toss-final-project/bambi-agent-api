@@ -95,7 +95,34 @@ class NaverNewsProvider:
     async def search(
         self, *, query: str, limit: int, language: str | None
     ) -> list[LatestArticle]:
-        """Naver 뉴스 검색 결과를 게시일 내림차순으로 반환한다."""
+        """Naver 뉴스를 최신순·관련도순 양쪽으로 조회해 합친 결과를 반환한다.
+
+        정렬 하나만 쓰면 둘 중 하나를 잃는다(2026-07-28 실측).
+
+            sort=date   신선하지만 부정확 — 'Cloudflare' 검색에 "Morgan Stanley
+                        Downgrades Adobe" 같은 무관 기사가 올라온다(관련 3/10).
+            sort=sim    정확하지만 낡았다 — 같은 검색어에서 관련 9/10이지만 평균
+                        190일 전 기사였다.
+
+        어느 쪽을 고르든 손해라, 양쪽을 모두 받아 URL로 중복을 제거한다. 최종
+        순위는 수집기가 정하지 않는다 — agent/selection이 유사도 x 신선도로
+        판정하므로, 낡았지만 정확한 기사와 신선하지만 무관한 기사가 각각 제
+        축에서 감점된다. 수집 단계는 후보를 넓게 확보하는 데만 집중한다.
+        """
+        payloads = []
+        for sort in ("date", "sim"):
+            payloads.append(await self._fetch(query, limit=limit, sort=sort))
+
+        articles: list[LatestArticle] = []
+        seen_urls: set[str] = set()
+        for payload in payloads:
+            articles.extend(
+                self._to_articles(payload, language=language, seen_urls=seen_urls)
+            )
+        return articles
+
+    async def _fetch(self, query: str, *, limit: int, sort: str) -> dict:
+        """지정한 정렬로 Naver 뉴스 검색 API를 호출한다."""
         headers = {
             "X-Naver-Client-Id": self._client_id,
             "X-Naver-Client-Secret": self._client_secret,
@@ -107,19 +134,26 @@ class NaverNewsProvider:
                 response = await client.get(
                     "https://openapi.naver.com/v1/search/news.json",
                     headers=headers,
-                    params={"query": query, "display": limit, "sort": "date"},
+                    params={"query": query, "display": limit, "sort": sort},
                 )
                 response.raise_for_status()
-                payload = response.json()
+                return response.json()
         except (httpx.HTTPError, ValueError) as error:
             raise LatestProviderError(
                 self.name, "request_failed", f"Naver 뉴스 검색에 실패했습니다: {error}"
             ) from error
+
+    def _to_articles(
+        self, payload: dict, *, language: str | None, seen_urls: set[str]
+    ) -> list[LatestArticle]:
+        """Naver 응답을 공통 문서로 변환한다. 이미 본 URL은 건너뛴다."""
         articles: list[LatestArticle] = []
         for item in payload.get("items", []):
             url = str(item.get("originallink") or item.get("link") or "").strip()
-            if not url:
+            # 두 정렬이 같은 기사를 함께 반환하는 일이 흔하므로 URL로 걸러낸다.
+            if not url or url in seen_urls:
                 continue
+            seen_urls.add(url)
             try:
                 published_at = parsedate_to_datetime(str(item.get("pubDate") or ""))
             except (TypeError, ValueError):
