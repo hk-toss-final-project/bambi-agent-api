@@ -35,11 +35,11 @@ def test_score_cutoff_combines_floor_and_ratio() -> None:
     두 기준이 서로 다른 실패를 막는다. 상대 비율은 최고점에 한참 못 미치는 문서를
     걸러내고, 절대 하한은 최고점 자체가 잡음 수준일 때 풀 전체를 포기하게 한다.
     """
-    # 최고점이 높으면 상대 비율이 지배한다.
-    assert score_cutoff(0.884) == 0.884 * pool_context.POOL_SCORE_RATIO
-    # 최고점이 잡음 수준이면 절대 하한이 지배해, 아무도 통과하지 못한다.
-    assert score_cutoff(0.076) == pool_context.POOL_SCORE_FLOOR
-    assert score_cutoff(0.076) > 0.076
+    # 관련 구간(0.089~0.098)에서는 상대 비율이 지배한다.
+    assert score_cutoff(0.098) == 0.098 * pool_context.POOL_SCORE_RATIO
+    # 잡음(0.000)에서는 절대 하한이 지배해 아무도 통과하지 못한다.
+    assert score_cutoff(0.0) == pool_context.POOL_SCORE_FLOOR
+    assert score_cutoff(0.0) > 0.0
 
 
 def test_low_scoring_documents_are_dropped() -> None:
@@ -153,12 +153,11 @@ def test_selection_is_sorted_by_score() -> None:
 def test_all_noise_pool_is_rejected() -> None:
     """최고점 자체가 잡음 수준이면 풀 전체를 포기한다.
 
-    상대 컷만 있으면 "잡음 중 상위"를 뽑아 통과시킨다. 2026-07-28 실측에서
-    'Anthropic' 검색이 최고 0.076으로 5건을 통과시켰고, 그중 "암호화폐 버리고
-    AI로? 코인베이스 CEO"처럼 주제와 무관한 문서가 섞여 리포트가 얕아졌다.
-    빈약한 풀을 믿느니 실시간 수집으로 가는 편이 낫다.
+    상대 컷만 있으면 "잡음 중 상위"를 뽑아 통과시킨다. 풀 검색은 매칭이 없어도
+    최근 문서를 채워 반환하되 점수를 0으로 남기므로(2026-07-28 실측: '양자컴퓨터'
+    검색이 코스피·멜론 기사를 0.000으로 반환), 그 경우 실시간 수집으로 가야 한다.
     """
-    noise = [_document(f"G{i}", score) for i, score in enumerate([0.076, 0.076, 0.061, 0.061, 0.061])]
+    noise = [_document(f"G{i}", 0.0) for i in range(5)]
 
     selected = select_pool_documents(noise, now=_NOW)
 
@@ -167,16 +166,69 @@ def test_all_noise_pool_is_rejected() -> None:
 
 
 def test_genuine_match_clears_the_floor() -> None:
-    """실제로 잘 맞는 문서는 절대 하한을 넉넉히 넘는다.
+    """실제로 잘 맞는 문서는 절대 하한을 넘는다.
 
-    실측된 두 무리(잡음 0.057~0.093 vs 진짜 매칭 0.884)가 하한을 사이에 두고
-    갈리는지 확인한다. 하한이 잡음 쪽으로 내려가거나 매칭 쪽으로 올라가면 실패한다.
+    실측된 두 구간(잡음 0.000 vs 관련 0.089~0.098)이 하한을 사이에 두고 갈리는지
+    확인한다. 하한이 관련 구간 위로 올라가면 풀을 영원히 쓰지 못하고(앞선 값 0.35가
+    그랬다 — 0/20건 통과), 0까지 내려가면 잡음이 전부 통과한다.
     """
-    assert pool_context.POOL_SCORE_FLOOR > 0.093
-    assert pool_context.POOL_SCORE_FLOOR < 0.884
+    assert pool_context.POOL_SCORE_FLOOR > 0.0
+    assert pool_context.POOL_SCORE_FLOOR < 0.089
 
-    matched = [_document("G1", 0.884), _document("G2", 0.870), _document("G3", 0.860)]
+    matched = [_document("G1", 0.098), _document("G2", 0.095), _document("G3", 0.089)]
     selected = select_pool_documents(matched, now=_NOW)
 
     assert len(selected) == 3
     assert is_pool_sufficient(selected)
+
+
+def test_pool_content_is_cleaned_for_prompt() -> None:
+    """풀 문서의 Jina 원문에서 사이트 메뉴 표기를 걷어내고 길이를 맞춘다.
+
+    풀에는 페이지 전체가 Markdown으로 저장된다(2026-07-28 실측: 62,000자짜리
+    '코스피 서킷브레이커' 기사 앞부분이 통째로 메뉴). 그대로 프롬프트에 넣으면
+    LLM이 근거로 쓰지 않아, 풀 문서 4건을 받고도 개인 Wiki만 인용했다.
+    """
+    raw = (
+        "[연합뉴스](https://www.yna.co.kr/)[본문 바로가기](https://x)\n\n"
+        "*   [최신뉴스](https://a)\n*   [정치](https://b)\n\n"
+        "코스피가 8% 급락하며 서킷브레이커가 발동했다."
+    )
+    document = ReportContextDocument(
+        reference="G1",
+        document_version_id="gsrc:1",
+        chunk_id="gsrc:1",
+        namespace_key="global",
+        title="코스피 급락",
+        content=raw,
+        url="https://www.yna.co.kr/view/1",
+        score=0.098,
+    )
+
+    selected = select_pool_documents([document], now=_NOW)
+
+    assert len(selected) == 1
+    cleaned = selected[0].content
+    # 실제 기사 문장은 살아남는다.
+    assert "서킷브레이커가 발동했다" in cleaned
+    # Markdown 링크 표기는 사라진다.
+    assert "https://" not in cleaned
+    assert len(cleaned) < len(raw)
+
+
+def test_empty_cleaning_result_keeps_original() -> None:
+    """정제 결과가 비면 원문을 그대로 둔다 — 근거를 잃느니 지저분한 편이 낫다."""
+    document = ReportContextDocument(
+        reference="G1",
+        document_version_id="gsrc:1",
+        chunk_id="gsrc:1",
+        namespace_key="global",
+        title="제목",
+        content="...",
+        url=None,
+        score=0.098,
+    )
+
+    selected = select_pool_documents([document], now=_NOW)
+
+    assert selected[0].content

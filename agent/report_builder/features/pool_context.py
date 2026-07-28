@@ -26,8 +26,10 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
+from agent.assistant.api import clean_article_body
 from shared.report_models import ReportContextDocument
 
 GLOBAL_NAMESPACE = "global"
@@ -62,20 +64,26 @@ POOL_SCORE_RATIO: float = _env_float("POOL_SCORE_RATIO", 0.75)
 # 풀 문서를 채택할 **절대** 점수 하한. 이 아래는 "풀에 쓸 만한 자료가 없다"로 보고
 # 실시간 수집으로 넘긴다.
 #
-# 점수는 `GREATEST(trigram similarity, ts_rank)` 합성값이며, 실측에서 두 무리로
-# 뚜렷하게 갈렸다.
+# 점수는 `GREATEST(trigram similarity, ts_rank)` 합성값이다. 실측(2026-07-28,
+# 마이그레이션 0008 이후 global_source_documents 구조)에서 두 구간이 뚜렷하게
+# 갈렸다.
 #
-#   진짜 매칭   0.884  ('Domain-Driven Design' → SW공학 기사)
-#   잡음        0.057 ~ 0.093  (Anthropic·ChatGPT·주가 검색 결과 전부)
+#   관련 있음   0.089 ~ 0.098  (풀에 수집한 주제 5개 · 25건)
+#   잡음        0.000          (풀에 없는 주제 5개 · 20건 전부)
 #
-# 약 10배 차이라 그 사이 어디에 그어도 두 무리는 갈린다. 0.35는 잡음 상단(0.093)의
-# 약 4배, 확인된 매칭(0.884)의 절반 아래로 잡은 값이다.
+# 풀 검색은 매칭이 없어도 최근 문서를 채워 반환하지만 점수를 0으로 정직하게 남긴다
+# ('양자컴퓨터'·'김치찌개 레시피' 검색이 코스피·멜론 기사를 0.000으로 돌려줬다).
+# 0.05는 잡음(0)의 명백히 위, 관련 최소(0.089)의 절반 아래다.
 #
-# 주의: 근거가 두 무리·소수 표본이라 **잠정값**이다. 풀이 채워지면 점수 분포를 다시
-# 재고 조정한다. 지금 풀(5개 키워드·48건)에서는 이 하한 때문에 사실상 항상 실시간
-# 수집으로 가는데, 그것이 의도한 안전한 기본값이다 — 빈약한 창고를 믿느니 인터넷을
-# 뒤지는 편이 낫다.
-POOL_SCORE_FLOOR: float = _env_float("POOL_SCORE_FLOOR", 0.35)
+# 앞선 값 0.35는 마이그레이션 0008 **이전** 구조(wiki_chunks 청크 기반)에서 잰
+# 것이라 새 구조에서는 전부 탈락시켰다(0/20건). ts_rank는 문서가 길수록 값이
+# 작아지는데, 청크(짧음) 대신 제목+요약+본문 통짜(평균 24,000자)를 색인하면서
+# 점수대가 0.09 근처로 압축됐다. 구조가 바뀌면 이 값을 다시 재야 한다.
+#
+# 한계: 이 하한은 "풀에 아예 없는 주제"를 걸러낼 뿐, 같은 풀 안의 오분류는 막지
+# 못한다. 실측에서 '삼성전자' 검색 2위로 "멜론 아이스크림"(0.093)이 올라왔는데,
+# 1위(0.096)와 차이가 작아 상대 비율로도 걸러지지 않는다.
+POOL_SCORE_FLOOR: float = _env_float("POOL_SCORE_FLOOR", 0.05)
 
 # 실시간 수집을 생략하려면 컷오프를 통과한 풀 문서가 이만큼 있어야 한다.
 # 생성 프롬프트 상한이 12건이고 개인 Wiki가 보통 4~5건을 채우므로, 3건이면
@@ -167,7 +175,35 @@ def select_pool_documents(
         selected.append(document)
 
     selected.sort(key=lambda d: float(getattr(d, "score", 0.0)), reverse=True)
-    return selected
+    return [_with_cleaned_content(document) for document in selected]
+
+
+def _with_cleaned_content(document: ReportContextDocument) -> ReportContextDocument:
+    """풀 문서의 Jina Reader 원문을 생성 프롬프트에 넣을 수 있게 정제한다.
+
+    풀에는 페이지 전체가 Markdown으로 저장된다. 실측(2026-07-28)에서 62,000자짜리
+    '코스피 서킷브레이커' 기사의 앞부분이 통째로 사이트 메뉴였다.
+
+        [연합뉴스][본문 바로가기][메뉴 바로가기] 광고
+        [최신뉴스][정치][북한][경제] … [대구경북][전남광주][전북]
+
+    이 상태로 프롬프트에 넣으면 LLM이 근거로 쓰지 않는다 — 같은 날 '코스피'
+    리포트가 풀 문서 4건을 받고도 개인 Wiki만 인용했다.
+
+    비서 파이프라인이 쓰는 것과 같은 정제기를 통과시켜 표기를 걷어내고 길이를
+    맞춘다. 정제 결과가 비면 원문을 그대로 둔다 — 근거를 잃느니 지저분한 편이 낫다.
+
+    한계: 정제는 앞에서부터 자르므로 메뉴가 아주 긴 매체는 본문에 닿기 전에
+    잘린다(실측: 연합뉴스는 본문까지 들어왔고, 톱스타뉴스는 메뉴만 남았다).
+    본문 시작점을 찾아 자르는 개선은 별도 과제다.
+    """
+    content = str(getattr(document, "content", "") or "")
+    if not content:
+        return document
+    cleaned = clean_article_body(content)
+    if not cleaned.strip():
+        return document
+    return replace(document, content=cleaned)
 
 
 def is_pool_sufficient(pool_documents: Sequence[ReportContextDocument]) -> bool:
