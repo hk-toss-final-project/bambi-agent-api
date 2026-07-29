@@ -4,7 +4,11 @@ name: bambi-agent-api
 
 services:
   agent-db:
-    image: pgvector/pgvector:0.8.1-pg17-bookworm
+    # PostgreSQL 17.9 미만은 쓰지 않는다. 17.8에는 UTF-8 본문에서 substring()·
+    # left()가 "invalid byte sequence for encoding UTF8"로 실패하는 버그가 있다
+    # (PostgreSQL BUG #19406, CVE-2026-2006 수정이 과했던 회귀). 한국어 본문은
+    # TOAST 대상이라 그대로 걸린다. 이 태그는 PostgreSQL 17.10을 담고 있다.
+    image: pgvector/pgvector:0.8.5-pg17-bookworm
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${AGENT_DB_NAME:-bambi_agent}
