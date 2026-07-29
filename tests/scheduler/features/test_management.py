@@ -48,6 +48,7 @@ def _schedule(
     last_started_at: datetime | None = None,
     daily_max_runs: int | None = None,
     runs_today: int = 0,
+    search_options: dict[str, Any] | None = None,
 ) -> GlobalCollectionSchedule:
     """테스트용 스케줄 설정 하나를 만든다."""
     return GlobalCollectionSchedule(
@@ -63,6 +64,7 @@ def _schedule(
         runs_today=runs_today,
         status=status,
         display_name="Latest naver",
+        search_options=search_options or {},
     )
 
 
@@ -481,3 +483,36 @@ def test_manual_run_rejects_unsupported_provider(
                 now=_NOW,
             )
         )
+
+
+def test_manual_run_passes_source_search_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Source에 설정한 검색 범위·정렬이 수집 Worker까지 전달되는지 검증한다.
+
+    이 배선이 끊기면 Source별 서브레딧 화이트리스트가 조용히 무시되고 Reddit
+    전체 검색으로 되돌아간다.
+    """
+    calls = _patch_manual_run(
+        monkeypatch,
+        _schedule(
+            source_key="latest-reddit",
+            provider="reddit",
+            search_options={"subreddits": ["MachineLearning"], "time_filter": "day"},
+        ),
+    )
+
+    asyncio.run(
+        management.sch_021(
+            _FakeConnection(),
+            source_key="latest-reddit",
+            database_url="postgresql://fake",
+            credentials=_CREDENTIALS,
+            now=_NOW,
+        )
+    )
+
+    assert calls[0]["search_options"] == {
+        "subreddits": ["MachineLearning"],
+        "time_filter": "day",
+    }

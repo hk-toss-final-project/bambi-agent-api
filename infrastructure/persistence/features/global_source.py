@@ -19,7 +19,7 @@ GDELT·Naver로 수집한 뉴스 URL을 소유권 없는 수집 캐시
 """
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -67,6 +67,9 @@ class GlobalCollectionSchedule:
     runs_today: int
     status: str = "active"
     display_name: str = ""
+    # SNS Provider(youtube·reddit)의 검색 범위·정렬 설정. Worker의 기본값을
+    # Source별로 덮어쓴다. connector_config.search_options에서 읽는다.
+    search_options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +131,7 @@ def _to_schedule(row: DictRow) -> GlobalCollectionSchedule:
         runs_today=int(row.get("runs_today") or 0),
         status=row.get("status") or "active",
         display_name=row.get("display_name") or "",
+        search_options=dict(connector_config.get("search_options") or {}),
     )
 
 

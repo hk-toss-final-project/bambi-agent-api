@@ -212,6 +212,7 @@ async def collect_schedule_keywords(
             naver_client_secret=credentials.naver_client_secret,
             gdelt_base_url=credentials.gdelt_base_url,
             news_api_key=credentials.news_api_key,
+            search_options=dict(schedule.search_options),
         )
         if remaining is not None:
             remaining -= 1

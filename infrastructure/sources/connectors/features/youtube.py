@@ -11,6 +11,17 @@ Jina 본문 확보)과 같은 분리다.
 발행 시각 제약: youtube-search-python은 정확한 시각 대신 "19 hours ago",
 "1일 전" 같은 상대 표현만 준다. 이를 근사 환산해 published_at을 만든다.
 정확도가 필요한 소비자는 근사값임을 감안해야 한다.
+
+검색 정렬: 기본 검색(VideosSearch)은 YouTube의 관련도순이라 "최근 + 주목받는"
+영상을 뽑지 못한다. 2026-07-29 실측('AI 반도체'):
+
+    관련도순              199회/2시간 전 무명 채널, 10개월 전 영상이 함께 섞임
+    thisWeek + viewCount  MBCNEWS 22만회/3일 전, 18만회/3일 전 …
+
+조회수 급등 여부를 우리가 계산하려면 조회수 이력을 쌓아야 하지만, 업로드 기간을
+좁히고 조회수순으로 받으면 "최근에 많이 본 영상"을 YouTube 랭킹에서 그대로
+얻는다. 그래서 검색 환경설정(CustomSearch)을 선택할 수 있게 열어 둔다. 아무것도
+지정하지 않으면 기존 관련도순 그대로 동작한다.
 """
 
 from __future__ import annotations
@@ -47,6 +58,12 @@ _KO_UNIT_HOURS = {
 _EN_RELATIVE = re.compile(r"(\d+)\s*(second|minute|hour|day|week|month|year)s?\s*ago", re.I)
 _EN_SINGULAR = re.compile(r"an?\s+(second|minute|hour|day|week|month|year)\s*ago", re.I)
 _KO_RELATIVE = re.compile(r"(\d+)\s*(초|분|시간|일|주|개월|달|년)\s*전")
+
+# 검색 환경설정으로 지정할 수 있는 값. youtubesearchpython의 VideoUploadDateFilter·
+# VideoSortOrder 속성 이름과 같으며, 잘못된 값을 조용히 무시하지 않도록 여기서
+# 검사한다(오타가 나면 필터 없이 수집되어 원인을 찾기 어렵다).
+UPLOAD_WINDOWS = ("lastHour", "today", "thisWeek", "thisMonth", "thisYear")
+SORT_ORDERS = ("relevance", "uploadDate", "viewCount", "rating")
 
 
 def relative_age_hours(published_time: str) -> float | None:
@@ -85,6 +102,58 @@ class YouTubeSearchProvider:
 
     name = "youtube"
 
+    def __init__(
+        self,
+        *,
+        upload_window: str | None = None,
+        sort_by: str | None = None,
+    ) -> None:
+        """검색 정렬 조건을 저장한다. 둘 다 생략하면 기존 관련도순 검색이다.
+
+        Args:
+            upload_window: 업로드 기간 필터 (UPLOAD_WINDOWS 중 하나). 예: "thisWeek"
+            sort_by: 정렬 기준 (SORT_ORDERS 중 하나). 예: "viewCount"
+
+        Raises:
+            ValueError: 지원하지 않는 값을 넘겼을 때
+        """
+        if upload_window is not None and upload_window not in UPLOAD_WINDOWS:
+            raise ValueError(
+                f"지원하지 않는 upload_window입니다: {upload_window} "
+                f"(가능: {', '.join(UPLOAD_WINDOWS)})"
+            )
+        if sort_by is not None and sort_by not in SORT_ORDERS:
+            raise ValueError(
+                f"지원하지 않는 sort_by입니다: {sort_by} (가능: {', '.join(SORT_ORDERS)})"
+            )
+        self._upload_window = upload_window
+        self._sort_by = sort_by
+
+    def _run_search(self, query: str, limit: int) -> dict:
+        """정렬 조건 유무에 따라 알맞은 검색 방식으로 원본 응답을 받는다.
+
+        정렬 조건이 없으면 기존과 같은 VideosSearch(관련도순)를, 있으면
+        CustomSearch에 환경설정 문자열을 이어 붙여 넘긴다.
+        """
+        if self._upload_window is None and self._sort_by is None:
+            from youtubesearchpython import VideosSearch
+
+            return VideosSearch(query, limit=limit).result()
+
+        from youtubesearchpython import (
+            CustomSearch,
+            VideoSortOrder,
+            VideoUploadDateFilter,
+        )
+
+        # youtubesearchpython은 필터 상수를 이어 붙인 문자열 하나를 받는다.
+        preferences = ""
+        if self._upload_window is not None:
+            preferences += getattr(VideoUploadDateFilter, self._upload_window)
+        if self._sort_by is not None:
+            preferences += getattr(VideoSortOrder, self._sort_by)
+        return CustomSearch(query, preferences, limit=limit).result()
+
     async def search(
         self, *, query: str, limit: int, language: str | None
     ) -> list[LatestArticle]:
@@ -94,9 +163,7 @@ class YouTubeSearchProvider:
         제공하지 않고, 검색어 자체의 언어로 결과가 결정되기 때문이다.
         """
         try:
-            from youtubesearchpython import VideosSearch
-
-            raw = VideosSearch(query, limit=limit).result()
+            raw = self._run_search(query, limit)
         except Exception as error:  # 스크래핑 라이브러리는 예외 종류가 다양하다.
             raise LatestProviderError(
                 self.name,

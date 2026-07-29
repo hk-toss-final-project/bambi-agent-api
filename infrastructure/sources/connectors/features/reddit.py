@@ -13,6 +13,15 @@ Reddit RSS는 비인증 요청에 매우 빡빡한 레이트리밋을 건다(요
 2. 같은 검색을 짧은 시간(TTL) 캐시해 반복 요청을 만들지 않는다.
 
 재시도까지 실패하면 예외를 던진다 — 실패를 "결과 없음"으로 숨기지 않는다.
+
+검색 범위·정렬: Reddit 전체를 최신순으로 뒤지면 주제와 무관한 개인 글이 그대로
+들어온다. 그래서 두 가지를 조정할 수 있게 열어 둔다.
+
+1. `subreddits` — 주제 커뮤니티로 범위를 좁힌다. Reddit이 `r/a+b+c` 형태의 다중
+   서브레딧 검색을 지원해 한 번의 요청으로 끝난다(요청 수가 늘지 않아 레이트리밋
+   에도 유리하다).
+2. `sort="top"` + `time_filter` — RSS에는 점수·댓글 수가 없어 우리가 인기 글을
+   고를 수 없다. 대신 Reddit에게 점수순 정렬을 시켜 그 결과를 받는다.
 """
 
 from __future__ import annotations
@@ -29,8 +38,15 @@ from infrastructure.sources.connectors.features.latest import (
 )
 
 _SEARCH_RSS_URL = "https://www.reddit.com/search.rss"
+_SUBREDDIT_SEARCH_RSS_URL = "https://www.reddit.com/r/{subreddits}/search.rss"
 # User-Agent 없는 요청을 Reddit이 더 쉽게 차단하므로 고유 값을 명시한다.
 _HEADERS = {"User-Agent": "report-builder-source-connector/0.1 (keyword collection)"}
+
+# 지정할 수 있는 정렬과 기간. Reddit search가 받는 값과 같다.
+SORT_ORDERS = ("relevance", "hot", "top", "new", "comments")
+TIME_FILTERS = ("hour", "day", "week", "month", "year", "all")
+# 기간(t)은 점수·댓글 기준 정렬에서만 의미가 있다. new/hot에는 붙이지 않는다.
+_TIME_AWARE_SORTS = ("relevance", "top", "comments")
 
 # 429 재시도 대기. x-ratelimit-reset이 있으면 그 값을, 없으면 기본값을 쓴다.
 # 요청이 너무 오래 걸리지 않도록 상한을 둔다.
@@ -52,9 +68,12 @@ def _strip_html(text: str) -> str:
     return " ".join(_HTML_TAG_PATTERN.sub(" ", text).split())
 
 
-def _cache_key(query: str, limit: int) -> str:
-    """검색어를 대소문자·공백 차이 없이 캐시 조회할 수 있게 정규화한다."""
-    return f"{' '.join(query.strip().lower().split())}::{limit}"
+def _cache_key(query: str, limit: int, feed_url: str) -> str:
+    """검색어를 대소문자·공백 차이 없이 캐시 조회할 수 있게 정규화한다.
+
+    검색 범위·정렬이 다르면 결과도 다르므로 완성된 요청 URL을 Key에 포함한다.
+    """
+    return f"{' '.join(query.strip().lower().split())}::{limit}::{feed_url}"
 
 
 def _fetch_feed(feed_url: str):
@@ -93,20 +112,69 @@ class RedditSearchProvider:
 
     name = "reddit"
 
+    def __init__(
+        self,
+        *,
+        subreddits: tuple[str, ...] | list[str] = (),
+        sort: str = "top",
+        time_filter: str = "week",
+    ) -> None:
+        """검색 범위와 정렬을 저장한다.
+
+        Args:
+            subreddits: 검색할 서브레딧 이름 목록 (예: ("MachineLearning", "programming")).
+                비우면 Reddit 전체를 검색한다.
+            sort: 정렬 기준 (SORT_ORDERS 중 하나)
+            time_filter: 기간 (TIME_FILTERS 중 하나). 점수 기준 정렬에서만 쓰인다.
+
+        Raises:
+            ValueError: 지원하지 않는 정렬·기간을 넘겼을 때
+        """
+        if sort not in SORT_ORDERS:
+            raise ValueError(
+                f"지원하지 않는 sort입니다: {sort} (가능: {', '.join(SORT_ORDERS)})"
+            )
+        if time_filter not in TIME_FILTERS:
+            raise ValueError(
+                f"지원하지 않는 time_filter입니다: {time_filter} "
+                f"(가능: {', '.join(TIME_FILTERS)})"
+            )
+        self._subreddits = tuple(
+            name.strip().lstrip("r/").strip("/")
+            for name in subreddits
+            if name and name.strip()
+        )
+        self._sort = sort
+        self._time_filter = time_filter
+
+    def _feed_url(self, query: str, limit: int) -> str:
+        """검색 범위·정렬을 반영한 RSS 요청 URL을 만든다."""
+        parameters = [f"q={quote_plus(query)}", f"sort={self._sort}", f"limit={limit}"]
+        if self._sort in _TIME_AWARE_SORTS:
+            parameters.append(f"t={self._time_filter}")
+        if self._subreddits:
+            base = _SUBREDDIT_SEARCH_RSS_URL.format(
+                subreddits="+".join(self._subreddits)
+            )
+            # restrict_sr이 없으면 서브레딧 경로를 무시하고 전체를 검색한다.
+            parameters.append("restrict_sr=1")
+        else:
+            base = _SEARCH_RSS_URL
+        return f"{base}?{'&'.join(parameters)}"
+
     async def search(
         self, *, query: str, limit: int, language: str | None
     ) -> list[LatestArticle]:
-        """키워드로 최신순 게시글을 검색해 최신 문서 목록을 반환한다.
+        """키워드로 게시글을 검색해 최신 문서 목록을 반환한다.
 
         language는 사용하지 않는다 — Reddit RSS가 언어 필터를 제공하지 않는다.
         """
-        cache_key = _cache_key(query, limit)
+        feed_url = self._feed_url(query, limit)
+        cache_key = _cache_key(query, limit, feed_url)
         cached = _search_cache.get(cache_key)
         if cached and time.monotonic() - cached[0] < _CACHE_TTL_SECONDS:
             return list(cached[1])
 
-        # 최신 게시글을 놓치지 않도록 최신순(sort=new)으로 받는다.
-        feed_url = f"{_SEARCH_RSS_URL}?q={quote_plus(query)}&sort=new&limit={limit}"
         parsed = _fetch_feed(feed_url)
 
         articles: list[LatestArticle] = []

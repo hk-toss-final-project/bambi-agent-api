@@ -12,6 +12,10 @@ NewsAPI는 자격 증명과 무료 플랜 호출 한도(일 100회)가 있어 �
 YouTube·Reddit(COL-005)은 자격 증명이 없어도 동작하지만 기본 목록에서는
 제외한다. 뉴스와 성격이 다른 소스라 필요할 때만 골라 쓰는 편이 낫고, Reddit은
 비인증 요청 레이트리밋이 빡빡해 매 tick 호출할 대상이 아니기 때문이다.
+
+SNS 두 Provider는 검색 범위·정렬을 `search_options`로 조정한다. 기본값은
+"최근에 주목받은 글"을 향하고(_SNS_SEARCH_DEFAULTS), Source별로 다르게 하려면
+`global_sources.connector_config.search_options`에 넣어 덮어쓴다.
 """
 
 from typing import Any
@@ -57,6 +61,23 @@ _SUPPORTED_PROVIDERS = (
 # 소스라 기본값에서 제외한다.
 _DEFAULT_PROVIDERS = ("gdelt", "naver", "google_news")
 
+# SNS Provider의 기본 검색 조건. "최신순으로 아무거나"가 아니라 "최근에 주목받은
+# 글"을 받도록 맞춘 값이다.
+#
+# - youtube: 관련도순 기본 검색은 조회수 200회짜리 개인 채널과 10개월 전 영상을
+#   함께 돌려준다(2026-07-29 실측). 최근 1주로 좁히고 조회수순으로 받으면 같은
+#   키워드에서 주요 언론·대형 채널의 최신 영상이 상위에 온다.
+# - reddit: 전체 검색 최신순은 주제와 무관한 개인 글을 그대로 담는다. 점수순으로
+#   받아 커뮤니티가 이미 걸러 준 결과를 쓴다. 서브레딧 화이트리스트는 주제마다
+#   달라 기본값을 두지 않고 Source 설정에 맡긴다.
+#
+# 개념·튜토리얼 키워드를 수집하는 Source는 최근 1주로 좁히면 안 되므로
+# connector_config에서 upload_window를 빼거나 넓혀서 덮어쓴다.
+_SNS_SEARCH_DEFAULTS: dict[str, dict[str, object]] = {
+    "youtube": {"upload_window": "thisWeek", "sort_by": "viewCount"},
+    "reddit": {"sort": "top", "time_filter": "week"},
+}
+
 # Provider별 수집 기능(COL-*) 매핑. SNS 두 곳은 COL-005가 함께 담당한다.
 _PROVIDER_CONNECTORS = {
     "naver": col_002,
@@ -68,6 +89,15 @@ _PROVIDER_CONNECTORS = {
 }
 
 
+def _sns_search_options(
+    name: str, search_options: dict[str, object] | None
+) -> dict[str, object]:
+    """SNS Provider의 기본 검색 조건에 Source별 설정을 덮어쓴다."""
+    merged = dict(_SNS_SEARCH_DEFAULTS.get(name, {}))
+    merged.update(search_options or {})
+    return merged
+
+
 def _build_provider(
     name: str,
     *,
@@ -75,6 +105,7 @@ def _build_provider(
     naver_client_secret: str | None,
     gdelt_base_url: str | None,
     news_api_key: str | None = None,
+    search_options: dict[str, object] | None = None,
 ) -> LatestInformationProvider:
     """이름과 자격 증명으로 수집 Provider를 구성한다.
 
@@ -84,12 +115,14 @@ def _build_provider(
         naver_client_secret: Naver 검색 API Client Secret
         gdelt_base_url: GDELT API 기본 URL (없으면 기본값 사용)
         news_api_key: NewsAPI Key (newsapi Provider에만 필요)
+        search_options: SNS Provider의 검색 범위·정렬 설정. 기본값을 덮어쓴다.
 
     Returns:
         키워드 검색이 가능한 Provider 인스턴스
 
     Raises:
-        LatestProviderError: 지원하지 않는 Provider이거나 자격 증명이 없을 때
+        LatestProviderError: 지원하지 않는 Provider이거나 자격 증명이 없을 때,
+            또는 SNS 검색 설정 값이 잘못됐을 때
     """
     if name == "naver":
         if not naver_client_id or not naver_client_secret:
@@ -111,11 +144,21 @@ def _build_provider(
                 "NEWS_API_KEY가 필요합니다.",
             )
         return NewsApiProvider(news_api_key)
-    # YouTube·Reddit은 자격 증명 없이 공개 검색으로 동작한다.
-    if name == "youtube":
-        return YouTubeSearchProvider()
-    if name == "reddit":
-        return RedditSearchProvider()
+    # YouTube·Reddit은 자격 증명 없이 공개 검색으로 동작한다. 검색 조건이 잘못된
+    # 경우 Provider가 ValueError를 던지므로, Provider 실패로 감싸 다른 Provider의
+    # 수집을 막지 않는다.
+    if name in ("youtube", "reddit"):
+        options = _sns_search_options(name, search_options)
+        try:
+            if name == "youtube":
+                return YouTubeSearchProvider(**options)  # type: ignore[arg-type]
+            return RedditSearchProvider(**options)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as error:
+            raise LatestProviderError(
+                name,
+                "invalid_search_options",
+                f"검색 설정이 잘못됐습니다: {error}",
+            ) from error
     raise LatestProviderError(name, "unsupported_provider", "지원하지 않는 Provider입니다.")
 
 
@@ -130,6 +173,7 @@ async def run_global_source_collection_batch(
     naver_client_secret: str | None = None,
     gdelt_base_url: str | None = None,
     news_api_key: str | None = None,
+    search_options: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     """키워드로 뉴스·SNS Provider를 검색해 Global 수집 캐시에 저장한다.
 
@@ -146,6 +190,7 @@ async def run_global_source_collection_batch(
         naver_client_secret: Naver 검색 API Client Secret
         gdelt_base_url: GDELT API 기본 URL
         news_api_key: NewsAPI Key
+        search_options: SNS Provider의 검색 범위·정렬 설정 (기본값을 덮어쓴다)
 
     Returns:
         Provider별 수집·저장 결과 또는 실패 정보 목록
@@ -168,6 +213,7 @@ async def run_global_source_collection_batch(
                     naver_client_secret=naver_client_secret,
                     gdelt_base_url=gdelt_base_url,
                     news_api_key=news_api_key,
+                    search_options=search_options,
                 )
                 connector = _PROVIDER_CONNECTORS[provider_name]
                 collected = await connector(
@@ -227,6 +273,7 @@ async def worker_001(
     naver_client_secret: str | None = None,
     gdelt_base_url: str | None = None,
     news_api_key: str | None = None,
+    search_options: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     """[WORKER-001] Global Source Collector Worker.
 
@@ -240,6 +287,8 @@ async def worker_001(
         raise ValueError("WORKER-001의 keywords는 문자열 목록이어야 합니다.")
     if providers is not None and not all(isinstance(name, str) for name in providers):
         raise ValueError("WORKER-001의 providers는 문자열 목록이어야 합니다.")
+    if search_options is not None and not isinstance(search_options, dict):
+        raise ValueError("WORKER-001의 search_options는 딕셔너리여야 합니다.")
     return await run_global_source_collection_batch(
         database_url=database_url,
         keywords=keywords,
@@ -250,4 +299,5 @@ async def worker_001(
         naver_client_secret=naver_client_secret,
         gdelt_base_url=gdelt_base_url,
         news_api_key=news_api_key,
+        search_options=search_options,
     )

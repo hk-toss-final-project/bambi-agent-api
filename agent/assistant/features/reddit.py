@@ -108,13 +108,20 @@ def _fetch_feed(feed_url: str):
 
 
 def _search_articles(keyword: str, limit: int):
-    """공용 Reddit 커넥터로 검색한다 (네트워크 경계, 테스트에서 대체 가능)."""
+    """공용 Reddit 커넥터로 검색한다 (네트워크 경계, 테스트에서 대체 가능).
+
+    최신순(sort=new)을 명시한다. 이 경로는 받아온 게시글을 다시 48시간 이내로
+    거르므로(search_posts), 점수순으로 받으면 기간 안의 새 글이 아예 목록에
+    들어오지 못해 결과가 비어 버린다. 점수순은 Global 수집 경로의 기본값이다.
+    """
     import asyncio
 
     from infrastructure.sources.connectors.api import RedditSearchProvider
 
     return asyncio.run(
-        RedditSearchProvider().search(query=keyword, limit=limit, language=None)
+        RedditSearchProvider(sort="new").search(
+            query=keyword, limit=limit, language=None
+        )
     )
 
 

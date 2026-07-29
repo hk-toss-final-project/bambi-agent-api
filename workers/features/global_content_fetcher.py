@@ -12,9 +12,10 @@ URL의 저장을 되돌리지 않는다.
   실측: 저장된 게시글 텍스트가 Jina 결과에 그대로 포함).
 - YouTube: 영상 페이지라 Jina로는 "Skip navigation", "Sign in" 같은 UI 문구만
   나온다(같은 날 실측: 본문 17,466자 전부 UI). 대신 자막을 본문으로 쓴다.
-  자막이 없는 영상은 실패로 남겨 빈 본문이 풀에 쌓이지 않게 한다.
+  자막이 없거나 너무 짧은 영상은 실패로 남겨 빈 본문이 풀에 쌓이지 않게 한다.
 """
 
+import os
 from asyncio import to_thread
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -40,6 +41,23 @@ from infrastructure.sources.connectors.api import (
 type DictRow = dict[str, Any]
 type UrlFetcher = Callable[[str], JinaReadResult]
 type TranscriptFetcher = Callable[[str], str | None]
+
+
+# 자막이 이 길이 미만이면 근거로 쓸 내용이 없다고 보고 버린다.
+#
+# 영상 길이(예: 60초 미만)로 자르지 않는 이유: 길이는 내용량의 나쁜 대리 지표다.
+# 말이 빽빽한 40초 영상은 쓸모가 있고, 배경음악만 깔린 3분 영상은 자막이 비거나
+# 무의미하다. 우리는 영상을 자막으로만 읽으므로 "읽을 게 있는가"를 직접 재는
+# 편이 정확하다. 화면 텍스트로만 정보를 전달하는 영상도 여기서 함께 걸러진다.
+DEFAULT_MIN_TRANSCRIPT_CHARS = 500
+
+
+def _min_transcript_chars() -> int:
+    """본문으로 인정할 자막 최소 길이를 환경변수에서 읽는다. 형식이 틀리면 기본값."""
+    try:
+        return max(int(os.environ["YOUTUBE_MIN_TRANSCRIPT_CHARS"]), 0)
+    except (KeyError, ValueError):
+        return DEFAULT_MIN_TRANSCRIPT_CHARS
 
 
 def _parse_published_at(value: str | None) -> datetime | None:
@@ -86,7 +104,8 @@ async def _fetch_youtube_transcript(
     """YouTube 영상 자막을 본문으로 저장하거나 실패로 표시한다.
 
     자막이 없는 영상은 본문을 만들 방법이 없으므로 실패로 남긴다. UI 문구를
-    본문인 척 저장하면 이후 검색·생성이 그 문서를 근거로 쓰게 된다.
+    본문인 척 저장하면 이후 검색·생성이 그 문서를 근거로 쓰게 된다. 자막이
+    있어도 근거로 쓰기에 너무 짧으면 같은 이유로 실패로 남긴다.
     """
     video_id = video_id_from_url(article.url)
     if not video_id:
@@ -103,6 +122,17 @@ async def _fetch_youtube_transcript(
             article=article,
             error_code="YOUTUBE_NO_TRANSCRIPT",
             error_message="자막이 없어 본문을 만들 수 없습니다.",
+        )
+    minimum_chars = _min_transcript_chars()
+    if len(transcript.strip()) < minimum_chars:
+        return await _mark_failed(
+            connection,
+            article=article,
+            error_code="YOUTUBE_TRANSCRIPT_TOO_SHORT",
+            error_message=(
+                f"자막이 {len(transcript.strip())}자로 최소 {minimum_chars}자에 "
+                "못 미쳐 근거로 쓸 수 없습니다."
+            ),
         )
     async with connection.transaction():
         await set_system_job_scope(connection)

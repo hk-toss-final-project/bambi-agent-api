@@ -177,7 +177,8 @@ def test_youtube_document_uses_transcript_as_body(
             database_url="postgresql://fake",
             limit=5,
             url_fetcher=fail_jina,
-            transcript_fetcher=lambda video_id: f"{video_id} 자막 본문",
+            # 최소 자막 길이 게이트를 넘도록 본문 분량을 충분히 준다.
+            transcript_fetcher=lambda video_id: f"{video_id} 자막 본문 " * 100,
         )
     )
 
@@ -229,3 +230,60 @@ def test_youtube_document_without_transcript_is_failed(
 
     assert results[0]["status"] == "failed"
     assert results[0]["error_code"] == "YOUTUBE_NO_TRANSCRIPT"
+
+
+def test_youtube_document_with_too_short_transcript_is_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """자막이 최소 길이에 못 미치면 본문으로 저장하지 않고 실패로 남긴다.
+
+    영상 길이가 아니라 자막 길이로 판정한다 — 우리는 영상을 자막으로만 읽으므로
+    "읽을 게 있는가"가 실제 기준이다.
+    """
+    connection = _FakeConnection(
+        [
+            [],  # set_system_job_scope (claim)
+            [
+                {
+                    "id": "y3",
+                    "canonical_url": "https://www.youtube.com/watch?v=abc12345678",
+                    "provider": "youtube",
+                }
+            ],  # claim
+            [],  # set_system_job_scope (실패 표시)
+            [],  # mark_failed UPDATE
+        ]
+    )
+    _patch_connection(monkeypatch, connection)
+
+    results = asyncio.run(
+        fetcher.run_global_content_fetch_batch(
+            database_url="postgresql://fake",
+            limit=5,
+            url_fetcher=lambda _: JinaReadResult(
+                requested_url="",
+                resolved_url="",
+                title="",
+                published_time=None,
+                markdown="x",
+            ),
+            transcript_fetcher=lambda _: "속보입니다",
+        )
+    )
+
+    assert results[0]["status"] == "failed"
+    assert results[0]["error_code"] == "YOUTUBE_TRANSCRIPT_TOO_SHORT"
+
+
+def test_youtube_minimum_transcript_length_is_configurable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """최소 자막 길이는 환경변수로 조정하고, 값이 잘못되면 기본값을 쓴다."""
+    monkeypatch.setenv("YOUTUBE_MIN_TRANSCRIPT_CHARS", "120")
+    assert fetcher._min_transcript_chars() == 120
+
+    monkeypatch.setenv("YOUTUBE_MIN_TRANSCRIPT_CHARS", "숫자아님")
+    assert fetcher._min_transcript_chars() == fetcher.DEFAULT_MIN_TRANSCRIPT_CHARS
+
+    monkeypatch.delenv("YOUTUBE_MIN_TRANSCRIPT_CHARS")
+    assert fetcher._min_transcript_chars() == fetcher.DEFAULT_MIN_TRANSCRIPT_CHARS
