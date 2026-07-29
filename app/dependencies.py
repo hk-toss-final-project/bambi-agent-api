@@ -13,6 +13,7 @@ from app.services.publish_snapshots import (
     PublishSnapshotService,
 )
 from app.services.agent_workflows import AgentWorkflowService
+from app.services.collection_schedules import CollectionScheduleService
 from app.services.interests import InterestService
 from app.services.generated_content import GeneratedContentService
 from app.services.development_scenarios import DevelopmentScenarioService
@@ -53,6 +54,7 @@ class AppContainer:
     latest_information_service: LatestInformationService | None = None
     generated_content_service: GeneratedContentService | None = None
     development_scenario_service: DevelopmentScenarioService | None = None
+    collection_schedule_service: CollectionScheduleService | None = None
     ready: bool = False
     database_error: str | None = None
 
@@ -112,6 +114,7 @@ class AppContainer:
         self.latest_information_service = None
         self.generated_content_service = None
         self.development_scenario_service = None
+        self.collection_schedule_service = None
 
     async def shutdown(self) -> None:
         """새 요청 처리를 중단하고 PostgreSQL 연결 Pool을 종료한다."""
@@ -160,6 +163,9 @@ def create_container(settings: Settings) -> AppContainer:
                 workflow_service,
                 interest_service,
                 latest_information_service,
+            ),
+            collection_schedule_service=CollectionScheduleService(
+                agent_job_repository, settings
             ),
         )
     return AppContainer(
@@ -301,6 +307,22 @@ def get_generated_content_service(
             ),
         )
     return container.generated_content_service
+
+
+def get_collection_schedule_service(
+    container: AppContainer = Depends(get_container),
+) -> CollectionScheduleService:
+    """Service가 정기 수집 주기를 조정하는 스케줄 관리 서비스를 반환한다."""
+    if container.collection_schedule_service is None:
+        raise AgentApiError(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            ErrorDetail(
+                code="SERVICE_NOT_READY",
+                message="수집 스케줄 저장소가 준비되지 않았습니다.",
+                retryable=True,
+            ),
+        )
+    return container.collection_schedule_service
 
 
 def get_development_scenario_service(

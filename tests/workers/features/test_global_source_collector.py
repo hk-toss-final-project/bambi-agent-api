@@ -18,6 +18,9 @@ from infrastructure.sources.connectors.api import (
     LatestArticle,
     LatestProviderError,
     NaverNewsProvider,
+    NewsApiProvider,
+    RedditSearchProvider,
+    YouTubeSearchProvider,
 )
 
 
@@ -150,6 +153,37 @@ def test_collection_batch_isolates_provider_failure(
     assert gdelt_result["error_code"] == "request_failed"
 
 
+def test_collection_batch_supports_sns_providers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """YouTube·Reddit도 뉴스와 같은 경로로 수집·저장되는지 검증한다."""
+    connection = _FakeConnection(
+        [
+            [],  # set_system_job_scope
+            [{"id": "source-1"}],  # INSERT global_sources
+            [{"id": "run-1"}],  # INSERT global_collection_runs
+            [{"id": "doc-1"}],  # INSERT global_source_documents
+            [],  # UPDATE global_collection_runs
+        ]
+    )
+    _patch_connection(monkeypatch, connection)
+    monkeypatch.setattr(
+        collector, "_build_provider", lambda name, **_: _OneArticleProvider(name)
+    )
+
+    results = asyncio.run(
+        collector.run_global_source_collection_batch(
+            database_url="postgresql://fake",
+            keywords=["후쿠오카"],
+            providers=["youtube"],
+        )
+    )
+
+    assert results[0]["provider"] == "youtube"
+    assert results[0]["status"] == "completed"
+    assert results[0]["created_count"] == 1
+
+
 def test_collection_batch_requires_keywords(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -189,6 +223,40 @@ def test_build_provider_selects_and_validates() -> None:
     )
     assert isinstance(google_news, GoogleNewsRssProvider)
 
+    newsapi = collector._build_provider(
+        "newsapi",
+        naver_client_id=None,
+        naver_client_secret=None,
+        gdelt_base_url=None,
+        news_api_key="news-api-key",
+    )
+    assert isinstance(newsapi, NewsApiProvider)
+
+    # SNS Provider는 자격 증명 없이 구성된다.
+    youtube = collector._build_provider(
+        "youtube",
+        naver_client_id=None,
+        naver_client_secret=None,
+        gdelt_base_url=None,
+    )
+    assert isinstance(youtube, YouTubeSearchProvider)
+
+    reddit = collector._build_provider(
+        "reddit",
+        naver_client_id=None,
+        naver_client_secret=None,
+        gdelt_base_url=None,
+    )
+    assert isinstance(reddit, RedditSearchProvider)
+
+    with pytest.raises(LatestProviderError):
+        collector._build_provider(
+            "newsapi",
+            naver_client_id=None,
+            naver_client_secret=None,
+            gdelt_base_url=None,
+            news_api_key=None,
+        )
     with pytest.raises(LatestProviderError):
         collector._build_provider(
             "naver",
@@ -202,4 +270,76 @@ def test_build_provider_selects_and_validates() -> None:
             naver_client_id=None,
             naver_client_secret=None,
             gdelt_base_url=None,
+        )
+
+
+def test_build_provider_applies_sns_search_defaults() -> None:
+    """SNS Provider는 "최근에 주목받은 글" 기본 검색 조건으로 구성된다.
+
+    관련도순·최신순 기본값은 저조회수 개인 채널과 무관한 커뮤니티 글을 그대로
+    담아 온다(2026-07-29 실측). 기본값이 사라지면 그 상태로 되돌아간다.
+    """
+    youtube = collector._build_provider(
+        "youtube",
+        naver_client_id=None,
+        naver_client_secret=None,
+        gdelt_base_url=None,
+    )
+    assert youtube._upload_window == "thisWeek"
+    assert youtube._sort_by == "viewCount"
+
+    reddit = collector._build_provider(
+        "reddit",
+        naver_client_id=None,
+        naver_client_secret=None,
+        gdelt_base_url=None,
+    )
+    assert reddit._sort == "top"
+    assert reddit._time_filter == "week"
+
+
+def test_build_provider_search_options_override_defaults() -> None:
+    """Source별 search_options가 기본 검색 조건을 덮어쓴다.
+
+    개념·튜토리얼 키워드를 모으는 Source는 최근 1주로 좁히면 안 되므로
+    업로드 기간을 넓히거나 없앨 수 있어야 한다.
+    """
+    youtube = collector._build_provider(
+        "youtube",
+        naver_client_id=None,
+        naver_client_secret=None,
+        gdelt_base_url=None,
+        search_options={"upload_window": "thisYear"},
+    )
+    assert youtube._upload_window == "thisYear"
+    assert youtube._sort_by == "viewCount"          # 지정 안 한 값은 기본값 유지
+
+    reddit = collector._build_provider(
+        "reddit",
+        naver_client_id=None,
+        naver_client_secret=None,
+        gdelt_base_url=None,
+        search_options={"subreddits": ["MachineLearning"], "time_filter": "day"},
+    )
+    assert reddit._subreddits == ("MachineLearning",)
+    assert reddit._time_filter == "day"
+
+
+def test_build_provider_rejects_invalid_search_options() -> None:
+    """잘못된 검색 설정은 Provider 실패로 감싸 다른 Provider 수집을 막지 않는다."""
+    with pytest.raises(LatestProviderError):
+        collector._build_provider(
+            "youtube",
+            naver_client_id=None,
+            naver_client_secret=None,
+            gdelt_base_url=None,
+            search_options={"upload_window": "지난주"},
+        )
+    with pytest.raises(LatestProviderError):
+        collector._build_provider(
+            "reddit",
+            naver_client_id=None,
+            naver_client_secret=None,
+            gdelt_base_url=None,
+            search_options={"없는옵션": 1},
         )

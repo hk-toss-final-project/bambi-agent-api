@@ -367,6 +367,14 @@ AND NOT EXISTS (
     JOIN agent.citations AS citation
       ON citation.chunk_id = chunk.id
     WHERE version.document_id = document.id
+)
+-- 관심 키워드 근거(INT-011)가 문서를 참조하면 남긴다. Citation과 같은 이유로,
+-- Seed 재적용이 이미 만들어진 결과를 끊어 버리면 안 된다. 이 가드가 없으면
+-- 관심사를 한 번이라도 계산한 DB에서 Seed가 외래키 위반으로 실패한다.
+AND NOT EXISTS (
+    SELECT 1
+    FROM agent.interest_evidence AS evidence
+    WHERE evidence.document_id = document.id
 );
 
 DELETE FROM agent.user_interest_profiles

@@ -299,7 +299,8 @@ def test_compose_requires_secret_and_runs_database_initializer() -> None:
     """Compose가 DB 시작마다 Migration과 선택적 개발 Seed를 같은 경로로 실행한다."""
     compose = _read(COMPOSE_PATH)
 
-    assert "pgvector/pgvector:0.8.1-pg17-bookworm" in compose
+    # PostgreSQL 17.9 미만은 UTF-8 본문 substring()이 깨진다(BUG #19406).
+    assert "pgvector/pgvector:0.8.5-pg17-bookworm" in compose
     assert "AGENT_DB_PASSWORD:?" in compose
     assert "127.0.0.1:${AGENT_DB_PORT:-5432}:5432" in compose
     assert "./database/migrations:/opt/bambi/migrations:ro" in compose

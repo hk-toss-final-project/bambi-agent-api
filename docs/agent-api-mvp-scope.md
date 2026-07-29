@@ -67,12 +67,20 @@
 - [x] `COL-002` Naver API 수집 — Adapter 구현 (자격 증명 필요)
 - [x] `COL-003` GDELT 수집
 - [x] `COL-004` NewsAPI 수집
+- [x] `COL-005` SNS 수집 — YouTube 영상 검색·Reddit 공개 RSS 검색 (자격 증명 불필요). 2026-07-29 범위 추가: 키워드 비서가 쓰던 Provider 구현(`features/youtube.py`·`features/reddit.py`)을 수집 Worker와 수집 스케줄에 연결했다. 뉴스와 성격이 다르고 Reddit은 비인증 레이트리밋이 빡빡해 기본 Provider 목록에서는 제외하고, Source로 등록했을 때만 수집한다
 - [x] `GSP-004` API 응답 정규화 — Provider 공통 문서 구조로 변환
 - [x] `GSP-006` 문서 중복 제거 — URL 기준 멱등 Upsert
 - [x] `GSP-015` 개인 Wiki 자동 반영 금지 — Global Namespace 분리 저장
-- [ ] `SCH-002` Naver API 수집 스케줄 — ❌ 정기 등록 미구현 (dev API 수동 실행만 가능)
-- [ ] `SCH-003` GDELT 수집 스케줄 — ❌
-- [ ] `SCH-004` NewsAPI 수집 스케줄 — ❌ (참고: MVP 목록 외 `SCH-009` Wiki Build 조용 시간 트리거는 구현됨)
+- [x] `SCH-001` RSS 수집 스케줄 — Google News RSS(`google_news`, COL-001) 정기 수집. 2026-07-28 범위 추가: 영문 키워드에서 가장 정확한 Provider인데(실측 'Cloudflare' 수집 시 Naver 10건 중 관련 3건, google_news 5건 전부 관련) 스케줄에서 빠져 있었다. **명세의 "RSS Source"는 임의 피드 주소를 뜻하지만 이 구현은 키워드 검색이다** — 임의 피드 수집이 필요해지면 별도 Provider로 추가한다. 원본 URL 디코딩 때문에 키워드당 12초쯤 더 걸린다
+- [x] `SCH-002` Naver API 수집 스케줄 — 독립 Scheduler 프로세스(`scheduler/main.py`)가 tick마다 `agent.global_sources`의 `schedule_cron`·`keywords`를 읽어 실행 차례가 된 Source만 수집 Worker(WORKER-001)로 넘긴다. 판정 순서는 ① Cron 도달 ② 키워드 존재 ③ `quota_policy.daily_max_runs`
+- [x] `SCH-003` GDELT 수집 스케줄 — SCH-002와 동일한 판정·실행 규칙
+- [x] `SCH-004` NewsAPI 수집 스케줄 — 수집 Worker에 `newsapi` Provider(COL-004) 연결 포함. 무료 플랜 호출 한도(일 100회)가 낮아 기본 Provider 목록에서는 제외하고 `quota_policy.daily_max_runs`와 함께 쓴다. (참고: MVP 목록 외 `SCH-009` Wiki Build 조용 시간 트리거는 구현됨)
+- [x] `SCH-017` 스케줄 등록 — `POST /internal/v1/collection-schedules` (멱등 Upsert, Cron·키워드 검증)
+- [x] `SCH-018` 스케줄 수정 — `PATCH /internal/v1/collection-schedules/{source_key}` (부분 수정, 다음 tick부터 반영)
+- [x] `SCH-019` 스케줄 중지 — `POST .../{source_key}/pause` (설정 보존, status만 paused)
+- [x] `SCH-020` 스케줄 재개 — `POST .../{source_key}/resume`
+- [x] `SCH-021` 스케줄 수동 실행 — `POST .../{source_key}/run` (Cron 주기·일일 한도·중지 상태를 모두 건너뛰고 등록된 키워드를 전부 즉시 수집. 이 조건들은 "알아서 도는 수집"을 통제하는 장치이므로 관리자가 명시한 실행까지 막지 않는다. 실행 이력은 남아 이후 정기 실행의 `runs_today`에는 반영된다). 2026-07-29 범위 추가: 키워드를 바꾼 뒤 다음 tick(최대 주기만큼)을 기다려야 적재를 확인할 수 있어 점검이 막혔다. 수집 규칙은 정기 실행과 같은 구현을 공유하고 동기로 실행해 결과를 그대로 돌려준다
+- [x] `SCH-022` 스케줄 이력 조회 — `GET /internal/v1/collection-schedules` (현재 설정 + 최근 실행 이력)
 
 ### 리포트 생성기 (Report Builder)
 
@@ -198,12 +206,31 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | COL-002 | Naver API 수집 | 설정된 키워드로 Naver API 데이터를 수집한다. |
 | COL-003 | GDELT 수집 | 글로벌 뉴스와 이벤트 데이터를 수집한다. |
 | COL-004 | NewsAPI 수집 | 뉴스 기사와 관련 메타데이터를 수집한다. |
+| COL-005 | SNS 수집 | 허용된 SNS 공개 데이터(YouTube·Reddit)를 수집한다. |
 | GSP-004 | API 응답 정규화 | Source별 응답을 공통 문서 구조로 변환한다. |
 | GSP-006 | 문서 중복 제거 | 동일 URL과 유사 문서를 중복 제거한다. |
 | GSP-015 | 개인 Wiki 자동 반영 금지 | 수집 데이터를 사용자 선택 없이 개인 Wiki에 반영하지 않는다. |
+| SCH-001 | RSS 수집 스케줄 | RSS Source 수집 작업을 정기 등록한다. |
 | SCH-002 | Naver API 수집 스케줄 | Naver API 수집 작업을 정기 등록한다. |
 | SCH-003 | GDELT 수집 스케줄 | GDELT 수집 작업을 정기 등록한다. |
 | SCH-004 | NewsAPI 수집 스케줄 | NewsAPI 수집 작업을 정기 등록한다. |
+| SCH-017 | 스케줄 등록 | 새로운 정기 작업을 등록한다. |
+| SCH-018 | 스케줄 수정 | 기존 작업의 실행 주기를 변경한다. |
+| SCH-019 | 스케줄 중지 | 정기 작업 실행을 일시 중지한다. |
+| SCH-020 | 스케줄 재개 | 중지된 정기 작업을 다시 활성화한다. |
+| SCH-021 | 스케줄 수동 실행 | 관리자가 정기 작업을 즉시 실행한다. |
+| SCH-022 | 스케줄 이력 조회 | 스케줄별 실행 결과와 상태를 조회한다. |
+
+> SCH-021은 2026-07-29에 MVP 범위로 추가했다. 주기를 바꾸거나 키워드를 고친 뒤
+> 실제로 적재되는지 확인하려면 다음 tick까지 기다려야 했는데, 주기가 길수록
+> 점검이 사실상 막혔다. Service·운영이 같은 창구에서 즉시 실행할 수 있게 한다.
+
+> SCH-017·018·019·020·022는 2026-07-28에 MVP 범위로 추가했다. 수집 Scheduler를
+> Agent 서버가 직접 돌리기로 하면서(기존 협의안은 Service가 Job을 발행하는
+> 방향이었다), **Service가 수집 주기를 조정할 창구**가 필요해졌기 때문이다.
+> 스케줄 정책의 결정권은 여전히 Service에 있고 Agent는 실행만 담당한다.
+> [global-collection-scheduling-proposal.md](global-collection-scheduling-proposal.md)
+> §4.1의 발행 주기 결정은 이 API로 Service가 직접 넣는 것으로 대체된다.
 
 ## 5. 리포트 생성기 (Report Builder)
 

@@ -1,4 +1,4 @@
--- 이 파일은 scripts/generate_web_clipping_seed.py가 dummy/clippings에서 생성한다.
+-- 이 파일은 scripts/generate_web_clipping_seed.py가 dummy\clippings에서 생성한다.
 -- 직접 수정하지 말고 원본 Markdown을 바꾼 뒤 Generator를 다시 실행한다.
 
 \set ON_ERROR_STOP on
@@ -10,13 +10,13 @@ SET LOCAL app.access_scope = 'system';
 DELETE FROM agent.agent_job_attempts
 WHERE job_id IN (
     'ecbd990d-fd2c-534b-b8ca-c4f6b147cfb5',
+    'aebc6368-807f-523b-a38d-b52ae12192e3',
     '2a30aed2-a7bf-5e99-872d-00a0db75deee',
     'e6445fbc-66e3-5324-9e22-5c2170fbb2b8',
     '3d210ceb-1ff5-5b68-ac5e-d32683e72ccd',
     'a5e3fd9d-9d64-58aa-a7c5-00fe1c76bfc8',
     'd20ce88a-50ae-5918-8b26-ac253c992fe4',
     '1fa84a47-90aa-5e53-a18a-a8c0abe9514d',
-    'aebc6368-807f-523b-a38d-b52ae12192e3',
     '635b290b-e40d-5efa-996e-706b6bec54ab',
     '5bf75415-9e99-5572-9990-4d056c1880cf',
     '94f8fbe5-dc35-5306-9fed-6da7c1a7fcdd',
@@ -38,13 +38,13 @@ WHERE document.id IN (
     FROM agent.wiki_document_versions AS version
     WHERE version.created_by_job_id IN (
         'ecbd990d-fd2c-534b-b8ca-c4f6b147cfb5',
+    'aebc6368-807f-523b-a38d-b52ae12192e3',
     '2a30aed2-a7bf-5e99-872d-00a0db75deee',
     'e6445fbc-66e3-5324-9e22-5c2170fbb2b8',
     '3d210ceb-1ff5-5b68-ac5e-d32683e72ccd',
     'a5e3fd9d-9d64-58aa-a7c5-00fe1c76bfc8',
     'd20ce88a-50ae-5918-8b26-ac253c992fe4',
     '1fa84a47-90aa-5e53-a18a-a8c0abe9514d',
-    'aebc6368-807f-523b-a38d-b52ae12192e3',
     '635b290b-e40d-5efa-996e-706b6bec54ab',
     '5bf75415-9e99-5572-9990-4d056c1880cf',
     '94f8fbe5-dc35-5306-9fed-6da7c1a7fcdd',
@@ -65,13 +65,13 @@ WHERE document.id IN (
       ON source_link.wiki_document_version_id = version.id
     WHERE source_link.source_document_version_id IN (
         '19c0e199-dbaf-55bb-b0a0-f66a5fe2dc06',
+    '2a3accae-e4de-5b9a-8b93-7124c4a43c69',
     'cda80c02-05ca-5dd9-bd32-efed2282e604',
     '34061cbd-0b49-5005-9f40-960fab0a07fd',
     '48bf8490-ccd5-58e0-a107-d5f420403a9d',
     '18a337a3-b153-5f59-9f4a-5b7a34aec6c4',
     'c2e9e879-bce6-550d-a450-2edbba833a2b',
     '904c18f9-bd6b-5194-bbac-ac1b4d99db57',
-    '2a3accae-e4de-5b9a-8b93-7124c4a43c69',
     '74f990c5-6ff7-51ae-b52e-feb27f85dbb6',
     'd64c529c-c116-5fde-aa18-13f612d83177',
     '9c80d01d-fcb5-53c5-b3e4-15475d616bcb',
@@ -101,6 +101,14 @@ AND NOT EXISTS (
     JOIN agent.citations AS citation
       ON citation.chunk_id = chunk.id
     WHERE version.document_id = document.id
+)
+-- 관심 키워드 근거(INT-011)가 문서를 참조하면 남긴다. Citation과 같은 이유로,
+-- Seed 재적용이 이미 만들어진 결과를 끊어 버리면 안 된다. 이 가드가 없으면
+-- 관심사를 한 번이라도 계산한 DB에서 Seed가 외래키 위반으로 실패한다.
+AND NOT EXISTS (
+    SELECT 1
+    FROM agent.interest_evidence AS evidence
+    WHERE evidence.document_id = document.id
 );
 
 DELETE FROM agent.user_interest_profiles
@@ -155,6 +163,18 @@ INSERT INTO agent.agent_jobs (
         $seed_37d48ed3faaf${"content_format":"markdown","seed":true,"source_document_id":"d931d233-ab2c-5db9-bed4-62d3bc9b2eda","source_document_version_id":"19c0e199-dbaf-55bb-b0a0-f66a5fe2dc06","source_event_id":"dummy-clipping-15500a59e7991fdc","source_event_row_id":"bb1bece7-496d-54e2-978b-d93b5d7a1f83"}$seed_37d48ed3faaf$::jsonb,
         true,
         '2026-07-15T00:00:00Z'::timestamptz
+    ),
+    (
+        'aebc6368-807f-523b-a38d-b52ae12192e3',
+        'SVC-002',
+        'personal_wiki_build',
+        'mock-clipping-user',
+        $seed_0561f66919db$dummy-clipping-b8e4b739e6b4909e$seed_0561f66919db$,
+        'queued',
+        0,
+        $seed_f9d0712a44c6${"content_format":"markdown","seed":true,"source_document_id":"639fd91e-b8fa-5942-85bb-b8a019c9d119","source_document_version_id":"2a3accae-e4de-5b9a-8b93-7124c4a43c69","source_event_id":"dummy-clipping-b8e4b739e6b4909e","source_event_row_id":"aacc66c8-bd08-538c-92dd-ed48cf4ccc50"}$seed_f9d0712a44c6$::jsonb,
+        true,
+        '2026-07-14T00:00:00Z'::timestamptz
     ),
     (
         '2a30aed2-a7bf-5e99-872d-00a0db75deee',
@@ -227,18 +247,6 @@ INSERT INTO agent.agent_jobs (
         $seed_f36a4fbf95c0${"content_format":"markdown","seed":true,"source_document_id":"ab13f7cb-6ba9-564c-b34a-d1fceb12705f","source_document_version_id":"904c18f9-bd6b-5194-bbac-ac1b4d99db57","source_event_id":"dummy-clipping-11217e97399022d9","source_event_row_id":"c54ea45c-c83a-55b1-93c3-1c33e2088a04"}$seed_f36a4fbf95c0$::jsonb,
         true,
         '2026-07-15T00:00:00Z'::timestamptz
-    ),
-    (
-        'aebc6368-807f-523b-a38d-b52ae12192e3',
-        'SVC-002',
-        'personal_wiki_build',
-        'mock-clipping-user',
-        $seed_0561f66919db$dummy-clipping-b8e4b739e6b4909e$seed_0561f66919db$,
-        'queued',
-        0,
-        $seed_f9d0712a44c6${"content_format":"markdown","seed":true,"source_document_id":"639fd91e-b8fa-5942-85bb-b8a019c9d119","source_document_version_id":"2a3accae-e4de-5b9a-8b93-7124c4a43c69","source_event_id":"dummy-clipping-b8e4b739e6b4909e","source_event_row_id":"aacc66c8-bd08-538c-92dd-ed48cf4ccc50"}$seed_f9d0712a44c6$::jsonb,
-        true,
-        '2026-07-14T00:00:00Z'::timestamptz
     ),
     (
         '635b290b-e40d-5efa-996e-706b6bec54ab',
@@ -425,6 +433,17 @@ INSERT INTO agent.wiki_source_events (
         'received'
     ),
     (
+        'aacc66c8-bd08-538c-92dd-ed48cf4ccc50',
+        'mock-clipping-user',
+        $seed_0561f66919db$dummy-clipping-b8e4b739e6b4909e$seed_0561f66919db$,
+        'web_clipping',
+        'aebc6368-807f-523b-a38d-b52ae12192e3',
+        '2026-07-14T00:00:00Z'::timestamptz,
+        $seed_b8e4b739e6b4$https://github.com/langchain-ai/openwiki$seed_b8e4b739e6b4$,
+        $seed_52aca9d9021b${"seed":true,"source_document_id":"639fd91e-b8fa-5942-85bb-b8a019c9d119","source_document_version_id":"2a3accae-e4de-5b9a-8b93-7124c4a43c69","source_filename":"dummy/clippings/langchain-aiopenwiki OpenWiki is a CLI that writes and maintains agent documentation for your codebase..md"}$seed_52aca9d9021b$::jsonb,
+        'received'
+    ),
+    (
         '47c42f80-5a6b-5024-a8fd-63db68cb3b66',
         'mock-clipping-user',
         $seed_6a581e78638a$dummy-clipping-ea76873a77dbdc4a$seed_6a581e78638a$,
@@ -488,17 +507,6 @@ INSERT INTO agent.wiki_source_events (
         '2026-07-15T00:00:00Z'::timestamptz,
         $seed_11217e973990$https://ui.shadcn.com/$seed_11217e973990$,
         $seed_918a6ec01783${"seed":true,"source_document_id":"ab13f7cb-6ba9-564c-b34a-d1fceb12705f","source_document_version_id":"904c18f9-bd6b-5194-bbac-ac1b4d99db57","source_filename":"dummy/clippings/The Foundation for your Design System.md"}$seed_918a6ec01783$::jsonb,
-        'received'
-    ),
-    (
-        'aacc66c8-bd08-538c-92dd-ed48cf4ccc50',
-        'mock-clipping-user',
-        $seed_0561f66919db$dummy-clipping-b8e4b739e6b4909e$seed_0561f66919db$,
-        'web_clipping',
-        'aebc6368-807f-523b-a38d-b52ae12192e3',
-        '2026-07-14T00:00:00Z'::timestamptz,
-        $seed_b8e4b739e6b4$https://github.com/langchain-ai/openwiki$seed_b8e4b739e6b4$,
-        $seed_52aca9d9021b${"seed":true,"source_document_id":"639fd91e-b8fa-5942-85bb-b8a019c9d119","source_document_version_id":"2a3accae-e4de-5b9a-8b93-7124c4a43c69","source_filename":"dummy/clippings/langchain-aiopenwiki OpenWiki is a CLI that writes and maintains agent documentation for your codebase..md"}$seed_52aca9d9021b$::jsonb,
         'received'
     ),
     (
@@ -668,6 +676,17 @@ INSERT INTO agent.user_source_documents (
         $seed_55e54e0ccd81${"seed":true,"source_filename":"dummy/clippings/DDD 아키텍처의 의존성 도식.md"}$seed_55e54e0ccd81$::jsonb
     ),
     (
+        '639fd91e-b8fa-5942-85bb-b8a019c9d119',
+        'mock-clipping-user',
+        'user/mock-clipping-user',
+        'web_clipping',
+        $seed_b8e4b739e6b4$https://github.com/langchain-ai/openwiki$seed_b8e4b739e6b4$,
+        'active',
+        1,
+        '869909181cc3e93700f848a755b28c7c6b701e4a40ac274a127b00d8888b2f9e',
+        $seed_6958af094914${"seed":true,"source_filename":"dummy/clippings/langchain-aiopenwiki OpenWiki is a CLI that writes and maintains agent documentation for your codebase..md"}$seed_6958af094914$::jsonb
+    ),
+    (
         '838a6107-36c0-5c9c-a868-d69d35900f00',
         'mock-clipping-user',
         'user/mock-clipping-user',
@@ -732,17 +751,6 @@ INSERT INTO agent.user_source_documents (
         1,
         '69afac7bbbdf790da2f59037a945d492e4ce5f42de8c96500564c6759858f6f0',
         $seed_83c934574608${"seed":true,"source_filename":"dummy/clippings/The Foundation for your Design System.md"}$seed_83c934574608$::jsonb
-    ),
-    (
-        '639fd91e-b8fa-5942-85bb-b8a019c9d119',
-        'mock-clipping-user',
-        'user/mock-clipping-user',
-        'web_clipping',
-        $seed_b8e4b739e6b4$https://github.com/langchain-ai/openwiki$seed_b8e4b739e6b4$,
-        'active',
-        1,
-        '869909181cc3e93700f848a755b28c7c6b701e4a40ac274a127b00d8888b2f9e',
-        $seed_6958af094914${"seed":true,"source_filename":"dummy/clippings/langchain-aiopenwiki OpenWiki is a CLI that writes and maintains agent documentation for your codebase..md"}$seed_6958af094914$::jsonb
     ),
     (
         '40f5b175-c9a5-59d1-9717-46f0028fad92',
@@ -952,6 +960,236 @@ DDD에서 모듈 간 의존성은 **Application Layer** 에서 처리하는 것�
         '8c58b84d3954cc622cdad6aebaaf3cbb495365c141a0f869673f4813c0b8eb2b',
         NULL,
         $seed_4cb5d069ccc0${"frontmatter_format":"obsidian_web_clipper","seed":true,"source_filename":"dummy/clippings/DDD 아키텍처의 의존성 도식.md"}$seed_4cb5d069ccc0$::jsonb
+    ),
+    (
+        '2a3accae-e4de-5b9a-8b93-7124c4a43c69',
+        '639fd91e-b8fa-5942-85bb-b8a019c9d119',
+        'user/mock-clipping-user',
+        'aacc66c8-bd08-538c-92dd-ed48cf4ccc50',
+        1,
+        $seed_0ea8711eae38$langchain-ai/openwiki: OpenWiki is a CLI that writes and maintains agent documentation for your codebase.$seed_0ea8711eae38$,
+        NULL,
+        NULL,
+        '2026-07-14'::date,
+        $seed_acd7c07342a0$OpenWiki is a CLI that writes and maintains agent documentation for your codebase. - langchain-ai/openwiki$seed_acd7c07342a0$,
+        ARRAY[$seed_0a29fd363993$clippings$seed_0a29fd363993$]::text[],
+        $seed_869909181cc3$## 오픈위키
+
+OpenWiki는 코드베이스 또는 목적 기억을 위한 에이전트 위키를 작성하고 유지 관리하는 CLI 도구입니다. 에이전트에 특화되어 개발되었으며, 내장 커넥터 또는 Git 저장소를 통해 로컬 지식 소스를 가져와 로컬 위키로 통합할 수 있습니다.
+
+[![오픈위키](https://raw.githubusercontent.com/langchain-ai/openwiki/main/static/openwiki.png)](https://raw.githubusercontent.com/langchain-ai/openwiki/main/static/openwiki.png)
+
+## 설치하다
+
+```
+npm install -g openwiki
+```
+
+Windows에서는 OpenWiki를 Node.js 패키지 관리자(예: `npm` 또는 ) 를 사용하여 설치하는 것이 좋습니다 `pnpm`.
+
+```
+npm install -g openwiki
+# or
+pnpm add -g openwiki
+```
+
+`bun install -g openwiki` OpenWiki의 체크포인트 종속성 컴파일로 되돌아갈 수 있습니다 `better-sqlite3`. 이 방법을 사용하기 전에 Visual Studio 빌드 도구를 C++ 데스크톱 개발 워크로드와 함께 설치하십시오. Bun은 기본적으로 설치된 패키지의 수명 주기 스크립트를 실행하지 않으므로 해당 네이티브 종속성 빌드가 시작되기 전에 패키지 수준 경고를 표시할 수 없습니다.
+
+## 빠른 시작
+
+OpenWiki를 코드 모드로 초기화하고, 모델과 API 키를 구성한 다음, 문서를 생성하세요.
+
+```
+openwiki --init
+```
+
+오픈위키에는 두 가지 모드가 있습니다.
+
+- **개인 모드는** `~/.openwiki/wiki` 로컬 저장소, Gmail, Notion, 웹 검색, Hacker News, X/Twitter와 같은 구성된 소스에서 로컬 개인 두뇌 위키를 구축합니다.
+- **코드 모드는** `openwiki/` 현재 코드베이스에 대한 저장소 문서를 생성합니다.
+
+코드 모드에서 실행하세요. 로컬 개인 브레인 위키를 사용 `openwiki --init` 하려면 또는 를 사용 하세요.`openwiki --update` `openwiki personal --init` `openwiki personal --update`
+
+문서가 항상 최신 상태로 유지되도록 하려면 Git 공급자의 CI 워크플로를 추가하여 문서 업데이트와 함께 PR 또는 병합 요청이 자동으로 생성되도록 하세요.
+
+- GitHub Actions: [openwiki-update.yml](https://github.com/langchain-ai/openwiki/blob/main/examples/openwiki-update.yml) 파일을. 으로 복사합니다 `.github/workflows/openwiki-update.yml`.
+- GitLab CI: [openwiki-update.gitlab-ci.yml](https://github.com/langchain-ai/openwiki/blob/main/examples/openwiki-update.gitlab-ci.yml)`.gitlab-ci.yml` 파일을 GitLab 파이프라인 에 복사하거나 기존 파이프라인에 포함시키세요.
+- Bitbucket Pipelines: [openwiki-update.bitbucket-pipelines.yml](https://github.com/langchain-ai/openwiki/blob/main/examples/openwiki-update.bitbucket-pipelines.yml) 파일을 복사한 `bitbucket-pipelines.yml` 다음, `openwiki-update` 저장소 설정 > 파이프라인 > 일정에서 사용자 지정 파이프라인을 예약하세요.
+
+GitHub Actions에서 저장소 문서를 생성하려면 \`git add.git action\`을 사용하세요. CI 환경에서 `openwiki code --update --print` 실행할 필요는 없습니다. 워크플로에 필요한 공급자 및 모델 환경 변수가 제공되면 문서가 아직 존재하지 않는 경우 자동으로 초기 문서를 생성 합니다.`--init` `--update` `openwiki/`
+
+## 용법
+
+현재 저장소에 대해 코드 모드로 대화형 CLI를 시작합니다.
+
+```
+openwiki
+```
+
+OpenWiki를 처음 시작할 때 다음 요청을 입력하세요.
+
+```
+openwiki "Please generate documentation for this repository"
+```
+
+대신 대화형 로컬 개인 두뇌를 시작하세요:
+
+```
+openwiki personal
+```
+
+명령어 하나만 실행하고 종료하세요:
+
+```
+openwiki -p "Summarize what you can do"
+```
+
+OpenWiki 초기화:
+
+```
+openwiki --init
+```
+
+로컬 개인 두뇌 위키를 초기화합니다:
+
+```
+openwiki personal --init
+```
+
+저장소 코드 문서 업데이트:
+
+```
+openwiki --update
+```
+
+로컬 개인 두뇌 위키를 업데이트하세요:
+
+```
+openwiki personal --update
+```
+
+먼저 구성된 로컬 커넥터를 가져올 수 있는 업데이트를 실행하십시오.
+
+```
+openwiki personal --update "Refresh the wiki from configured connectors"
+```
+
+도움말 보기:
+
+```
+openwiki --help
+```
+
+채팅에서 다음 명령어를 사용하여 `/api-key` 현재 공급자 API 키를 업데이트하고 `/langsmith-key` LangSmith 추적 자격 증명을 업데이트하거나 삭제할 수 있습니다. 두 명령어 모두 마스크된 프롬프트를 사용합니다.
+
+커넥터 제공업체를 인증합니다.
+
+```
+openwiki auth slack
+openwiki auth gmail
+openwiki auth x
+openwiki auth notion
+```
+
+Slack OAuth용 ngrok 터널을 시작하세요:
+
+```
+openwiki ngrok start
+```
+
+이 명령은 임의의 HTTPS 포워딩 URL로 ngrok을 시작합니다. OpenWiki는 ngrok의 로컬 검사 API를 읽고, URL에 를 추가한 후 자동으로 `/callback` 저장합니다 `OPENWIKI_HTTPS_OAUTH_REDIRECT_URI`. 출력된 콜백 URL을 Slack에 등록하세요. 고정된 ngrok 도메인을 사용하는 경우, 를 실행하세요 `openwiki ngrok start https://<your-ngrok-domain>`. X/Twitter 및 Gmail 인증은 해당 HTTPS 재정의를 무시하고 로컬 루프백 콜백을 계속 사용합니다 `http://127.0.0.1:53682/callback`.
+
+Bare는 `openwiki` 현재 저장소에 대해 코드 모드로 실행됩니다. `openwiki/` 위키가 존재하지 않는 경우 초기 저장소 문서를 생성합니다. `openwiki personal` 로컬 범용 위키에는 를 사용하십시오 `~/.openwiki/wiki/`. 기본적으로 CLI는 실행 후 계속 열려 있으므로 후속 메시지를 보낼 수 있습니다. 최종 어시스턴트 출력을 인쇄하는 일회성 비대화형 실행에는 `-p` 또는 를 사용하십시오.`--print`
+
+기본 코드 모드로 실행하고 저장소 문서를 기반으로 작업합니다. 위치 모드를 사용 `openwiki --init` 하거나 로컬 개인 브레인 위키를 초기화 또는 업데이트할 수 있습니다.`openwiki --update` `personal` `--mode personal`
+
+On each `code` run, `openwiki` maintains both an `AGENTS.md` and a `CLAUDE.md` at the repository root, adding prompting that instructs your coding agent to reference the wiki when searching for context. Each file is created if it does not already exist. If a file is present, OpenWiki only rewrites its own `<!-- OPENWIKI:START -->…<!-- OPENWIKI:END -->` block and leaves the rest of your content untouched (appending the block the first time). The scheduled GitHub Actions workflow includes these files, along with the workflow itself, in the documentation pull request.
+
+On the first interactive run, OpenWiki will have you configure your inference provider, API key, and LLM. You will also be able to set a LangSmith API key to trace your OpenWiki runs to a LangSmith tracing project named "openwiki" (optional).
+
+These configuration options and secrets will be saved to `~/.openwiki/.env` on your local machine.
+
+## Local Connectors
+
+OpenWiki's first-run onboarding offers connector setup for local Git repositories, Notion, Gmail, X/Twitter, Web Search, and Hacker News. During an ingestion run, deterministic connector tools write raw data and manifests under `~/.openwiki/connectors/<connector>/raw/`, then source-specific agent runs synthesize the local wiki under `~/.openwiki/wiki/` from those local files.
+
+You can configure the same connector more than once. For example, add one Web Search source for AI research and another for NBA news; OpenWiki stores them as separate source instances such as `web-search-1` and `web-search-2`. Run all instances with `openwiki ingest all`, all instances for one connector with `openwiki ingest web-search`, or one instance with `openwiki ingest web-search-2`.
+
+- `git-repo` reads configured local repository paths and writes compact manifests.
+- `x` uses the X API directly with OAuth user-context credentials for home timeline, user posts, mentions, bookmarks, and list posts.
+- `notion` targets the hosted Notion MCP server, so users should authenticate through Notion OAuth instead of pasting a Notion token into OpenWiki.
+- `google` uses the Gmail API directly with OAuth user credentials to fetch recent mail, with room to add Drive, Calendar, and other Google providers later.
+- `web-search` uses Tavily through LangChain and requires `TAVILY_API_KEY`.
+- `hackernews` uses public Hacker News feed and search APIs, with no credentials required.
+
+Connector secrets are referenced by env var name and stored in `~/.openwiki/.env`; connector config files should never contain raw secret values.
+
+`openwiki auth <provider>` runs a local browser OAuth flow, saves returned tokens into `~/.openwiki/.env`, creates connector config when possible, and discovers MCP tools for MCP-backed providers. Slack and Gmail require app client credentials to already be set in that file; Notion uses dynamic client registration for hosted MCP; X uses OAuth 2.0 with PKCE. After `openwiki auth gmail`, the Google connector can ingest Gmail directly with no MCP transport setup.
+
+`openwiki auth configure <provider>` and `openwiki auth tools <provider>` are advanced/retry commands for regenerating connector config or inspecting live MCP tools.
+
+First-run onboarding also lets users choose a wiki template, customize its scope, and save per-source ingestion notes and source schedules in `~/.openwiki/onboarding.json`. The global personal wiki instructions are saved in `~/.openwiki/INSTRUCTIONS.md`. On macOS, source schedules are installed as user LaunchAgents under `~/Library/LaunchAgents/` and write logs under `~/.openwiki/logs/`.
+
+See the OpenWiki operations docs for credential storage and provider setup notes.
+
+## Customizing
+
+OpenWiki supports OpenAI (with an API key or a ChatGPT login), OpenRouter, Fireworks, Baseten, NVIDIA NIM, an OpenAI-compatible provider, and Anthropic out of the box. The onboarding default is OpenAI with `gpt-5.6-terra`, and each inference provider also includes pre-defined model options plus support for custom model IDs.
+
+### Alternative base URLs
+
+To route the Anthropic provider at an alternative, Anthropic-compatible endpoint (for example a self-hosted or proxied gateway) instead of the default API, set `ANTHROPIC_BASE_URL` alongside `ANTHROPIC_API_KEY`:
+
+```
+OPENWIKI_PROVIDER=anthropic
+ANTHROPIC_API_KEY=your-key
+ANTHROPIC_BASE_URL=https://your-gateway.example.com/anthropic
+```
+
+### OpenAI-compatible endpoints
+
+The `openai-compatible` provider targets any OpenAI-compatible chat-completions endpoint via a required base URL. This can be used for OpenAI-compatible LLM endpoints like those exposed by a LiteLLM gateway when it is used as a gateway — letting you reach whatever upstream providers the gateway fronts through a single OpenAI-shaped API. Set the model ID to whatever name the gateway exposes:
+
+```
+OPENWIKI_PROVIDER=openai-compatible
+OPENAI_COMPATIBLE_API_KEY=your-gateway-key
+OPENAI_COMPATIBLE_BASE_URL=https://your-gateway.example.com/v1
+OPENWIKI_MODEL_ID=your-gateway-model-name
+```
+
+The `openai-chatgpt` provider calls OpenAI's Codex backend using your ChatGPT subscription instead of a metered API key. Model usage draws on your ChatGPT Plus/Pro/Team plan's included Codex usage rather than per-token API billing. It serves the same model list as the `openai` provider.
+
+Instead of pasting an API key, run the setup wizard and complete a browser login:
+
+```
+OPENWIKI_PROVIDER=openai-chatgpt openwiki code --init
+# or
+OPENWIKI_PROVIDER=openai-chatgpt openwiki personal --init
+```
+
+The wizard opens `https://auth.openai.com` in your browser (and also prints the URL for headless/SSH use, where you can open it on another machine — or paste the redirect URL back into the terminal to finish without a callback). After you sign in with your ChatGPT account, OpenWiki captures the OAuth callback, shows the signed-in email and plan, and then continues to model and LangSmith selection just like the other providers. It stores the resulting access token, refresh token, expiry, account id, email, and plan in `~/.openwiki/.env` (`OPENAI_CHATGPT_ACCESS_TOKEN`, `OPENAI_CHATGPT_REFRESH_TOKEN`, `OPENAI_CHATGPT_EXPIRES_AT`, `OPENAI_CHATGPT_ACCOUNT_ID`, `OPENAI_CHATGPT_EMAIL`, `OPENAI_CHATGPT_PLAN`). These are managed for you — the access token is refreshed automatically when it expires, so you normally never edit them by hand. Treat the refresh token like a password.
+
+Base URLs (and all credentials) can be set in your environment or stored in `~/.openwiki/.env`.
+
+### Provider retry attempts
+
+OpenWiki uses LangChain's built-in retry handling for transient provider errors. To override the number of retries after the first provider request, set `OPENWIKI_PROVIDER_RETRY_ATTEMPTS`:
+
+```
+OPENWIKI_PROVIDER_RETRY_ATTEMPTS=3
+```
+
+The value must be a positive integer. If the value is unset, OpenWiki defaults to 3 retries.
+
+추가되었으면 하는 추론 제공자 또는 모델이 있다면 PR을 열어주세요!
+
+## 기여하기
+
+기여를 환영합니다! PR을 열기 전에 [CONTRIBUTING.md](https://github.com/langchain-ai/openwiki/blob/main/CONTRIBUTING.md) 파일을 꼭 읽어주세요. 저희는 PR의 범위를 하나의 변경 사항으로 엄격하게 제한하고 있으며, 관련 없는 변경 사항을 묶어 제출하는 PR은 분할 요청과 함께 닫힐 수 있습니다.$seed_869909181cc3$,
+        'markdown',
+        '869909181cc3e93700f848a755b28c7c6b701e4a40ac274a127b00d8888b2f9e',
+        NULL,
+        $seed_3d17e0a05463${"frontmatter_format":"obsidian_web_clipper","seed":true,"source_filename":"dummy/clippings/langchain-aiopenwiki OpenWiki is a CLI that writes and maintains agent documentation for your codebase..md"}$seed_3d17e0a05463$::jsonb
     ),
     (
         'cda80c02-05ca-5dd9-bd32-efed2282e604',
@@ -1458,236 +1696,6 @@ Demo is read only. Press send to send messages.$seed_69afac7bbbdf$,
         '69afac7bbbdf790da2f59037a945d492e4ce5f42de8c96500564c6759858f6f0',
         NULL,
         $seed_5166fe1448eb${"frontmatter_format":"obsidian_web_clipper","seed":true,"source_filename":"dummy/clippings/The Foundation for your Design System.md"}$seed_5166fe1448eb$::jsonb
-    ),
-    (
-        '2a3accae-e4de-5b9a-8b93-7124c4a43c69',
-        '639fd91e-b8fa-5942-85bb-b8a019c9d119',
-        'user/mock-clipping-user',
-        'aacc66c8-bd08-538c-92dd-ed48cf4ccc50',
-        1,
-        $seed_0ea8711eae38$langchain-ai/openwiki: OpenWiki is a CLI that writes and maintains agent documentation for your codebase.$seed_0ea8711eae38$,
-        NULL,
-        NULL,
-        '2026-07-14'::date,
-        $seed_acd7c07342a0$OpenWiki is a CLI that writes and maintains agent documentation for your codebase. - langchain-ai/openwiki$seed_acd7c07342a0$,
-        ARRAY[$seed_0a29fd363993$clippings$seed_0a29fd363993$]::text[],
-        $seed_869909181cc3$## 오픈위키
-
-OpenWiki는 코드베이스 또는 목적 기억을 위한 에이전트 위키를 작성하고 유지 관리하는 CLI 도구입니다. 에이전트에 특화되어 개발되었으며, 내장 커넥터 또는 Git 저장소를 통해 로컬 지식 소스를 가져와 로컬 위키로 통합할 수 있습니다.
-
-[![오픈위키](https://raw.githubusercontent.com/langchain-ai/openwiki/main/static/openwiki.png)](https://raw.githubusercontent.com/langchain-ai/openwiki/main/static/openwiki.png)
-
-## 설치하다
-
-```
-npm install -g openwiki
-```
-
-Windows에서는 OpenWiki를 Node.js 패키지 관리자(예: `npm` 또는 ) 를 사용하여 설치하는 것이 좋습니다 `pnpm`.
-
-```
-npm install -g openwiki
-# or
-pnpm add -g openwiki
-```
-
-`bun install -g openwiki` OpenWiki의 체크포인트 종속성 컴파일로 되돌아갈 수 있습니다 `better-sqlite3`. 이 방법을 사용하기 전에 Visual Studio 빌드 도구를 C++ 데스크톱 개발 워크로드와 함께 설치하십시오. Bun은 기본적으로 설치된 패키지의 수명 주기 스크립트를 실행하지 않으므로 해당 네이티브 종속성 빌드가 시작되기 전에 패키지 수준 경고를 표시할 수 없습니다.
-
-## 빠른 시작
-
-OpenWiki를 코드 모드로 초기화하고, 모델과 API 키를 구성한 다음, 문서를 생성하세요.
-
-```
-openwiki --init
-```
-
-오픈위키에는 두 가지 모드가 있습니다.
-
-- **개인 모드는** `~/.openwiki/wiki` 로컬 저장소, Gmail, Notion, 웹 검색, Hacker News, X/Twitter와 같은 구성된 소스에서 로컬 개인 두뇌 위키를 구축합니다.
-- **코드 모드는** `openwiki/` 현재 코드베이스에 대한 저장소 문서를 생성합니다.
-
-코드 모드에서 실행하세요. 로컬 개인 브레인 위키를 사용 `openwiki --init` 하려면 또는 를 사용 하세요.`openwiki --update` `openwiki personal --init` `openwiki personal --update`
-
-문서가 항상 최신 상태로 유지되도록 하려면 Git 공급자의 CI 워크플로를 추가하여 문서 업데이트와 함께 PR 또는 병합 요청이 자동으로 생성되도록 하세요.
-
-- GitHub Actions: [openwiki-update.yml](https://github.com/langchain-ai/openwiki/blob/main/examples/openwiki-update.yml) 파일을. 으로 복사합니다 `.github/workflows/openwiki-update.yml`.
-- GitLab CI: [openwiki-update.gitlab-ci.yml](https://github.com/langchain-ai/openwiki/blob/main/examples/openwiki-update.gitlab-ci.yml)`.gitlab-ci.yml` 파일을 GitLab 파이프라인 에 복사하거나 기존 파이프라인에 포함시키세요.
-- Bitbucket Pipelines: [openwiki-update.bitbucket-pipelines.yml](https://github.com/langchain-ai/openwiki/blob/main/examples/openwiki-update.bitbucket-pipelines.yml) 파일을 복사한 `bitbucket-pipelines.yml` 다음, `openwiki-update` 저장소 설정 > 파이프라인 > 일정에서 사용자 지정 파이프라인을 예약하세요.
-
-GitHub Actions에서 저장소 문서를 생성하려면 \`git add.git action\`을 사용하세요. CI 환경에서 `openwiki code --update --print` 실행할 필요는 없습니다. 워크플로에 필요한 공급자 및 모델 환경 변수가 제공되면 문서가 아직 존재하지 않는 경우 자동으로 초기 문서를 생성 합니다.`--init` `--update` `openwiki/`
-
-## 용법
-
-현재 저장소에 대해 코드 모드로 대화형 CLI를 시작합니다.
-
-```
-openwiki
-```
-
-OpenWiki를 처음 시작할 때 다음 요청을 입력하세요.
-
-```
-openwiki "Please generate documentation for this repository"
-```
-
-대신 대화형 로컬 개인 두뇌를 시작하세요:
-
-```
-openwiki personal
-```
-
-명령어 하나만 실행하고 종료하세요:
-
-```
-openwiki -p "Summarize what you can do"
-```
-
-OpenWiki 초기화:
-
-```
-openwiki --init
-```
-
-로컬 개인 두뇌 위키를 초기화합니다:
-
-```
-openwiki personal --init
-```
-
-저장소 코드 문서 업데이트:
-
-```
-openwiki --update
-```
-
-로컬 개인 두뇌 위키를 업데이트하세요:
-
-```
-openwiki personal --update
-```
-
-먼저 구성된 로컬 커넥터를 가져올 수 있는 업데이트를 실행하십시오.
-
-```
-openwiki personal --update "Refresh the wiki from configured connectors"
-```
-
-도움말 보기:
-
-```
-openwiki --help
-```
-
-채팅에서 다음 명령어를 사용하여 `/api-key` 현재 공급자 API 키를 업데이트하고 `/langsmith-key` LangSmith 추적 자격 증명을 업데이트하거나 삭제할 수 있습니다. 두 명령어 모두 마스크된 프롬프트를 사용합니다.
-
-커넥터 제공업체를 인증합니다.
-
-```
-openwiki auth slack
-openwiki auth gmail
-openwiki auth x
-openwiki auth notion
-```
-
-Slack OAuth용 ngrok 터널을 시작하세요:
-
-```
-openwiki ngrok start
-```
-
-이 명령은 임의의 HTTPS 포워딩 URL로 ngrok을 시작합니다. OpenWiki는 ngrok의 로컬 검사 API를 읽고, URL에 를 추가한 후 자동으로 `/callback` 저장합니다 `OPENWIKI_HTTPS_OAUTH_REDIRECT_URI`. 출력된 콜백 URL을 Slack에 등록하세요. 고정된 ngrok 도메인을 사용하는 경우, 를 실행하세요 `openwiki ngrok start https://<your-ngrok-domain>`. X/Twitter 및 Gmail 인증은 해당 HTTPS 재정의를 무시하고 로컬 루프백 콜백을 계속 사용합니다 `http://127.0.0.1:53682/callback`.
-
-Bare는 `openwiki` 현재 저장소에 대해 코드 모드로 실행됩니다. `openwiki/` 위키가 존재하지 않는 경우 초기 저장소 문서를 생성합니다. `openwiki personal` 로컬 범용 위키에는 를 사용하십시오 `~/.openwiki/wiki/`. 기본적으로 CLI는 실행 후 계속 열려 있으므로 후속 메시지를 보낼 수 있습니다. 최종 어시스턴트 출력을 인쇄하는 일회성 비대화형 실행에는 `-p` 또는 를 사용하십시오.`--print`
-
-기본 코드 모드로 실행하고 저장소 문서를 기반으로 작업합니다. 위치 모드를 사용 `openwiki --init` 하거나 로컬 개인 브레인 위키를 초기화 또는 업데이트할 수 있습니다.`openwiki --update` `personal` `--mode personal`
-
-On each `code` run, `openwiki` maintains both an `AGENTS.md` and a `CLAUDE.md` at the repository root, adding prompting that instructs your coding agent to reference the wiki when searching for context. Each file is created if it does not already exist. If a file is present, OpenWiki only rewrites its own `<!-- OPENWIKI:START -->…<!-- OPENWIKI:END -->` block and leaves the rest of your content untouched (appending the block the first time). The scheduled GitHub Actions workflow includes these files, along with the workflow itself, in the documentation pull request.
-
-On the first interactive run, OpenWiki will have you configure your inference provider, API key, and LLM. You will also be able to set a LangSmith API key to trace your OpenWiki runs to a LangSmith tracing project named "openwiki" (optional).
-
-These configuration options and secrets will be saved to `~/.openwiki/.env` on your local machine.
-
-## Local Connectors
-
-OpenWiki's first-run onboarding offers connector setup for local Git repositories, Notion, Gmail, X/Twitter, Web Search, and Hacker News. During an ingestion run, deterministic connector tools write raw data and manifests under `~/.openwiki/connectors/<connector>/raw/`, then source-specific agent runs synthesize the local wiki under `~/.openwiki/wiki/` from those local files.
-
-You can configure the same connector more than once. For example, add one Web Search source for AI research and another for NBA news; OpenWiki stores them as separate source instances such as `web-search-1` and `web-search-2`. Run all instances with `openwiki ingest all`, all instances for one connector with `openwiki ingest web-search`, or one instance with `openwiki ingest web-search-2`.
-
-- `git-repo` reads configured local repository paths and writes compact manifests.
-- `x` uses the X API directly with OAuth user-context credentials for home timeline, user posts, mentions, bookmarks, and list posts.
-- `notion` targets the hosted Notion MCP server, so users should authenticate through Notion OAuth instead of pasting a Notion token into OpenWiki.
-- `google` uses the Gmail API directly with OAuth user credentials to fetch recent mail, with room to add Drive, Calendar, and other Google providers later.
-- `web-search` uses Tavily through LangChain and requires `TAVILY_API_KEY`.
-- `hackernews` uses public Hacker News feed and search APIs, with no credentials required.
-
-Connector secrets are referenced by env var name and stored in `~/.openwiki/.env`; connector config files should never contain raw secret values.
-
-`openwiki auth <provider>` runs a local browser OAuth flow, saves returned tokens into `~/.openwiki/.env`, creates connector config when possible, and discovers MCP tools for MCP-backed providers. Slack and Gmail require app client credentials to already be set in that file; Notion uses dynamic client registration for hosted MCP; X uses OAuth 2.0 with PKCE. After `openwiki auth gmail`, the Google connector can ingest Gmail directly with no MCP transport setup.
-
-`openwiki auth configure <provider>` and `openwiki auth tools <provider>` are advanced/retry commands for regenerating connector config or inspecting live MCP tools.
-
-First-run onboarding also lets users choose a wiki template, customize its scope, and save per-source ingestion notes and source schedules in `~/.openwiki/onboarding.json`. The global personal wiki instructions are saved in `~/.openwiki/INSTRUCTIONS.md`. On macOS, source schedules are installed as user LaunchAgents under `~/Library/LaunchAgents/` and write logs under `~/.openwiki/logs/`.
-
-See the OpenWiki operations docs for credential storage and provider setup notes.
-
-## Customizing
-
-OpenWiki supports OpenAI (with an API key or a ChatGPT login), OpenRouter, Fireworks, Baseten, NVIDIA NIM, an OpenAI-compatible provider, and Anthropic out of the box. The onboarding default is OpenAI with `gpt-5.6-terra`, and each inference provider also includes pre-defined model options plus support for custom model IDs.
-
-### Alternative base URLs
-
-To route the Anthropic provider at an alternative, Anthropic-compatible endpoint (for example a self-hosted or proxied gateway) instead of the default API, set `ANTHROPIC_BASE_URL` alongside `ANTHROPIC_API_KEY`:
-
-```
-OPENWIKI_PROVIDER=anthropic
-ANTHROPIC_API_KEY=your-key
-ANTHROPIC_BASE_URL=https://your-gateway.example.com/anthropic
-```
-
-### OpenAI-compatible endpoints
-
-The `openai-compatible` provider targets any OpenAI-compatible chat-completions endpoint via a required base URL. This can be used for OpenAI-compatible LLM endpoints like those exposed by a LiteLLM gateway when it is used as a gateway — letting you reach whatever upstream providers the gateway fronts through a single OpenAI-shaped API. Set the model ID to whatever name the gateway exposes:
-
-```
-OPENWIKI_PROVIDER=openai-compatible
-OPENAI_COMPATIBLE_API_KEY=your-gateway-key
-OPENAI_COMPATIBLE_BASE_URL=https://your-gateway.example.com/v1
-OPENWIKI_MODEL_ID=your-gateway-model-name
-```
-
-The `openai-chatgpt` provider calls OpenAI's Codex backend using your ChatGPT subscription instead of a metered API key. Model usage draws on your ChatGPT Plus/Pro/Team plan's included Codex usage rather than per-token API billing. It serves the same model list as the `openai` provider.
-
-Instead of pasting an API key, run the setup wizard and complete a browser login:
-
-```
-OPENWIKI_PROVIDER=openai-chatgpt openwiki code --init
-# or
-OPENWIKI_PROVIDER=openai-chatgpt openwiki personal --init
-```
-
-The wizard opens `https://auth.openai.com` in your browser (and also prints the URL for headless/SSH use, where you can open it on another machine — or paste the redirect URL back into the terminal to finish without a callback). After you sign in with your ChatGPT account, OpenWiki captures the OAuth callback, shows the signed-in email and plan, and then continues to model and LangSmith selection just like the other providers. It stores the resulting access token, refresh token, expiry, account id, email, and plan in `~/.openwiki/.env` (`OPENAI_CHATGPT_ACCESS_TOKEN`, `OPENAI_CHATGPT_REFRESH_TOKEN`, `OPENAI_CHATGPT_EXPIRES_AT`, `OPENAI_CHATGPT_ACCOUNT_ID`, `OPENAI_CHATGPT_EMAIL`, `OPENAI_CHATGPT_PLAN`). These are managed for you — the access token is refreshed automatically when it expires, so you normally never edit them by hand. Treat the refresh token like a password.
-
-Base URLs (and all credentials) can be set in your environment or stored in `~/.openwiki/.env`.
-
-### Provider retry attempts
-
-OpenWiki uses LangChain's built-in retry handling for transient provider errors. To override the number of retries after the first provider request, set `OPENWIKI_PROVIDER_RETRY_ATTEMPTS`:
-
-```
-OPENWIKI_PROVIDER_RETRY_ATTEMPTS=3
-```
-
-The value must be a positive integer. If the value is unset, OpenWiki defaults to 3 retries.
-
-추가되었으면 하는 추론 제공자 또는 모델이 있다면 PR을 열어주세요!
-
-## 기여하기
-
-기여를 환영합니다! PR을 열기 전에 [CONTRIBUTING.md](https://github.com/langchain-ai/openwiki/blob/main/CONTRIBUTING.md) 파일을 꼭 읽어주세요. 저희는 PR의 범위를 하나의 변경 사항으로 엄격하게 제한하고 있으며, 관련 없는 변경 사항을 묶어 제출하는 PR은 분할 요청과 함께 닫힐 수 있습니다.$seed_869909181cc3$,
-        'markdown',
-        '869909181cc3e93700f848a755b28c7c6b701e4a40ac274a127b00d8888b2f9e',
-        NULL,
-        $seed_3d17e0a05463${"frontmatter_format":"obsidian_web_clipper","seed":true,"source_filename":"dummy/clippings/langchain-aiopenwiki OpenWiki is a CLI that writes and maintains agent documentation for your codebase..md"}$seed_3d17e0a05463$::jsonb
     ),
     (
         '74f990c5-6ff7-51ae-b52e-feb27f85dbb6',

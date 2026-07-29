@@ -104,6 +104,11 @@ async def _run_batch_once(
             if settings.naver_client_secret
             else None
         )
+        news_api_key = (
+            settings.news_api_key.get_secret_value()
+            if settings.news_api_key
+            else None
+        )
         return await worker_001(
             database_url=settings.agent_database_url,
             keywords=keywords,
@@ -113,6 +118,7 @@ async def _run_batch_once(
             naver_client_id=settings.naver_client_id,
             naver_client_secret=naver_secret,
             gdelt_base_url=settings.gdelt_base_url,
+            news_api_key=news_api_key,
         )
     if args.worker == "global-content":
         return await run_global_content_fetch_batch(
@@ -195,8 +201,28 @@ async def _run() -> None:
     )
 
 
+def configure_output_encoding() -> None:
+    """콘솔 인코딩과 무관하게 결과 출력이 실패하지 않도록 UTF-8로 맞춘다.
+
+    Windows 기본 콘솔은 cp949라 이모지가 섞인 제목(YouTube 영상 등)을 출력할 때
+    UnicodeEncodeError로 프로세스가 종료된다. 수집·저장은 이미 끝난 뒤에 나는
+    오류라 데이터는 남지만 종료 코드가 1이 되어 실패한 실행처럼 보인다.
+
+    인코딩을 바꿀 수 없는 스트림(리다이렉트된 바이너리 등)은 그대로 둔다.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (OSError, ValueError):
+            continue
+
+
 def main() -> None:
     """선택한 Agent Worker를 실행하고 JSON 결과를 표준 출력한다."""
+    configure_output_encoding()
     # psycopg async 모드는 Windows 기본 ProactorEventLoop를 지원하지 않는다.
     loop_factory = (
         (lambda: asyncio.SelectorEventLoop(selectors.SelectSelector()))

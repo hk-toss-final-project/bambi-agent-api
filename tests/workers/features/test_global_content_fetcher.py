@@ -146,3 +146,144 @@ def test_content_fetch_returns_empty_when_no_pending(
     )
 
     assert results == []
+
+
+def test_youtube_document_uses_transcript_as_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """YouTube 문서는 Jina 대신 자막을 본문으로 저장하는지 검증한다."""
+    connection = _FakeConnection(
+        [
+            [],  # set_system_job_scope (claim)
+            [
+                {
+                    "id": "y1",
+                    "canonical_url": "https://www.youtube.com/watch?v=abc12345678",
+                    "provider": "youtube",
+                }
+            ],  # claim
+            [],  # set_system_job_scope (저장)
+            [{"id": "y1"}],  # UPDATE 캐시 문서 → fetched
+        ]
+    )
+    _patch_connection(monkeypatch, connection)
+
+    def fail_jina(url: str) -> JinaReadResult:
+        """YouTube 문서에는 Jina를 쓰지 않아야 한다."""
+        raise AssertionError("YouTube 문서에 Jina Reader를 호출했습니다.")
+
+    results = asyncio.run(
+        fetcher.run_global_content_fetch_batch(
+            database_url="postgresql://fake",
+            limit=5,
+            url_fetcher=fail_jina,
+            # 최소 자막 길이 게이트를 넘도록 본문 분량을 충분히 준다.
+            transcript_fetcher=lambda video_id: f"{video_id} 자막 본문 " * 100,
+        )
+    )
+
+    assert results[0]["status"] == "completed"
+    assert results[0]["content_status"] == "fetched"
+    # 자막 저장은 제목을 주지 않으므로, 수집 때 저장한 영상 제목이 지워지면 안 된다.
+    saved_sql = next(
+        sql
+        for sql in connection.executed
+        if "UPDATE agent.global_source_documents" in sql and "fetched" in sql
+    )
+    assert "COALESCE(%s, title)" in saved_sql
+
+
+def test_youtube_document_without_transcript_is_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """자막이 없는 영상은 빈 본문을 저장하지 않고 실패로 남기는지 검증한다."""
+    connection = _FakeConnection(
+        [
+            [],  # set_system_job_scope (claim)
+            [
+                {
+                    "id": "y2",
+                    "canonical_url": "https://www.youtube.com/watch?v=abc12345678",
+                    "provider": "youtube",
+                }
+            ],  # claim
+            [],  # set_system_job_scope (실패 표시)
+            [],  # mark_failed UPDATE
+        ]
+    )
+    _patch_connection(monkeypatch, connection)
+
+    results = asyncio.run(
+        fetcher.run_global_content_fetch_batch(
+            database_url="postgresql://fake",
+            limit=5,
+            url_fetcher=lambda _: JinaReadResult(
+                requested_url="",
+                resolved_url="",
+                title="",
+                published_time=None,
+                markdown="x",
+            ),
+            transcript_fetcher=lambda _: None,
+        )
+    )
+
+    assert results[0]["status"] == "failed"
+    assert results[0]["error_code"] == "YOUTUBE_NO_TRANSCRIPT"
+
+
+def test_youtube_document_with_too_short_transcript_is_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """자막이 최소 길이에 못 미치면 본문으로 저장하지 않고 실패로 남긴다.
+
+    영상 길이가 아니라 자막 길이로 판정한다 — 우리는 영상을 자막으로만 읽으므로
+    "읽을 게 있는가"가 실제 기준이다.
+    """
+    connection = _FakeConnection(
+        [
+            [],  # set_system_job_scope (claim)
+            [
+                {
+                    "id": "y3",
+                    "canonical_url": "https://www.youtube.com/watch?v=abc12345678",
+                    "provider": "youtube",
+                }
+            ],  # claim
+            [],  # set_system_job_scope (실패 표시)
+            [],  # mark_failed UPDATE
+        ]
+    )
+    _patch_connection(monkeypatch, connection)
+
+    results = asyncio.run(
+        fetcher.run_global_content_fetch_batch(
+            database_url="postgresql://fake",
+            limit=5,
+            url_fetcher=lambda _: JinaReadResult(
+                requested_url="",
+                resolved_url="",
+                title="",
+                published_time=None,
+                markdown="x",
+            ),
+            transcript_fetcher=lambda _: "속보입니다",
+        )
+    )
+
+    assert results[0]["status"] == "failed"
+    assert results[0]["error_code"] == "YOUTUBE_TRANSCRIPT_TOO_SHORT"
+
+
+def test_youtube_minimum_transcript_length_is_configurable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """최소 자막 길이는 환경변수로 조정하고, 값이 잘못되면 기본값을 쓴다."""
+    monkeypatch.setenv("YOUTUBE_MIN_TRANSCRIPT_CHARS", "120")
+    assert fetcher._min_transcript_chars() == 120
+
+    monkeypatch.setenv("YOUTUBE_MIN_TRANSCRIPT_CHARS", "숫자아님")
+    assert fetcher._min_transcript_chars() == fetcher.DEFAULT_MIN_TRANSCRIPT_CHARS
+
+    monkeypatch.delenv("YOUTUBE_MIN_TRANSCRIPT_CHARS")
+    assert fetcher._min_transcript_chars() == fetcher.DEFAULT_MIN_TRANSCRIPT_CHARS

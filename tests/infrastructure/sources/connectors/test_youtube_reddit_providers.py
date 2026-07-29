@@ -5,6 +5,11 @@ from datetime import UTC, datetime
 
 import pytest
 
+from infrastructure.sources.connectors.api import (
+    LatestArticle,
+    LatestProviderError,
+    col_005,
+)
 from infrastructure.sources.connectors.features import reddit as reddit_provider
 from infrastructure.sources.connectors.features import youtube as youtube_provider
 
@@ -90,6 +95,56 @@ def test_youtube_search_skips_items_without_link(monkeypatch) -> None:
         )
         == []
     )
+
+
+def test_youtube_search_uses_custom_search_for_sort_options(monkeypatch) -> None:
+    """업로드 기간·정렬을 지정하면 CustomSearch에 환경설정 문자열을 넘긴다.
+
+    관련도순 기본 검색은 무명 채널의 저조회수 영상과 오래된 영상을 함께
+    돌려주므로(2026-07-29 실측), 수집 경로는 이 정렬 조건을 쓴다.
+    """
+    captured: dict[str, object] = {}
+
+    class _FakeCustomSearch:
+        def __init__(self, query, preferences, limit):
+            captured["query"] = query
+            captured["preferences"] = preferences
+            captured["limit"] = limit
+
+        def result(self):
+            return {"result": []}
+
+    class _UnexpectedVideosSearch:
+        def __init__(self, query, limit):
+            raise AssertionError("정렬 조건이 있으면 VideosSearch를 쓰면 안 된다")
+
+    import sys
+    import types
+
+    module = types.ModuleType("youtubesearchpython")
+    module.CustomSearch = _FakeCustomSearch
+    module.VideosSearch = _UnexpectedVideosSearch
+    module.VideoUploadDateFilter = types.SimpleNamespace(thisWeek="&sp=WEEK")
+    module.VideoSortOrder = types.SimpleNamespace(viewCount="VIEWS")
+    monkeypatch.setitem(sys.modules, "youtubesearchpython", module)
+
+    provider = youtube_provider.YouTubeSearchProvider(
+        upload_window="thisWeek", sort_by="viewCount"
+    )
+    asyncio.run(provider.search(query="AI 반도체", limit=5, language=None))
+
+    assert captured["query"] == "AI 반도체"
+    # 두 상수를 이어 붙인 하나의 환경설정 문자열을 넘긴다.
+    assert captured["preferences"] == "&sp=WEEKVIEWS"
+    assert captured["limit"] == 5
+
+
+def test_youtube_rejects_unknown_search_options() -> None:
+    """지원하지 않는 정렬 값은 조용히 무시하지 않고 거부한다."""
+    with pytest.raises(ValueError):
+        youtube_provider.YouTubeSearchProvider(upload_window="지난주")
+    with pytest.raises(ValueError):
+        youtube_provider.YouTubeSearchProvider(sort_by="popular")
 
 
 def test_youtube_search_wraps_library_failure(monkeypatch) -> None:
@@ -190,6 +245,80 @@ def test_reddit_search_raises_after_retry_fails(monkeypatch) -> None:
         )
 
 
+def test_reddit_restricts_search_to_configured_subreddits(monkeypatch) -> None:
+    """서브레딧을 지정하면 다중 서브레딧 검색 URL을 한 번만 요청한다.
+
+    범위를 좁히지 않으면 Reddit 전체에서 주제와 무관한 개인 글이 들어온다.
+    다중 서브레딧(r/a+b)을 쓰므로 서브레딧 수만큼 요청이 늘지 않는다.
+    """
+    calls: list[str] = []
+
+    def fake_parse(url, request_headers=None):
+        calls.append(url)
+        return _feed([])
+
+    monkeypatch.setattr("feedparser.parse", fake_parse)
+    provider = reddit_provider.RedditSearchProvider(
+        subreddits=("MachineLearning", "r/programming")
+    )
+
+    asyncio.run(provider.search(query="AI chip", limit=5, language=None))
+
+    assert len(calls) == 1
+    url = calls[0]
+    assert url.startswith("https://www.reddit.com/r/MachineLearning+programming/search.rss?")
+    assert "restrict_sr=1" in url                    # 없으면 전체 검색으로 샌다
+    assert "sort=top" in url and "t=week" in url
+
+
+def test_reddit_omits_time_filter_for_new_sort(monkeypatch) -> None:
+    """기간은 점수 기준 정렬에서만 붙인다 (sort=new에는 의미가 없다)."""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "feedparser.parse",
+        lambda url, request_headers=None: (calls.append(url), _feed([]))[1],
+    )
+
+    asyncio.run(
+        reddit_provider.RedditSearchProvider(sort="new").search(
+            query="x", limit=5, language=None
+        )
+    )
+
+    assert "sort=new" in calls[0]
+    assert "&t=" not in calls[0]
+
+
+def test_reddit_cache_separates_different_search_scopes(monkeypatch) -> None:
+    """검색 범위가 다르면 캐시를 공유하지 않는다 (다른 결과를 돌려줘야 한다)."""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "feedparser.parse",
+        lambda url, request_headers=None: (calls.append(url), _feed([]))[1],
+    )
+
+    asyncio.run(
+        reddit_provider.RedditSearchProvider(subreddits=("investing",)).search(
+            query="코스피", limit=5, language=None
+        )
+    )
+    asyncio.run(
+        reddit_provider.RedditSearchProvider(subreddits=("stocks",)).search(
+            query="코스피", limit=5, language=None
+        )
+    )
+
+    assert len(calls) == 2
+
+
+def test_reddit_rejects_unknown_sort_options() -> None:
+    """지원하지 않는 정렬·기간은 거부한다."""
+    with pytest.raises(ValueError):
+        reddit_provider.RedditSearchProvider(sort="best")
+    with pytest.raises(ValueError):
+        reddit_provider.RedditSearchProvider(time_filter="2주")
+
+
 def test_reddit_falls_back_to_url_for_subreddit(monkeypatch) -> None:
     """요약 HTML에서 서브레딧을 못 찾으면 permalink URL에서 뽑는다.
 
@@ -209,3 +338,47 @@ def test_reddit_falls_back_to_url_for_subreddit(monkeypatch) -> None:
     )
 
     assert articles[0].source_name == "r/StockMarket"
+
+
+# ── COL-005 (SNS 수집 커넥터) ──────────────────────────────────────────────
+
+
+class _NamedProvider:
+    """이름만 다른 Provider 대역. 검색 인자를 기록한다."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.calls: list[dict] = []
+
+    async def search(self, *, query: str, limit: int, language: str | None):
+        """검색 인자를 기록하고 문서 한 건을 돌려준다."""
+        self.calls.append({"query": query, "limit": limit, "language": language})
+        return [
+            LatestArticle(
+                provider=self.name,
+                title="제목",
+                url="https://example.com/1",
+                description="",
+            )
+        ]
+
+
+def test_col_005_collects_from_sns_providers() -> None:
+    """COL-005가 YouTube·Reddit Provider에 그대로 위임하는지 검증한다."""
+    for name in ("youtube", "reddit"):
+        provider = _NamedProvider(name)
+
+        articles = asyncio.run(
+            col_005(provider, query="후쿠오카", limit=5, language="ko")
+        )
+
+        assert [article.provider for article in articles] == [name]
+        assert provider.calls == [{"query": "후쿠오카", "limit": 5, "language": "ko"}]
+
+
+def test_col_005_rejects_non_sns_provider() -> None:
+    """SNS가 아닌 Provider를 넘기면 거부하는지 검증한다."""
+    with pytest.raises(LatestProviderError):
+        asyncio.run(
+            col_005(_NamedProvider("naver"), query="코스피", limit=5, language="ko")
+        )

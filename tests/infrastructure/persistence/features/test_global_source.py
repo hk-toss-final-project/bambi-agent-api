@@ -13,6 +13,7 @@ from typing import Any
 from infrastructure.persistence.features.global_source import (
     GlobalArticleToFetch,
     claim_global_articles_for_fetch,
+    load_collection_schedules,
     mark_global_article_fetch_failed,
     persist_collected_articles,
     save_fetched_article_content,
@@ -267,3 +268,71 @@ def test_mark_failed_sets_failed_status() -> None:
     assert params is not None
     assert params[0] == "JINA_HTTP_404"
     assert params[1] == "not found"
+
+
+def test_load_collection_schedules_reads_source_settings() -> None:
+    """Source의 주기·키워드·쿼터와 실행 이력 집계를 스케줄 값으로 옮기는지 검증한다."""
+    last_started_at = datetime(2026, 7, 28, 6, 0, tzinfo=UTC)
+    connection = _FakeConnection(
+        [
+            [
+                {
+                    "id": "source-1",
+                    "source_key": "latest-naver",
+                    "connector_type": "naver",
+                    "schedule_cron": "  0 */6 * * *  ",
+                    "keywords": ["AI", "  ", " 에이전트 "],
+                    "languages": ["ko"],
+                    "quota_policy": {"daily_max_runs": 4},
+                    "connector_config": {"limit_per_provider": 20},
+                    "last_started_at": last_started_at,
+                    "runs_today": 2,
+                }
+            ]
+        ]
+    )
+
+    schedules = asyncio.run(load_collection_schedules(connection))  # type: ignore[arg-type]
+
+    query, _ = connection.executed[0]
+    assert "FROM agent.global_sources" in query
+    assert "source.status = 'active'" in query
+    schedule = schedules[0]
+    assert schedule.provider == "naver"
+    assert schedule.schedule_cron == "0 */6 * * *"
+    assert schedule.keywords == ("AI", "에이전트")
+    assert schedule.language == "ko"
+    assert schedule.limit_per_provider == 20
+    assert schedule.daily_max_runs == 4
+    assert schedule.last_started_at == last_started_at
+    assert schedule.runs_today == 2
+
+
+def test_load_collection_schedules_falls_back_to_defaults() -> None:
+    """설정이 비어 있거나 값이 잘못되면 기본 수집 수와 무제한 쿼터로 읽는지 검증한다."""
+    connection = _FakeConnection(
+        [
+            [
+                {
+                    "id": "source-2",
+                    "source_key": "latest-gdelt",
+                    "connector_type": "gdelt",
+                    "schedule_cron": "0 * * * *",
+                    "keywords": [],
+                    "languages": [],
+                    "quota_policy": {"daily_max_runs": 0},
+                    "connector_config": {"limit_per_provider": -5},
+                    "last_started_at": None,
+                    "runs_today": 0,
+                }
+            ]
+        ]
+    )
+
+    schedule = asyncio.run(load_collection_schedules(connection))[0]  # type: ignore[arg-type]
+
+    assert schedule.keywords == ()
+    assert schedule.language is None
+    assert schedule.limit_per_provider == 10
+    assert schedule.daily_max_runs is None
+    assert schedule.last_started_at is None

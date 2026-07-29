@@ -110,7 +110,7 @@ Wiki 빌드와 Report Builder 생성은 OpenAI를 실제 호출하므로 비용�
 |---|---|---|
 | `personal-wiki` | 클리핑·URL 원본을 LLM Wiki로 빌드 (Chunk 포함, Embedding은 보류) | 단발 / `--loop` 상주 |
 | `report-generation` | 생성 Job을 처리해 콘텐츠·발행 Snapshot 저장 | 단발 / `--loop` 상주 |
-| `global-collector` | 키워드로 외부 기사 수집 (`--keywords` 필수, Provider 기본 `gdelt,naver`) | 단발 |
+| `global-collector` | 키워드로 외부 기사 수집 (`--keywords` 필수, Provider 기본 `gdelt,naver,google_news`) | 단발 |
 | `global-content` | 수집된 기사의 본문 확보 | 단발 |
 
 ```bash
@@ -129,6 +129,77 @@ uv run python -m workers.main --worker global-content
 `--limit`, `--lease-seconds`, `--model`, `--interval-seconds`(상주 모드) 옵션으로
 Batch 크기와 실행을 조정합니다. 상주 Worker는 `scheduled_at`이 도래한 Job만
 Claim하므로 예약 생성 요청은 지정 시각에 처리됩니다.
+
+### 6. 정기 수집 Scheduler
+
+Global 풀을 채우는 정기 수집(SCH-001·SCH-002·SCH-003·SCH-004)입니다. **API 서버를 띄우면
+같이 돕니다** — 별도 실행이 필요 없습니다. 기동 시 백그라운드 Task로 올라가
+tick(기본 60초)마다 실행 차례가 된 Source만 수집합니다.
+
+> **시계는 한 벌만 돌아야 합니다.** API를 여러 인스턴스로 띄우면 같은 수집이
+> 인스턴스 수만큼 중복 실행됩니다. 그런 배포에서는 `ENABLE_COLLECTION_SCHEDULER=false`로
+> 서버 내장 Scheduler를 끄고, 아래 CLI를 한 벌만 띄우세요.
+
+```bash
+# 상주 (서버 내장 Scheduler를 끈 배포용)
+uv run python -m scheduler.main
+
+# 단발: 지금 판정 결과만 확인 (실행 차례가 아니면 사유를 출력)
+uv run python -m scheduler.main --once
+```
+
+#### 스케줄 설정 — Service API로 조정
+
+수집 주기·키워드는 코드가 아니라 `agent.global_sources` row가 소유합니다.
+Service는 아래 엔드포인트로 이 값을 바꾸고, 변경은 **다음 tick부터 반영**됩니다
+(서버 재시작 불필요).
+
+| 엔드포인트 | 기능 |
+|---|---|
+| `GET /internal/v1/collection-schedules` | 현재 설정 + 최근 실행 이력 (SCH-022) |
+| `POST /internal/v1/collection-schedules` | 등록 (멱등 Upsert, SCH-017) |
+| `PATCH /internal/v1/collection-schedules/{source_key}` | 주기·키워드 수정 (SCH-018) |
+| `POST .../{source_key}/pause` | 중지 — 설정은 보존 (SCH-019) |
+| `POST .../{source_key}/resume` | 재개 (SCH-020) |
+
+```bash
+curl -X POST http://localhost:8000/internal/v1/collection-schedules \
+  -H "Content-Type: application/json" \
+  -d '{"source_key":"latest-naver","provider":"naver","schedule_cron":"0 */6 * * *",
+       "keywords":["AI 에이전트","개인화"],"language":"ko","daily_max_runs":12}'
+```
+
+| 설정 | 뜻 | 없을 때 |
+|---|---|---|
+| `schedule_cron` | 수집 주기 (Cron 식, UTC) | 비어 있으면 Scheduler가 무시 |
+| `keywords` | 수집할 주제 목록 | 비어 있으면 건너뛰고 사유 출력 |
+| `daily_max_runs` | 하루 최대 실행 횟수 | 제한 없음 |
+| `limit_per_provider` | 한 번에 수집할 기사 수 | 10건 |
+
+Provider는 `naver`·`google_news`·`gdelt`·`newsapi` 넷을 지원합니다. 한국어 주제는
+`naver`, 영문 주제는 `google_news`가 정확합니다(실측: 'Cloudflare' 수집 시 Naver는
+10건 중 관련 3건, google_news는 5건 전부 관련).
+
+| Provider | 알아둘 점 |
+|---|---|
+| `naver` | 자격 증명 필요 (`NAVER_CLIENT_ID`·`NAVER_CLIENT_SECRET`). 일 25,000회 |
+| `google_news` | 자격 증명 불필요. 원본 URL 디코딩 때문에 키워드당 12초쯤 더 걸림 |
+| `gdelt` | 자격 증명 불필요. **짧은 간격으로 반복 호출하면 429** — 정기 주기에서는 정상 |
+| `newsapi` | `NEWS_API_KEY` 없으면 등록해도 안 돎. 무료 플랜 일 100회 |
+
+`gdelt`는 인증 없는 공개 API라 연속 호출을 제한합니다. 6시간 주기로 도는 스케줄에서는
+문제가 없지만, `--once --force`로 수동 점검을 몇 분 간격으로 반복하면 429가 납니다.
+그때도 실패는 Provider 단위로 격리되어 나머지 수집은 그대로 완료됩니다.
+
+**키워드는 각각 따로 검색합니다.** `["코스피","삼성전자"]`는 두 번의 개별 질의가
+됩니다. 하나의 문자열로 합치면(`"코스피 삼성전자"`) 두 단어를 모두 포함하는 기사만
+찾아 0건이 나옵니다. `daily_max_runs`는 이 개별 실행(= 외부 API 호출) 수를 셉니다.
+
+NewsAPI 무료 플랜은 하루 100회가 한계이므로 `daily_max_runs`를 반드시 함께
+설정하세요. `--once --force`는 Cron 실행 시각만 건너뛰고 호출 한도는 지킵니다.
+
+수집된 기사는 본문 없는 `pending` 상태로 쌓이므로, `global-content` Worker도
+함께 돌려야 Jina Reader가 본문을 채웁니다.
 
 ## 구조
 

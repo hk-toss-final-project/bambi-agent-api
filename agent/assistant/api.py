@@ -15,11 +15,14 @@ from .features.feeds import clean_article_body
 from .features.topic_intent import resolve_topic_intent
 from .features.graph import build_graph as build_assistant_graph
 from .features.service import assist_daily_agent
+from .features.youtube import fetch_transcript, video_id_from_url
 
 __all__ = [
     "assist_daily_agent",
     "build_assistant_graph",
     "clean_article_body",
     "collect_window_days",
+    "fetch_transcript",
     "resolve_topic_intent",
+    "video_id_from_url",
 ]

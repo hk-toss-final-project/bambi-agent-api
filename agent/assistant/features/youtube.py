@@ -94,7 +94,7 @@ def filter_recent_videos(
     return recent
 
 
-def _video_id_from_url(url: str) -> str | None:
+def video_id_from_url(url: str) -> str | None:
     """YouTube URL에서 video_id를 뽑는다. 형식을 못 알아보면 None."""
     match = re.search(r"(?:v=|youtu\.be/|/shorts/)([\w-]{11})", url)
     return match.group(1) if match else None
@@ -141,7 +141,7 @@ def search_videos(keyword: str, limit: int = 4) -> list[dict[str, object]]:
 
     videos: list[dict[str, object]] = []
     for article in articles:
-        video_id = _video_id_from_url(str(article.url))
+        video_id = video_id_from_url(str(article.url))
         videos.append(
             {
                 "video_id": video_id,

@@ -1,0 +1,175 @@
+"""수집 스케줄 관리 API의 요청·응답 스키마.
+
+Service가 Agent의 정기 수집 주기를 조정하고 즉시 실행할 때 주고받는 모델을
+정의한다 (SCH-017·018·019·020·021·022).
+"""
+
+from datetime import datetime
+
+from pydantic import BaseModel, Field
+
+
+class CollectionScheduleRegisterRequest(BaseModel):
+    """수집 스케줄 등록 요청 (SCH-017)."""
+
+    source_key: str = Field(
+        min_length=1,
+        max_length=128,
+        description="Source 식별 Key. 같은 Key로 다시 등록하면 설정을 덮어쓴다",
+        examples=["latest-naver"],
+    )
+    provider: str = Field(
+        description=(
+            "수집 Provider. 뉴스는 `naver`·`gdelt`·`google_news`·`newsapi`, "
+            "SNS는 `youtube`·`reddit`. `youtube`·`reddit`·`gdelt`·`google_news`는 "
+            "자격 증명이 필요 없고, `naver`·`newsapi`는 API Key가 있어야 한다"
+        ),
+        examples=["naver"],
+    )
+    schedule_cron: str = Field(
+        description="수집 주기 Cron 식 (UTC 기준)",
+        examples=["0 */6 * * *"],
+    )
+    keywords: list[str] = Field(
+        min_length=1,
+        description=(
+            "수집할 주제 목록. 각 키워드를 **따로** 검색하므로 주제를 한 문자열에 "
+            "합치지 않는다"
+        ),
+        examples=[["코스피", "삼성전자"]],
+    )
+    display_name: str | None = Field(
+        default=None, max_length=200, description="화면에 보일 이름"
+    )
+    language: str | None = Field(
+        default=None, max_length=16, description="검색 언어 힌트", examples=["ko"]
+    )
+    limit_per_provider: int | None = Field(
+        default=None, ge=1, le=100, description="한 번에 수집할 기사 수 (기본 10)"
+    )
+    daily_max_runs: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "하루 최대 수집 실행 횟수. 실행 1회 = 키워드 1개의 외부 API 호출 1회. "
+            "무료 한도가 낮은 Provider는 반드시 설정한다"
+        ),
+    )
+
+
+class CollectionScheduleUpdateRequest(BaseModel):
+    """수집 스케줄 수정 요청 (SCH-018). 넘긴 항목만 변경한다."""
+
+    schedule_cron: str | None = Field(
+        default=None, description="새 수집 주기 Cron 식", examples=["0 * * * *"]
+    )
+    keywords: list[str] | None = Field(
+        default=None, min_length=1, description="새 주제 목록 (각각 따로 수집)"
+    )
+    language: str | None = Field(
+        default=None, max_length=16, description="새 검색 언어 힌트"
+    )
+    limit_per_provider: int | None = Field(
+        default=None, ge=1, le=100, description="새 수집 기사 수"
+    )
+    daily_max_runs: int | None = Field(
+        default=None, ge=1, description="새 일일 실행 한도"
+    )
+
+
+class CollectionScheduleResponse(BaseModel):
+    """수집 스케줄 하나의 현재 상태."""
+
+    source_key: str = Field(description="Source 식별 Key")
+    provider: str = Field(description="수집 Provider")
+    display_name: str = Field(description="화면에 보일 이름")
+    status: str = Field(description="active(수집함) 또는 paused(중지)")
+    schedule_cron: str = Field(description="수집 주기 Cron 식 (없으면 빈 문자열)")
+    keywords: list[str] = Field(description="수집할 주제 목록")
+    language: str | None = Field(description="검색 언어 힌트")
+    limit_per_provider: int = Field(description="한 번에 수집할 기사 수")
+    daily_max_runs: int | None = Field(description="하루 최대 실행 횟수 (없으면 무제한)")
+    last_started_at: datetime | None = Field(description="마지막 수집 시작 시각")
+    runs_today: int = Field(description="오늘 실행 횟수")
+    next_run_at: datetime | None = Field(
+        description="다음 실행 예정 시각. 한 번도 실행하지 않았으면 null(즉시 대상)"
+    )
+    cron_valid: bool = Field(
+        description="Cron 식을 해석할 수 있는지 여부. false면 Scheduler가 건너뛴다"
+    )
+
+
+class CollectionRunResponse(BaseModel):
+    """수집 실행 이력 한 건."""
+
+    run_id: str = Field(description="실행 ID")
+    source_key: str = Field(description="Source 식별 Key")
+    query: str | None = Field(description="이번 실행에 사용한 검색어")
+    status: str = Field(description="running·completed·partial·failed")
+    fetched_count: int = Field(description="외부 API가 돌려준 기사 수")
+    created_count: int = Field(description="새로 저장한 문서 수")
+    duplicate_count: int = Field(description="이미 있어 건너뛴 문서 수")
+    failed_count: int = Field(description="저장에 실패한 문서 수")
+    error_code: str | None = Field(description="실패 원인 코드")
+    started_at: datetime = Field(description="실행 시작 시각")
+    completed_at: datetime | None = Field(description="실행 종료 시각")
+
+
+class CollectionProviderRunResponse(BaseModel):
+    """키워드 하나를 Provider 하나로 수집한 결과 (SCH-021)."""
+
+    provider: str = Field(description="수집 Provider")
+    status: str = Field(description="completed(수집 성공) 또는 failed(수집 실패)")
+    query: str | None = Field(default=None, description="이번 수집에 사용한 검색어")
+    run_id: str | None = Field(default=None, description="기록된 수집 실행 ID")
+    fetched_count: int = Field(default=0, description="외부 API가 돌려준 기사 수")
+    created_count: int = Field(default=0, description="새로 저장한 문서 수")
+    duplicate_count: int = Field(default=0, description="이미 있어 건너뛴 문서 수")
+    error_code: str | None = Field(default=None, description="실패 원인 코드")
+    error_message: str | None = Field(default=None, description="실패 원인 설명")
+
+
+class CollectionKeywordRunResponse(BaseModel):
+    """키워드 하나의 수집 실행 결과 (SCH-021)."""
+
+    keyword: str | None = Field(
+        description="수집한 키워드. Source 단위로 건너뛴 경우 null"
+    )
+    status: str = Field(description="completed(실행함) 또는 skipped(건너뜀)")
+    reason: str | None = Field(default=None, description="건너뛴 사유")
+    providers: list[CollectionProviderRunResponse] = Field(
+        default_factory=list, description="Provider별 수집·저장 결과"
+    )
+
+
+class CollectionScheduleRunResponse(BaseModel):
+    """수집 스케줄 즉시 실행 결과 (SCH-021)."""
+
+    source_key: str = Field(description="실행한 Source 식별 Key")
+    provider: str = Field(description="수집 Provider")
+    status: str = Field(
+        description=(
+            "completed(전부 성공)·partial(일부 실패)·failed(전부 실패)·"
+            "skipped(실행하지 않음)"
+        )
+    )
+    fetched_count: int = Field(description="외부 API가 돌려준 기사 수 합계")
+    created_count: int = Field(description="새로 저장한 문서 수 합계")
+    duplicate_count: int = Field(description="이미 있어 건너뛴 문서 수 합계")
+    keywords: list[CollectionKeywordRunResponse] = Field(
+        description="키워드별 실행 결과 (등록된 키워드는 각각 따로 수집한다)"
+    )
+    schedule: CollectionScheduleResponse = Field(
+        description="실행 직후의 스케줄 상태"
+    )
+
+
+class CollectionScheduleListResponse(BaseModel):
+    """수집 스케줄 목록과 최근 실행 이력 (SCH-022)."""
+
+    schedules: list[CollectionScheduleResponse] = Field(
+        description="등록된 수집 스케줄 목록 (중지·주기 미설정 포함)"
+    )
+    recent_runs: list[CollectionRunResponse] = Field(
+        description="최근 수집 실행 이력 (started_at 내림차순)"
+    )

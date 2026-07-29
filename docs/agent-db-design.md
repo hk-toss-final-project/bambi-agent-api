@@ -11,7 +11,7 @@
 
 | 항목 | 결정 |
 |---|---|
-| 데이터베이스 | PostgreSQL 17 |
+| 데이터베이스 | PostgreSQL 17 (**17.9 이상**, 6절 참고) |
 | Vector 저장 | 동일 PostgreSQL의 pgvector, MVP Embedding 차원은 1536 |
 | 논리 Schema | `agent` 한 개. `public`에는 Extension만 설치 |
 | 내부 ID | Agent가 생성하는 Entity는 UUID |
@@ -256,7 +256,9 @@ MVP의 실시간·대량 발행 경로는 Agent API가 agent-db를 직접 노출
 
 ## 6. 로컬 Docker
 
-루트 `compose.yaml`은 `pgvector/pgvector:0.8.1-pg17-bookworm`을 `127.0.0.1`에만 노출합니다. 비밀번호는 파일에 기본값으로 넣지 않으며 `.env`의 `AGENT_DB_PASSWORD`가 없으면 Compose가 시작되지 않습니다.
+루트 `compose.yaml`은 `pgvector/pgvector:0.8.5-pg17-bookworm`(PostgreSQL 17.10)을 `127.0.0.1`에만 노출합니다.
+
+**PostgreSQL은 17.9 이상을 씁니다.** 17.8 이하에는 TOAST 대상(대략 2KB 이상)인 UTF-8 텍스트에 `substring()`·`left()`를 쓰면 값이 멀쩡한데도 `invalid byte sequence for encoding "UTF8"`로 실패하는 버그가 있습니다([BUG #19406](https://www.postgresql.org/message-id/19406-9867fddddd724fca%40postgresql.org), CVE-2026-2006 수정이 과했던 회귀. 17.9에서 수정). 한국어 본문은 문자당 3바이트라 사실상 모든 수집 본문이 대상이고, 영문 본문은 바이트 경계가 맞아 증상이 드러나지 않습니다. Cloud SQL도 같은 하한을 지킵니다. 부득이 17.8 이하를 써야 하면 `left(markdown || '', n)`처럼 전체 압축 해제를 강제해 우회합니다. 비밀번호는 파일에 기본값으로 넣지 않으며 `.env`의 `AGENT_DB_PASSWORD`가 없으면 Compose가 시작되지 않습니다.
 
 초기화와 검증 절차는 `database/README.md`를 따릅니다. `scripts/start_agent_db.sh`가
 실행 중인 컨테이너에도 Initializer를 명시적으로 호출하고, Compose `post_start`
