@@ -35,10 +35,16 @@ type DictRow = dict[str, Any]
 
 @dataclass(frozen=True, slots=True)
 class GlobalArticleToFetch:
-    """Jina Reader Worker가 본문을 채울 대상으로 점유한 Global 기사 하나."""
+    """본문 수집 Worker가 채울 대상으로 점유한 Global 문서 하나.
+
+    provider는 본문을 어떻게 가져올지 고르는 데 쓴다. 뉴스·Reddit은 페이지
+    본문(Jina Reader)이 그대로 쓸 만하지만 YouTube는 영상 페이지라 자막을
+    가져와야 한다.
+    """
 
     document_id: str
     url: str
+    provider: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -621,7 +627,7 @@ async def claim_global_articles_for_fetch(
         SET content_status = 'fetching'
         FROM claimable
         WHERE document.id = claimable.id
-        RETURNING document.id, document.canonical_url
+        RETURNING document.id, document.canonical_url, document.provider
         """,
         (limit,),
     )
@@ -630,6 +636,7 @@ async def claim_global_articles_for_fetch(
         GlobalArticleToFetch(
             document_id=str(row["id"]),
             url=row["canonical_url"],
+            provider=row.get("provider") or "",
         )
         for row in rows
     ]
@@ -665,7 +672,9 @@ async def save_fetched_article_content(
         """
         UPDATE agent.global_source_documents
         SET
-            title = %s,
+            -- 본문 수집기가 제목을 주지 않으면(YouTube 자막 등) 수집 때 저장한
+            -- 제목을 그대로 둔다.
+            title = COALESCE(%s, title),
             markdown = %s,
             content_hash = %s,
             resolved_url = %s,
