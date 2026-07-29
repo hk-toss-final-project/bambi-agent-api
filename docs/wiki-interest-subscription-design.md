@@ -3,8 +3,8 @@
 > 상태: **제안 — 팀 협의 전** · 작성일 2026-07-27
 > 목적: "사용자 행동이 어떻게 지식(Wiki)이 되고, 지식이 어떻게 관심사가 되며, 관심사가 어떻게
 > 매일 받아보는 콘텐츠가 되는가"의 전체 데이터 흐름과 편집 정책을 확정하기 위한 설계 문서.
-> 배경 논의: [agent-structure-and-collection-loop.md](agent-structure-and-collection-loop.md) (구조 진단),
-> [assistant-split-proposal.md](assistant-split-proposal.md) (수집 정리 방향).
+> 배경 논의: [agent-structure-and-collection-loop.md](archive/2026-07/agent-structure-and-collection-loop.md) (구조 진단),
+> [assistant-split-proposal.md](archive/2026-07/assistant-split-proposal.md) (수집 정리 방향).
 > 아래 내용 중 "확인됨"은 코드·스키마로 검증한 사실이고, "결정 필요"는 팀이 정해야 하는 항목이다.
 
 ---
@@ -193,7 +193,7 @@ MockAgentClient → 실호출 전환: svc_002/003(저장 → Wiki), pwiki_003 �
 
 ## 8. 기존 문서와의 관계
 
-- [agent-structure-and-collection-loop.md](agent-structure-and-collection-loop.md) — 구조 진단(입구 문서). 이 문서는 그 §6 "결론"의 지식·관심사 축을 구체화한다.
-- [assistant-split-proposal.md](assistant-split-proposal.md) — 수집 정리. 본 문서의 프로필(구독 키워드)이 그 문서의 수집 워커 키워드 소스가 된다(끊긴 링크 연결 시).
-- [langgraph-agents-review-2026-07-26.md](langgraph-agents-review-2026-07-26.md) — 리뷰. wiki_builder 개선 항목과 Track A~D는 독립적으로 진행 가능.
+- [agent-structure-and-collection-loop.md](archive/2026-07/agent-structure-and-collection-loop.md) — 구조 진단(입구 문서). 이 문서는 그 §6 "결론"의 지식·관심사 축을 구체화한다.
+- [assistant-split-proposal.md](archive/2026-07/assistant-split-proposal.md) — 수집 정리. 본 문서의 프로필(구독 키워드)이 그 문서의 수집 워커 키워드 소스가 된다(끊긴 링크 연결 시).
+- [langgraph-agents-review-2026-07-26.md](archive/2026-07/langgraph-agents-review-2026-07-26.md) — 리뷰. wiki_builder 개선 항목과 Track A~D는 독립적으로 진행 가능.
 - [llm-wiki-vault-structure.md](llm-wiki-vault-structure.md) — Vault 산출물 규격. 편집(D-2) 구현 시 문서 규격 준수 필요.

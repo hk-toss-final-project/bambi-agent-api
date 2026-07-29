@@ -4,8 +4,8 @@
 > 갱신일 2026-07-28
 > 배경: 리포트 생성이 키워드 **하나**로만 외부 자료를 수집한다는 지적에서 출발했다.
 > 개인 Wiki에 저장된 노드 연결(`wiki_document_relations`)을 검색어 확장에 쓰자는 제안.
-> 관련: [assistant-split-proposal.md](assistant-split-proposal.md) ·
-> [agent-structure-and-collection-loop.md](agent-structure-and-collection-loop.md)
+> 관련: [assistant-split-proposal.md](archive/2026-07/assistant-split-proposal.md) ·
+> [agent-structure-and-collection-loop.md](archive/2026-07/agent-structure-and-collection-loop.md)
 
 ## 1. 문제
 
@@ -192,7 +192,7 @@ Agents" 등으로, **사용자가 그 오픈소스 프로젝트에 관한 글을
 ```
 
 Worker lease가 600초이므로, 확장 폭을 통제하지 않으면
-[리뷰 P0 #4](langgraph-agents-review-2026-07-26.md)(lease 초과 → Job 이중 실행)가
+[리뷰 P0 #4](archive/2026-07/langgraph-agents-review-2026-07-26.md)(lease 초과 → Job 이중 실행)가
 다시 문제가 된다. **Step 3(Global 풀 소비 전환)과 함께 가야 안전하다** — 풀에서
 읽으면 검색어가 늘어도 네트워크 호출이 늘지 않기 때문이다.
 
@@ -201,7 +201,7 @@ Worker lease가 600초이므로, 확장 폭을 통제하지 않으면
 > 풀에서 결과를 찾고도 **실시간 수집을 그대로 다 수행**하므로, 이 문서의 비용
 > 완화 전제(=풀에서 읽으면 네트워크 호출이 안 는다)는 Step 3에서 **수집 건너뛰기**가
 > 붙어야 성립한다. 상세는
-> [assistant-split-proposal.md의 Step 3 범위 정정](assistant-split-proposal.md) 참고.
+> [assistant-split-proposal.md의 Step 3 범위 정정](archive/2026-07/assistant-split-proposal.md) 참고.
 
 ## 5. 검증 계획
 

@@ -1,7 +1,7 @@
 # 수동 검증 지침 — Wiki·관심사 신규 기능 (2026-07-27 구현분)
 
 > 대상: `feature/llm-wiki` 브랜치에 구현된 5개 기능을 **Swagger에서 직접 실행하며** 확인하려는 팀원.
-> Swagger 기본 사용법·문제 해결은 [swagger-dev-guide.md](swagger-dev-guide.md)를 먼저 보세요.
+> Swagger 기본 사용법은 저장소 [README의 Agent API 서버 + Swagger 절](../../../README.md#2-agent-api-서버--swagger)을 먼저 보세요.
 > 자동 검증은 `uv run pytest`(523개, LLM 무호출)로 이미 커버되어 있고, 이 문서는 눈으로 확인하는 절차입니다.
 
 ## 0. 무엇을 검증하나

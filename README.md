@@ -59,8 +59,8 @@ uv run uvicorn app.main:app --port 8000 --reload --loop app.main:selector_event_
   모드를 전환할 수 있고, 선택한 테마는 브라우저에 저장됩니다.
 - ReDoc: <http://127.0.0.1:8000/redoc> · OpenAPI JSON: <http://127.0.0.1:8000/openapi.json>
 - `APP_ENV=local`(또는 `test`) + `ENABLE_DEV_AGENT_API=true`면 `dev-*` 태그의
-  개발 실행 API가 함께 등록됩니다. 단계별 사용법은
-  [Swagger 개발 테스트 가이드](docs/swagger-dev-guide.md)를 따라가세요.
+  개발 실행 API가 함께 등록됩니다. 엔드포인트별 계약은
+  [FastAPI MVP API 설계](docs/fastapi-mvp-api.md)를 참고하세요.
 - 에이전트 그래프 구조 시각화: <http://127.0.0.1:8000/dev/graphs> —
   Personal Wiki·Report Generation·키워드 비서 그래프를 Mermaid 차트로
   보여줍니다(개발 API와 같은 플래그로 활성화).
@@ -98,8 +98,8 @@ http://127.0.0.1:8000/wiki-graph?user_id={user_id}
 
 이 화면은 PostgreSQL 없이 동작하며 `OPENAI_API_KEY`만 필요합니다. DB 연결에 실패해도
 서버는 기동하고 비서 UI는 그대로 쓸 수 있습니다(DB가 필요한 API만 `503
-SERVICE_NOT_READY`로 응답합니다). 동작 방식은
-[키워드 비서 개발 명세](docs/keyword-assistant.md)를 참고하세요.
+SERVICE_NOT_READY`로 응답합니다). 분해 전 구조와 설계 배경은
+[보관된 에이전트 구조 문서](docs/archive/2026-07/agent-structure-and-collection-loop.md)를 참고하세요.
 
 ### 5. Worker 실행
 
@@ -210,10 +210,10 @@ Agent API는 전체 기능 명세 1~43절의 기능 ID를 코드 함수와 1:1�
 
 ## Agent API 문서
 
+- [문서 안내와 현행·보관 기준](docs/README.md)
 - [전체 기능 명세](docs/agent-api-feature-spec.md)
 - [MVP 개발 범위와 구현 현황 체크리스트](docs/agent-api-mvp-scope.md)
 - [FastAPI MVP API 설계](docs/fastapi-mvp-api.md)
-- [Swagger 개발 테스트 가이드](docs/swagger-dev-guide.md)
 - [Service 연동 가이드 (service-api·service-worker)](docs/service-integration-guide.md)
 - [Agent DB 설계](docs/agent-db-design.md)
 - [Agent DB 테이블 카탈로그](docs/agent-db-table-catalog.md)

@@ -88,7 +88,7 @@
 - 구현 메모: `record_history=False`여도 **이력 읽기는 유지**한다 — `first_seen`이 발행일
   확정 폴백에 쓰이므로 읽기까지 막으면 날짜 로직이 깨진다. 쓰기만 건너뛴다.
   회귀 테스트 3종 추가(플래그 전달 확인, 이력 미증가, 기본값 True 유지).
-  자세한 내용은 [keyword-assistant.md](keyword-assistant.md) "소비 맥락 플래그" 절 참조.
+  자세한 내용은 현재 삭제된 과거 문서 `keyword-assistant.md`의 "소비 맥락 플래그" 절에 기록돼 있었다.
 
 ### Step 1 — 수집 일원화 — ✅ **완료 (2026-07-27)**
 RSS를 col_001 재사용으로 교체하고 YouTube·Reddit provider를 connectors로 이식. assistant는 connectors를 import해서 사용(동작 동일). global-collector가 5개 소스(GDELT·Naver·GoogleNews·YouTube·Reddit)를 키워드로 수집 가능해짐.
@@ -177,7 +177,7 @@ P0 #7(계약 드리프트)이 단순해진다**는 것이었다. 실측 결과 *
 - **규칙 10(/dev/graphs)**: 갱신 불필요. `load_context` 노드 내부 로직만 바뀌었고
   노드·엣지 구조는 그대로다.
 - **규칙 8(bench)**: `bench/report_generation` 재실행 완료(10/10, 회귀 없음,
-  [결과](../bench/report_generation/results/2026-07-28_gpt-4.1-mini.md)). 다만 이
+  [결과](../../../bench/report_generation/results/2026-07-28_gpt-4.1-mini.md)). 다만 이
   벤치마크는 근거를 데이터셋에서 고정 주입하므로 **Step 3를 측정하지 못한다.**
   파이프라인 전체를 도는 벤치마크는 별도 과제다(데이터셋 변경이라 승인 필요).
 - **agent-contract.md citation 절**: 미갱신. 위 "미달성" 절대로 저장 형태가 아직

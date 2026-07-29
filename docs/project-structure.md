@@ -69,7 +69,8 @@ domain/personal_wiki/documents/
 - 기존 서비스 객체·저장소·Provider처럼 실행 시점에 결합되는 의존성은 typed 인자나 `Protocol`로 기능 함수에 전달합니다. 구현된 기능은 호출자 제공 콜백이 아니라 `features/` 함수가 검증·변환·오케스트레이션을 소유합니다.
 - 범용 `FeatureRequest/FeatureResult` 실행 위임은 이번 전환 제외 범위인 `agent/report_builder/**`의 호환 경계에만 남기고, 다른 운영 경로에서는 사용하지 않습니다.
 - 외부 모듈의 `features/` 직접 import와 `api.py` 내부 함수 구현은 정합성 테스트로 차단합니다.
-- 적용된 기능별 경계와 런타임 호출 상태는 [`feature-facade-migration.md`](feature-facade-migration.md)에 기록합니다.
+- 적용된 기능별 경계와 런타임 호출 상태는 [MVP 구현 현황](agent-api-mvp-scope.md)과
+  [`test_feature_scaffolds.py`](../tests/test_feature_scaffolds.py)의 정합성 검사를 기준으로 확인합니다.
 
 ## 기능 영역별 파일 매핑
 

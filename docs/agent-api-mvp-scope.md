@@ -229,7 +229,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 > Agent 서버가 직접 돌리기로 하면서(기존 협의안은 Service가 Job을 발행하는
 > 방향이었다), **Service가 수집 주기를 조정할 창구**가 필요해졌기 때문이다.
 > 스케줄 정책의 결정권은 여전히 Service에 있고 Agent는 실행만 담당한다.
-> [global-collection-scheduling-proposal.md](global-collection-scheduling-proposal.md)
+> [global-collection-scheduling-proposal.md](archive/2026-07/global-collection-scheduling-proposal.md)
 > §4.1의 발행 주기 결정은 이 API로 Service가 직접 넣는 것으로 대체된다.
 
 ## 5. 리포트 생성기 (Report Builder)
