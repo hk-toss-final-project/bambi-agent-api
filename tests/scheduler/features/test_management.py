@@ -1,7 +1,8 @@
-"""수집 스케줄 관리 기능(SCH-017·018·019·020·022)의 검증·변환을 확인한다.
+"""수집 스케줄 관리 기능(SCH-017·018·019·020·021·022)의 검증·변환을 확인한다.
 
 실제 DB 없이 영속 함수를 대역으로 주입해, Cron·키워드 검증과 다음 실행 시각
-계산, 없는 source_key 처리를 확인한다.
+계산, 없는 source_key 처리를 확인한다. 수동 실행(SCH-021)은 수집 Worker까지
+대역으로 바꿔 외부 API 호출 없이 판정만 확인한다.
 """
 
 import asyncio
@@ -10,18 +11,26 @@ from typing import Any
 
 import pytest
 
+import scheduler.features.collection as collection
 import scheduler.features.management as management
 from infrastructure.persistence.api import (
     GlobalCollectionRunRecord,
     GlobalCollectionSchedule,
 )
 from scheduler.api import (
+    CollectionCredentials,
     UnknownCollectionScheduleError,
     sch_017,
     sch_018,
     sch_019,
     sch_020,
+    sch_021,
     sch_022,
+)
+
+_NOW = datetime(2026, 7, 29, 12, 0, tzinfo=UTC)
+_CREDENTIALS = CollectionCredentials(
+    naver_client_id="id", naver_client_secret="secret"
 )
 
 
@@ -37,6 +46,8 @@ def _schedule(
     keywords: tuple[str, ...] = ("코스피",),
     status: str = "active",
     last_started_at: datetime | None = None,
+    daily_max_runs: int | None = None,
+    runs_today: int = 0,
 ) -> GlobalCollectionSchedule:
     """테스트용 스케줄 설정 하나를 만든다."""
     return GlobalCollectionSchedule(
@@ -47,9 +58,9 @@ def _schedule(
         keywords=keywords,
         language="ko",
         limit_per_provider=10,
-        daily_max_runs=None,
+        daily_max_runs=daily_max_runs,
         last_started_at=last_started_at,
-        runs_today=0,
+        runs_today=runs_today,
         status=status,
         display_name="Latest naver",
     )
@@ -280,4 +291,162 @@ def test_history_reports_unknown_source(monkeypatch: pytest.MonkeyPatch) -> None
     with pytest.raises(UnknownCollectionScheduleError):
         asyncio.run(
             sch_022(_FakeConnection(), source_key="latest-unknown")  # type: ignore[arg-type]
+        )
+
+
+def _patch_manual_run(
+    monkeypatch: pytest.MonkeyPatch, schedule: GlobalCollectionSchedule | None
+) -> list[dict[str, Any]]:
+    """수동 실행이 쓰는 스케줄 조회와 수집 Worker를 대역으로 교체한다."""
+    calls: list[dict[str, Any]] = []
+
+    async def fake_load(
+        _connection: Any, *, source_key: str
+    ) -> GlobalCollectionSchedule | None:
+        """등록된 스케줄 하나를 그대로 돌려준다."""
+        return schedule
+
+    async def fake_worker(**kwargs: Any) -> list[dict[str, object]]:
+        """수집 Worker 호출 인자를 기록하고 완료 결과를 돌려준다."""
+        calls.append(kwargs)
+        return [
+            {
+                "provider": kwargs["providers"][0],
+                "status": "completed",
+                "created_count": 3,
+            }
+        ]
+
+    monkeypatch.setattr(management, "load_collection_schedule", fake_load)
+    monkeypatch.setattr(collection, "worker_001", fake_worker)
+    return calls
+
+
+def test_manual_run_ignores_cron_and_collects_each_keyword(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """수동 실행이 다음 실행 시각 전에도 키워드를 각각 수집하는지 검증한다."""
+    calls = _patch_manual_run(
+        monkeypatch,
+        _schedule(
+            keywords=("코스피", "삼성전자"),
+            # 30분 전에 실행했으므로 6시간 주기로는 아직 차례가 아니다.
+            last_started_at=datetime(2026, 7, 29, 11, 30, tzinfo=UTC),
+        ),
+    )
+
+    view, results = asyncio.run(
+        sch_021(
+            _FakeConnection(),  # type: ignore[arg-type]
+            source_key="latest-naver",
+            database_url="postgresql://fake",
+            credentials=_CREDENTIALS,
+            now=_NOW,
+        )
+    )
+
+    assert [result.status for result in results] == ["completed", "completed"]
+    assert [call["keywords"] for call in calls] == [["코스피"], ["삼성전자"]]
+    assert calls[0]["providers"] == ["naver"]
+    assert calls[0]["naver_client_id"] == "id"
+    assert view.source_key == "latest-naver"
+
+
+def test_manual_run_runs_paused_schedule(monkeypatch: pytest.MonkeyPatch) -> None:
+    """중지된 스케줄도 수동 실행은 수집하는지 검증한다.
+
+    중지는 정기 실행만 멈춘다. 수동 실행은 관리자가 명시적으로 지시한 별개
+    행위이므로 상태를 이유로 막지 않는다.
+    """
+    calls = _patch_manual_run(monkeypatch, _schedule(status="paused"))
+
+    _, results = asyncio.run(
+        sch_021(
+            _FakeConnection(),  # type: ignore[arg-type]
+            source_key="latest-naver",
+            database_url="postgresql://fake",
+            credentials=_CREDENTIALS,
+            now=_NOW,
+        )
+    )
+
+    assert [result.status for result in results] == ["completed"]
+    assert len(calls) == 1
+
+
+def test_manual_run_keeps_daily_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """수동 실행이 일일 호출 한도는 그대로 지키는지 검증한다."""
+    calls = _patch_manual_run(
+        monkeypatch, _schedule(daily_max_runs=2, runs_today=2)
+    )
+
+    _, results = asyncio.run(
+        sch_021(
+            _FakeConnection(),  # type: ignore[arg-type]
+            source_key="latest-naver",
+            database_url="postgresql://fake",
+            credentials=_CREDENTIALS,
+            now=_NOW,
+        )
+    )
+
+    assert [result.status for result in results] == ["skipped"]
+    assert "한도" in (results[0].reason or "")
+    assert calls == []
+
+
+def test_manual_run_reports_empty_keywords(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """키워드가 없는 스케줄은 수집하지 않고 사유를 남기는지 검증한다."""
+    calls = _patch_manual_run(monkeypatch, _schedule(keywords=()))
+
+    _, results = asyncio.run(
+        sch_021(
+            _FakeConnection(),  # type: ignore[arg-type]
+            source_key="latest-naver",
+            database_url="postgresql://fake",
+            credentials=_CREDENTIALS,
+            now=_NOW,
+        )
+    )
+
+    assert results[0].status == "skipped"
+    assert "키워드" in (results[0].reason or "")
+    assert calls == []
+
+
+def test_manual_run_reports_unknown_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """없는 source_key 수동 실행은 전용 예외로 알리는지 검증한다."""
+    _patch_manual_run(monkeypatch, None)
+
+    with pytest.raises(UnknownCollectionScheduleError):
+        asyncio.run(
+            sch_021(
+                _FakeConnection(),  # type: ignore[arg-type]
+                source_key="latest-unknown",
+                database_url="postgresql://fake",
+                credentials=_CREDENTIALS,
+                now=_NOW,
+            )
+        )
+
+
+def test_manual_run_rejects_unsupported_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """정기 수집을 지원하지 않는 Provider는 수동 실행도 거부하는지 검증한다."""
+    _patch_manual_run(monkeypatch, _schedule(provider="dart"))
+
+    with pytest.raises(ValueError, match="Provider"):
+        asyncio.run(
+            sch_021(
+                _FakeConnection(),  # type: ignore[arg-type]
+                source_key="latest-dart",
+                database_url="postgresql://fake",
+                credentials=_CREDENTIALS,
+                now=_NOW,
+            )
         )

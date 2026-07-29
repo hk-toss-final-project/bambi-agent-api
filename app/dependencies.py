@@ -165,7 +165,7 @@ def create_container(settings: Settings) -> AppContainer:
                 latest_information_service,
             ),
             collection_schedule_service=CollectionScheduleService(
-                agent_job_repository
+                agent_job_repository, settings
             ),
         )
     return AppContainer(

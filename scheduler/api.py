@@ -21,6 +21,7 @@ from .features.wiki import WikiScheduleResult, sch_009, sch_010
 from .features.runtime import (
     PROVIDER_SCHEDULES,
     CollectionScheduler,
+    build_collection_credentials,
     build_scheduler,
     run_collection_scheduler_loop,
 )
@@ -49,6 +50,7 @@ __all__ = [
     "CollectionScheduler",
     "UnknownCollectionScheduleError",
     "WikiScheduleResult",
+    "build_collection_credentials",
     "build_scheduler",
     "next_collection_run_at",
     "run_collection_scheduler_loop",

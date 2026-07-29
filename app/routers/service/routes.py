@@ -16,6 +16,7 @@ from app.schemas.collection_schedules import (
     CollectionScheduleListResponse,
     CollectionScheduleRegisterRequest,
     CollectionScheduleResponse,
+    CollectionScheduleRunResponse,
     CollectionScheduleUpdateRequest,
 )
 from app.schemas.generated_content import (
@@ -483,6 +484,33 @@ async def update_collection_schedule_route(
 ) -> CollectionScheduleResponse:
     """[SCH-018] 기존 수집 작업의 실행 주기를 변경한다."""
     return await service.update(source_key, payload)
+
+
+@router.post(
+    "/collection-schedules/{source_key}/run",
+    response_model=CollectionScheduleRunResponse,
+    tags=["collection-schedules"],
+    operation_id="sch_021",
+    summary="수집 스케줄 즉시 실행",
+    description=(
+        "등록된 Cron 주기를 기다리지 않고 지금 한 번 수집한다. 키워드를 바꾼 "
+        "직후 실제로 적재되는지 바로 확인할 때 쓴다.\n\n"
+        "- 주기 조건만 건너뛴다. 일일 실행 한도(`daily_max_runs`)는 그대로 "
+        "지키고, 한도를 채운 키워드는 `skipped`로 남는다.\n"
+        "- 중지(paused) 상태 스케줄도 실행한다. 중지는 정기 실행만 멈춘다.\n"
+        "- 키워드는 각각 따로 외부 API를 호출하므로 **수집이 끝날 때까지 응답을 "
+        "기다린다**(키워드 수 × Provider 응답 시간). `google_news`는 원본 URL "
+        "디코딩 때문에 키워드당 12초쯤 더 걸린다.\n"
+        "- 수집한 기사는 본문 없이 `pending` 상태로 저장된다. 본문은 이후 본문 "
+        "수집 Worker(`global-content`)가 채운다."
+    ),
+)
+async def run_collection_schedule_now(
+    source_key: SourceKey,
+    service: CollectionScheduleService = Depends(get_collection_schedule_service),
+) -> CollectionScheduleRunResponse:
+    """[SCH-021] 등록된 정기 수집 작업을 주기와 무관하게 즉시 실행한다."""
+    return await service.run_now(source_key)
 
 
 @router.post(

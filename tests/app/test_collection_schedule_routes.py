@@ -13,9 +13,12 @@ from app.config import Settings
 from app.dependencies import get_collection_schedule_service
 from app.main import create_app
 from app.schemas.collection_schedules import (
+    CollectionKeywordRunResponse,
+    CollectionProviderRunResponse,
     CollectionScheduleListResponse,
     CollectionScheduleRegisterRequest,
     CollectionScheduleResponse,
+    CollectionScheduleRunResponse,
     CollectionScheduleUpdateRequest,
 )
 
@@ -79,6 +82,37 @@ class _FakeScheduleService:
         """재개 요청을 기록한다."""
         self.calls.append(("resume", source_key))
         return _response(source_key=source_key, status="active")
+
+    async def run_now(self, source_key: str) -> CollectionScheduleRunResponse:
+        """즉시 실행 요청을 기록하고 수집 결과 하나를 돌려준다."""
+        self.calls.append(("run_now", source_key))
+        return CollectionScheduleRunResponse(
+            source_key=source_key,
+            provider="naver",
+            status="completed",
+            fetched_count=10,
+            created_count=7,
+            duplicate_count=3,
+            keywords=[
+                CollectionKeywordRunResponse(
+                    keyword="코스피",
+                    status="completed",
+                    reason=None,
+                    providers=[
+                        CollectionProviderRunResponse(
+                            provider="naver",
+                            status="completed",
+                            query="코스피",
+                            run_id="run-1",
+                            fetched_count=10,
+                            created_count=7,
+                            duplicate_count=3,
+                        )
+                    ],
+                )
+            ],
+            schedule=_response(source_key=source_key),
+        )
 
 
 @pytest.fixture
@@ -165,6 +199,21 @@ def test_update_passes_only_given_fields(
     assert source_key == "latest-naver"
     assert payload.schedule_cron == "0 * * * *"
     assert payload.keywords is None
+
+
+def test_run_now_returns_collection_summary(
+    schedule_client: TestClient, schedule_service: _FakeScheduleService
+) -> None:
+    """즉시 실행 라우트가 수집 합계와 키워드별 결과를 돌려주는지 검증한다."""
+    response = schedule_client.post(f"{_PREFIX}/latest-naver/run")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "completed"
+    assert body["created_count"] == 7
+    assert body["keywords"][0]["providers"][0]["run_id"] == "run-1"
+    assert body["schedule"]["source_key"] == "latest-naver"
+    assert schedule_service.calls[0] == ("run_now", "latest-naver")
 
 
 def test_pause_and_resume(

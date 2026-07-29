@@ -1,7 +1,7 @@
 """수집 스케줄 관리 API의 요청·응답 스키마.
 
-Service가 Agent의 정기 수집 주기를 조정할 때 주고받는 모델을 정의한다
-(SCH-017·018·019·020·022).
+Service가 Agent의 정기 수집 주기를 조정하고 즉시 실행할 때 주고받는 모델을
+정의한다 (SCH-017·018·019·020·021·022).
 """
 
 from datetime import datetime
@@ -109,6 +109,55 @@ class CollectionRunResponse(BaseModel):
     error_code: str | None = Field(description="실패 원인 코드")
     started_at: datetime = Field(description="실행 시작 시각")
     completed_at: datetime | None = Field(description="실행 종료 시각")
+
+
+class CollectionProviderRunResponse(BaseModel):
+    """키워드 하나를 Provider 하나로 수집한 결과 (SCH-021)."""
+
+    provider: str = Field(description="수집 Provider")
+    status: str = Field(description="completed(수집 성공) 또는 failed(수집 실패)")
+    query: str | None = Field(default=None, description="이번 수집에 사용한 검색어")
+    run_id: str | None = Field(default=None, description="기록된 수집 실행 ID")
+    fetched_count: int = Field(default=0, description="외부 API가 돌려준 기사 수")
+    created_count: int = Field(default=0, description="새로 저장한 문서 수")
+    duplicate_count: int = Field(default=0, description="이미 있어 건너뛴 문서 수")
+    error_code: str | None = Field(default=None, description="실패 원인 코드")
+    error_message: str | None = Field(default=None, description="실패 원인 설명")
+
+
+class CollectionKeywordRunResponse(BaseModel):
+    """키워드 하나의 수집 실행 결과 (SCH-021)."""
+
+    keyword: str | None = Field(
+        description="수집한 키워드. Source 단위로 건너뛴 경우 null"
+    )
+    status: str = Field(description="completed(실행함) 또는 skipped(건너뜀)")
+    reason: str | None = Field(default=None, description="건너뛴 사유")
+    providers: list[CollectionProviderRunResponse] = Field(
+        default_factory=list, description="Provider별 수집·저장 결과"
+    )
+
+
+class CollectionScheduleRunResponse(BaseModel):
+    """수집 스케줄 즉시 실행 결과 (SCH-021)."""
+
+    source_key: str = Field(description="실행한 Source 식별 Key")
+    provider: str = Field(description="수집 Provider")
+    status: str = Field(
+        description=(
+            "completed(전부 성공)·partial(일부 실패)·failed(전부 실패)·"
+            "skipped(실행하지 않음)"
+        )
+    )
+    fetched_count: int = Field(description="외부 API가 돌려준 기사 수 합계")
+    created_count: int = Field(description="새로 저장한 문서 수 합계")
+    duplicate_count: int = Field(description="이미 있어 건너뛴 문서 수 합계")
+    keywords: list[CollectionKeywordRunResponse] = Field(
+        description="키워드별 실행 결과 (등록된 키워드는 각각 따로 수집한다)"
+    )
+    schedule: CollectionScheduleResponse = Field(
+        description="실행 직후의 스케줄 상태"
+    )
 
 
 class CollectionScheduleListResponse(BaseModel):

@@ -105,6 +105,34 @@ class CollectionScheduler:
             await connection.close()
 
 
+def build_collection_credentials(settings: Settings) -> CollectionCredentials:
+    """환경 설정에서 수집 Provider 자격 증명과 Endpoint를 모은다.
+
+    Scheduler 기동(build_scheduler)과 API의 수동 실행(SCH-021)이 같은 자격
+    증명을 쓰도록 한곳에서 만든다.
+
+    Args:
+        settings: 자격 증명을 읽을 환경 설정
+
+    Returns:
+        수집 Provider에 넘길 자격 증명 묶음
+    """
+    return CollectionCredentials(
+        naver_client_id=settings.naver_client_id,
+        naver_client_secret=(
+            settings.naver_client_secret.get_secret_value()
+            if settings.naver_client_secret
+            else None
+        ),
+        gdelt_base_url=settings.gdelt_base_url,
+        news_api_key=(
+            settings.news_api_key.get_secret_value()
+            if settings.news_api_key
+            else None
+        ),
+    )
+
+
 def build_scheduler(settings: Settings | None = None) -> CollectionScheduler:
     """설정된 수집 주기를 Scheduler 인스턴스에 등록한다.
 
@@ -125,20 +153,7 @@ def build_scheduler(settings: Settings | None = None) -> CollectionScheduler:
         raise RuntimeError("AGENT_DATABASE_URL이 필요합니다.")
     return CollectionScheduler(
         database_url=resolved.agent_database_url,
-        credentials=CollectionCredentials(
-            naver_client_id=resolved.naver_client_id,
-            naver_client_secret=(
-                resolved.naver_client_secret.get_secret_value()
-                if resolved.naver_client_secret
-                else None
-            ),
-            gdelt_base_url=resolved.gdelt_base_url,
-            news_api_key=(
-                resolved.news_api_key.get_secret_value()
-                if resolved.news_api_key
-                else None
-            ),
-        ),
+        credentials=build_collection_credentials(resolved),
         tick_seconds=resolved.collection_scheduler_tick_seconds,
     )
 

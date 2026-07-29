@@ -141,6 +141,85 @@ def _evaluate_schedule(
     return None, next_run_at
 
 
+async def collect_schedule_keywords(
+    schedule: GlobalCollectionSchedule,
+    *,
+    database_url: str,
+    credentials: CollectionCredentials,
+    now: datetime,
+) -> list[CollectionScheduleResult]:
+    """실행하기로 정해진 Source 스케줄의 키워드를 하나씩 수집한다.
+
+    실행 차례(Cron) 판정은 하지 않는다. 호출자가 이미 실행하기로 정한 스케줄을
+    받아 수집만 하므로, 정기 실행(SCH-001~004)과 수동 실행(SCH-021)이 같은
+    수집 규칙(키워드 분리·쿼터·오류 격리)을 공유한다.
+
+    일일 실행 한도는 여기서도 지킨다. 무료 플랜 호출 한도가 있는 Provider를
+    수동 실행으로 소진하지 않기 위해서다.
+
+    Args:
+        schedule: 수집할 Source 스케줄 설정
+        database_url: 수집 Worker가 사용할 Agent DB 연결 문자열
+        credentials: Provider 자격 증명 묶음
+        now: 다음 실행 시각 계산 기준 시각
+
+    Returns:
+        키워드별 수집 결과 목록. 한도를 채운 키워드는 skipped로 남는다
+    """
+    try:
+        following_run_at = next_collection_run_at(
+            schedule.schedule_cron, after=now
+        )
+    except (CroniterBadCronError, ValueError):
+        following_run_at = None
+    remaining = (
+        None
+        if schedule.daily_max_runs is None
+        else schedule.daily_max_runs - schedule.runs_today
+    )
+    results: list[CollectionScheduleResult] = []
+    for keyword in schedule.keywords:
+        if remaining is not None and remaining <= 0:
+            results.append(
+                CollectionScheduleResult(
+                    provider=schedule.provider,
+                    source_key=schedule.source_key,
+                    status="skipped",
+                    keyword=keyword,
+                    reason=(
+                        f"오늘 실행 한도 {schedule.daily_max_runs}회를 채웠습니다."
+                    ),
+                    next_run_at=following_run_at,
+                )
+            )
+            continue
+        # 키워드를 하나씩 넘겨야 주제가 섞인 단일 질의가 되지 않는다.
+        collected = await worker_001(
+            database_url=database_url,
+            keywords=[keyword],
+            providers=[schedule.provider],
+            limit_per_provider=schedule.limit_per_provider,
+            language=schedule.language,
+            naver_client_id=credentials.naver_client_id,
+            naver_client_secret=credentials.naver_client_secret,
+            gdelt_base_url=credentials.gdelt_base_url,
+            news_api_key=credentials.news_api_key,
+        )
+        if remaining is not None:
+            remaining -= 1
+        results.append(
+            CollectionScheduleResult(
+                provider=schedule.provider,
+                source_key=schedule.source_key,
+                status="completed",
+                keyword=keyword,
+                next_run_at=following_run_at,
+                results=collected,
+            )
+        )
+    return results
+
+
 async def _run_scheduled_collection(
     connection: AsyncConnection[DictRow],
     *,
@@ -204,57 +283,14 @@ async def _run_scheduled_collection(
                 )
             )
             continue
-        try:
-            following_run_at = next_collection_run_at(
-                schedule.schedule_cron, after=now
-            )
-        except (CroniterBadCronError, ValueError):
-            following_run_at = None
-        remaining = (
-            None
-            if schedule.daily_max_runs is None
-            else schedule.daily_max_runs - schedule.runs_today
-        )
-        for keyword in schedule.keywords:
-            if remaining is not None and remaining <= 0:
-                results.append(
-                    CollectionScheduleResult(
-                        provider=provider,
-                        source_key=schedule.source_key,
-                        status="skipped",
-                        keyword=keyword,
-                        reason=(
-                            f"오늘 실행 한도 {schedule.daily_max_runs}회를 "
-                            "채웠습니다."
-                        ),
-                        next_run_at=following_run_at,
-                    )
-                )
-                continue
-            # 키워드를 하나씩 넘겨야 주제가 섞인 단일 질의가 되지 않는다.
-            collected = await worker_001(
+        results.extend(
+            await collect_schedule_keywords(
+                schedule,
                 database_url=database_url,
-                keywords=[keyword],
-                providers=[provider],
-                limit_per_provider=schedule.limit_per_provider,
-                language=schedule.language,
-                naver_client_id=credentials.naver_client_id,
-                naver_client_secret=credentials.naver_client_secret,
-                gdelt_base_url=credentials.gdelt_base_url,
-                news_api_key=credentials.news_api_key,
+                credentials=credentials,
+                now=now,
             )
-            if remaining is not None:
-                remaining -= 1
-            results.append(
-                CollectionScheduleResult(
-                    provider=provider,
-                    source_key=schedule.source_key,
-                    status="completed",
-                    keyword=keyword,
-                    next_run_at=following_run_at,
-                    results=collected,
-                )
-            )
+        )
     return results
 
 

@@ -6,6 +6,10 @@ SCH-017·018·019·020·022는 Service가 Agent의 정기 수집 주기를 조�
 수집 주기·키워드·쿼터는 `agent.global_sources` row가 소유하므로, 이 기능들은
 그 row를 읽고 바꾼다. Scheduler는 tick마다 같은 row를 다시 읽으므로 변경은
 서버 재시작 없이 다음 tick부터 반영된다.
+
+SCH-021만 설정을 바꾸지 않고 수집을 직접 실행한다. 주기를 기다리지 않고 지금
+결과를 보고 싶을 때(키워드 변경 직후 점검 등) 쓰는 경로이며, 수집 규칙 자체는
+정기 실행과 같은 구현(`collection.collect_schedule_keywords`)을 공유한다.
 """
 
 from dataclasses import dataclass
@@ -19,12 +23,19 @@ from infrastructure.persistence.api import (
     GlobalCollectionRunRecord,
     GlobalCollectionSchedule,
     load_collection_runs,
+    load_collection_schedule,
     load_collection_schedules,
     set_collection_schedule_status,
     update_collection_schedule,
     upsert_collection_schedule,
 )
-from .collection import SCHEDULED_PROVIDERS, next_collection_run_at
+from .collection import (
+    SCHEDULED_PROVIDERS,
+    CollectionCredentials,
+    CollectionScheduleResult,
+    collect_schedule_keywords,
+    next_collection_run_at,
+)
 from shared.contracts import FeatureRequest, FeatureResult
 
 type DictRow = dict[str, Any]
@@ -223,12 +234,70 @@ async def sch_020(
     return _to_view(resumed)
 
 
-async def sch_021(request: FeatureRequest) -> FeatureResult:
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
+async def sch_021(
+    connection: AsyncConnection[DictRow],
+    *,
+    source_key: str,
+    database_url: str,
+    credentials: CollectionCredentials,
+    now: datetime | None = None,
+) -> tuple[CollectionScheduleView, list[CollectionScheduleResult]]:
     """[SCH-021] 스케줄 수동 실행.
 
-    관리자가 정기 작업을 즉시 실행한다.
+    관리자가 정기 작업을 즉시 실행한다. 등록된 Cron 주기와 무관하게 지금 한 번
+    수집하므로, 키워드를 바꾸고 다음 tick까지 기다리지 않고 결과를 확인할 수
+    있다.
+
+    주기 조건만 건너뛴다. 일일 실행 한도(`quota_policy.daily_max_runs`)는 그대로
+    지켜, 무료 플랜 호출 한도를 수동 실행으로 소진하지 않게 한다. 중지(paused)
+    상태 스케줄도 실행한다 — 중지는 "정기 실행을 멈춘다"는 뜻이고, 수동 실행은
+    관리자가 명시적으로 지시한 별개 행위이기 때문이다.
+
+    Args:
+        connection: 스케줄 설정을 읽을 Agent DB 연결
+        source_key: 즉시 실행할 Source 식별 Key
+        database_url: 수집 Worker가 사용할 Agent DB 연결 문자열
+        credentials: Provider 자격 증명 묶음
+        now: 다음 실행 시각 계산 기준 시각 (미지정 시 현재 UTC)
+
+    Returns:
+        실행 후 스케줄 상태와 키워드별 수집 결과 목록
+
+    Raises:
+        UnknownCollectionScheduleError: 등록되지 않은 source_key일 때
+        ValueError: 정기 수집을 지원하지 않는 Provider일 때
     """
-    raise NotImplementedError("[SCH-021] 기능 구현이 필요합니다.")
+    schedule = await load_collection_schedule(connection, source_key=source_key)
+    if schedule is None:
+        raise UnknownCollectionScheduleError(source_key)
+    if schedule.provider not in SCHEDULED_PROVIDERS:
+        raise ValueError(
+            f"정기 수집을 지원하지 않는 Provider입니다: {schedule.provider} "
+            f"(가능: {', '.join(sorted(SCHEDULED_PROVIDERS))})"
+        )
+    moment = now or datetime.now(UTC)
+    if not schedule.keywords:
+        return (
+            _to_view(schedule),
+            [
+                CollectionScheduleResult(
+                    provider=schedule.provider,
+                    source_key=schedule.source_key,
+                    status="skipped",
+                    reason="수집 키워드가 비어 있습니다.",
+                )
+            ],
+        )
+    results = await collect_schedule_keywords(
+        schedule,
+        database_url=database_url,
+        credentials=credentials,
+        now=moment,
+    )
+    # 실행 직후 상태(마지막 실행 시각·오늘 실행 횟수)를 다시 읽어 돌려준다.
+    refreshed = await load_collection_schedule(connection, source_key=source_key)
+    return _to_view(refreshed or schedule), results
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
