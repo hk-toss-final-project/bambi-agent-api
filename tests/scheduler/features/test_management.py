@@ -374,10 +374,15 @@ def test_manual_run_runs_paused_schedule(monkeypatch: pytest.MonkeyPatch) -> Non
     assert len(calls) == 1
 
 
-def test_manual_run_keeps_daily_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """수동 실행이 일일 호출 한도는 그대로 지키는지 검증한다."""
+def test_manual_run_ignores_daily_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """수동 실행이 일일 실행 한도에 막히지 않는지 검증한다.
+
+    한도는 "알아서 도는 수집"을 통제하는 장치다. 관리자가 지금 결과를 보겠다고
+    명시한 요청까지 막으면 한도가 낮은 스케줄은 점검이 불가능해진다.
+    """
     calls = _patch_manual_run(
-        monkeypatch, _schedule(daily_max_runs=2, runs_today=2)
+        monkeypatch,
+        _schedule(keywords=("후쿠오카", "르센느"), daily_max_runs=1, runs_today=1),
     )
 
     _, results = asyncio.run(
@@ -390,9 +395,8 @@ def test_manual_run_keeps_daily_limit(monkeypatch: pytest.MonkeyPatch) -> None:
         )
     )
 
-    assert [result.status for result in results] == ["skipped"]
-    assert "한도" in (results[0].reason or "")
-    assert calls == []
+    assert [result.status for result in results] == ["completed", "completed"]
+    assert [call["keywords"] for call in calls] == [["후쿠오카"], ["르센느"]]
 
 
 def test_manual_run_reports_empty_keywords(

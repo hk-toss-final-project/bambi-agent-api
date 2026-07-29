@@ -147,21 +147,23 @@ async def collect_schedule_keywords(
     database_url: str,
     credentials: CollectionCredentials,
     now: datetime,
+    enforce_daily_limit: bool = True,
 ) -> list[CollectionScheduleResult]:
     """실행하기로 정해진 Source 스케줄의 키워드를 하나씩 수집한다.
 
     실행 차례(Cron) 판정은 하지 않는다. 호출자가 이미 실행하기로 정한 스케줄을
     받아 수집만 하므로, 정기 실행(SCH-001~004)과 수동 실행(SCH-021)이 같은
-    수집 규칙(키워드 분리·쿼터·오류 격리)을 공유한다.
+    수집 규칙(키워드 분리·오류 격리)을 공유한다.
 
-    일일 실행 한도는 여기서도 지킨다. 무료 플랜 호출 한도가 있는 Provider를
-    수동 실행으로 소진하지 않기 위해서다.
+    일일 실행 한도는 정기 실행에서만 지킨다. 수동 실행(SCH-021)은 관리자가
+    지금 결과를 보겠다고 명시한 요청이라 한도로 막지 않는다.
 
     Args:
         schedule: 수집할 Source 스케줄 설정
         database_url: 수집 Worker가 사용할 Agent DB 연결 문자열
         credentials: Provider 자격 증명 묶음
         now: 다음 실행 시각 계산 기준 시각
+        enforce_daily_limit: False면 일일 실행 한도를 무시하고 모두 수집한다
 
     Returns:
         키워드별 수집 결과 목록. 한도를 채운 키워드는 skipped로 남는다
@@ -174,7 +176,7 @@ async def collect_schedule_keywords(
         following_run_at = None
     remaining = (
         None
-        if schedule.daily_max_runs is None
+        if schedule.daily_max_runs is None or not enforce_daily_limit
         else schedule.daily_max_runs - schedule.runs_today
     )
     results: list[CollectionScheduleResult] = []

@@ -249,10 +249,14 @@ async def sch_021(
     수집하므로, 키워드를 바꾸고 다음 tick까지 기다리지 않고 결과를 확인할 수
     있다.
 
-    주기 조건만 건너뛴다. 일일 실행 한도(`quota_policy.daily_max_runs`)는 그대로
-    지켜, 무료 플랜 호출 한도를 수동 실행으로 소진하지 않게 한다. 중지(paused)
-    상태 스케줄도 실행한다 — 중지는 "정기 실행을 멈춘다"는 뜻이고, 수동 실행은
-    관리자가 명시적으로 지시한 별개 행위이기 때문이다.
+    **정기 실행 조건에 걸리지 않는다.** Cron 주기, 일일 실행 한도
+    (`quota_policy.daily_max_runs`), 중지(paused) 상태를 모두 건너뛴다. 이
+    조건들은 "알아서 도는 수집"을 통제하는 장치이고, 수동 실행은 관리자가 지금
+    결과를 보겠다고 명시한 별개 행위이기 때문이다. 실행하면 키워드는 항상 전부
+    수집한다.
+
+    다만 이 실행도 `global_collection_runs`에 기록되므로, 이후 정기 실행의
+    오늘 실행 횟수(`runs_today`)에는 그대로 반영된다.
 
     Args:
         connection: 스케줄 설정을 읽을 Agent DB 연결
@@ -294,6 +298,7 @@ async def sch_021(
         database_url=database_url,
         credentials=credentials,
         now=moment,
+        enforce_daily_limit=False,
     )
     # 실행 직후 상태(마지막 실행 시각·오늘 실행 횟수)를 다시 읽어 돌려준다.
     refreshed = await load_collection_schedule(connection, source_key=source_key)
