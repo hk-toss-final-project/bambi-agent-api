@@ -1,9 +1,9 @@
 # Global 수집 스케줄링 — 구현 인수인계 메모 (Step 4)
 
-> 상태: **구현 대기 (담당자 배정됨)** · 작성 2026-07-28
+> 상태: **✅ 구현 완료 (2026-07-29)** · 작성 2026-07-28
 > 관련: [assistant-split-proposal.md](assistant-split-proposal.md) Step 4
-> 이 문서는 원래 Service 팀 협의안으로 썼으나, **스케줄러를 우리 서버에서 돌리는
-> 것으로 결정**되어 구현 인수인계 자료로 다시 정리했다.
+> 이 문서는 Service 팀 협의안 → 구현 인수인계 메모 → **완료 기록** 순으로 성격이
+> 두 번 바뀌었다. §3~4의 함정·실측은 구현이 끝난 지금도 운영 시 참고 자료로 남긴다.
 
 ## 1. 결정된 설계
 
@@ -22,16 +22,32 @@ Service가 사용자 지정 시각에 리포트를 요청하는 것이고, 후�
 것이다. 다만 데이터는 만난다 — 리포트 생성은 개인 Wiki(`wiki_chunks`)와 Global
 캐시(`global_source_documents`)를 함께 검색해 **한 리포트**에 담는다.
 
-## 2. 구현 범위
+## 2. 구현 범위 — ✅ **전부 완료 (2026-07-29)**
 
 | | 항목 | 상태 |
 |---|---|---|
-| ① | `SCH-002`/`003`/`004` 구현 (`scheduler/features/collection.py` 전부 `NotImplementedError`) | ❌ |
-| ② | 서버 시작 시 스케줄러 자동 실행 | ❌ |
-| ③ | 수집 → Jina Reader 본문 캐싱 → `global_source_documents` 적재 | ✅ **완료 (2026-07-28)** |
-| ④ | service-api가 주기를 조정할 API 엔드포인트 | ❌ |
+| ① | `SCH-001`/`002`/`003`/`004` 정기 수집 스케줄 | ✅ 완료 |
+| ② | 서버 시작 시 스케줄러 자동 실행 | ✅ 완료 |
+| ③ | 수집 → Jina Reader 본문 캐싱 → `global_source_documents` 적재 | ✅ 완료 (07-28) |
+| ④ | service-api가 주기를 조정할 API 엔드포인트 | ✅ 완료 |
 
-③은 이미 동작한다. 현재 적재 상태:
+③은 2026-07-28에, ①②④는 2026-07-29에 구현됐다. 이 문서는 착수 전 인수인계용으로
+썼으나 **구현이 끝났으므로 아래 §3~4는 이력·근거 기록으로 남긴다.**
+
+구현 위치:
+
+```
+scheduler/features/collection.py   sch_001~004 (SCH-005~008은 여전히 스텁)
+app/main.py:40                     _start_collection_scheduler — 백그라운드 Task
+                                   ENABLE_COLLECTION_SCHEDULER=false로 끌 수 있음
+app/routers/service/routes.py      SCH-017 등록 · 018 주기 변경 · 019 중지
+                                   020 재개 · 021 즉시 실행 · 022 상태 조회
+```
+
+범위가 계획보다 넓어졌다. §3.5에서 제안한 대로 **SCH-001(RSS/google_news)이
+포함**됐고, 즉시 실행(SCH-021)·상태 조회(SCH-022)도 함께 들어갔다.
+
+수집 캐시 적재 상태(07-28 기준):
 
 ```
 agent.global_source_documents   260건
@@ -39,8 +55,7 @@ agent.global_source_documents   260건
   failed    11건 (유료 구독·접근 차단)
 ```
 
-리포트가 이 테이블에서 근거를 꺼내 쓰는 것까지 검증됐다(Step 3). 남은 것은
-**자동 실행**뿐이다.
+리포트가 이 테이블에서 근거를 꺼내 쓰는 것까지 검증됐다(Step 3).
 
 ## 3. ⚠️ 착수 전에 알아야 할 것
 
