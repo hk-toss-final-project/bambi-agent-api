@@ -15,6 +15,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from datetime import UTC, datetime
 from typing import Any
 
@@ -26,6 +27,7 @@ from .collection import (
     SCHEDULED_PROVIDERS,
     CollectionCredentials,
     CollectionScheduleResult,
+    run_provider_collection_schedule,
     sch_001,
     sch_002,
     sch_003,
@@ -46,6 +48,10 @@ PROVIDER_SCHEDULES: dict[str, Callable[..., Any]] = {
     "gdelt": sch_003,
     "newsapi": sch_004,
     "google_news": sch_001,
+    # SNS(COL-005)는 Provider별 스케줄 기능 ID가 명세에 없어 공용 구현을 바로
+    # 부른다. 판정·실행 규칙은 뉴스 Provider와 같다.
+    "youtube": partial(run_provider_collection_schedule, provider="youtube"),
+    "reddit": partial(run_provider_collection_schedule, provider="reddit"),
 }
 
 

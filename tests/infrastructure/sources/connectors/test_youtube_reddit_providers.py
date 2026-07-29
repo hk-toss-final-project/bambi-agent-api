@@ -5,6 +5,11 @@ from datetime import UTC, datetime
 
 import pytest
 
+from infrastructure.sources.connectors.api import (
+    LatestArticle,
+    LatestProviderError,
+    col_005,
+)
 from infrastructure.sources.connectors.features import reddit as reddit_provider
 from infrastructure.sources.connectors.features import youtube as youtube_provider
 
@@ -209,3 +214,47 @@ def test_reddit_falls_back_to_url_for_subreddit(monkeypatch) -> None:
     )
 
     assert articles[0].source_name == "r/StockMarket"
+
+
+# ── COL-005 (SNS 수집 커넥터) ──────────────────────────────────────────────
+
+
+class _NamedProvider:
+    """이름만 다른 Provider 대역. 검색 인자를 기록한다."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.calls: list[dict] = []
+
+    async def search(self, *, query: str, limit: int, language: str | None):
+        """검색 인자를 기록하고 문서 한 건을 돌려준다."""
+        self.calls.append({"query": query, "limit": limit, "language": language})
+        return [
+            LatestArticle(
+                provider=self.name,
+                title="제목",
+                url="https://example.com/1",
+                description="",
+            )
+        ]
+
+
+def test_col_005_collects_from_sns_providers() -> None:
+    """COL-005가 YouTube·Reddit Provider에 그대로 위임하는지 검증한다."""
+    for name in ("youtube", "reddit"):
+        provider = _NamedProvider(name)
+
+        articles = asyncio.run(
+            col_005(provider, query="후쿠오카", limit=5, language="ko")
+        )
+
+        assert [article.provider for article in articles] == [name]
+        assert provider.calls == [{"query": "후쿠오카", "limit": 5, "language": "ko"}]
+
+
+def test_col_005_rejects_non_sns_provider() -> None:
+    """SNS가 아닌 Provider를 넘기면 거부하는지 검증한다."""
+    with pytest.raises(LatestProviderError):
+        asyncio.run(
+            col_005(_NamedProvider("naver"), query="코스피", limit=5, language="ko")
+        )

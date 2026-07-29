@@ -67,6 +67,7 @@
 - [x] `COL-002` Naver API 수집 — Adapter 구현 (자격 증명 필요)
 - [x] `COL-003` GDELT 수집
 - [x] `COL-004` NewsAPI 수집
+- [x] `COL-005` SNS 수집 — YouTube 영상 검색·Reddit 공개 RSS 검색 (자격 증명 불필요). 2026-07-29 범위 추가: 키워드 비서가 쓰던 Provider 구현(`features/youtube.py`·`features/reddit.py`)을 수집 Worker와 수집 스케줄에 연결했다. 뉴스와 성격이 다르고 Reddit은 비인증 레이트리밋이 빡빡해 기본 Provider 목록에서는 제외하고, Source로 등록했을 때만 수집한다
 - [x] `GSP-004` API 응답 정규화 — Provider 공통 문서 구조로 변환
 - [x] `GSP-006` 문서 중복 제거 — URL 기준 멱등 Upsert
 - [x] `GSP-015` 개인 Wiki 자동 반영 금지 — Global Namespace 분리 저장
@@ -205,6 +206,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | COL-002 | Naver API 수집 | 설정된 키워드로 Naver API 데이터를 수집한다. |
 | COL-003 | GDELT 수집 | 글로벌 뉴스와 이벤트 데이터를 수집한다. |
 | COL-004 | NewsAPI 수집 | 뉴스 기사와 관련 메타데이터를 수집한다. |
+| COL-005 | SNS 수집 | 허용된 SNS 공개 데이터(YouTube·Reddit)를 수집한다. |
 | GSP-004 | API 응답 정규화 | Source별 응답을 공통 문서 구조로 변환한다. |
 | GSP-006 | 문서 중복 제거 | 동일 URL과 유사 문서를 중복 제거한다. |
 | GSP-015 | 개인 Wiki 자동 반영 금지 | 수집 데이터를 사용자 선택 없이 개인 Wiki에 반영하지 않는다. |

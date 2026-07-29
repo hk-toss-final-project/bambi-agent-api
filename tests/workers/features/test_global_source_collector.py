@@ -19,6 +19,8 @@ from infrastructure.sources.connectors.api import (
     LatestProviderError,
     NaverNewsProvider,
     NewsApiProvider,
+    RedditSearchProvider,
+    YouTubeSearchProvider,
 )
 
 
@@ -151,6 +153,37 @@ def test_collection_batch_isolates_provider_failure(
     assert gdelt_result["error_code"] == "request_failed"
 
 
+def test_collection_batch_supports_sns_providers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """YouTube·Reddit도 뉴스와 같은 경로로 수집·저장되는지 검증한다."""
+    connection = _FakeConnection(
+        [
+            [],  # set_system_job_scope
+            [{"id": "source-1"}],  # INSERT global_sources
+            [{"id": "run-1"}],  # INSERT global_collection_runs
+            [{"id": "doc-1"}],  # INSERT global_source_documents
+            [],  # UPDATE global_collection_runs
+        ]
+    )
+    _patch_connection(monkeypatch, connection)
+    monkeypatch.setattr(
+        collector, "_build_provider", lambda name, **_: _OneArticleProvider(name)
+    )
+
+    results = asyncio.run(
+        collector.run_global_source_collection_batch(
+            database_url="postgresql://fake",
+            keywords=["후쿠오카"],
+            providers=["youtube"],
+        )
+    )
+
+    assert results[0]["provider"] == "youtube"
+    assert results[0]["status"] == "completed"
+    assert results[0]["created_count"] == 1
+
+
 def test_collection_batch_requires_keywords(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -198,6 +231,23 @@ def test_build_provider_selects_and_validates() -> None:
         news_api_key="news-api-key",
     )
     assert isinstance(newsapi, NewsApiProvider)
+
+    # SNS Provider는 자격 증명 없이 구성된다.
+    youtube = collector._build_provider(
+        "youtube",
+        naver_client_id=None,
+        naver_client_secret=None,
+        gdelt_base_url=None,
+    )
+    assert isinstance(youtube, YouTubeSearchProvider)
+
+    reddit = collector._build_provider(
+        "reddit",
+        naver_client_id=None,
+        naver_client_secret=None,
+        gdelt_base_url=None,
+    )
+    assert isinstance(reddit, RedditSearchProvider)
 
     with pytest.raises(LatestProviderError):
         collector._build_provider(

@@ -1,13 +1,17 @@
 """PostgreSQL Global Source Collector Worker.
 
-GDELT·Naver·Google News RSS·NewsAPI를 키워드로 검색해 뉴스 기사 URL을 Global
-수집 캐시에 중복 없이 저장한다. 본문은 저장하지 않고 `content_status='pending'`
-상태로만 등록하며, 이후 Jina Reader Worker(global_content_fetcher)가 본문을
-채운다. Provider별 실패는 서로 격리해 한 Provider가 실패해도 나머지 수집을
-계속한다.
+GDELT·Naver·Google News RSS·NewsAPI·YouTube·Reddit을 키워드로 검색해 문서 URL을
+Global 수집 캐시에 중복 없이 저장한다. 본문은 저장하지 않고
+`content_status='pending'` 상태로만 등록하며, 이후 Jina Reader
+Worker(global_content_fetcher)가 본문을 채운다. Provider별 실패는 서로 격리해
+한 Provider가 실패해도 나머지 수집을 계속한다.
 
 NewsAPI는 자격 증명과 무료 플랜 호출 한도(일 100회)가 있어 기본 Provider
 목록에서는 제외한다. 호출자가 명시적으로 지정할 때만 수집한다.
+
+YouTube·Reddit(COL-005)은 자격 증명이 없어도 동작하지만 기본 목록에서는
+제외한다. 뉴스와 성격이 다른 소스라 필요할 때만 골라 쓰는 편이 낫고, Reddit은
+비인증 요청 레이트리밋이 빡빡해 매 tick 호출할 대상이 아니기 때문이다.
 """
 
 from typing import Any
@@ -26,28 +30,41 @@ from infrastructure.sources.connectors.api import (
     LatestProviderError,
     NaverNewsProvider,
     NewsApiProvider,
+    RedditSearchProvider,
+    YouTubeSearchProvider,
     col_001,
     col_002,
     col_003,
     col_004,
+    col_005,
 )
 from infrastructure.sources.processing.api import gsp_004, gsp_006, gsp_015
 
 type DictRow = dict[str, Any]
 
-# 이 Worker가 지원하는 최신 뉴스 Provider 이름.
-_SUPPORTED_PROVIDERS = ("gdelt", "naver", "google_news", "newsapi")
+# 이 Worker가 지원하는 Provider 이름.
+_SUPPORTED_PROVIDERS = (
+    "gdelt",
+    "naver",
+    "google_news",
+    "newsapi",
+    "youtube",
+    "reddit",
+)
 
 # 호출자가 Provider를 지정하지 않았을 때 수집할 기본 Provider 이름.
-# NewsAPI는 무료 플랜 호출 한도가 낮아 기본값에서 제외한다.
+# NewsAPI는 무료 플랜 호출 한도가 낮아, YouTube·Reddit은 뉴스와 성격이 다른
+# 소스라 기본값에서 제외한다.
 _DEFAULT_PROVIDERS = ("gdelt", "naver", "google_news")
 
-# Provider별 수집 기능(COL-*) 매핑.
+# Provider별 수집 기능(COL-*) 매핑. SNS 두 곳은 COL-005가 함께 담당한다.
 _PROVIDER_CONNECTORS = {
     "naver": col_002,
     "gdelt": col_003,
     "google_news": col_001,
     "newsapi": col_004,
+    "youtube": col_005,
+    "reddit": col_005,
 }
 
 
@@ -59,10 +76,10 @@ def _build_provider(
     gdelt_base_url: str | None,
     news_api_key: str | None = None,
 ) -> LatestInformationProvider:
-    """이름과 자격 증명으로 최신 뉴스 Provider를 구성한다.
+    """이름과 자격 증명으로 수집 Provider를 구성한다.
 
     Args:
-        name: Provider 이름 (gdelt, naver, google_news 또는 newsapi)
+        name: Provider 이름 (gdelt, naver, google_news, newsapi, youtube, reddit)
         naver_client_id: Naver 검색 API Client ID
         naver_client_secret: Naver 검색 API Client Secret
         gdelt_base_url: GDELT API 기본 URL (없으면 기본값 사용)
@@ -94,6 +111,11 @@ def _build_provider(
                 "NEWS_API_KEY가 필요합니다.",
             )
         return NewsApiProvider(news_api_key)
+    # YouTube·Reddit은 자격 증명 없이 공개 검색으로 동작한다.
+    if name == "youtube":
+        return YouTubeSearchProvider()
+    if name == "reddit":
+        return RedditSearchProvider()
     raise LatestProviderError(name, "unsupported_provider", "지원하지 않는 Provider입니다.")
 
 
@@ -109,7 +131,7 @@ async def run_global_source_collection_batch(
     gdelt_base_url: str | None = None,
     news_api_key: str | None = None,
 ) -> list[dict[str, object]]:
-    """키워드로 GDELT·Naver·Google News RSS·NewsAPI 뉴스를 수집해 Global 수집 캐시에 저장한다.
+    """키워드로 뉴스·SNS Provider를 검색해 Global 수집 캐시에 저장한다.
 
     Provider별로 독립적인 Transaction과 오류 처리를 사용해, 한 Provider의 API
     실패나 저장 오류가 다른 Provider의 수집 결과를 되돌리지 않는다.

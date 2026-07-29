@@ -35,12 +35,18 @@ from workers.api import worker_001
 
 type DictRow = dict[str, Any]
 
-# 정기 수집 스케줄을 구현한 Provider와 담당 기능 ID.
+# 정기 수집 스케줄을 등록할 수 있는 Provider와 담당 기능 ID.
+#
+# 뉴스 Provider는 명세에 Provider별 스케줄 기능(SCH-001~004)이 있다. SNS는
+# 스케줄 기능 ID가 명세에 없어 수집 기능 ID(COL-005)를 적어 둔다 — 판정·실행
+# 규칙은 뉴스와 완전히 같고, 실행은 아래 공용 구현이 그대로 맡는다.
 SCHEDULED_PROVIDERS = {
     "google_news": "SCH-001",
     "naver": "SCH-002",
     "gdelt": "SCH-003",
     "newsapi": "SCH-004",
+    "youtube": "COL-005",
+    "reddit": "COL-005",
 }
 
 
@@ -222,7 +228,7 @@ async def collect_schedule_keywords(
     return results
 
 
-async def _run_scheduled_collection(
+async def run_provider_collection_schedule(
     connection: AsyncConnection[DictRow],
     *,
     provider: str,
@@ -233,13 +239,14 @@ async def _run_scheduled_collection(
 ) -> list[CollectionScheduleResult]:
     """한 Provider의 정기 수집 스케줄을 판정하고 실행 차례인 것만 수집한다.
 
-    SCH-002·SCH-003·SCH-004가 공유하는 구현이다. Source의 키워드는 하나씩
-    따로 수집해 주제가 섞인 단일 질의가 되지 않게 하고, 키워드 하나가 실패해도
-    같은 Source의 다른 키워드 수집을 막지 않는다.
+    Provider별 스케줄 기능(SCH-001~004)이 공유하는 구현이며, 스케줄 기능 ID가
+    없는 SNS Provider(youtube·reddit)는 Scheduler가 이 함수를 직접 호출한다.
+    Source의 키워드는 하나씩 따로 수집해 주제가 섞인 단일 질의가 되지 않게 하고,
+    키워드 하나가 실패해도 같은 Source의 다른 키워드 수집을 막지 않는다.
 
     Args:
         connection: 스케줄 설정을 읽을 Agent DB 연결
-        provider: 수집 Provider 이름 (naver, gdelt, newsapi)
+        provider: 수집 Provider 이름 (SCHEDULED_PROVIDERS의 Key)
         database_url: 수집 Worker가 사용할 Agent DB 연결 문자열
         credentials: Provider 자격 증명 묶음
         now: 실행 시각 판정 기준
@@ -320,7 +327,7 @@ async def sch_001(
     다른 Provider보다 느리다. 기사 link가 Google 리다이렉트 주소라 원본 URL
     디코딩에 약 1.2초/건이 들어, 키워드 하나당 12초쯤 더 걸린다.
     """
-    return await _run_scheduled_collection(
+    return await run_provider_collection_schedule(
         connection,
         provider="google_news",
         database_url=database_url,
@@ -345,7 +352,7 @@ async def sch_002(
     수집 Worker를 실행하고, 아직 차례가 아니거나 일일 호출 한도를 채웠으면
     건너뛴 사유를 남긴다.
     """
-    return await _run_scheduled_collection(
+    return await run_provider_collection_schedule(
         connection,
         provider="naver",
         database_url=database_url,
@@ -374,7 +381,7 @@ async def sch_003(
     수동 점검을 몇 분 간격으로 반복할 때만 걸린다. 429가 나도 실패는 이
     Provider 안에 갇혀 같은 tick의 다른 Provider 수집은 그대로 끝난다.
     """
-    return await _run_scheduled_collection(
+    return await run_provider_collection_schedule(
         connection,
         provider="gdelt",
         database_url=database_url,
@@ -398,7 +405,7 @@ async def sch_004(
     NewsAPI 수집 작업을 정기 등록한다. 무료 플랜 호출 한도가 낮으므로
     Source의 `quota_policy.daily_max_runs` 설정을 반드시 함께 쓴다.
     """
-    return await _run_scheduled_collection(
+    return await run_provider_collection_schedule(
         connection,
         provider="newsapi",
         database_url=database_url,

@@ -19,7 +19,11 @@ class CollectionScheduleRegisterRequest(BaseModel):
         examples=["latest-naver"],
     )
     provider: str = Field(
-        description="수집 Provider (naver, gdelt, newsapi)",
+        description=(
+            "수집 Provider. 뉴스는 `naver`·`gdelt`·`google_news`·`newsapi`, "
+            "SNS는 `youtube`·`reddit`. `youtube`·`reddit`·`gdelt`·`google_news`는 "
+            "자격 증명이 필요 없고, `naver`·`newsapi`는 API Key가 있어야 한다"
+        ),
         examples=["naver"],
     )
     schedule_cron: str = Field(
