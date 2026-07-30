@@ -98,3 +98,42 @@ def test_pwiki_002_delegates_to_persistence_facade(
         "plan": plan,
         "job_id": "job-1",
     }
+
+
+def test_pwiki_005_delegates_to_persistence_facade(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """PWIKI-005가 삭제 인자를 영속화 삭제 함수에 그대로 위임한다."""
+    connection = _FakeConnection()
+    captured: dict[str, Any] = {}
+
+    async def fake_delete(
+        connection_value: object, **kwargs: object
+    ) -> dict[str, object]:
+        """삭제 호출 인자를 기록하고 고정 결과를 반환한다."""
+        captured["connection"] = connection_value
+        captured.update(kwargs)
+        return {"document_id": "document-1", "already_deleted": False}
+
+    monkeypatch.setattr(
+        persistence_api, "delete_wiki_document_and_record_event", fake_delete
+    )
+    result = asyncio.run(
+        commands.pwiki_005(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            document_id="document-1",
+            source_event_id="delete-1",
+            memo="정리",
+        )
+    )
+
+    assert result == {"document_id": "document-1", "already_deleted": False}
+    assert captured == {
+        "connection": connection,
+        "user_id": "user-1",
+        "document_id": "document-1",
+        "source_event_id": "delete-1",
+        "occurred_at": None,
+        "memo": "정리",
+    }

@@ -44,7 +44,7 @@
 
 - [x] `PWIKI-002` 개인 Wiki 문서 생성 — Entity·Concept·Schema 증분 생성
 - [x] `PWIKI-003` 개인 Wiki 문서 조회 — 목록·상세·Build·Graph·연결 상위 Node(top-nodes)
-- [ ] `PWIKI-005` 개인 Wiki 문서 삭제 — ❌ 삭제 API·Handler 미구현
+- [x] `PWIKI-005` 개인 Wiki 문서 삭제 — soft-delete + Chunk 검색 제외 (동기·멱등). 삭제 정책은 Service 소유, `pwiki_005` facade는 영속화 계층 `delete_wiki_document_and_record_event`에 위임 (WBA-015와 동일 실행 경로 공유). D1 잠정: 재등장 시 기본 부활, tombstone 없음
 - [x] `PWIKI-008` Wiki 문서 중복 제거 — ⚠️ 같은 `document_key` Upsert·병합은 구현, 유사 문서 의미 판단은 LLM 프롬프트에 위임
 - [x] `PWE-001` 개인 Wiki 문서 Chunking
 - [x] `PWE-002` Chunk 저장 — `wiki_chunks` 멱등 Upsert
