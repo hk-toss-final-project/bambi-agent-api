@@ -60,6 +60,8 @@ Seed Snapshot의 고정 계약은 다음과 같습니다.
 `dummy/clippings`의 Obsidian Web Clipper Markdown은 `mock-clipping-user`와 `28`
 각 사용자의 원본 및 처리 대기 Job으로 저장됩니다. `wiki_documents`에는 Worker가
 생성한 LLM Wiki만 들어가므로 Seed 직후에는 두 사용자의 Wiki 문서가 없습니다.
+28번 사용자의 같은 Version Context Snapshot이 이미 있으면 기존 개인화 값을
+덮어쓰지 않고 그대로 사용합니다.
 
 ```sql
 SELECT version.title, version.clipped_on, source.canonical_url, version.raw_content
@@ -164,7 +166,11 @@ docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_US
   Compose `post_start` Hook은 컨테이너가 실제로 시작될 때 같은 경로를 실행합니다.
   Migration은 Advisory Lock을, Seed는 볼륨 내 Checksum과 File Lock을 사용해
   중복 적용을 막습니다.
-- 운영 마이그레이션은 Agent API 시작 과정이 아니라 별도 Cloud Run Job에서 한 번만 실행합니다.
+- 배포 환경은 Agent API 시작 과정이 아니라 별도 one-shot 작업으로 같은
+  Initializer를 실행합니다. 현재 VM 배포에서는 `bambi-build`의 `agent-db-init`
+  서비스가 API·Worker 기동 전에 실행되며, Migration은 `schema_migrations`,
+  Seed는 `audit_logs`에 기록된 최신 합성 Checksum으로 중복 적용을 막습니다.
+  Cloud Run 전환 시에도 이 작업을 단일 Migration Job으로 유지합니다.
 - `vector`, `pg_trgm` 확장은 Cloud SQL Primary에서 `cloudsqlsuperuser` 권한으로 먼저 생성합니다.
 - 애플리케이션 계정은 테이블 소유자가 아니어야 하며 DML 최소 권한만 부여합니다.
 - 개인 데이터 쿼리는 트랜잭션을 시작한 뒤 `app.user_id`와 `app.access_scope`를 `SET LOCAL`로 지정합니다.
@@ -204,6 +210,22 @@ Migration과 Seed 전체 초기화 경로는 다음 명령으로 수동 실행·
 docker compose exec -T -u postgres agent-db /bin/sh /usr/local/bin/initialize-agent-db
 docker compose exec -T -u postgres agent-db /bin/sh /usr/local/bin/initialize-agent-db --check
 ```
+
+배포 이미지에서는 `AGENT_DATABASE_URL`로 원격 DB에 연결하고 다음 설정으로
+동일한 Initializer를 one-shot 실행합니다.
+
+```bash
+AGENT_DB_MIGRATION_DIR=/app/database/migrations \
+AGENT_DB_SEED_DIR=/app/database/seeds \
+AGENT_DB_MIGRATION_RUNNER_PATH=/app/scripts/run_agent_db_migrations.sh \
+AGENT_DB_SEED_STATE_BACKEND=database \
+/bin/sh /app/scripts/initialize_agent_db.sh
+```
+
+`database` 상태 저장 방식을 쓰면 성공한 Seed 묶음의 Checksum을
+`agent.audit_logs`에 append-only로 기록합니다. 다음 배포에서 최신 Checksum이
+같으면 Seed SQL을 건너뛰고, 파일이 추가되거나 내용이 바뀌면 한 번 다시 적용합니다.
+Initializer가 실패하면 배포 작업도 실패해야 하며 API·Worker를 먼저 기동하지 않습니다.
 
 `0004`는 `0003`에서 Wiki Version으로 분류했던 개인 웹 클리핑을
 `user_source_documents`와 `user_source_document_versions`로 이관합니다. 이후
@@ -280,8 +302,9 @@ uv run python scripts/generate_user_url_seed.py
 uv run python scripts/generate_user_url_seed.py --check
 ```
 
-개발 Seed는 DB 볼륨에 저장된 합성 Checksum과 현재 Seed 파일이 다를 때만
-적용됩니다. 기존 볼륨에 Checksum이 없으면 다음 기동 시 한 번 적용됩니다.
+로컬 개발 Seed는 DB 볼륨에 저장된 합성 Checksum과 현재 Seed 파일이 다를 때만
+적용됩니다. 배포 one-shot 작업은 같은 Checksum을 DB 감사 로그에 저장합니다.
+기존 상태에 Checksum이 없으면 다음 초기화 시 한 번 적용됩니다.
 `AGENT_DB_APPLY_DEV_SEEDS=false`로 설정하면 자동 Seed를 건너뜁니다. 개발 데이터를 모두
 삭제해도 되는 경우에만 아래 명령으로 볼륨을 제거한 뒤 다시 시작합니다.
 

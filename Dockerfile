@@ -30,9 +30,10 @@ RUN uv sync --frozen --no-dev
 # ── runtime stage ── 빌드 도구 없이 venv + 소스만 담는다
 FROM python:3.14-slim AS runtime
 
-# psycopg[binary] 라 libpq 는 휠에 포함되지만, HTTPS 호출(OpenAI·Tavily·Jina)에 CA 번들이 필요하다.
+# psycopg[binary] 라 libpq 는 휠에 포함된다. HTTPS 호출에는 CA 번들이,
+# 배포 전용 DB 초기화 작업에는 psql과 pg_isready가 필요하다.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 # 비루트 실행

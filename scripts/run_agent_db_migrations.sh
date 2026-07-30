@@ -7,6 +7,7 @@ MIGRATION_DIR="${AGENT_DB_MIGRATION_DIR:-/opt/bambi/migrations}"
 WAIT_SECONDS="${AGENT_DB_MIGRATION_WAIT_SECONDS:-60}"
 LOCK_KEY="764224901"
 MODE="${1:-}"
+DATABASE_URL="${AGENT_DATABASE_URL:-}"
 
 PGHOST="${PGHOST:-127.0.0.1}"
 PGPORT="${PGPORT:-5432}"
@@ -14,6 +15,26 @@ PGDATABASE="${PGDATABASE:-${POSTGRES_DB:-postgres}}"
 PGUSER="${PGUSER:-${POSTGRES_USER:-postgres}}"
 PGPASSWORD="${PGPASSWORD:-${POSTGRES_PASSWORD:-}}"
 export PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD
+
+# 배포 환경의 URL 또는 로컬 libpq 환경변수로 psql을 실행한다.
+run_psql() {
+    if [ -n "$DATABASE_URL" ]; then
+        psql -d "$DATABASE_URL" "$@"
+        return
+    fi
+
+    psql "$@"
+}
+
+# 선택된 연결 방식으로 PostgreSQL 준비 상태를 확인한다.
+database_is_ready() {
+    if [ -n "$DATABASE_URL" ]; then
+        pg_isready -q -d "$DATABASE_URL"
+        return
+    fi
+
+    pg_isready -q -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE"
+}
 
 set -- "$MIGRATION_DIR"/[0-9][0-9][0-9][0-9]_*.sql
 if [ ! -f "$1" ]; then
@@ -31,14 +52,14 @@ latest_version="$(printf '%s' "$latest_prefix" | sed 's/^0*//')"
 latest_version="${latest_version:-0}"
 
 if [ "$MODE" = "--check" ]; then
-    psql -X -q -t -A -v ON_ERROR_STOP=1 -c \
+    run_psql -X -q -t -A -v ON_ERROR_STOP=1 -c \
         "SELECT COALESCE((SELECT max(version) FROM agent.schema_migrations), 0)
          = $latest_version;" | grep -qx 't'
     exit 0
 fi
 
 elapsed=0
-until pg_isready -q -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE"; do
+until database_is_ready; do
     if [ "$elapsed" -ge "$WAIT_SECONDS" ]; then
         echo "PostgreSQL 준비를 ${WAIT_SECONDS}초 동안 기다렸지만 연결할 수 없습니다." >&2
         exit 1
@@ -79,5 +100,5 @@ trap 'rm -f "$runner_sql"' EXIT HUP INT TERM
     printf "SELECT pg_advisory_unlock(%s);\n" "$LOCK_KEY"
 } > "$runner_sql"
 
-psql -X -v ON_ERROR_STOP=1 -f "$runner_sql"
+run_psql -X -v ON_ERROR_STOP=1 -f "$runner_sql"
 echo "Agent DB Migration 확인 완료: version $latest_version"
