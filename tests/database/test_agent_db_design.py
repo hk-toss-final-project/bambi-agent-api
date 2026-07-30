@@ -74,6 +74,7 @@ USER_URL_DUMMY_PATH = PROJECT_ROOT / "dummy" / "urls" / "url.txt"
 MIGRATION_RUNNER_PATH = PROJECT_ROOT / "scripts" / "run_agent_db_migrations.sh"
 DATABASE_INITIALIZER_PATH = PROJECT_ROOT / "scripts" / "initialize_agent_db.sh"
 DATABASE_STARTER_PATH = PROJECT_ROOT / "scripts" / "start_agent_db.sh"
+DOCKERFILE_PATH = PROJECT_ROOT / "Dockerfile"
 
 
 def _read(path: Path) -> str:
@@ -335,21 +336,45 @@ def test_migration_runner_applies_only_pending_versioned_files() -> None:
     assert "-v ON_ERROR_STOP=1" in runner
     assert 'MODE="${1:-}"' in runner
     assert 'if [ "$MODE" = "--check" ]' in runner
+    assert 'DATABASE_URL="${AGENT_DATABASE_URL:-}"' in runner
+    assert 'pg_isready -q -d "$DATABASE_URL"' in runner
 
 
 def test_database_initializer_runs_migrations_before_dev_seeds() -> None:
     """DB 시작 경로가 Schema 후 변경된 개발 Seed만 적용하는지 검증한다."""
     initializer = _read(DATABASE_INITIALIZER_PATH)
 
-    migration_position = initializer.index("/usr/local/bin/run-agent-db-migrations")
+    migration_position = initializer.index('/bin/sh "$migration_runner" "$MODE"')
     seed_position = initializer.index('expected_checksum="$(seed_checksum)"')
 
     assert migration_position < seed_position
     assert "AGENT_DB_APPLY_DEV_SEEDS:-true" in initializer
-    assert "psql -X -v ON_ERROR_STOP=1" in initializer
+    assert "run_psql -X -v ON_ERROR_STOP=1" in initializer
     assert "sha256sum" in initializer
     assert "flock -x" in initializer
     assert 'if [ "$MODE" = "--check" ]' in initializer
+    assert "AGENT_DB_MIGRATION_RUNNER_PATH" in initializer
+
+
+def test_database_initializer_tracks_deploy_seed_checksum_in_database() -> None:
+    """배포 Initializer가 DB 잠금과 최신 Checksum으로 Seed를 한 번만 적용하는지 검증한다."""
+    initializer = _read(DATABASE_INITIALIZER_PATH)
+
+    assert "AGENT_DB_SEED_STATE_BACKEND" in initializer
+    assert "pg_advisory_lock" in initializer
+    assert "pg_advisory_unlock" in initializer
+    assert "agent.audit_logs" in initializer
+    assert "agent-db-initializer" in initializer
+    assert "development_seed_applied" in initializer
+    assert "ORDER BY created_at DESC, id DESC" in initializer
+    assert "-v seed_checksum=" in initializer
+
+
+def test_runtime_image_contains_database_initialization_client() -> None:
+    """배포 one-shot 작업 이미지에 psql과 pg_isready가 설치되는지 검증한다."""
+    dockerfile = _read(DOCKERFILE_PATH)
+
+    assert "postgresql-client" in dockerfile
 
 
 def test_database_starter_initializes_before_waiting_for_health(tmp_path: Path) -> None:
@@ -405,6 +430,9 @@ def test_database_readme_uses_starter_for_repeatable_initialization() -> None:
     assert readme.count("./scripts/start_agent_db.sh") >= 2
     assert "이미 실행 중인 컨테이너" in readme
     assert "`post_start`가 다시 실행되지 않으므로" in readme
+    assert "AGENT_DB_SEED_STATE_BACKEND=database" in readme
+    assert "`agent.audit_logs`" in readme
+    assert "API·Worker를 먼저 기동하지 않습니다" in readme
 
 
 def test_project_readme_uses_database_starter() -> None:

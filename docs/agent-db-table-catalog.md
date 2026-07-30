@@ -237,7 +237,8 @@ Append-only 성격을 강제해야 합니다.
 호출하고, Compose `post_start` Hook은 컨테이너가 실제로 시작될 때 같은 경로를
 실행합니다. Initializer는 미적용 Migration을 순서대로 적용한 뒤 Checksum이
 변경된 개발 Seed를 한 번 적용합니다. Migration과 Seed가 최신 상태여야 Health
-Check를 통과합니다.
+Check를 통과합니다. 배포 환경은 같은 Initializer를 API·Worker 기동 전 one-shot
+서비스로 실행하고, 성공한 Seed Checksum을 `audit_logs`에 append-only로 기록합니다.
 
 ## 14. 핵심 관계 흐름
 
