@@ -19,7 +19,12 @@
 > 동작하는지 기준으로 판정했다. 표기: `[x]` 구현 완료, `[x] ⚠️` 핵심 동작은 되지만 제약 있음,
 > `[ ] ❌` 미구현, `[ ] ➖` Agent API 범위 아님(service-worker 책임).
 >
-> **집계: 완료 50 · 부분 8 · 미구현 11 · 범위 외 2 (총 71)**
+> **집계: 완료 52 · 부분 8 · 미구현 11 · 범위 외 2 (총 73)**
+
+### 내부 API 인증
+
+- [x] `AUTH-001` Service API 인증 — `Authorization: Bearer`의 opaque 토큰을 검증하고 Swagger 전역 인증에 연결
+- [x] `AUTH-002` Service Worker 인증 — Service API와 같은 배포 Secret을 검증하되 별도 기능 경계로 기록
 
 ### Service API 연동
 
@@ -121,6 +126,17 @@
 - [x] `DB-004` 개인 Wiki Chunk 저장
 - [x] `DB-005` 개인 Wiki Embedding 저장
 - [x] `DB-026` Agent Job 저장 — Claim·Lease·Attempt 이력
+
+## 0. 내부 API 인증
+
+| ID | 기능 | 설명 |
+|---|---|---|
+| AUTH-001 | Service API 인증 | Service API가 제시한 내부 Bearer 토큰을 검증한다. |
+| AUTH-002 | Service Worker 인증 | Service Worker가 제시한 내부 Bearer 토큰을 검증한다. |
+
+Swagger UI, `/wiki-graph`, `/dev/graphs` 같은 개발 화면은 토큰 없이 열 수 있지만,
+`/internal/v1/**` API 실행에는 `AGENT_INTERNAL_TOKEN`과 일치하는 Bearer 토큰이
+필요합니다. `/system/*` 상태 확인 API는 인증 대상에서 제외합니다.
 
 ## 1. Service API 연동
 
@@ -306,7 +322,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 
 ## MVP 제외 범위
 
-- 내부 서버 인증 및 세부 권한
+- 내부 호출 주체별 별도 Secret·세부 Scope 권한·요청 서명
 - 자체 API Key와 External Agent API
 - MCP Server
 - 번역 및 이미지 생성

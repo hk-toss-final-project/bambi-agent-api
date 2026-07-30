@@ -46,6 +46,7 @@ from app.schemas.wiki import (
     WikiGraphResponse,
     WikiTopNodesResponse,
 )
+from app.security.internal_auth.api import require_service_api_access
 from app.routers.service.api import (
     svc_001,
     svc_002,
@@ -63,7 +64,10 @@ from app.services.wiki_documents import WikiDocumentService
 from app.services.interests import InterestService
 from app.services.generated_content import GeneratedContentService
 
-router = APIRouter(tags=["service-api"])
+router = APIRouter(
+    tags=["service-api"],
+    dependencies=[Depends(require_service_api_access)],
+)
 UserId = Annotated[str, Path(min_length=1, max_length=128, description="사용자 ID")]
 
 

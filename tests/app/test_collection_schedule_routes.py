@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.dependencies import get_collection_schedule_service
 from app.main import create_app
+from tests.conftest import TEST_AUTHORIZATION_HEADER, TEST_INTERNAL_TOKEN
 from app.schemas.collection_schedules import (
     CollectionKeywordRunResponse,
     CollectionProviderRunResponse,
@@ -126,11 +127,14 @@ def schedule_client(
     schedule_service: _FakeScheduleService,
 ) -> Iterator[TestClient]:
     """스케줄 서비스 대역이 주입된 테스트 클라이언트를 제공한다."""
-    application = create_app(Settings(environment="test"))
+    application = create_app(
+        Settings(environment="test", internal_api_token=TEST_INTERNAL_TOKEN)
+    )
     application.dependency_overrides[get_collection_schedule_service] = (
         lambda: schedule_service
     )
     with TestClient(application) as client:
+        client.headers.update(TEST_AUTHORIZATION_HEADER)
         yield client
 
 

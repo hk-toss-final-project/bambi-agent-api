@@ -16,6 +16,9 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("API_PREFIX", "/agent/internal/v1")
     monkeypatch.setenv("DOCS_ENABLED", "false")
+    monkeypatch.setenv(
+        "AGENT_INTERNAL_TOKEN", "test-agent-internal-token-0123456789abcdef"
+    )
     monkeypatch.setenv("OPENAI_API_KEY", "test-secret")
     monkeypatch.setenv("WIKI_LLM_MODEL", "gpt-4.1-mini")
     monkeypatch.setenv("REPORT_LLM_MODEL", "gpt-4.1-nano")
@@ -32,6 +35,11 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     assert settings.environment == "production"
     assert settings.api_prefix == "/agent/internal/v1"
     assert settings.docs_enabled is False
+    assert settings.internal_api_token is not None
+    assert (
+        settings.internal_api_token.get_secret_value()
+        == "test-agent-internal-token-0123456789abcdef"
+    )
     assert settings.openai_api_key is not None
     assert settings.openai_api_key.get_secret_value() == "test-secret"
     assert settings.wiki_llm_model == "gpt-4.1-mini"

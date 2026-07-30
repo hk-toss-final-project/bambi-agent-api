@@ -9,6 +9,7 @@ from app.config import Settings
 from app.dependencies import AppContainer
 from app.main import create_app
 from app.services.wiki_graph import WikiGraphService
+from tests.conftest import TEST_AUTHORIZATION_HEADER, TEST_INTERNAL_TOKEN
 
 
 class _FakeGraphRepository:
@@ -135,12 +136,18 @@ class _FakeRankedGraphRepository:
 
 def _graph_client(repository: object | None = None) -> TestClient:
     """가짜 Graph 저장소가 연결된 FastAPI TestClient를 만든다."""
-    settings = Settings(app_name="Wiki Graph Test", environment="test")
+    settings = Settings(
+        app_name="Wiki Graph Test",
+        environment="test",
+        internal_api_token=TEST_INTERNAL_TOKEN,
+    )
     container = AppContainer(
         settings=settings,
         wiki_graph_service=WikiGraphService(repository or _FakeGraphRepository()),
     )
-    return TestClient(create_app(settings, container))
+    client = TestClient(create_app(settings, container))
+    client.headers.update(TEST_AUTHORIZATION_HEADER)
+    return client
 
 
 def test_wiki_graph_api_returns_nodes_edges_and_stats() -> None:

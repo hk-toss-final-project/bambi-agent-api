@@ -8,7 +8,7 @@ OPENAPI_DESCRIPTION = """
 LangGraph 기반 에이전트를 제공하는 Report Builder Agent API입니다.
 
 현재 MVP는 `service-api`와 `service-worker`가 호출하는 내부 API를 제공합니다.
-내부 인증이 적용되기 전까지 API와 Swagger UI를 외부 네트워크에 노출하지 마세요.
+Swagger UI는 공개할 수 있지만 `/internal/v1/**` 실행에는 Bearer 인증이 필요합니다.
 """.strip()
 
 OPENAPI_TAGS = [
@@ -72,6 +72,7 @@ SWAGGER_UI_PARAMETERS: dict[str, bool | str] = {
     "displayRequestDuration": True,
     "filter": True,
     "operationsSorter": "method",
+    "persistAuthorization": True,
     "tagsSorter": "alpha",
 }
 

@@ -27,7 +27,7 @@ flowchart LR
 | 항목 | 내용 |
 |---|---|
 | Base Path | `/internal/v1` (`API_PREFIX`로 변경 가능) |
-| 인증 | 현재 없음 — **내부 네트워크 전제**. 배포 전 내부 인증 방식 협의 필요 |
+| 인증 | `Authorization: Bearer <AGENT_INTERNAL_TOKEN>` — 사용자 JWT와 분리된 Agent 전용 opaque 토큰 |
 | 추적 헤더 | `X-Request-ID`, `X-Trace-ID` 전달 권장 (누락 시 agent가 생성) |
 | 비동기 계약 | 쓰기 요청은 DB Commit 후 `202 Accepted` + `job_id` 반환. 완료 여부는 Job 조회로 확인 |
 | 오류 구조 | 모든 오류는 `{code, message, request_id, retryable, details}` 공통 JSON |
@@ -226,6 +226,8 @@ user_id, version, snapshot_hash, title, summary, body, citations, tags)가 포�
 
 | Code | HTTP | 서비스 쪽 대응 |
 |---|---:|---|
+| `INVALID_INTERNAL_TOKEN` | 401 | `Authorization: Bearer` 헤더와 배포 Secret 일치 여부 확인 |
+| `INTERNAL_AUTH_NOT_CONFIGURED` | 503 | Agent 배포 환경의 `AGENT_INTERNAL_TOKEN` 설정 후 재기동 |
 | `REQUEST_VALIDATION_ERROR` | 422 | 요청 형식 수정 (details에 필드별 사유) |
 | `USER_CONTEXT_REQUIRED` | 409 | 컨텍스트 먼저 PUT 후 재시도 |
 | `STALE_CONTEXT_VERSION` | 409 | 더 큰 `context_version`으로 재전송 |
@@ -254,7 +256,7 @@ user_id, version, snapshot_hash, title, summary, body, citations, tags)가 포�
 
 | 항목 | 내용 | 시점 |
 |---|---|---|
-| 내부 인증 | 현재 무인증. 공유 시크릿 헤더 vs 네트워크 격리 | 배포 전 필수 |
+| 내부 인증 | Agent 전용 opaque Bearer 토큰 적용. Service의 모든 Agent HTTP Client가 공통 헤더를 전송 | 구현 시 필수 |
 | 차단 ID 매핑 | `blocked_interest_ids`·`blocked_source_ids`가 무엇의 ID인지 (키워드 문자열 / 도메인 / agent 관심사 UUID) — 확정돼야 agent가 검색·생성 필터에 반영 | 개인화 고도화 전 |
 | 회원 탈퇴 삭제 | 탈퇴 시 agent 데이터(클리핑 원문·Wiki) 삭제 API — agent 쪽 미구현 | 서비스 오픈 전 |
 | `CONTENT_READY` 이벤트 | 폴링 지연을 줄이는 Push 신호 (Outbox 기록까지는 구현됨) | MVP 이후 |

@@ -73,6 +73,14 @@ def test_swagger_ui_contains_theme_toggle(client: TestClient) -> None:
     assert "라이트 모드로 전환" in response.text
 
 
+def test_swagger_ui_persists_global_authorization(client: TestClient) -> None:
+    """Swagger에 한 번 입력한 Bearer 토큰을 새로고침 후에도 유지한다."""
+    response = client.get("/docs")
+
+    assert response.status_code == 200
+    assert '"persistAuthorization": true' in response.text
+
+
 def test_openapi_contains_swagger_metadata(client: TestClient) -> None:
     """OpenAPI Schema에 API 설명과 영역별 태그 설명이 포함되는지 검증한다."""
     response = client.get("/openapi.json")

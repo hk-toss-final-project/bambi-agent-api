@@ -29,9 +29,10 @@ class Settings(BaseModel):
         default=False,
         description="개발용 Agent 동기 실행 API 활성화 여부",
     )
-    dev_agent_api_token: SecretStr | None = Field(
+    internal_api_token: SecretStr | None = Field(
         default=None,
-        description="개발용 Agent API 보호 토큰",
+        min_length=32,
+        description="Service API와 Service Worker가 내부 API 호출에 사용하는 Bearer 토큰",
     )
     dev_agent_timeout_seconds: int = Field(
         default=180,
@@ -141,7 +142,7 @@ def load_settings() -> Settings:
         log_directory=os.getenv("LOG_DIR", "logs"),
         enable_assistant_ui=_boolean_env("ENABLE_ASSISTANT_UI", True),
         enable_dev_agent_api=_boolean_env("ENABLE_DEV_AGENT_API", False),
-        dev_agent_api_token=_optional_env("DEV_AGENT_API_TOKEN"),
+        internal_api_token=_optional_env("AGENT_INTERNAL_TOKEN"),
         dev_agent_timeout_seconds=_integer_env("DEV_AGENT_TIMEOUT_SECONDS", 180),
         agent_database_url=_optional_env("AGENT_DATABASE_URL"),
         vector_store_url=_optional_env("VECTOR_STORE_URL"),

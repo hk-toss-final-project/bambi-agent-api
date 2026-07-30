@@ -15,9 +15,13 @@ from app.schemas.mvp import (
     PublishSnapshotResponse,
 )
 from app.routers.service_worker.api import sw_004, sw_009
+from app.security.internal_auth.api import require_service_worker_access
 from app.services.publish_snapshots import PublishSnapshotService
 
-router = APIRouter(tags=["service-worker"])
+router = APIRouter(
+    tags=["service-worker"],
+    dependencies=[Depends(require_service_worker_access)],
+)
 
 
 @router.get(

@@ -2,6 +2,7 @@
 
 import logging
 from dataclasses import dataclass
+from typing import Mapping
 
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -25,11 +26,18 @@ class ErrorDetail:
 class AgentApiError(RuntimeError):
     """Agent API의 예상 가능한 도메인 오류."""
 
-    def __init__(self, status_code: int, detail: ErrorDetail) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        detail: ErrorDetail,
+        *,
+        headers: Mapping[str, str] | None = None,
+    ) -> None:
         """HTTP 상태와 안전한 오류 상세를 보존한다."""
         super().__init__(detail.message)
         self.status_code = status_code
         self.detail = detail
+        self.headers = dict(headers) if headers is not None else None
 
 
 def _request_id(request: Request) -> str | None:
@@ -47,7 +55,9 @@ async def handle_agent_api_error(request: Request, exc: AgentApiError) -> JSONRe
         details=list(exc.detail.details),
     )
     return JSONResponse(
-        status_code=exc.status_code, content=body.model_dump(mode="json")
+        status_code=exc.status_code,
+        content=body.model_dump(mode="json"),
+        headers=exc.headers,
     )
 
 

@@ -5,7 +5,9 @@
 ## 설계 원칙
 
 - 내부 API Prefix는 기본 `/internal/v1`이며 `API_PREFIX` 환경변수로 변경할 수 있습니다.
-- 내부 인증은 MVP 제외 범위이므로 적용하지 않습니다. 인증 추가 전까지 외부 네트워크에 노출하지 않습니다.
+- `/internal/v1/**`은 `AGENT_INTERNAL_TOKEN`과 일치하는
+  `Authorization: Bearer <token>`을 요구합니다. Swagger UI와 개발 시각화 페이지,
+  `/system/*` 상태 확인 API는 토큰 없이 열 수 있습니다.
 - Request ID와 Trace ID는 각각 `X-Request-ID`, `X-Trace-ID` 헤더로 전달하며, 누락되거나 형식이 잘못되면 Agent API가 생성합니다.
 - 비동기 Wiki 및 생성 요청은 필요한 입력을 PostgreSQL에 Commit한 뒤 `202 Accepted`와 `job_id`를 반환합니다.
 - 사용자 컨텍스트는 단조 증가하는 `context_version`으로 오래된 데이터 덮어쓰기를 방지합니다.
@@ -302,6 +304,8 @@ sequenceDiagram
 
 | Code | HTTP | 설명 |
 |---|---:|---|
+| `INVALID_INTERNAL_TOKEN` | `401` | 내부 Bearer 토큰이 누락되었거나 설정값과 다릅니다. |
+| `INTERNAL_AUTH_NOT_CONFIGURED` | `503` | Agent Runtime에 내부 인증 Secret이 설정되지 않았습니다. |
 | `REQUEST_VALIDATION_ERROR` | `422` | 요청 Path 또는 Body 검증에 실패했습니다. |
 | `CLIPPING_CONTENT_TOO_LARGE` | `413` | 클리핑 요청이 MVP의 2 MiB 제한을 초과했습니다. |
 | `CLIPPING_SOURCE_EVENT_CONFLICT` | `409` | 같은 source_event_id에 기존 요청과 다른 Payload가 전달됐습니다. |

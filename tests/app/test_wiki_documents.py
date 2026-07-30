@@ -9,6 +9,7 @@ from app.config import Settings
 from app.dependencies import AppContainer
 from app.main import create_app
 from app.services.wiki_documents import WikiDocumentService
+from tests.conftest import TEST_AUTHORIZATION_HEADER, TEST_INTERNAL_TOKEN
 
 
 class _FakeWikiDocumentRepository:
@@ -130,12 +131,14 @@ class _FakeWikiDocumentRepository:
 
 def _client() -> TestClient:
     """가짜 Wiki 문서 Repository가 연결된 TestClient를 반환한다."""
-    settings = Settings(environment="test")
+    settings = Settings(environment="test", internal_api_token=TEST_INTERNAL_TOKEN)
     container = AppContainer(
         settings=settings,
         wiki_document_service=WikiDocumentService(_FakeWikiDocumentRepository()),
     )
-    return TestClient(create_app(settings, container))
+    client = TestClient(create_app(settings, container))
+    client.headers.update(TEST_AUTHORIZATION_HEADER)
+    return client
 
 
 def test_wiki_document_list_detail_and_build_routes() -> None:

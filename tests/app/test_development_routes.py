@@ -15,6 +15,7 @@ from app.schemas.development import (
     LatestNewsWorkerRunRequest,
     LatestNewsWorkerRunResponse,
 )
+from tests.conftest import TEST_AUTHORIZATION_HEADER, TEST_INTERNAL_TOKEN
 
 
 class _FakeWorkflowService:
@@ -75,18 +76,21 @@ class _FakeWorkflowService:
 
 
 def _development_client(
-    *, token: str | None = None
+    *, authorized: bool = True
 ) -> tuple[TestClient, AppContainer, _FakeWorkflowService]:
     """개발 라우터와 가짜 실행기가 연결된 TestClient를 만든다."""
     settings = Settings(
         environment="test",
         enable_dev_agent_api=True,
-        dev_agent_api_token=token,
+        internal_api_token=TEST_INTERNAL_TOKEN,
     )
     container = create_container(settings)
     workflow = _FakeWorkflowService()
     container.agent_workflow_service = workflow  # type: ignore[assignment]
-    return TestClient(create_app(settings, container)), container, workflow
+    client = TestClient(create_app(settings, container))
+    if authorized:
+        client.headers.update(TEST_AUTHORIZATION_HEADER)
+    return client, container, workflow
 
 
 def test_development_routes_are_absent_without_explicit_flag() -> None:
@@ -116,18 +120,17 @@ def test_development_job_and_wiki_routes_call_workflow() -> None:
     assert workflow.called == ("wiki-job-1", "personal_wiki_build", "user-1")
 
 
-def test_development_route_requires_configured_token() -> None:
-    """설정에 토큰이 있으면 일치하는 X-Dev-Token만 허용하는지 검증한다."""
-    client, _, _ = _development_client(token="secret-token")
-    with client:
-        rejected = client.post("/internal/v1/dev/jobs/job-1/run")
-        accepted = client.post(
-            "/internal/v1/dev/jobs/job-1/run",
-            headers={"X-Dev-Token": "secret-token"},
-        )
+def test_development_route_requires_internal_bearer_token() -> None:
+    """개발 실행 API도 공통 내부 Bearer 토큰만 허용하는지 검증한다."""
+    rejected_client, _, _ = _development_client(authorized=False)
+    accepted_client, _, _ = _development_client()
+    with rejected_client:
+        rejected = rejected_client.post("/internal/v1/dev/jobs/job-1/run")
+    with accepted_client:
+        accepted = accepted_client.post("/internal/v1/dev/jobs/job-1/run")
 
     assert rejected.status_code == 401
-    assert rejected.json()["code"] == "INVALID_DEV_TOKEN"
+    assert rejected.json()["code"] == "INVALID_INTERNAL_TOKEN"
     assert accepted.status_code == 200
 
 
@@ -223,11 +226,17 @@ class _FakeLatestInformationService:
 
 def _latest_news_client() -> tuple[TestClient, _FakeLatestInformationService]:
     """가짜 최신 정보 서비스를 연결한 개발 라우터 TestClient를 만든다."""
-    settings = Settings(environment="test", enable_dev_agent_api=True)
+    settings = Settings(
+        environment="test",
+        enable_dev_agent_api=True,
+        internal_api_token=TEST_INTERNAL_TOKEN,
+    )
     container = create_container(settings)
     fake = _FakeLatestInformationService()
     container.latest_information_service = fake  # type: ignore[assignment]
-    return TestClient(create_app(settings, container)), fake
+    client = TestClient(create_app(settings, container))
+    client.headers.update(TEST_AUTHORIZATION_HEADER)
+    return client, fake
 
 
 def test_development_latest_news_worker_route_runs_collection() -> None:

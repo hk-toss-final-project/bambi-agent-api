@@ -4,10 +4,9 @@ local 또는 test 환경에서 설정으로 명시적으로 활성화했을 때�
 Router에 포함되며, 운영 비동기 API가 등록한 Job Handler를 그대로 호출한다.
 """
 
-import secrets
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, Path, Request, status
+from fastapi import APIRouter, Depends, Path, Request, status
 
 from app.dependencies import (
     AppContainer,
@@ -40,6 +39,7 @@ from app.schemas.latest_information import (
     LatestInformationSearchResponse,
 )
 from app.schemas.mvp import GenerationRequest
+from app.security.internal_auth.api import require_service_api_access
 from app.services.agent_workflows import AgentWorkflowService
 from app.services.interests import InterestService
 from app.services.latest_information import LatestInformationService
@@ -49,33 +49,22 @@ from app.services.development_scenarios import DevelopmentScenarioService
 
 async def require_development_access(
     container: AppContainer = Depends(get_container),
-    dev_token: Annotated[
-        str | None,
-        Header(alias="X-Dev-Token", description="설정된 개발 API 보호 토큰"),
-    ] = None,
 ) -> None:
-    """개발 API 활성 환경과 선택 보호 토큰을 다시 확인한다."""
+    """개발 API가 허용된 실행 환경인지 다시 확인한다."""
     settings = container.settings
     if not settings.dev_agent_api_enabled:
         raise AgentApiError(
             status.HTTP_404_NOT_FOUND,
             ErrorDetail(code="DEV_API_DISABLED", message="개발 API가 비활성화되었습니다."),
         )
-    expected = settings.dev_agent_api_token
-    if expected is not None and (
-        dev_token is None
-        or not secrets.compare_digest(expected.get_secret_value(), dev_token)
-    ):
-        raise AgentApiError(
-            status.HTTP_401_UNAUTHORIZED,
-            ErrorDetail(
-                code="INVALID_DEV_TOKEN",
-                message="개발 API 토큰이 올바르지 않습니다.",
-            ),
-        )
 
 
-router = APIRouter(dependencies=[Depends(require_development_access)])
+router = APIRouter(
+    dependencies=[
+        Depends(require_development_access),
+        Depends(require_service_api_access),
+    ]
+)
 JobId = Annotated[str, Path(min_length=1, max_length=128, description="Agent Job ID")]
 UserId = Annotated[str, Path(min_length=1, max_length=128, description="사용자 ID")]
 

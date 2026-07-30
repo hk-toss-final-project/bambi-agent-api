@@ -28,6 +28,13 @@ cp .env.example .env
 
 `.env`에서 최소한 아래 값을 채웁니다.
 
+- **`AGENT_INTERNAL_TOKEN`** — `/internal/v1/**` 인증용. 아래처럼 생성한 값을
+  Swagger의 `Authorize`와 Service API 호출에 사용합니다.
+
+  ```bash
+  openssl rand -hex 32
+  ```
+
 - **`OPENAI_API_KEY`** — Wiki 빌드·Report Builder 생성·키워드 비서 요약에 필요 (필수)
 - `AGENT_DATABASE_URL`, `AGENT_DB_PASSWORD` — Agent API·Worker용.
   키워드 비서 UI만 쓸 경우 비워둬도 됩니다.
@@ -64,7 +71,10 @@ uv run uvicorn app.main:app --port 8000 --reload --loop app.main:selector_event_
 - 에이전트 그래프 구조 시각화: <http://127.0.0.1:8000/dev/graphs> —
   Personal Wiki·Report Generation·키워드 비서 그래프를 Mermaid 차트로
   보여줍니다(개발 API와 같은 플래그로 활성화).
-- 내부 인증이 적용되기 전까지 API와 문서를 외부 네트워크에 노출하지 마세요.
+- Swagger UI와 개발 시각화 페이지는 토큰 없이 열 수 있지만,
+  `/internal/v1/**` 실행에는 `AGENT_INTERNAL_TOKEN` Bearer 인증이 필요합니다.
+  Swagger의 `Authorize`에 토큰을 한 번 입력하면 브라우저에 유지되어 이후
+  요청에 자동으로 추가됩니다.
   문서가 필요 없는 환경에서는 `DOCS_ENABLED=false`로 비활성화할 수 있습니다.
 
 ### 3. LLM Wiki Graph UI
@@ -164,6 +174,7 @@ Service는 아래 엔드포인트로 이 값을 바꾸고, 변경은 **다음 ti
 
 ```bash
 curl -X POST http://localhost:8000/internal/v1/collection-schedules \
+  -H "Authorization: Bearer ${AGENT_INTERNAL_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"source_key":"latest-naver","provider":"naver","schedule_cron":"0 */6 * * *",
        "keywords":["AI 에이전트","개인화"],"language":"ko","daily_max_runs":12}'

@@ -39,7 +39,9 @@
 - 내부 API Prefix: **`/internal/v1`** (`API_PREFIX`로 변경 가능).
 - 시스템 엔드포인트는 prefix 없이 `/system/*`.
 - 추적 헤더: `X-Request-ID`, `X-Trace-ID` (없으면 agent가 생성). **Gateway가 전파한다.**
-- 내부 인증: 현재 없음(내부망 전제). 배포 전 협의(§7).
+- 내부 인증: `/internal/v1/**` 요청은 Agent 전용 opaque Bearer 토큰을 사용한다.
+  Service와 Agent에 같은 `AGENT_INTERNAL_TOKEN` Secret을 주입하며 사용자 JWT는
+  전달하거나 재사용하지 않는다.
 
 ### 2.2 Service → agent 연동 엔드포인트 (전부 비동기 Job)
 | Method | Path | 성공 | 용도 |
@@ -244,7 +246,7 @@ service-api엔 이미 **동기** `AgentClient` 인터페이스가 있다(`com.ba
 | 순서 전제 | 생성 전 위키/관심사 필요 — 저장→생성 트리거(스케줄러) 시점 | 소라·서빈·송우 | ⬜ (service-api swagger 스케줄링 계약 확인) |
 | 컨텍스트 | `agent_context_version` 컬럼·재동기 큐 도입 | 소라·영현 | ⬜ |
 | 변환 경계 | Gateway = `{success,data,error}` 변환 지점 확정 | 소라·영현 | ⬜ |
-| 내부 인증 | 무인증 → 공유 시크릿 vs 네트워크 격리 | 전원 | ⬜(배포 전) |
+| 내부 인증 | Agent 전용 opaque Bearer 토큰 + 네트워크 격리 | 전원 | ✅ |
 | 차단 ID | `blocked_*_ids` 실제 연결(삭제 기능) | 소라·송우 | ⬜(개인화 고도화) |
 
 **다음 스텝 (07-27 갱신):** ~~결정 1(B/C) 동의~~ ✅ (C) 확정 → ① `reports` 테이블(본문 보존, GAP-3/4 이행) V4 마이그레이션(영현) ② 클리핑·조회 API 중계 + claim/ack HTTP 클라이언트(소라) ③ 생성 트리거 스케줄러 — service 책임(송우 가이드 §3.4, 담당 확정 필요) ④ 컨텍스트 동기화는 구현 완료(단 `agent_context_version` 컬럼 없어 재동기 불가 — 별도).

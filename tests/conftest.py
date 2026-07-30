@@ -40,6 +40,11 @@ from infrastructure.persistence.api import (
 )
 from shared.contracts import FeatureRequest
 
+TEST_INTERNAL_TOKEN = "test-agent-internal-token-0123456789abcdef"
+TEST_AUTHORIZATION_HEADER = {
+    "Authorization": f"Bearer {TEST_INTERNAL_TOKEN}",
+}
+
 
 def _utc_now() -> datetime:
     """Timezone 정보가 포함된 현재 UTC 시각을 반환한다."""
@@ -308,6 +313,7 @@ def settings() -> Settings:
         app_name="Test Report Builder Agent API",
         app_version="9.9.9",
         environment="test",
+        internal_api_token=TEST_INTERNAL_TOKEN,
     )
 
 
@@ -345,4 +351,5 @@ def publish_service(container: AppContainer) -> PublishSnapshotService:
 def client(settings: Settings, container: AppContainer) -> Iterator[TestClient]:
     """Lifespan이 활성화된 FastAPI 테스트 클라이언트를 제공한다."""
     with TestClient(create_app(settings, container)) as test_client:
+        test_client.headers.update(TEST_AUTHORIZATION_HEADER)
         yield test_client
