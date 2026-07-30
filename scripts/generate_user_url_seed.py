@@ -18,12 +18,19 @@ DEFAULT_INPUT_PATH = PROJECT_ROOT / "dummy" / "urls" / "url.txt"
 DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "database" / "seeds" / "0004_dev_user_urls.sql"
 SEED_NAMESPACE = uuid.UUID("a5de28b9-5f0e-40fb-96fa-64780430ccde")
 MOCK_USER_ID = "mock-clipping-user"
-MOCK_NAMESPACE = f"user/{MOCK_USER_ID}"
+SEED_USER_IDS = (MOCK_USER_ID, "28")
 
 
 def _deterministic_uuid(kind: str, url: str) -> uuid.UUID:
     """URL과 Entity 종류로 재생성 가능한 UUID를 만든다."""
     return uuid.uuid5(SEED_NAMESPACE, f"{kind}:{url}")
+
+
+def _user_deterministic_uuid(kind: str, url: str, user_id: str) -> uuid.UUID:
+    """기존 Mock UUID를 보존하면서 사용자별로 격리된 UUID를 만든다."""
+    if user_id == MOCK_USER_ID:
+        return _deterministic_uuid(kind, url)
+    return uuid.uuid5(SEED_NAMESPACE, f"{kind}:{user_id}:{url}")
 
 
 def _source_event_id(url: str) -> str:
@@ -58,47 +65,53 @@ def _render_values(rows: list[tuple[str, ...]]) -> str:
     )
 
 
-def render_seed(urls: list[str], input_path: Path) -> str:
+def render_seed(
+    urls: list[str],
+    input_path: Path,
+    user_ids: tuple[str, ...] = SEED_USER_IDS,
+) -> str:
     """URL 목록을 기존 처리 결과를 보존하는 멱등 PostgreSQL Seed로 렌더링한다."""
     relative_input = input_path.relative_to(PROJECT_ROOT).as_posix()
     event_rows: list[tuple[str, ...]] = []
     document_rows: list[tuple[str, ...]] = []
 
-    for url in urls:
-        source_event_id = _source_event_id(url)
-        event_rows.append(
-            (
-                f"'{_deterministic_uuid('event', url)}'",
-                f"'{MOCK_USER_ID}'",
-                _dollar_quote(source_event_id),
-                "'url'",
-                "clock_timestamp()",
-                _dollar_quote(url),
-                _sql_json(
-                    {"seed": True, "source_filename": relative_input, "url": url}
-                ),
-                "'received'",
+    for user_id in user_ids:
+        namespace = f"user/{user_id}"
+        for url in urls:
+            source_event_id = _source_event_id(url)
+            event_rows.append(
+                (
+                    f"'{_user_deterministic_uuid('event', url, user_id)}'",
+                    f"'{user_id}'",
+                    _dollar_quote(source_event_id),
+                    "'url'",
+                    "clock_timestamp()",
+                    _dollar_quote(url),
+                    _sql_json(
+                        {"seed": True, "source_filename": relative_input, "url": url}
+                    ),
+                    "'received'",
+                )
             )
-        )
-        document_rows.append(
-            (
-                f"'{_deterministic_uuid('document', url)}'",
-                f"'{MOCK_USER_ID}'",
-                f"'{MOCK_NAMESPACE}'",
-                "'url'",
-                _dollar_quote(url),
-                "'active'",
-                "1",
-                f"'{hashlib.sha256(url.encode('utf-8')).hexdigest()}'",
-                _sql_json(
-                    {
-                        "registered_by": "development-seed",
-                        "seed": True,
-                        "source_filename": relative_input,
-                    }
-                ),
+            document_rows.append(
+                (
+                    f"'{_user_deterministic_uuid('document', url, user_id)}'",
+                    f"'{user_id}'",
+                    f"'{namespace}'",
+                    "'url'",
+                    _dollar_quote(url),
+                    "'active'",
+                    "1",
+                    f"'{hashlib.sha256(url.encode('utf-8')).hexdigest()}'",
+                    _sql_json(
+                        {
+                            "registered_by": "development-seed",
+                            "seed": True,
+                            "source_filename": relative_input,
+                        }
+                    ),
+                )
             )
-        )
 
     return f"""-- 이 파일은 scripts/generate_user_url_seed.py가 {relative_input}에서 생성한다.
 -- 직접 수정하지 말고 원본 URL 목록을 바꾼 뒤 Generator를 다시 실행한다.

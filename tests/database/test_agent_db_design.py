@@ -565,6 +565,8 @@ def test_web_clipping_seed_builds_resettable_worker_dependency_chain() -> None:
 
     assert positions == sorted(positions)
     assert "mock-clipping-user" in seed
+    assert "'28'" in seed
+    assert "'user/28'" in seed
     assert "personal_wiki_build" in seed
     assert "'queued'" in seed
     assert "'received'" in seed
@@ -621,6 +623,8 @@ def test_user_url_seed_registers_heads_without_overwriting_collection_results() 
 
     assert event_position < document_position
     assert "mock-clipping-user" in seed
+    assert "'28'" in seed
+    assert "'user/28'" in seed
     assert "user-url-" in seed
     assert "'url'" in seed
     assert "ON CONFLICT (user_id, source_event_id) DO UPDATE" in seed

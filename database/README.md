@@ -57,19 +57,19 @@ Seed Snapshot의 고정 계약은 다음과 같습니다.
 | `version` | `1` |
 | `status` | `ready` |
 
-`dummy/clippings`의 Obsidian Web Clipper Markdown은 `mock-clipping-user`의 사용자
-원본과 처리 대기 Job으로 저장됩니다. `wiki_documents`에는 Worker가 생성한 LLM Wiki만
-들어가므로 Seed 직후에는 이 사용자의 Wiki 문서가 없습니다.
+`dummy/clippings`의 Obsidian Web Clipper Markdown은 `mock-clipping-user`와 `28`
+각 사용자의 원본 및 처리 대기 Job으로 저장됩니다. `wiki_documents`에는 Worker가
+생성한 LLM Wiki만 들어가므로 Seed 직후에는 두 사용자의 Wiki 문서가 없습니다.
 
 ```sql
 SELECT version.title, version.clipped_on, source.canonical_url, version.raw_content
 FROM agent.user_source_document_versions AS version
 JOIN agent.user_source_documents AS source ON source.id = version.source_document_id
-WHERE source.user_id = 'mock-clipping-user'
-ORDER BY version.clipped_on DESC, version.title;
+WHERE source.user_id IN ('mock-clipping-user', '28')
+ORDER BY source.user_id, version.clipped_on DESC, version.title;
 ```
 
-`dummy/urls/url.txt`의 URL도 같은 사용자의 `wiki_source_events`와
+`dummy/urls/url.txt`의 URL도 두 사용자의 `wiki_source_events`와
 `user_source_documents` Head로 등록됩니다. DB 초기화 과정에서는 외부 HTTP 요청을
 하지 않으므로 본문 Version은 만들지 않으며, 기존에 Jina Reader로 수집한 이벤트 상태와
 본문 Version이 있으면 Seed 재적용 후에도 보존합니다.
@@ -80,9 +80,9 @@ FROM agent.user_source_documents AS source
 JOIN agent.wiki_source_events AS event
   ON event.user_id = source.user_id
  AND event.source_url = source.canonical_url
-WHERE source.user_id = 'mock-clipping-user'
+WHERE source.user_id IN ('mock-clipping-user', '28')
   AND source.source_type = 'url'
-ORDER BY source.canonical_url;
+ORDER BY source.user_id, source.canonical_url;
 ```
 
 등록된 URL의 Markdown 본문까지 실제로 수집하려면 `.env`에
@@ -126,7 +126,7 @@ FROM agent.wiki_documents AS document
 JOIN agent.wiki_document_versions AS version
   ON version.document_id = document.id
  AND version.version = document.current_version
-WHERE document.namespace_key = 'user/mock-clipping-user'
+WHERE document.namespace_key = 'user/28'
   AND document.deleted_at IS NULL
 ORDER BY document.file_path;
 ```
@@ -135,7 +135,7 @@ Agent API를 실행한 뒤에는 Obsidian 스타일 관계 Graph에서 같은 �
 있습니다. 화면에서 사용자 ID를 바꾸면 해당 Namespace를 다시 조회합니다.
 
 ```text
-http://127.0.0.1:8000/wiki-graph?user_id=mock-clipping-user
+http://127.0.0.1:8000/wiki-graph?user_id=28
 ```
 
 Graph 원본 JSON은 `GET /internal/v1/users/{user_id}/wiki/graph`에서 조회합니다.

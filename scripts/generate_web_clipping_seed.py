@@ -18,12 +18,12 @@ DEFAULT_INPUT_DIR = PROJECT_ROOT / "dummy" / "clippings"
 DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "database" / "seeds" / "0003_dev_web_clippings.sql"
 SEED_NAMESPACE = uuid.UUID("7aa5c090-73ce-4ef8-a288-70a625f8613c")
 MOCK_USER_ID = "mock-clipping-user"
-MOCK_NAMESPACE = f"user/{MOCK_USER_ID}"
+SEED_USER_IDS = (MOCK_USER_ID, "28")
 
 
 @dataclass(frozen=True)
 class Clipping:
-    """Seed 한 건에 필요한 클리핑 원문과 결정적 식별자를 보관한다."""
+    """Seed 한 건에 필요한 클리핑 원문을 보관한다."""
 
     path: Path
     title: str
@@ -36,6 +36,12 @@ class Clipping:
     content: str
     content_hash: str
     source_event_key: str
+
+
+@dataclass(frozen=True)
+class SeedIdentifiers:
+    """사용자별 Seed Row를 연결하는 결정적 UUID를 보관한다."""
+
     job_id: uuid.UUID
     event_id: uuid.UUID
     source_document_id: uuid.UUID
@@ -124,6 +130,27 @@ def _deterministic_uuid(kind: str, source: str) -> uuid.UUID:
     return uuid.uuid5(SEED_NAMESPACE, f"{kind}:{source}")
 
 
+def _user_deterministic_uuid(kind: str, source: str, user_id: str) -> uuid.UUID:
+    """기존 Mock UUID를 보존하면서 사용자별로 격리된 UUID를 만든다."""
+    if user_id == MOCK_USER_ID:
+        return _deterministic_uuid(kind, source)
+    return uuid.uuid5(SEED_NAMESPACE, f"{kind}:{user_id}:{source}")
+
+
+def _seed_identifiers(clipping: Clipping, user_id: str) -> SeedIdentifiers:
+    """클리핑과 사용자에 대응하는 Seed 식별자 묶음을 만든다."""
+    return SeedIdentifiers(
+        job_id=_user_deterministic_uuid("job", clipping.source, user_id),
+        event_id=_user_deterministic_uuid("event", clipping.source, user_id),
+        source_document_id=_user_deterministic_uuid(
+            "document", clipping.source, user_id
+        ),
+        source_version_id=_user_deterministic_uuid(
+            "version-1", clipping.source, user_id
+        ),
+    )
+
+
 def parse_clipping(path: Path) -> Clipping:
     """Markdown 파일 하나를 검증하고 Seed용 클리핑으로 변환한다."""
     text = path.read_text(encoding="utf-8")
@@ -167,10 +194,6 @@ def parse_clipping(path: Path) -> Clipping:
         content=content,
         content_hash=content_hash,
         source_event_key=f"dummy-clipping-{source_digest}",
-        job_id=_deterministic_uuid("job", source),
-        event_id=_deterministic_uuid("event", source),
-        source_document_id=_deterministic_uuid("document", source),
-        source_version_id=_deterministic_uuid("version-1", source),
     )
 
 
@@ -220,33 +243,60 @@ def _render_values(rows: list[tuple[str, ...]]) -> str:
     )
 
 
-def render_seed(clippings: list[Clipping], input_dir: Path) -> str:
+def render_seed(
+    clippings: list[Clipping],
+    input_dir: Path,
+    user_ids: tuple[str, ...] = SEED_USER_IDS,
+) -> str:
     """클리핑 목록을 반복 적용 가능한 PostgreSQL Seed SQL로 렌더링한다."""
     relative_input = input_dir.relative_to(PROJECT_ROOT)
-    job_ids = ",\n    ".join(f"'{clipping.job_id}'" for clipping in clippings)
-    source_version_ids = ",\n    ".join(
-        f"'{clipping.source_version_id}'" for clipping in clippings
+    seed_entries = [
+        (user_id, clipping, _seed_identifiers(clipping, user_id))
+        for user_id in user_ids
+        for clipping in clippings
+    ]
+    job_ids = ",\n    ".join(
+        f"'{identifiers.job_id}'" for _, _, identifiers in seed_entries
     )
+    source_version_ids = ",\n    ".join(
+        f"'{identifiers.source_version_id}'" for _, _, identifiers in seed_entries
+    )
+    seed_user_ids = ", ".join(f"'{user_id}'" for user_id in user_ids)
 
+    context_rows: list[tuple[str, ...]] = []
     job_rows: list[tuple[str, ...]] = []
     event_rows: list[tuple[str, ...]] = []
     source_document_rows: list[tuple[str, ...]] = []
     source_version_rows: list[tuple[str, ...]] = []
 
-    for clipping in clippings:
+    for user_id in user_ids:
+        context_rows.append(
+            (
+                f"'{_user_deterministic_uuid('context', user_id, user_id)}'",
+                f"'{user_id}'",
+                "1",
+                "'free'",
+                "'ko'",
+                "true",
+                "'{\"seed\":true,\"source\":\"dummy/clippings\"}'::jsonb",
+            )
+        )
+
+    for user_id, clipping, identifiers in seed_entries:
+        namespace = f"user/{user_id}"
         relative_path = clipping.path.relative_to(PROJECT_ROOT).as_posix()
         job_payload = {
             "content_format": "markdown",
             "seed": True,
-            "source_document_id": str(clipping.source_document_id),
-            "source_document_version_id": str(clipping.source_version_id),
+            "source_document_id": str(identifiers.source_document_id),
+            "source_document_version_id": str(identifiers.source_version_id),
             "source_event_id": clipping.source_event_key,
-            "source_event_row_id": str(clipping.event_id),
+            "source_event_row_id": str(identifiers.event_id),
         }
         event_payload = {
             "seed": True,
-            "source_document_id": str(clipping.source_document_id),
-            "source_document_version_id": str(clipping.source_version_id),
+            "source_document_id": str(identifiers.source_document_id),
+            "source_document_version_id": str(identifiers.source_version_id),
             "source_filename": relative_path,
         }
         metadata = {"seed": True, "source_filename": relative_path}
@@ -258,10 +308,10 @@ def render_seed(clippings: list[Clipping], input_dir: Path) -> str:
 
         job_rows.append(
             (
-                f"'{clipping.job_id}'",
+                f"'{identifiers.job_id}'",
                 "'SVC-002'",
                 "'personal_wiki_build'",
-                f"'{MOCK_USER_ID}'",
+                f"'{user_id}'",
                 _dollar_quote(clipping.source_event_key),
                 "'queued'",
                 "0",
@@ -272,11 +322,11 @@ def render_seed(clippings: list[Clipping], input_dir: Path) -> str:
         )
         event_rows.append(
             (
-                f"'{clipping.event_id}'",
-                f"'{MOCK_USER_ID}'",
+                f"'{identifiers.event_id}'",
+                f"'{user_id}'",
                 _dollar_quote(clipping.source_event_key),
                 "'web_clipping'",
-                f"'{clipping.job_id}'",
+                f"'{identifiers.job_id}'",
                 f"'{clipping.clipped_on}T00:00:00Z'::timestamptz",
                 _dollar_quote(clipping.source),
                 _sql_json(event_payload),
@@ -285,9 +335,9 @@ def render_seed(clippings: list[Clipping], input_dir: Path) -> str:
         )
         source_document_rows.append(
             (
-                f"'{clipping.source_document_id}'",
-                f"'{MOCK_USER_ID}'",
-                f"'{MOCK_NAMESPACE}'",
+                f"'{identifiers.source_document_id}'",
+                f"'{user_id}'",
+                f"'{namespace}'",
                 "'web_clipping'",
                 _dollar_quote(clipping.source),
                 "'active'",
@@ -298,10 +348,10 @@ def render_seed(clippings: list[Clipping], input_dir: Path) -> str:
         )
         source_version_rows.append(
             (
-                f"'{clipping.source_version_id}'",
-                f"'{clipping.source_document_id}'",
-                f"'{MOCK_NAMESPACE}'",
-                f"'{clipping.event_id}'",
+                f"'{identifiers.source_version_id}'",
+                f"'{identifiers.source_document_id}'",
+                f"'{namespace}'",
+                f"'{identifiers.event_id}'",
                 "1",
                 _dollar_quote(clipping.title),
                 _sql_text(clipping.author),
@@ -378,10 +428,10 @@ AND NOT EXISTS (
 );
 
 DELETE FROM agent.user_interest_profiles
-WHERE user_id = '{MOCK_USER_ID}';
+WHERE user_id IN ({seed_user_ids});
 
 DELETE FROM agent.wiki_versions
-WHERE user_id = '{MOCK_USER_ID}';
+WHERE user_id IN ({seed_user_ids});
 
 INSERT INTO agent.user_context_snapshots (
     id,
@@ -391,15 +441,8 @@ INSERT INTO agent.user_context_snapshots (
     preferred_language,
     personalization_enabled,
     attributes
-) VALUES (
-    '{_deterministic_uuid("context", MOCK_USER_ID)}',
-    '{MOCK_USER_ID}',
-    1,
-    'free',
-    'ko',
-    true,
-    '{{"seed":true,"source":"dummy/clippings"}}'::jsonb
-)
+) VALUES
+{_render_values(context_rows)}
 ON CONFLICT (id) DO UPDATE SET
     plan = EXCLUDED.plan,
     preferred_language = EXCLUDED.preferred_language,

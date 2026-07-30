@@ -41,7 +41,7 @@ cp .env.example .env
 ```
 
 처음 시작하는 DB뿐 아니라 이미 실행 중인 DB에도 미적용 Migration과 변경된
-개발 Seed(`mock-clipping-user` 데이터 포함)를 반영한 뒤 Health 상태를 확인합니다.
+개발 Seed(`mock-clipping-user`, `28` 데이터 포함)를 반영한 뒤 Health 상태를 확인합니다.
 자세한 절차는 [database/README.md](database/README.md)를 참고하세요. 키워드 비서
 UI만 쓸 경우에는 필요 없습니다.
 
@@ -73,7 +73,7 @@ Agent API 서버(8000)에 내장된 개인 지식 그래프 시각화 페이지�
 
 ```text
 http://127.0.0.1:8000/wiki-graph?user_id={user_id}
-예) http://127.0.0.1:8000/wiki-graph?user_id=mock-clipping-user   ← 개발 Seed 사용자
+예) http://127.0.0.1:8000/wiki-graph?user_id=28   ← 개발 Seed 사용자
 ```
 
 - Entity(초록)·Concept(보라) Node 그래프, 검색·종류 필터, 확대·이동·Node
