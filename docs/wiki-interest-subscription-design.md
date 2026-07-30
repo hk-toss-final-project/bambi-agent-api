@@ -58,8 +58,8 @@ graph TB
 |---|---|---|---|
 | ① | 웹 클리핑 | `web_clipping` | 편입 파이프라인 구현됨 (wiki build Job) |
 | ② | URL 저장 | `url` | 〃 |
-| ③ | 피드 콘텐츠 북마크/저장 (다른 사용자 리포트 포함) | `content_save` / `content_mark` | 이벤트 타입만 정의됨 — 편입 파이프라인 미구현 |
-| ④ | 내 리포트 | ③으로 흡수 — **사용자가 저장할 때만** | REPORT-021 원칙 (자동 편입 금지) 확인됨 |
+| ③ | 리포트 북마크 (내 리포트·피드의 다른 사용자 리포트 **구분 없음**) | `content_mark` | **구현됨** — SVC-004가 `content_id`로 작성자 무관 편입 (2026-07-30) |
+| ④ | 내 리포트 | ③으로 흡수 — **사용자가 북마크할 때만** | REPORT-021 원칙 (자동 편입 금지) 확인됨 |
 | — | 좋아요 | wiki 입력원 아님 → 관심사 신호(INT-005) | 스키마 준비·미구현 |
 | — | 편집·메모·삭제 | `edit` / `memo` / `delete` | 이벤트 타입만 정의됨 — WBA-015 스텁 |
 
@@ -85,7 +85,7 @@ graph TB
 > **구현 현황 (2026-07-27, feature/llm-wiki 브랜치):**
 > - **A1·A2 완료** — Wiki Build 완료 시 INT-011 자동 재계산 훅(`run_personal_wiki_build`, 실패 시 Build 유지) + rebuild 운영 라우트(`int_011_rebuild`) 승격.
 > - **B1·B2 완료(잠정값)** — `POST .../feedback-signals`(SVC-006)로 신호 수신, INT-005가 시간 감쇠(반감기 14일)로 점수 보정. **가중치·반감기는 D2 잠정값** — 팀 확정 시 `domain/interests/features/scoring.py` 상수만 교체.
-> - **C1 부분 완료** — 내 리포트 저장(위키마킹, SVC-004)은 구현(생성 후보 본문을 `content_mark` 원본으로 물질화 → 기존 Build Job). **피드 타 사용자 콘텐츠 편입은 별도 엔드포인트 대신 svc_002(클리핑) 재사용을 잠정 방침으로** — 기능 ID 체계(명세 1~43절 고정) 제약상 신규 ID를 만들 수 없어, Service가 본문을 클리핑 형태로 전달한다. C2(Spring 발행)는 Service 몫.
+> - **C1 완료(통합)** — 리포트 북마크는 작성자와 무관하게 **SVC-004(`content_mark`) 단일 경로**로 처리한다(2026-07-30). REPORT-021의 기준이 "내 것인가"가 아니라 "자동이 아니라 사용자가 북마크했는가"이므로 내 리포트/피드의 남의 리포트를 구분하지 않는다. Service는 `content_id`만 전달하고 Agent가 자기 DB의 원본을 물질화(무손실·출처보존)하므로 클리핑 재포장(svc_002 재사용)은 폐기했다. 후보를 작성자 무관하게 읽어야 해 접수 트랜잭션은 system scope로 실행하며, 열람 권한(비공개·차단) 판단은 Service 소유다. 원 작성자(`author_user_id`)·북마커(`bookmarked_by`)는 Version 메타데이터로 보존한다. C2(Spring이 북마크 시 SVC-004 호출)는 Service 몫.
 > - **D-2 부분 완료(잠정값)** — 삭제(`POST .../wiki-sources/deletions`, WBA-015: soft-delete + Chunk 검색 제외, 멱등)만 구현. **D1은 잠정 '기본 부활'로 진행**(tombstone 없음 — 팀 확정 시 억제 옵션 추가). 편집·메모(edit/memo) 이벤트와 D-3(삭제 후 자동 재계산)는 미구현 — 삭제 직후 반영이 필요하면 rebuild API 호출.
 > - 상세 계약은 [service-integration-guide.md](service-integration-guide.md) §3.6-1·§3.7·§3.8 참조.
 
@@ -165,8 +165,8 @@ MockAgentClient → 실호출 전환: svc_002/003(저장 → Wiki), pwiki_003 �
 
 | 항목 | 형태 | 내용 |
 |---|---|---|
-| svc_004 처리 구현 | 기존 라우트 보강 (현재 **접수 후 501**) | `content-marks`(내 생성 콘텐츠 위키마킹) → `wiki_source_events(content_mark)` → build Job. REPORT-021 원칙: Service가 사용자 액션 시에만 호출 |
-| content-saves 신설 | `POST /users/{id}/wiki-sources/content-saves` | 피드에서 북마크한 타 사용자 콘텐츠 편입. 본문은 Service가 전달(클리핑과 동형) → `content_save` 이벤트 → build Job |
+| svc_004 통합 구현 (완료) | `content-marks` 단일 경로 | 리포트 북마크(내 것·피드의 남의 것 구분 없음) → `wiki_source_events(content_mark)` → build Job. `content_id`로 작성자 무관 조회(system scope), 쓰기는 북마커 namespace로 명시 귀속. REPORT-021 원칙: Service가 사용자 액션 시에만 호출, 열람 권한은 Service 판단 |
+| ~~content-saves 신설~~ | — | 폐기. 별도 엔드포인트·`content_save` 이벤트 없이 SVC-004로 통합(작성자 구분이 REPORT-021과 무관하므로) |
 
 ### Phase 4 — 행동 신호 (Track B, 결정 D2 선행)
 

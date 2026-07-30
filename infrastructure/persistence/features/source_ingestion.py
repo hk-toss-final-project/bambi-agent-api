@@ -347,38 +347,48 @@ async def save_content_mark_and_enqueue(
     memo: str | None,
     request_id: str,
 ) -> PersistedSourceSubmission:
-    """위키마킹한 생성 콘텐츠를 원본 Version으로 물질화하고 Build Job을 멱등 등록한다.
+    """북마크한 플랫폼 내부 리포트를 원본 Version으로 물질화하고 Build Job을 멱등 등록한다.
 
-    REPORT-021(자동 Wiki 편입 금지)의 짝이다 — 이 함수는 사용자가 명시적으로
-    선택한 콘텐츠(SVC-004)만 받는다. 생성 후보 본문을 `content_mark` 원본으로
-    복사해 클리핑과 같은 Wiki Build 파이프라인을 태운다.
+    REPORT-021(자동 Wiki 편입 금지)의 짝이다 — 핵심 기준은 "자동이 아니라
+    사용자가 명시적으로 저장(북마크)했는가"이지 "내가 만든 콘텐츠인가"가 아니다.
+    그래서 대상 리포트를 작성자와 무관하게 전역 유일한 `content_id`로 조회한다.
+    내 리포트든 피드에서 본 다른 사용자의 리포트든 같은 경로로 편입되며, 물질화된
+    원본과 Build Job은 항상 북마크한 사용자(`user_id`)의 namespace에 귀속된다.
+    생성 후보 본문을 `content_mark` 원본으로 복사해 클리핑과 같은 Wiki Build
+    파이프라인을 태운다.
+
+    작성자와 무관하게 후보를 읽어야 하므로 호출자는 이 함수를 system scope
+    트랜잭션에서 실행한다. 리포트 열람 권한(비공개·차단) 판단은 Service 소유이며
+    Agent는 Service가 전달한 content_id를 실행만 한다.
 
     Args:
-        connection: agent-db 커넥션 (호출자가 트랜잭션을 소유)
-        user_id: 마킹한 사용자 ID
+        connection: agent-db 커넥션 (호출자가 트랜잭션·system scope를 소유)
+        user_id: 북마크한 사용자 ID (물질화 원본의 소유자)
         source_event_id: Service가 부여한 멱등 이벤트 ID
-        content_id: 생성 후보 Row ID 또는 논리 content_id
-        occurred_at: 사용자가 마킹한 시각
-        memo: 마킹 시 남긴 메모
+        content_id: 리포트 Row ID 또는 논리 content_id (작성자 무관)
+        occurred_at: 사용자가 북마크한 시각
+        memo: 북마크 시 남긴 메모
         request_id: 요청 추적 ID
 
     Raises:
-        GeneratedContentNotFoundError: 해당 사용자의 생성 콘텐츠가 없는 경우
+        GeneratedContentNotFoundError: 해당 content_id의 리포트가 없는 경우
     """
     candidate_cursor = await connection.execute(
         """
-        SELECT content_id, version, content_type, title, summary, body
+        SELECT user_id AS author_user_id, content_id, version, content_type,
+               title, summary, body
         FROM agent.generated_content_candidates
-        WHERE user_id = %s AND (id::text = %s OR content_id = %s)
+        WHERE id::text = %s OR content_id = %s
         ORDER BY (id::text = %s) DESC, version DESC
         LIMIT 1
         """,
-        (user_id, content_id, content_id, content_id),
+        (content_id, content_id, content_id),
     )
     candidate = await candidate_cursor.fetchone()
     if candidate is None:
         raise GeneratedContentNotFoundError(content_id)
 
+    author_user_id = str(candidate["author_user_id"])
     namespace_key = f"user/{user_id}"
     content = str(candidate["body"] or "")
     content_hash = compute_content_hash(content)
@@ -449,6 +459,10 @@ async def save_content_mark_and_enqueue(
             "content_id": str(candidate["content_id"]),
             "content_version": int(candidate["version"]),
             "content_type": str(candidate["content_type"] or ""),
+            # 출처 보존: 파이프라인은 내 것/남의 것을 동일하게 처리하되,
+            # 원 작성자와 북마크한 사용자는 메타데이터로 남겨 추후 구분·감사에 쓴다.
+            "author_user_id": author_user_id,
+            "bookmarked_by": user_id,
         },
     )
 

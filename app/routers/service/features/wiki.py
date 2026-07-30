@@ -31,7 +31,7 @@ class WikiSourceSubmissionService(Protocol):
     async def submit_content_mark(
         self, *, user_id: str, payload: ContentMarkRequest, request_id: str
     ) -> AcceptedJobResponse:
-        """위키마킹한 생성 콘텐츠를 Wiki 처리 작업으로 접수한다."""
+        """북마크한 리포트(작성자 무관)를 Wiki 처리 작업으로 접수한다."""
         ...
 
     async def submit_feedback_signals(
@@ -83,9 +83,10 @@ async def svc_004(
     payload: ContentMarkRequest,
     request_id: str,
 ) -> AcceptedJobResponse:
-    """[SVC-004] 위키마킹 처리 요청.
+    """[SVC-004] 북마크(위키마킹) 처리 요청.
 
-    사용자가 선택한 콘텐츠의 Wiki 편입을 요청한다.
+    사용자가 북마크한 리포트의 Wiki 편입을 요청한다. 내 리포트와 피드에서 본
+    다른 사용자의 리포트를 구분하지 않고 content_id로 동일하게 편입한다.
     """
     return await service.submit_content_mark(
         user_id=user_id, payload=payload, request_id=request_id

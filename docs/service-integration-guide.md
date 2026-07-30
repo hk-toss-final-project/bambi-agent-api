@@ -134,14 +134,21 @@ flowchart LR
   점수에 반영합니다(가중치는 잠정값 — D2 확정 시 변경 가능). 즉시 반영이
   필요하면 `POST .../interest-profiles/rebuild`를 이어서 호출하세요.
 
-### 3.7 위키마킹 (2026-07-27 구현 완료)
+### 3.7 리포트 북마크 위키 편입 (2026-07-27 구현 / 2026-07-30 통합)
 
-- **위키마킹** (`POST .../wiki-sources/content-marks`): 사용자가 선택한 생성
-  콘텐츠(`content_id` = 후보 ID 또는 논리 content_id)를 `content_mark` 원본
+- **북마크 편입** (`POST .../wiki-sources/content-marks`): 사용자가 북마크한
+  리포트(`content_id` = 후보 ID 또는 논리 content_id)를 `content_mark` 원본
   Version으로 물질화하고 기존 `personal_wiki_build` Job으로 처리합니다(202).
-  대상 콘텐츠가 없으면 `404 GENERATED_CONTENT_NOT_FOUND`. `source_event_id`
-  기준 멱등 접수입니다. **사용자가 명시적으로 저장을 선택했을 때만 호출**
-  하세요 — 자동 호출은 REPORT-021(자동 Wiki 편입 금지) 위반입니다.
+  대상 리포트가 없으면 `404 GENERATED_CONTENT_NOT_FOUND`. `source_event_id`
+  기준 멱등 접수입니다.
+- **내 리포트와 다른 사용자(피드) 리포트를 구분하지 않습니다.** 같은 엔드포인트에
+  `content_id`만 넘기면 작성자와 무관하게 편입됩니다(Agent가 자기 DB의 원본
+  본문을 물질화하므로 Service는 본문을 다시 실어 보낼 필요가 없습니다).
+- ⚠️ **열람 권한(비공개·차단) 판단은 Service 소유**입니다. Agent는 전달받은
+  `content_id`를 실행만 하므로, 사용자가 볼 수 없는 리포트의 `content_id`가
+  넘어오지 않도록 Service가 피드 노출 기준으로 게이팅하세요.
+- **사용자가 명시적으로 북마크했을 때만 호출**하세요 — 자동 호출은
+  REPORT-021(자동 Wiki 편입 금지) 위반입니다.
 
 ### 3.8 개인 Wiki 문서 삭제 (2026-07-27 구현)
 

@@ -142,8 +142,8 @@ def test_save_web_clipping_reuses_same_source_version_and_job() -> None:
     )
 
 
-def test_save_content_mark_materializes_candidate_and_enqueues_job() -> None:
-    """위키마킹이 생성 후보 본문을 원본 Version으로 복사하고 Job을 등록하는지 검증한다."""
+def test_save_content_mark_bookmarks_report_regardless_of_author() -> None:
+    """북마크가 작성자와 무관하게 리포트 본문을 북마커 namespace 원본으로 복사·등록하는지 검증한다."""
     from infrastructure.persistence.features.source_ingestion import (
         save_content_mark_and_enqueue,
     )
@@ -151,6 +151,8 @@ def test_save_content_mark_materializes_candidate_and_enqueues_job() -> None:
     connection = _SequencedConnection(
         [
             {
+                # 다른 사용자가 작성한 리포트를 user-1이 북마크하는 상황
+                "author_user_id": "author-2",
                 "content_id": "content-1",
                 "version": 2,
                 "content_type": "interest_news_card",
@@ -184,19 +186,28 @@ def test_save_content_mark_materializes_candidate_and_enqueues_job() -> None:
     assert result.source_document_id == "source-1"
     assert result.source_document_version_id == "source-version-1"
     assert result.job_id == "job-1"
+    # 후보 조회는 작성자(user_id) 필터 없이 content_id로만 전역 조회한다.
     candidate_sql, candidate_params = connection.executed[0]
     assert "agent.generated_content_candidates" in candidate_sql
-    assert candidate_params[0] == "user-1"
+    assert "WHERE id::text = %s OR content_id = %s" in candidate_sql
+    assert candidate_params == ("content-1", "content-1", "content-1")
+    # 물질화 원본·이벤트는 북마크한 사용자(user-1) namespace에 귀속된다.
     event_sql, event_params = connection.executed[1]
     assert "'content_mark'" in event_sql
+    assert event_params[0] == "user-1"
     assert event_params[3] == "content-1"
     head_sql, head_params = connection.executed[3]
     assert "agent.user_source_documents" in head_sql
     assert "content_mark" in head_params
+    assert "user/user-1" in head_params
     version_sql, version_params = connection.executed[5]
     assert "agent.user_source_document_versions" in version_sql
     assert version_params[4] == "생성 리포트 제목"
     assert version_params[10] == "# 생성 본문"
+    # 출처 보존: 원 작성자와 북마커를 메타데이터로 남긴다.
+    version_metadata = version_params[12].obj
+    assert version_metadata["author_user_id"] == "author-2"
+    assert version_metadata["bookmarked_by"] == "user-1"
     job_sql, job_params = connection.executed[7]
     assert "'personal_wiki_build'" in job_sql
     assert job_params[0] == "SVC-004"

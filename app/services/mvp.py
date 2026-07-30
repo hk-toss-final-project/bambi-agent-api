@@ -128,11 +128,14 @@ class AgentApiMvpService:
         payload: ContentMarkRequest,
         request_id: str,
     ) -> AcceptedJobResponse:
-        """생성 콘텐츠를 content_mark 원본으로 물질화하고 Wiki Build Job을 접수한다.
+        """북마크한 리포트를 content_mark 원본으로 물질화하고 Wiki Build Job을 접수한다.
 
-        REPORT-021(자동 편입 금지)의 사용자 선택 경로다. 대상 콘텐츠 본문을
-        원본 Version으로 복사해 클리핑과 같은 Build 파이프라인을 태우므로
-        별도 Handler 없이 기존 personal_wiki_build Worker가 처리한다.
+        REPORT-021(자동 편입 금지)의 사용자 선택 경로다. 기준은 "자동이 아니라
+        사용자가 북마크했는가"이므로 내 리포트와 피드에서 본 다른 사용자의 리포트를
+        구분하지 않고 같은 경로로 처리한다(Agent는 content_id만 받고, 열람 권한
+        판단은 Service 소유). 대상 리포트 본문을 원본 Version으로 복사해 클리핑과
+        같은 Build 파이프라인을 태우므로 별도 Handler 없이 기존 personal_wiki_build
+        Worker가 처리한다.
         """
         try:
             submission = await self._agent_jobs.submit_content_mark(
@@ -148,7 +151,7 @@ class AgentApiMvpService:
                 status.HTTP_404_NOT_FOUND,
                 ErrorDetail(
                     code="GENERATED_CONTENT_NOT_FOUND",
-                    message="위키마킹할 생성 콘텐츠를 찾을 수 없습니다.",
+                    message="북마크할 리포트를 찾을 수 없습니다.",
                 ),
             ) from exc
         return self._accepted_job_response(submission)

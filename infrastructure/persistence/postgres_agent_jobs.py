@@ -178,10 +178,17 @@ class PostgresAgentJobRepository:
         memo: str | None,
         request_id: str,
     ) -> SubmittedSourceJob:
-        """위키마킹 원본과 Wiki Build Job을 저장하고 조회 가능한 결과를 반환한다."""
+        """북마크한 리포트 원본과 Wiki Build Job을 저장하고 조회 가능한 결과를 반환한다.
+
+        대상 리포트는 작성자와 무관하게 조회해야 하므로(내 것/피드의 남의 것 모두
+        같은 경로) 이 트랜잭션은 system scope로 실행한다. RLS의 사용자 격리를
+        우회하는 대신, 물질화 원본·이벤트·Build Job은 모두 SQL에서 북마크한
+        사용자(user_id)로 명시 귀속되어 다른 사용자 namespace로 새지 않는다.
+        (build worker가 같은 방식으로 system scope에서 사용자 namespace에 쓰는 것과 동일.)
+        """
         async with self._pool.connection() as connection:
             async with connection.transaction():
-                await set_personal_wiki_scope(connection, user_id=user_id)
+                await set_system_job_scope(connection)
                 saved = await save_content_mark_and_enqueue(
                     connection,
                     user_id=user_id,

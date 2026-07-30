@@ -140,7 +140,7 @@ async def request_url_wiki_source(
     response_model=AcceptedJobResponse,
     status_code=status.HTTP_202_ACCEPTED,
     operation_id="svc_004",
-    summary="생성 콘텐츠 위키마킹 요청",
+    summary="리포트 북마크 위키 편입 요청",
 )
 async def request_content_mark(
     user_id: UserId,
@@ -148,7 +148,7 @@ async def request_content_mark(
     request: Request,
     service: AgentApiMvpService = Depends(get_mvp_service),
 ) -> AcceptedJobResponse:
-    """[SVC-004] 사용자가 선택한 생성 콘텐츠를 Wiki Build Job으로 등록한다."""
+    """[SVC-004] 사용자가 북마크한 리포트(작성자 무관)를 Wiki Build Job으로 등록한다."""
     return await svc_004(
         service,
         user_id=user_id,
