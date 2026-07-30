@@ -55,7 +55,7 @@
     .user-form { flex: 1; display: flex; align-items: center; gap: 8px; max-width: 620px; }
     .input-wrap { position: relative; flex: 1; }
     .input-wrap span { position: absolute; left: 12px; top: 9px; color: var(--faint); }
-    input[type="text"], input[type="search"] {
+    input[type="text"], input[type="search"], input[type="password"] {
       width: 100%; height: 38px; border-radius: 9px; border: 1px solid var(--border);
       color: var(--text); background: var(--panel-soft); outline: none;
       padding: 0 12px 0 34px; transition: border .15s, box-shadow .15s;
@@ -98,6 +98,15 @@
       padding: 12px; border: 1px solid var(--border); border-radius: 13px;
       background: var(--panel); box-shadow: var(--shadow); backdrop-filter: blur(16px);
     }
+    .auth-form { display: flex; gap: 8px; }
+    .auth-form .input-wrap { min-width: 0; }
+    .auth-hint {
+      min-height: 16px; margin: 6px 2px 10px; color: var(--muted);
+      font-size: 11px; line-height: 1.45;
+    }
+    .auth-hint.is-ready { color: var(--entity); }
+    .auth-hint.is-error { color: var(--danger); }
+    .toolbar-divider { height: 1px; margin: 0 0 11px; background: var(--border); }
     .search-row { display: flex; gap: 8px; }
     .search-row .input-wrap { min-width: 0; }
     .filters { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 10px; }
@@ -241,6 +250,16 @@
         </svg>
       </div>
       <aside class="toolbar" aria-label="그래프 검색 및 필터">
+        <form class="auth-form" id="auth-form">
+          <label class="sr-only" for="api-token">내부 API Bearer 토큰</label>
+          <div class="input-wrap">
+            <span aria-hidden="true">⌁</span>
+            <input id="api-token" type="password" autocomplete="off" spellcheck="false" placeholder="토큰 값 (Bearer 제외)">
+          </div>
+          <button class="button" type="submit">인증 적용</button>
+        </form>
+        <p class="auth-hint" id="auth-hint" aria-live="polite"></p>
+        <div class="toolbar-divider" aria-hidden="true"></div>
         <div class="search-row">
           <label class="sr-only" for="graph-search">Wiki 검색</label>
           <div class="input-wrap"><span aria-hidden="true">⌕</span><input id="graph-search" type="search" placeholder="제목, 별칭, subtype 검색"></div>
@@ -286,7 +305,12 @@
       const entityFilter = document.getElementById("filter-entity");
       const conceptFilter = document.getElementById("filter-concept");
       const orphanFilter = document.getElementById("filter-orphan");
+      const tokenInput = document.getElementById("api-token");
+      const authHint = document.getElementById("auth-hint");
       const detail = document.getElementById("detail");
+      const tokenStorageKey = "report-builder-agent-api-token";
+      const swaggerAuthorizationStorageKey = "authorized";
+      let apiToken = "";
       const state = {
         data: null, nodes: [], edges: [], nodeMap: new Map(), positions: new Map(),
         transform: { x: 0, y: 0, scale: 1 }, selected: null, frame: null,
@@ -319,13 +343,105 @@
 
       function hideStatus() { status.hidden = true; }
 
+      function normalizeToken(value) {
+        if (typeof value !== "string") return "";
+        return value.trim().replace(/^Bearer\s+/i, "").trim();
+      }
+
+      function readLocalStorage(key) {
+        try {
+          return window.localStorage.getItem(key) || "";
+        } catch (error) {
+          return "";
+        }
+      }
+
+      function persistToken(value) {
+        try {
+          if (value) window.localStorage.setItem(tokenStorageKey, value);
+          else window.localStorage.removeItem(tokenStorageKey);
+        } catch (error) {
+          // 저장소가 막힌 브라우저에서도 현재 탭에서는 입력 토큰을 사용한다.
+        }
+      }
+
+      function readSwaggerToken() {
+        try {
+          const serialized = readLocalStorage(swaggerAuthorizationStorageKey);
+          if (!serialized) return "";
+          const authorized = JSON.parse(serialized);
+          const entry = authorized?.InternalBearer;
+          return normalizeToken(typeof entry === "string" ? entry : entry?.value);
+        } catch (error) {
+          return "";
+        }
+      }
+
+      function setAuthHint(message, tone = "") {
+        authHint.textContent = message;
+        authHint.classList.toggle("is-ready", tone === "ready");
+        authHint.classList.toggle("is-error", tone === "error");
+      }
+
+      function initializeAuthentication() {
+        const storedToken = normalizeToken(readLocalStorage(tokenStorageKey));
+        const swaggerToken = storedToken ? "" : readSwaggerToken();
+        apiToken = storedToken || swaggerToken;
+        tokenInput.value = apiToken;
+        if (swaggerToken) {
+          persistToken(swaggerToken);
+          setAuthHint("Swagger Authorize에 저장된 토큰을 사용합니다.", "ready");
+        } else if (storedToken) {
+          setAuthHint("저장된 Bearer 토큰을 요청에 사용합니다.", "ready");
+        } else {
+          setAuthHint("서버 .env 값은 자동 전달되지 않습니다. 토큰을 한 번 입력하세요.");
+        }
+      }
+
+      function requestHeaders() {
+        const headers = { Accept: "application/json" };
+        if (apiToken) headers.Authorization = `Bearer ${apiToken}`;
+        return headers;
+      }
+
+      function applyAuthentication(event) {
+        event.preventDefault();
+        apiToken = normalizeToken(tokenInput.value);
+        tokenInput.value = apiToken;
+        persistToken(apiToken);
+        if (!apiToken) {
+          clearGraph();
+          setAuthHint("Bearer 토큰을 입력해야 Graph 데이터를 조회할 수 있습니다.", "error");
+          showStatus("Bearer 토큰이 필요합니다", "AGENT_INTERNAL_TOKEN 값을 위 인증란에 입력해주세요.");
+          return;
+        }
+        setAuthHint("Bearer 토큰을 저장했습니다. Graph를 다시 조회합니다.", "ready");
+        const userId = document.getElementById("user-id").value.trim();
+        if (userId) loadGraph(userId);
+      }
+
       async function loadGraph(userId) {
+        if (!apiToken) {
+          clearGraph();
+          setAuthHint("Bearer 토큰을 입력해야 Graph 데이터를 조회할 수 있습니다.", "error");
+          showStatus("Bearer 토큰이 필요합니다", "AGENT_INTERNAL_TOKEN 값을 위 인증란에 입력해주세요.");
+          return;
+        }
         showStatus("Wiki Graph 불러오는 중", "현재 Entity·Concept와 관계를 조회하고 있습니다.", true);
         closeDetail();
         try {
-          const response = await fetch(`${apiPrefix}/users/${encodeURIComponent(userId)}/wiki/graph`, { headers: { Accept: "application/json" } });
-          const payload = await response.json();
+          const response = await fetch(`${apiPrefix}/users/${encodeURIComponent(userId)}/wiki/graph`, { headers: requestHeaders() });
+          const payload = await response.json().catch(() => ({}));
+          if (response.status === 401) {
+            setAuthHint("인증에 실패했습니다. 저장한 토큰과 서버 설정을 확인하세요.", "error");
+            throw new Error("Bearer 토큰이 서버의 AGENT_INTERNAL_TOKEN과 일치하지 않습니다.");
+          }
+          if (response.status === 503 && payload.code === "INTERNAL_AUTH_NOT_CONFIGURED") {
+            setAuthHint("Agent API 서버에 인증 토큰이 적용되지 않았습니다.", "error");
+            throw new Error("서버 .env에 AGENT_INTERNAL_TOKEN을 설정한 뒤 Agent API를 재시작해주세요.");
+          }
           if (!response.ok) throw new Error(payload.message || `Graph API 오류 (${response.status})`);
+          setAuthHint("Bearer 인증됨 · Graph 데이터를 조회했습니다.", "ready");
           state.data = payload;
           document.getElementById("version-label").textContent = payload.wiki_version ? `Wiki version ${payload.wiki_version}` : "Wiki version —";
           history.replaceState(null, "", `/wiki-graph?user_id=${encodeURIComponent(userId)}`);
@@ -601,12 +717,13 @@
       document.getElementById("detail-close").addEventListener("click", closeDetail);
       document.getElementById("fit-button").addEventListener("click", fitGraph);
       document.getElementById("reheat-button").addEventListener("click", () => { state.positions.clear(); seedPositions(); reheat(1); });
+      document.getElementById("auth-form").addEventListener("submit", applyAuthentication);
       search.addEventListener("input", applySearch);
       [entityFilter, conceptFilter, orphanFilter].forEach(input => input.addEventListener("change", () => buildVisibleGraph(false)));
       document.getElementById("user-form").addEventListener("submit", event => { event.preventDefault(); const userId = document.getElementById("user-id").value.trim(); if (userId) loadGraph(userId); });
       window.addEventListener("resize", () => { if (state.nodes.length) fitGraph(); });
       const initialUserId = document.body.dataset.userId || "mock-clipping-user";
-      document.getElementById("user-id").value = initialUserId; applyTransform(); loadGraph(initialUserId);
+      document.getElementById("user-id").value = initialUserId; initializeAuthentication(); applyTransform(); loadGraph(initialUserId);
     })();
   </script>
 </body>

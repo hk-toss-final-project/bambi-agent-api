@@ -51,7 +51,11 @@ Version, 수정 시각, Markdown 본문과 연결 차수를 포함합니다. `ed
 
 `GET /wiki-graph?user_id={user_id}`는 이 API를 사용하는 내부 시각화 페이지입니다.
 브라우저는 표시와 일시적인 물리 좌표만 관리하며 Wiki 지식의 원본은 PostgreSQL입니다.
-DB 연결이 준비되지 않은 Runtime은 Graph API에 `SERVICE_NOT_READY`를 반환합니다.
+화면 자체는 공개하지만 Graph API 요청에는 Bearer 토큰을 붙입니다. 같은 Origin의
+Swagger `Authorize`에 영속 저장된 `InternalBearer` 토큰을 재사용하며, 없으면 화면의
+인증란에서 입력한 토큰을 브라우저 `localStorage`에 저장합니다. 서버 Secret은 HTML이나
+URL에 포함하지 않습니다. DB 연결이 준비되지 않은 Runtime은 Graph API에
+`SERVICE_NOT_READY`를 반환합니다.
 
 ### 웹 클리핑 저장 계약
 

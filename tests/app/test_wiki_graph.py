@@ -205,11 +205,26 @@ def test_wiki_graph_page_contains_local_interactive_graph(client: TestClient) ->
 
     assert response.status_code == 200
     assert "Report Builder Wiki Graph" in response.text
+    assert 'id="api-token"' in response.text
     assert 'id="graph-search"' in response.text
     assert 'id="filter-entity"' in response.text
     assert 'id="detail-markdown"' in response.text
     assert "requestAnimationFrame(simulate)" in response.text
     assert "https://cdn" not in response.text
+
+
+def test_wiki_graph_page_reuses_and_applies_persisted_bearer_token(
+    client: TestClient,
+) -> None:
+    """Graph 화면이 저장 토큰과 Swagger 인증을 읽어 Authorization에 적용한다."""
+    response = client.get("/wiki-graph?user_id=mock-clipping-user")
+
+    assert response.status_code == 200
+    assert '"report-builder-agent-api-token"' in response.text
+    assert '"authorized"' in response.text
+    assert "authorized?.InternalBearer" in response.text
+    assert "headers.Authorization = `Bearer ${apiToken}`" in response.text
+    assert "AGENT_INTERNAL_TOKEN 값을 위 인증란에 입력해주세요." in response.text
 
 
 def test_wiki_graph_page_hides_completed_loading_status(client: TestClient) -> None:

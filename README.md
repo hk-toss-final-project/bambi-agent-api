@@ -89,9 +89,18 @@ http://127.0.0.1:8000/wiki-graph?user_id={user_id}
 - Entity(초록)·Concept(보라) Node 그래프, 검색·종류 필터, 확대·이동·Node
   Drag와 Markdown 상세 보기를 제공합니다.
 - PostgreSQL이 필요하며, Wiki가 생성된 사용자만 그래프가 표시됩니다.
-- 인증 없는 내부 개발 도구이므로 외부에 노출하지 마세요. 실제 서비스 화면은
-  `GET /internal/v1/users/{user_id}/wiki/graph` JSON API를 소비해 프론트엔드가
-  직접 렌더링합니다 ([Service 연동 가이드](docs/service-integration-guide.md) §3.6).
+- HTML 화면 자체는 인증 없이 열리지만, Graph 데이터는
+  `GET /internal/v1/users/{user_id}/wiki/graph`에서 읽으므로 Bearer 인증이
+  필요합니다. 실제 서비스 화면도 같은 JSON API를 소비합니다
+  ([Service 연동 가이드](docs/service-integration-guide.md) §3.6).
+- 서버 `.env`의 토큰은 브라우저로 자동 전달되지 않습니다. `/docs`의
+  `Authorize`에 `AGENT_INTERNAL_TOKEN` 값만(`Bearer ` 접두어 제외) 입력한 뒤
+  같은 Origin의 `/wiki-graph`를 열면 저장된 `InternalBearer` 인증을 재사용합니다.
+  Swagger를 거치지 않았다면 Graph 화면의 인증란에 같은 값을 한 번 입력하면 됩니다.
+- Graph 화면도 Swagger의 `persistAuthorization`과 마찬가지로 개발 편의를 위해
+  토큰을 브라우저 `localStorage`에 저장합니다. 공유 PC에서는 사용하지 말고,
+  `localhost`와 `127.0.0.1`은 서로 다른 Origin이므로 두 화면의 호스트를 동일하게
+  맞춰야 합니다.
 
 ### 4. 키워드 비서 웹 UI
 
