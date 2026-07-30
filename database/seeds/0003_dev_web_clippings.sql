@@ -177,6 +177,7 @@ WHERE user_id IN ('mock-clipping-user', '28');
 DELETE FROM agent.wiki_versions
 WHERE user_id IN ('mock-clipping-user', '28');
 
+-- 실제 사용자에게 같은 Context Version이 있으면 Seed 값으로 덮어쓰지 않는다.
 INSERT INTO agent.user_context_snapshots (
     id,
     user_id,
@@ -204,11 +205,7 @@ INSERT INTO agent.user_context_snapshots (
         true,
         '{"seed":true,"source":"dummy/clippings"}'::jsonb
     )
-ON CONFLICT (id) DO UPDATE SET
-    plan = EXCLUDED.plan,
-    preferred_language = EXCLUDED.preferred_language,
-    personalization_enabled = EXCLUDED.personalization_enabled,
-    attributes = EXCLUDED.attributes;
+ON CONFLICT (user_id, context_version) DO NOTHING;
 
 INSERT INTO agent.agent_jobs (
     id,

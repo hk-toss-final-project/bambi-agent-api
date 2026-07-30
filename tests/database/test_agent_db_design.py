@@ -608,6 +608,17 @@ def test_web_clipping_seed_builds_resettable_worker_dependency_chain() -> None:
     assert "ON CONFLICT (id) DO UPDATE" in seed
 
 
+def test_web_clipping_seed_preserves_existing_user_context_snapshot() -> None:
+    """클리핑 Seed가 기존 사용자의 같은 버전 Context Snapshot을 덮어쓰지 않는지 검증한다."""
+    seed = _read(CLIPPING_SEED_PATH)
+    context_insert_start = seed.index("INSERT INTO agent.user_context_snapshots")
+    context_insert_end = seed.index("INSERT INTO agent.agent_jobs")
+    context_insert = seed[context_insert_start:context_insert_end]
+
+    assert "ON CONFLICT (user_id, context_version) DO NOTHING" in context_insert
+    assert "ON CONFLICT (id) DO UPDATE" not in context_insert
+
+
 def test_web_clipping_seed_preserves_wiki_documents_referenced_by_citations() -> None:
     """클리핑 Seed가 Citation이 참조하는 Wiki 문서를 삭제 대상에서 제외하는지 검증한다."""
     seed = _read(CLIPPING_SEED_PATH)

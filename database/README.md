@@ -60,6 +60,8 @@ Seed Snapshot의 고정 계약은 다음과 같습니다.
 `dummy/clippings`의 Obsidian Web Clipper Markdown은 `mock-clipping-user`와 `28`
 각 사용자의 원본 및 처리 대기 Job으로 저장됩니다. `wiki_documents`에는 Worker가
 생성한 LLM Wiki만 들어가므로 Seed 직후에는 두 사용자의 Wiki 문서가 없습니다.
+28번 사용자의 같은 Version Context Snapshot이 이미 있으면 기존 개인화 값을
+덮어쓰지 않고 그대로 사용합니다.
 
 ```sql
 SELECT version.title, version.clipped_on, source.canonical_url, version.raw_content
