@@ -12,6 +12,11 @@ from .features.pool_context import (
     is_pool_sufficient,
     select_pool_documents,
 )
+from .features.researcher import (
+    ResearchOutcome,
+    research_agent_enabled,
+    research_context,
+)
 from .features.generation import (
     ReportContextDocument,
     GeneratedReportContent,

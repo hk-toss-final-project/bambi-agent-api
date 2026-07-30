@@ -7,6 +7,12 @@ from .features.client import LlmCompletion, complete, complete_with_usage
 from .features.completion import llm_001, llm_002, llm_003
 from .features.embedding_client import embed_texts, get_embedding_client
 from .features.parsing import strip_json_fence
+from .features.tool_loop import (
+    ToolCallRecord,
+    ToolLoopResult,
+    ToolSpec,
+    run_tool_loop,
+)
 from .features.tools import llm_004, llm_005
 from .features.routing import llm_006, llm_007, llm_008, llm_019
 from .features.budgets import llm_009
@@ -23,6 +29,10 @@ __all__ = [
     "embed_texts",
     "get_embedding_client",
     "strip_json_fence",
+    "ToolCallRecord",
+    "ToolLoopResult",
+    "ToolSpec",
+    "run_tool_loop",
     "llm_001",
     "llm_002",
     "llm_003",

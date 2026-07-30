@@ -222,6 +222,15 @@ def test_run_personal_wiki_build_survives_interest_recalc_failure(
     assert result["chunk_count"] == 2
 
 
+def _disable_research(monkeypatch: pytest.MonkeyPatch) -> None:
+    """조사원 에이전트를 끄고 토픽 성격 판정도 고정한다.
+
+    두 함수 모두 실제 LLM·DB를 사용하므로 그래프 테스트에서는 대체한다.
+    """
+    monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: False)
+    monkeypatch.setattr(agent_graph, "resolve_topic_intent", lambda *args: "news")
+
+
 def test_run_report_generation_chains_search_generate_persist(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -272,6 +281,9 @@ def test_run_report_generation_chains_search_generate_persist(
     monkeypatch.setattr(agent_graph, "generate_report_content_with_quality", fake_generate)
     monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect_live_context)
     monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
+    # 이 테스트는 조사원을 끈 고정 경로를 검증한다. 끄지 않으면 research 노드가
+    # 실제 LLM을 호출한다(테스트는 LLM을 부르지 않아야 한다).
+    _disable_research(monkeypatch)
 
     connection = _FakeConnection()
     result = asyncio.run(
@@ -291,3 +303,158 @@ def test_run_report_generation_chains_search_generate_persist(
     assert order == ["load_context", "collect_live", "generate", "persist"]
     assert result == {"content_candidate_id": "candidate-1"}
     assert connection.transactions == 2
+
+
+def _patch_generation_tail(
+    monkeypatch: pytest.MonkeyPatch, order: list[str]
+) -> list[list[Any]]:
+    """조사 이후 단계(선별·생성·저장)를 대체하고 생성에 들어간 근거를 모은다."""
+    used_contexts: list[list[Any]] = []
+
+    async def fake_prag_006(contexts: list[Any]) -> list[Any]:
+        """맥락화 단계를 통과시킨다."""
+        return contexts
+
+    def fake_generate(**kwargs: Any) -> str:
+        """생성에 들어간 근거를 기록하고 고정 콘텐츠를 반환한다."""
+        order.append("generate")
+        used_contexts.append(list(kwargs["contexts"]))
+        return "generated"
+
+    async def fake_prag_007(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """저장 단계를 대체한다."""
+        order.append("persist")
+        return {"content_candidate_id": "candidate-1"}
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """persist 단계가 부르는 RLS Scope 설정을 생략한다."""
+
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
+    monkeypatch.setattr(
+        agent_graph, "generate_report_content_with_quality", fake_generate
+    )
+    monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
+    monkeypatch.setattr(agent_graph, "resolve_topic_intent", lambda *args: "news")
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    return used_contexts
+
+
+def _run_generation() -> dict[str, object]:
+    """Report Builder 그래프를 고정 입력으로 실행한다."""
+    return asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="코스피",
+            content_type="article",
+            language="ko",
+            model="test-model",
+        )
+    )
+
+
+def test_research_agent_output_becomes_generation_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """조사원이 모은 자료가 생성 근거로 그대로 전달된다.
+
+    조사원이 자료를 모으면 기존 고정 경로(prag_003 검색·실시간 수집)는
+    실행되지 않아야 한다 — 같은 자료를 두 번 모으면 비용이 두 배가 된다.
+    """
+    order: list[str] = []
+    used_contexts = _patch_generation_tail(monkeypatch, order)
+
+    async def fake_research(connection: Any, **kwargs: Any) -> Any:
+        """조사원이 문서 두 건을 모은 상황을 재현한다."""
+        order.append("research")
+        assert kwargs["topic"] == "코스피"
+        return SimpleNamespace(
+            documents=("doc-1", "doc-2"),
+            calls=(),
+            notes="두 건을 모았다.",
+            stop_reason="final",
+        )
+
+    def fail_prag_003(*args: Any, **kwargs: Any) -> None:
+        """고정 경로가 실행되면 즉시 실패시킨다."""
+        raise AssertionError("조사원이 성공하면 prag_003을 부르면 안 된다.")
+
+    monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: True)
+    monkeypatch.setattr(agent_graph, "research_context", fake_research)
+    monkeypatch.setattr(agent_graph, "prag_003", fail_prag_003)
+
+    result = _run_generation()
+
+    assert order == ["research", "generate", "persist"]
+    assert used_contexts == [["doc-1", "doc-2"]]
+    assert result == {"content_candidate_id": "candidate-1"}
+
+
+def test_research_failure_falls_back_to_fixed_collection_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """조사원이 실패해도 기존 경로로 리포트 생성을 계속한다."""
+    order: list[str] = []
+    _patch_generation_tail(monkeypatch, order)
+
+    async def broken_research(connection: Any, **kwargs: Any) -> Any:
+        """조사원 실행 중 오류를 재현한다."""
+        order.append("research")
+        raise RuntimeError("도구 호출 실패")
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[str]:
+        """고정 경로의 개인 Wiki 검색을 대체한다."""
+        order.append("load_context")
+        return ["context-1"]
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """Scope 설정을 생략한다."""
+
+    def fake_collect(topic: str, user_id: str, *, model: str = "") -> list[Any]:
+        """실시간 수집을 대체한다."""
+        order.append("collect_live")
+        return []
+
+    monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: True)
+    monkeypatch.setattr(agent_graph, "research_context", broken_research)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect)
+
+    result = _run_generation()
+
+    assert order == ["research", "load_context", "collect_live", "generate", "persist"]
+    assert result == {"content_candidate_id": "candidate-1"}
+
+
+def test_research_node_is_skipped_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """스위치를 끄면 조사원을 아예 호출하지 않는다."""
+    order: list[str] = []
+    _patch_generation_tail(monkeypatch, order)
+
+    async def fail_research(connection: Any, **kwargs: Any) -> Any:
+        """꺼진 상태에서 호출되면 실패시킨다."""
+        raise AssertionError("스위치가 꺼지면 조사원을 부르면 안 된다.")
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[str]:
+        """고정 경로 검색을 대체한다."""
+        order.append("load_context")
+        return ["context-1"]
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """Scope 설정을 생략한다."""
+
+    monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: False)
+    monkeypatch.setattr(agent_graph, "research_context", fail_research)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "collect_live_context", lambda *a, **k: [])
+
+    result = _run_generation()
+
+    assert order[0] == "load_context"
+    assert result == {"content_candidate_id": "candidate-1"}

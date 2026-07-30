@@ -30,6 +30,12 @@ class ReportGenerationState(TypedDict):
     content_type: str
     language: str
     model: str
+    # 조사원(Researcher) 노드가 채운다. research_documents가 비어 있으면
+    # load_context가 기존 고정 경로(풀 검색 → 부족하면 수집)로 되돌아간다.
+    research_documents: NotRequired[list[object]]
+    research_notes: NotRequired[str]
+    research_calls: NotRequired[list[dict[str, object]]]
+    topic_intent: NotRequired[str]
     contexts: NotRequired[list[object]]
     generated: NotRequired[object]
     latency_ms: NotRequired[int]

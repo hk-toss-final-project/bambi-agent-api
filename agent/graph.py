@@ -32,6 +32,8 @@ from agent.report_builder.api import (
     collect_live_context,
     GLOBAL_NAMESPACE,
     is_pool_sufficient,
+    research_agent_enabled,
+    research_context,
     select_pool_documents,
     select_generation_context,
 )
@@ -254,8 +256,58 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
     load_context → generate → persist 순서로 검색·생성·영속화를 잇는다.
     """
 
+    async def research(state: ReportGenerationState) -> dict[str, Any]:
+        """조사원 에이전트가 도구를 골라 가며 근거 자료를 모은다.
+
+        LLM이 search_pool·collect_live 중 무엇을 어떤 검색어로 부를지 스스로
+        정한다. 실패하거나 한 건도 못 모으면 빈 목록을 돌려주고, load_context가
+        기존 고정 경로로 되돌아간다 — 조사가 안 됐다고 생성까지 막지는 않는다.
+        """
+        topic_intent = await to_thread(
+            resolve_topic_intent, state["topic"], state["user_id"]
+        )
+        if not research_agent_enabled():
+            return {"topic_intent": topic_intent, "research_documents": []}
+        try:
+            outcome = await research_context(
+                connection,
+                topic=state["topic"],
+                user_id=state["user_id"],
+                topic_intent=topic_intent,
+                model=state["model"],
+            )
+        except Exception:
+            logger.exception("조사원 실행에 실패해 기존 수집 경로로 되돌립니다.")
+            return {"topic_intent": topic_intent, "research_documents": []}
+        return {
+            "topic_intent": topic_intent,
+            "research_documents": list(outcome.documents),
+            "research_notes": outcome.notes,
+            "research_calls": [
+                {
+                    "tool": call.name,
+                    "arguments": call.arguments,
+                    "failed": call.failed,
+                }
+                for call in outcome.calls
+            ],
+        }
+
     async def load_context(state: ReportGenerationState) -> dict[str, Any]:
-        """개인 Wiki와 Global 최신 문서 Context를 조회 Transaction으로 읽는다."""
+        """조사원이 모은 자료를 생성용 Context로 다듬는다.
+
+        조사원이 자료를 모았으면 그대로 쓰고, 비었으면 기존 고정 경로(개인 Wiki
+        조회 → 풀 판정 → 부족하면 실시간 수집)를 그대로 수행한다.
+        """
+        researched = list(state.get("research_documents") or [])
+        if researched:
+            logger.info(
+                "조사원 자료 사용: topic=%s %d건 (도구 호출 %d회)",
+                state["topic"],
+                len(researched),
+                len(state.get("research_calls") or []),
+            )
+            return await _finalize_contexts(state, researched)
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=state["user_id"])
             hybrid = await prag_003(
@@ -287,9 +339,8 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         # 판정이 헐거우면 오히려 손해다. 잡음 수준 문서로 수집을 건너뛰면 리포트가
         # 얕아진다(같은 날 실측: 'Anthropic'이 잡음 5건으로 통과해 사실과 다른 서술
         # 생성). select_pool_documents가 절대 하한으로 그 경우를 걸러낸다.
-        topic_intent = await to_thread(
-            resolve_topic_intent, state["topic"], state["user_id"]
-        )
+        # 토픽 성격은 research 노드가 이미 판정했다. 다시 부르지 않는다.
+        topic_intent = str(state.get("topic_intent") or "news")
         pool_documents = select_pool_documents(
             hybrid, published_at=pool_freshness, topic_intent=topic_intent
         )
@@ -353,6 +404,49 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                     "implementation": lambda: select_generation_context(
                         personal_documents,
                         live.data.get("result", []),
+                    )
+                },
+            )
+        )
+        personalized = await report_012(
+            FeatureRequest(
+                request_id=state["job_id"],
+                actor_id="report-generation-graph",
+                user_id=state["user_id"],
+                payload={"implementation": lambda: selected.data.get("result", [])},
+            )
+        )
+        contexts = personalized.data.get("result")
+        if not isinstance(contexts, list):
+            raise RuntimeError("REPORT 검색 기능이 Context 목록을 반환하지 않았습니다.")
+        return {"contexts": contexts}
+
+    async def _finalize_contexts(
+        state: ReportGenerationState, documents: list[Any]
+    ) -> dict[str, Any]:
+        """조사원이 모은 문서를 생성용 Context로 다듬는다.
+
+        고정 경로와 같은 REPORT-004/006/012 단계를 그대로 거친다 — 자료를 누가
+        모았든 근거 상한·개인화 규칙은 동일해야 하기 때문이다. REPORT-005(실시간
+        수집)는 조사원이 이미 도구로 수행했으므로 건너뛴다.
+        """
+        contextualized = await prag_006(documents)
+        personal = await report_004(
+            FeatureRequest(
+                request_id=state["job_id"],
+                actor_id="report-generation-graph",
+                user_id=state["user_id"],
+                payload={"implementation": lambda: contextualized},
+            )
+        )
+        selected = await report_006(
+            FeatureRequest(
+                request_id=state["job_id"],
+                actor_id="report-generation-graph",
+                user_id=state["user_id"],
+                payload={
+                    "implementation": lambda: select_generation_context(
+                        personal.data.get("result", []), []
                     )
                 },
             )
@@ -458,10 +552,12 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         return {"result": dict(safeguarded.data)}
 
     graph = StateGraph(ReportGenerationState)
+    graph.add_node("research", research)
     graph.add_node("load_context", load_context)
     graph.add_node("generate", generate)
     graph.add_node("persist", persist)
-    graph.set_entry_point("load_context")
+    graph.set_entry_point("research")
+    graph.add_edge("research", "load_context")
     graph.add_edge("load_context", "generate")
     graph.add_edge("generate", "persist")
     graph.add_edge("persist", END)

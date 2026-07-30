@@ -52,8 +52,10 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
             slug="report-generation",
             title="Report Builder Generation",
             description=(
-                "개인 Wiki·실시간 자료 검색(load_context) → 콘텐츠 생성(generate) → "
-                "Citation·Snapshot 저장(persist)"
+                "조사원 에이전트가 도구(search_pool·collect_live)를 골라 근거 "
+                "수집(research) → 생성용 Context 선별(load_context) → "
+                "콘텐츠 생성(generate) → Citation·Snapshot 저장(persist). "
+                "research가 자료를 못 모으면 load_context가 기존 고정 경로로 되돌아간다."
             ),
             mermaid=_mermaid_of(build_report_generation_graph(None)),
         ),
