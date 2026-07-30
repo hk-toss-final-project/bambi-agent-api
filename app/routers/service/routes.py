@@ -426,7 +426,6 @@ SourceKey = Annotated[
 @router.get(
     "/collection-schedules",
     response_model=CollectionScheduleListResponse,
-    tags=["collection-schedules"],
     operation_id="sch_022",
     summary="수집 스케줄 목록·실행 이력 조회",
     description=(
@@ -453,7 +452,6 @@ async def list_collection_schedules(
     "/collection-schedules",
     response_model=CollectionScheduleResponse,
     status_code=status.HTTP_201_CREATED,
-    tags=["collection-schedules"],
     operation_id="sch_017",
     summary="수집 스케줄 등록",
     description=(
@@ -473,7 +471,6 @@ async def register_collection_schedule(
 @router.patch(
     "/collection-schedules/{source_key}",
     response_model=CollectionScheduleResponse,
-    tags=["collection-schedules"],
     operation_id="sch_018",
     summary="수집 스케줄 수정",
     description=(
@@ -493,7 +490,6 @@ async def update_collection_schedule_route(
 @router.post(
     "/collection-schedules/{source_key}/run",
     response_model=CollectionScheduleRunResponse,
-    tags=["collection-schedules"],
     operation_id="sch_021",
     summary="수집 스케줄 즉시 실행",
     description=(
@@ -522,7 +518,6 @@ async def run_collection_schedule_now(
 @router.post(
     "/collection-schedules/{source_key}/pause",
     response_model=CollectionScheduleResponse,
-    tags=["collection-schedules"],
     operation_id="sch_019",
     summary="수집 스케줄 중지",
 )
@@ -537,7 +532,6 @@ async def pause_collection_schedule(
 @router.post(
     "/collection-schedules/{source_key}/resume",
     response_model=CollectionScheduleResponse,
-    tags=["collection-schedules"],
     operation_id="sch_020",
     summary="수집 스케줄 재개",
 )

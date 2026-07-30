@@ -152,6 +152,21 @@ def test_list_returns_schedules_and_runs(
     assert schedule_service.calls[0] == ("list", (None, 5))
 
 
+def test_openapi_groups_collection_schedules_only_under_service_api() -> None:
+    """수집 스케줄 API가 Swagger에서 Service API 그룹에만 표시되는지 검증한다."""
+    schema = create_app(Settings(environment="test")).openapi()
+    operations = [
+        operation
+        for path, path_item in schema["paths"].items()
+        if path.startswith(_PREFIX)
+        for operation in path_item.values()
+        if isinstance(operation, dict) and "operationId" in operation
+    ]
+
+    assert len(operations) == 6
+    assert all(operation["tags"] == ["service-api"] for operation in operations)
+
+
 def test_register_returns_201(
     schedule_client: TestClient, schedule_service: _FakeScheduleService
 ) -> None:
