@@ -112,7 +112,7 @@
 | `summary` | report.summary, card.summary | 그대로 (카드는 요약만 노출) |
 | `body` | **report.body** | 카드엔 안 넣음. 리포트에 보존 |
 | `citations[…]` | report(citations) / card_sources | citation 구조는 아래 주의 |
-| interests(관심사) | **card 관심사 태그** | why_for_you 문장 대체. 카드에 태그 필드/조인 신설 필요 |
+| interests(관심사) | **card 관심사 태그** | why_for_you 문장 대체. ✅ 2026-07-30 연결됨 — 발행 Snapshot payload의 `tags`(생성 요청 topic, 항상 1개)를 service가 `card_interest_tags`에 그대로 저장 |
 | ~~why_for_you~~ | (폐기) | "왜 당신에게" 문장 안 씀 → 관심사 태그로 대체 |
 
 > ⚠️ `report`·카드 관심사 태그는 **service DB 스키마 변경** → 영현·우석 소유. 소라+서빈이 스케줄링/Pull 저장 구현.
@@ -122,6 +122,7 @@
 - **개인 위키(P) citation은 `url=null`**(위키엔 외부 URL 없음) → `card_sources.url`이 빈다. 외부(G) citation만 url이 있다.
 - P/G 구분(`reference`)은 `card_sources`에 저장 시 소실 → 필요하면 컬럼 추가.
 - 참고: **발행 Snapshot(claim) 카드의 citation은 `{citation_id,title,url}`로 더 단순** — 두 citation 모양이 다르다.
+- 발행 Snapshot payload는 citation 외에 **`tags`**(카드 관심사 태그)를 함께 싣는다. 상세는 [service-integration-guide.md](service-integration-guide.md) "Claim 응답" 절.
 - 참고: 기존 동기 계약의 `BookmarkProcessResponse{summary, interests[], tags[], confidence}` 중 `confidence`·`tags`는 agent 실제 결과에 대응이 불명확 → 관심사 태그로 정리되며 자연 흡수.
 - ✅ **결정 완료(07-22, 송우).** 구현 소유: `report`/카드 관심사태그 스키마 = 영현·우석, service-worker Pull 저장·스케줄링 = 소라·서빈.
 

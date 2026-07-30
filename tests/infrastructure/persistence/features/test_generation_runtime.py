@@ -6,7 +6,9 @@ from typing import Any
 
 from infrastructure.persistence.features.generation_runtime import (
     enqueue_report_generation_job,
+    persist_report_generation,
 )
+from shared.report_models import GeneratedReportContent
 
 
 class _FakeCursor:
@@ -109,3 +111,73 @@ def test_uuid_or_none_keeps_wiki_ids_and_drops_live_references() -> None:
     assert _uuid_or_none(wiki_id) == wiki_id
     assert _uuid_or_none("L1") is None
     assert _uuid_or_none("") is None
+
+
+def _connection_for_persist(topic: str) -> _FakeConnection:
+    """인용 없는 리포트 저장 경로가 실행할 질의 순서대로 응답을 준비한다."""
+    return _FakeConnection(
+        [
+            [{"id": "request-1", "topic": topic}],  # generation_requests 조회
+            [],  # status = running
+            [{"id": "run-1"}],  # generation_runs INSERT
+            [{"next_version": 1}],  # 다음 content 버전
+            [],  # 이전 후보 superseded
+            [{"id": "cand-1", "created_at": datetime(2026, 7, 30, tzinfo=UTC)}],
+            [],  # generation_runs completed
+            [],  # generation_requests completed
+            [],  # publish_snapshots INSERT
+            [],  # event_outbox INSERT
+        ]
+    )
+
+
+def _publish_payload(connection: _FakeConnection) -> dict[str, Any]:
+    """기록된 질의에서 publish_snapshots INSERT의 payload를 꺼낸다."""
+    for sql, params in connection.executed:
+        if "INSERT INTO agent.publish_snapshots" in sql:
+            assert params is not None
+            return params[5].obj  # Jsonb로 감싼 payload
+    raise AssertionError("publish_snapshots INSERT를 찾지 못했다.")
+
+
+def _persist(connection: _FakeConnection) -> None:
+    """인용 없는 최소 리포트 한 건을 저장 경로에 통과시킨다."""
+    asyncio.run(
+        persist_report_generation(
+            connection,  # type: ignore[arg-type]
+            job_id="job-1",
+            user_id="user-1",
+            attempt_number=1,
+            content_type="interest_news_card",
+            generated=GeneratedReportContent(
+                title="제목",
+                summary="요약",
+                body="본문",
+                citation_references=(),
+            ),
+            contexts=[],
+            latency_ms=100,
+        )
+    )
+
+
+def test_publish_payload_carries_request_topic_as_interest_tag() -> None:
+    """발행 Snapshot payload에 생성 요청 topic이 카드 태그로 실린다.
+
+    service 워커가 이 값을 card_interest_tags에 그대로 저장하므로,
+    빠지면 카드에 관심사 태그가 붙지 않는다.
+    """
+    connection = _connection_for_persist("코스피")
+
+    _persist(connection)
+
+    assert _publish_payload(connection)["tags"] == ["코스피"]
+
+
+def test_publish_payload_omits_blank_topic_tag() -> None:
+    """공백뿐인 topic은 빈 태그로 노출되지 않도록 제외한다."""
+    connection = _connection_for_persist("   ")
+
+    _persist(connection)
+
+    assert _publish_payload(connection)["tags"] == []

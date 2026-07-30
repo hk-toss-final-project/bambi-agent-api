@@ -229,7 +229,8 @@ INSERT INTO agent.publish_snapshots (
         "citation_id":"70000000-0000-4000-8000-000000000001",
         "title":"Report Builder Agent API 목업 출처",
         "url":"https://example.com/mock-ai-agent"
-      }]
+      }],
+      "tags":["AI 에이전트 동향"]
     }'::jsonb,
     'ready',
     '2026-07-13T00:00:01Z',

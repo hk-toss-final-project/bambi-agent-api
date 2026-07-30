@@ -315,6 +315,10 @@ class PublishSnapshotResponse(ImmutableSchema):
     citations: list[CitationSchema] = Field(
         default_factory=list, description="본문과 연결된 출처 목록"
     )
+    tags: list[str] = Field(
+        default_factory=list,
+        description="카드에 노출할 관심사 태그 목록 (생성 요청 topic)",
+    )
     created_at: datetime = Field(description="Snapshot 생성 시각")
 
 

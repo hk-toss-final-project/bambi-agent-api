@@ -318,7 +318,8 @@ INSERT INTO agent.publish_snapshots (
             "citation_id":"70000000-0000-4000-8000-000000000002",
             "title":"온디바이스 AI 목업 출처",
             "url":"https://example.com/mock-on-device-ai"
-          }]
+          }],
+          "tags":["온디바이스 AI"]
         }'::jsonb,
         'ready',
         '2026-07-13T00:00:02Z'
@@ -338,7 +339,8 @@ INSERT INTO agent.publish_snapshots (
             "citation_id":"70000000-0000-4000-8000-000000000003",
             "title":"친환경 데이터센터 목업 출처",
             "url":"https://example.com/mock-green-data-center"
-          }]
+          }],
+          "tags":["친환경 데이터센터"]
         }'::jsonb,
         'ready',
         '2026-07-13T00:00:03Z'

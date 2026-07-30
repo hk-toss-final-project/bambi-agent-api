@@ -61,6 +61,46 @@ def test_publish_snapshot_and_ack_flow(
     assert acknowledged.json()["status"] == "published"
 
 
+def test_publish_snapshot_carries_interest_tags(
+    client: TestClient, publish_service: PublishSnapshotService
+) -> None:
+    """Snapshot 조회 응답이 카드 관심사 태그를 그대로 전달하는지 검증한다."""
+    snapshot = PublishSnapshotResponse(
+        content_id="content-tagged",
+        user_id="user-1",
+        version=1,
+        snapshot_hash="hash-tagged",
+        title="Generated title",
+        summary="Generated summary",
+        body="Generated body",
+        tags=["코스피"],
+        created_at=datetime.now(UTC),
+    )
+    asyncio.run(publish_service.save_publish_snapshot(snapshot))
+
+    fetched = client.get("/internal/v1/publish-snapshots/content-tagged")
+
+    assert fetched.status_code == 200
+    assert fetched.json()["tags"] == ["코스피"]
+
+
+def test_publish_snapshot_tags_default_to_empty_list() -> None:
+    """태그 없이 만든 Snapshot이 빈 목록으로 직렬화되는지 검증한다."""
+    snapshot = PublishSnapshotResponse(
+        content_id="content-untagged",
+        user_id="user-1",
+        version=1,
+        snapshot_hash="hash-untagged",
+        title="Generated title",
+        summary="Generated summary",
+        body="Generated body",
+        created_at=datetime.now(UTC),
+    )
+
+    assert snapshot.tags == []
+    assert snapshot.model_dump()["tags"] == []
+
+
 def test_publish_ack_rejects_snapshot_mismatch(
     client: TestClient, publish_service: PublishSnapshotService
 ) -> None:

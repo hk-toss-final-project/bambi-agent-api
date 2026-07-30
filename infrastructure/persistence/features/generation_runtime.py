@@ -482,7 +482,7 @@ async def persist_report_generation(
     """생성 Run·후보·Citation·Publish Snapshot·Outbox를 한 트랜잭션에 저장한다."""
     request_cursor = await connection.execute(
         """
-        SELECT id
+        SELECT id, topic
         FROM agent.generation_requests
         WHERE job_id = %s AND user_id = %s
         FOR UPDATE
@@ -642,11 +642,16 @@ async def persist_report_generation(
         """,
         (generation_request["id"],),
     )
+    # 카드 관심사 태그(service.card_interest_tags)의 원천이다. 리포트 1건은
+    # topic 1개로 생성되므로 항상 원소 1개짜리 목록이다. service 워커는 받은
+    # 문자열을 그대로 저장·노출하므로 빈 문자열은 빈 태그로 보이게 된다.
+    topic = str(generation_request["topic"] or "").strip()
     publish_payload = {
         "title": generated.title,
         "summary": generated.summary,
         "body": generated.body,
         "citations": citation_payloads,
+        "tags": [topic] if topic else [],
     }
     await connection.execute(
         """

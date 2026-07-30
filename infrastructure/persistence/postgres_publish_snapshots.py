@@ -80,6 +80,8 @@ class PostgresPublishSnapshotRepository:
                 "summary": payload["summary"],
                 "body": payload["body"],
                 "citations": payload.get("citations", []),
+                # tags는 나중에 추가된 필드라, 그 전에 저장된 Snapshot에는 없다.
+                "tags": payload.get("tags", []),
                 "created_at": row["created_at"],
             }
         )

@@ -172,8 +172,20 @@ loop (10~30초):
 ### Claim 응답
 
 `batch_id`, `lease_expires_at`과 함께 각 item에 **전체 Payload**(content_id,
-user_id, version, snapshot_hash, title, summary, body, citations)가 포함되므로
+user_id, version, snapshot_hash, title, summary, body, citations, tags)가 포함되므로
 추가 조회 없이 바로 Upsert할 수 있습니다. 처리할 것이 없으면 `items=[]`.
+
+**`tags`(2026-07-30 추가)** — 카드에 노출할 관심사 태그 목록입니다.
+
+```json
+"tags": ["코스피"]
+```
+
+- 값은 생성 요청의 `topic`을 그대로 실은 것입니다. 리포트 1건은 topic 1개로
+  생성되므로 **항상 원소가 1개**입니다(배열인 것은 확장 여지를 남긴 것).
+- service 워커는 이 문자열을 `card_interest_tags`에 그대로 저장·노출합니다.
+  `/interests`의 topic과 일치시킬 필요는 없습니다(2026-07-30 송우 확인).
+- 이 필드가 붙기 전에 저장된 Snapshot에는 없어서 `[]`로 내려갑니다.
 
 ### ACK 규칙
 
