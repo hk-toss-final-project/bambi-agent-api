@@ -251,3 +251,14 @@ def test_research_prompt_tells_the_model_to_try_pool_first() -> None:
     """
     assert "먼저 search_pool" in researcher.SYSTEM_PROMPT
     assert "주제어 하나로만 찾지 마라" in researcher.SYSTEM_PROMPT
+
+
+def test_research_prompt_states_a_concrete_stop_condition() -> None:
+    """근거가 충분하면 멈추고 실시간 수집도 하지 말라고 명시한다.
+
+    2026-07-31 벤치마크에서 이 지시가 모호해 케이스의 86.7%가 반복 상한까지
+    가고, 창고에서 충분히 얻고도 collect_live를 불렀다(판단 정확도 53.3%).
+    문구를 구체화해 각각 46.7% / 100%로 개선했다.
+    """
+    assert "collect_live도 부르지 마라" in researcher.SYSTEM_PROMPT
+    assert "건에 못 미칠 때만" in researcher.SYSTEM_PROMPT
