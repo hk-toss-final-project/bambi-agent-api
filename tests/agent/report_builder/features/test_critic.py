@@ -259,3 +259,14 @@ def test_critic_prompt_forbids_guessing_omissions() -> None:
     """
     assert "search_pool로 그 자료가 실제로 있는지 먼저 확인" in critic.SYSTEM_PROMPT
     assert "추측으로" in critic.SYSTEM_PROMPT
+
+
+def test_critic_prompt_keeps_semantic_not_literal_matching() -> None:
+    """원문과 글자가 같아야 한다는 지시를 넣지 않는다.
+
+    2026-07-31 벤치마크에서 "문장마다 따로 대조하라"를 넣었더니 검토자가 축자
+    대조로 기울어, 뜻이 같은 정상 초안(pass-06)을 오탐했다. 헛지적률이
+    0.0% → 6.7%로 나빠져 되돌렸다. 상세는
+    bench/critic/results/2026-07-31_prompt-tuning-failed.md 참고.
+    """
+    assert "문장마다 따로 대조" not in critic.SYSTEM_PROMPT
