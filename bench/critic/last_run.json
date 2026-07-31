@@ -1,0 +1,514 @@
+{
+  "model": "gpt-4.1-mini",
+  "summary": {
+    "total": 30,
+    "correct": 29,
+    "accuracy": 0.967,
+    "revise_total": 15,
+    "detection_rate": 0.933,
+    "pass_total": 15,
+    "false_flag_rate": 0.0,
+    "unavailable": 0,
+    "avg_tool_calls": 1.5,
+    "avg_latency_ms": 2554,
+    "input_tokens": 38943,
+    "output_tokens": 2691
+  },
+  "results": [
+    {
+      "id": "rev-01-fabricated-event",
+      "kind": "완전 날조",
+      "expected": "revise",
+      "actual": "revise",
+      "correct": true,
+      "outcome": "revise",
+      "tool_calls": 2,
+      "tools_used": [
+        "get_source",
+        "get_source"
+      ],
+      "latency_ms": 6241,
+      "input_tokens": 1295,
+      "output_tokens": 149,
+      "problem": "인용한 P1과 P2 원문에는 코스피 폐지, 2026년 3월 금융위원회 결정, KRX-100 지수 대체, 상장사 전원 재심사 관련 내용이 전혀 없음"
+    },
+    {
+      "id": "rev-02-number-inflated",
+      "kind": "수치 조작",
+      "expected": "revise",
+      "actual": "revise",
+      "correct": true,
+      "outcome": "revise",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 2901,
+      "input_tokens": 1152,
+      "output_tokens": 143,
+      "problem": "본문에서 '지난달 반도체 수출액이 전년 동월 대비 32% 증가'라고 했으나, 근거 원문 G1에는 '3.2% 증가'로 되어 있어 수치가 잘못 인용됨."
+    },
+    {
+      "id": "rev-03-causal-invented",
+      "kind": "인과 날조",
+      "expected": "revise",
+      "actual": "revise",
+      "correct": true,
+      "outcome": "revise",
+      "tool_calls": 3,
+      "tools_used": [
+        "get_source",
+        "get_source",
+        "search_pool"
+      ],
+      "latency_ms": 4759,
+      "input_tokens": 2006,
+      "output_tokens": 214,
+      "problem": "본문에서 '한국은행 분석 결과 이것이 지난달 물가 상승률 2.1%의 가장 큰 원인으로 확인됐다'고 했으나, 근거 원문 G2에는 단지 물가 상승률 2.1%가 집계됐다는 사실만 있고 환율 상승이 원인이라는 내용은 없다."
+    },
+    {
+      "id": "rev-04-wrong-subject",
+      "kind": "주체 바꿔치기",
+      "expected": "revise",
+      "actual": "revise",
+      "correct": true,
+      "outcome": "revise",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 2233,
+      "input_tokens": 1093,
+      "output_tokens": 109,
+      "problem": "본문에서 '구글이 새로운 추론 모델을 공개했다고 밝혔다'고 했으나, 근거 원문 G1에는 'OpenAI가 새로운 추론 모델을 공개했다고 밝혔다'고 되어 있어 인용 내용이 사실과 다름."
+    },
+    {
+      "id": "rev-05-time-shifted",
+      "kind": "시점 조작",
+      "expected": "revise",
+      "actual": "revise",
+      "correct": true,
+      "outcome": "revise",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 2837,
+      "input_tokens": 1128,
+      "output_tokens": 126,
+      "problem": "본문에서 '이번 달 금융통화위원회에서 기준금리를 3.25%로 동결했다'고 했으나, 근거 G1 원문에는 '지난해 11월 기준금리를 3.25%로 동결했다'고 되어 있어 시점이 다르다."
+    },
+    {
+      "id": "rev-06-half-true",
+      "kind": "부분 날조",
+      "expected": "revise",
+      "actual": "revise",
+      "correct": true,
+      "outcome": "revise",
+      "tool_calls": 3,
+      "tools_used": [
+        "get_source",
+        "get_source",
+        "search_pool"
+      ],
+      "latency_ms": 5050,
+      "input_tokens": 2578,
+      "output_tokens": 194,
+      "problem": "본문에서 '국내 3사가 올해 하반기부터 전 차종에 전고체 배터리를 탑재하기로 확정했다'는 내용은 근거 원문(P1)에 없으며, 근거 없이 인용한 내용임."
+    },
+    {
+      "id": "rev-07-reversed",
+      "kind": "반대 서술",
+      "expected": "revise",
+      "actual": "revise",
+      "correct": true,
+      "outcome": "revise",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 2303,
+      "input_tokens": 1113,
+      "output_tokens": 113,
+      "problem": "본문에서 '지난달 서울 아파트 거래량은 전월 대비 12% 늘었다'고 했으나, 근거 원문 G1에는 '12% 줄었다'고 명확히 나와 있어 인용 내용이 사실과 다름."
+    },
+    {
+      "id": "rev-08-invented-quote",
+      "kind": "없는 발언",
+      "expected": "revise",
+      "actual": "pass",
+      "correct": false,
+      "outcome": "pass",
+      "tool_calls": 2,
+      "tools_used": [
+        "get_source",
+        "search_pool"
+      ],
+      "latency_ms": 2062,
+      "input_tokens": 1219,
+      "output_tokens": 99,
+      "problem": "인용한 내용이 근거 원문에 정확히 있으며, 주제상 빠진 필수 사실도 없다."
+    },
+    {
+      "id": "rev-09-invented-policy",
+      "kind": "없는 제도",
+      "expected": "revise",
+      "actual": "revise",
+      "correct": true,
+      "outcome": "revise",
+      "tool_calls": 2,
+      "tools_used": [
+        "get_source",
+        "get_source"
+      ],
+      "latency_ms": 3522,
+      "input_tokens": 1250,
+      "output_tokens": 221,
+      "problem": "본문에서 '청년 전세자금 대출은 무주택 청년이 신청할 수 있다'고 했으나, 원문 P1에는 '소득 요건을 충족한 무주택 청년이 신청할 수 있다'라고 명확히 소득 요건을 포함하여 기술되어 있음. 또한 '정부는 내년부터 보증금 전액을 지원하는 신규 제도를 도입한다'는 내용은 P1 원문에 없음."
+    },
+    {
+      "id": "rev-10-overgeneralized",
+      "kind": "과장 일반화",
+      "expected": "revise",
+      "actual": "revise",
+      "correct": true,
+      "outcome": "revise",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 3649,
+      "input_tokens": 1132,
+      "output_tokens": 120,
+      "problem": "본문에서는 '조사 대상 기업 전부가 주 2회 재택근무를 유지'한다고 했으나, 근거 원문 P1에는 '일부는 주 2회 재택근무를 유지'라고 되어 있어 사실과 다름."
+    },
+    {
+      "id": "rev-11-english-misread",
+      "kind": "영문 근거 오독",
+      "expected": "revise",
+      "actual": "revise",
+      "correct": true,
+      "outcome": "revise",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 3849,
+      "input_tokens": 1142,
+      "output_tokens": 163,
+      "problem": "본문에서 '클라우드 매출은 전년 대비 18% 성장해 직전 분기 24%보다 성장세가 빨라졌다'고 했으나, 근거 원문 G1에는 '18% 성장했으나 직전 분기 24%보다 성장세가 느려졌다'고 명확히 나와 있음. 인용 내용이 원문과 반대임."
+    },
+    {
+      "id": "rev-12-missing-reference",
+      "kind": "없는 참조",
+      "expected": "revise",
+      "actual": "revise",
+      "correct": true,
+      "outcome": "revise",
+      "tool_calls": 2,
+      "tools_used": [
+        "get_source",
+        "get_source"
+      ],
+      "latency_ms": 3085,
+      "input_tokens": 1178,
+      "output_tokens": 125,
+      "problem": "P7 인용이 근거 원문에 없음. P7 인용은 근거가 없는 내용임."
+    },
+    {
+      "id": "rev-13-crossed-reference",
+      "kind": "참조 뒤바꿈",
+      "expected": "revise",
+      "actual": "revise",
+      "correct": true,
+      "outcome": "revise",
+      "tool_calls": 2,
+      "tools_used": [
+        "get_source",
+        "get_source"
+      ],
+      "latency_ms": 4326,
+      "input_tokens": 1225,
+      "output_tokens": 182,
+      "problem": "인용한 근거 G1과 G2가 서로 바뀌어 인용되었음. G1은 항만 물동량에 관한 내용이고, G2는 항공 화물 운임에 관한 내용임에도 본문에서는 G1을 항공 화물 운임 하락에, G2를 부산항 물동량 증가에 인용함."
+    },
+    {
+      "id": "rev-14-unit-changed",
+      "kind": "단위 조작",
+      "expected": "revise",
+      "actual": "revise",
+      "correct": true,
+      "outcome": "revise",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 2131,
+      "input_tokens": 1106,
+      "output_tokens": 82,
+      "problem": "본문에서 '8조 원'이라고 했으나 근거 원문(P1)에는 '8천억 원'으로 되어 있어 금액이 과장됨"
+    },
+    {
+      "id": "rev-15-forecast-as-fact",
+      "kind": "예측을 사실로",
+      "expected": "revise",
+      "actual": "revise",
+      "correct": true,
+      "outcome": "revise",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 2165,
+      "input_tokens": 1127,
+      "output_tokens": 109,
+      "problem": "본문에서 '내년 경제성장률은 2.0%로 확정 발표됐다'고 했으나, 근거 원문 G1에는 '2.0% 안팎으로 전망했다'고 되어 있어 확정 발표가 아님."
+    },
+    {
+      "id": "pass-01-plain-summary",
+      "kind": "단순 요약",
+      "expected": "pass",
+      "actual": "pass",
+      "correct": true,
+      "outcome": "pass",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 1497,
+      "input_tokens": 1147,
+      "output_tokens": 29,
+      "problem": ""
+    },
+    {
+      "id": "pass-02-paraphrase",
+      "kind": "표현만 바꿈",
+      "expected": "pass",
+      "actual": "pass",
+      "correct": true,
+      "outcome": "pass",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 1449,
+      "input_tokens": 1186,
+      "output_tokens": 29,
+      "problem": ""
+    },
+    {
+      "id": "pass-03-two-sources",
+      "kind": "근거 종합",
+      "expected": "pass",
+      "actual": "pass",
+      "correct": true,
+      "outcome": "pass",
+      "tool_calls": 2,
+      "tools_used": [
+        "get_source",
+        "get_source"
+      ],
+      "latency_ms": 1801,
+      "input_tokens": 1256,
+      "output_tokens": 57,
+      "problem": ""
+    },
+    {
+      "id": "pass-04-english-source",
+      "kind": "영문 근거 번역",
+      "expected": "pass",
+      "actual": "pass",
+      "correct": true,
+      "outcome": "pass",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 1376,
+      "input_tokens": 1158,
+      "output_tokens": 29,
+      "problem": ""
+    },
+    {
+      "id": "pass-05-single-source-short",
+      "kind": "짧은 초안",
+      "expected": "pass",
+      "actual": "pass",
+      "correct": true,
+      "outcome": "pass",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 1426,
+      "input_tokens": 1112,
+      "output_tokens": 22,
+      "problem": ""
+    },
+    {
+      "id": "pass-06-hedged",
+      "kind": "조심스러운 표현",
+      "expected": "pass",
+      "actual": "pass",
+      "correct": true,
+      "outcome": "pass",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 1657,
+      "input_tokens": 1157,
+      "output_tokens": 29,
+      "problem": ""
+    },
+    {
+      "id": "pass-07-partial-quantifier",
+      "kind": "수량 표현 정확",
+      "expected": "pass",
+      "actual": "pass",
+      "correct": true,
+      "outcome": "pass",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 1410,
+      "input_tokens": 1128,
+      "output_tokens": 22,
+      "problem": ""
+    },
+    {
+      "id": "pass-08-three-sources",
+      "kind": "근거 3건",
+      "expected": "pass",
+      "actual": "pass",
+      "correct": true,
+      "outcome": "pass",
+      "tool_calls": 4,
+      "tools_used": [
+        "get_source",
+        "get_source",
+        "get_source",
+        "search_pool"
+      ],
+      "latency_ms": 3503,
+      "input_tokens": 2919,
+      "output_tokens": 95,
+      "problem": ""
+    },
+    {
+      "id": "pass-09-mixed-language",
+      "kind": "한영 혼용",
+      "expected": "pass",
+      "actual": "pass",
+      "correct": true,
+      "outcome": "pass",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 1384,
+      "input_tokens": 1133,
+      "output_tokens": 22,
+      "problem": ""
+    },
+    {
+      "id": "pass-10-number-exact",
+      "kind": "수치 정확",
+      "expected": "pass",
+      "actual": "pass",
+      "correct": true,
+      "outcome": "pass",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 1377,
+      "input_tokens": 1140,
+      "output_tokens": 22,
+      "problem": ""
+    },
+    {
+      "id": "pass-11-order-changed",
+      "kind": "순서만 바꿈",
+      "expected": "pass",
+      "actual": "pass",
+      "correct": true,
+      "outcome": "pass",
+      "tool_calls": 2,
+      "tools_used": [
+        "get_source",
+        "get_source"
+      ],
+      "latency_ms": 2171,
+      "input_tokens": 1225,
+      "output_tokens": 60,
+      "problem": ""
+    },
+    {
+      "id": "pass-12-subset-cited",
+      "kind": "일부만 인용",
+      "expected": "pass",
+      "actual": "pass",
+      "correct": true,
+      "outcome": "pass",
+      "tool_calls": 2,
+      "tools_used": [
+        "get_source",
+        "get_source"
+      ],
+      "latency_ms": 2026,
+      "input_tokens": 1237,
+      "output_tokens": 60,
+      "problem": ""
+    },
+    {
+      "id": "pass-13-definition",
+      "kind": "개념 설명",
+      "expected": "pass",
+      "actual": "pass",
+      "correct": true,
+      "outcome": "pass",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 1518,
+      "input_tokens": 1159,
+      "output_tokens": 22,
+      "problem": ""
+    },
+    {
+      "id": "pass-14-company-fact",
+      "kind": "기업 실적",
+      "expected": "pass",
+      "actual": "pass",
+      "correct": true,
+      "outcome": "pass",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 1544,
+      "input_tokens": 1149,
+      "output_tokens": 22,
+      "problem": ""
+    },
+    {
+      "id": "pass-15-ai-model",
+      "kind": "주체 정확",
+      "expected": "pass",
+      "actual": "pass",
+      "correct": true,
+      "outcome": "pass",
+      "tool_calls": 1,
+      "tools_used": [
+        "get_source"
+      ],
+      "latency_ms": 1383,
+      "input_tokens": 1093,
+      "output_tokens": 22,
+      "problem": ""
+    }
+  ]
+}

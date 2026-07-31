@@ -90,6 +90,7 @@ class CriticVerdict:
         problem: 검토자가 지적한 문제 (통과면 빈 문자열)
         correction: 재작성 시 프롬프트에 덧붙일 교정 지시
         calls: 검토자가 실행한 도구 호출 기록
+        input_tokens·output_tokens: 검토에 쓴 토큰 (벤치마크 비용 기록용)
     """
 
     outcome: str = PASS
@@ -97,6 +98,8 @@ class CriticVerdict:
     problem: str = ""
     correction: str = ""
     calls: tuple[ToolCallRecord, ...] = ()
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 def _reference_index(
@@ -286,7 +289,12 @@ async def review_report(
     verdict = parse_verdict(result.text)
     if verdict is None:
         logger.warning("검토자 응답을 해석하지 못해 통과 처리합니다: %s", result.text[:200])
-        return CriticVerdict(outcome=UNAVAILABLE, calls=result.calls)
+        return CriticVerdict(
+            outcome=UNAVAILABLE,
+            calls=result.calls,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+        )
 
     logger.info(
         "검토 판정: %s (도구 호출 %d회) — %s",
@@ -300,4 +308,6 @@ async def review_report(
         problem=verdict.problem,
         correction=verdict.correction,
         calls=result.calls,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
     )
