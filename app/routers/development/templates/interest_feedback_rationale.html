@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>관심사·피드백 재설계 근거 — 밤새비서</title>
+  <style>
+    :root { color-scheme: light dark; }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    img { max-width: 100%; }
+  </style>
+</head>
+<body>
+
+<div style="max-width:1000px;margin:0 auto;padding:14px 20px 0;font:13px/1.6 -apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo',system-ui,sans-serif;">
+  <a href="/dev/design" style="color:inherit;opacity:.6;text-decoration:none;">&larr; 디자인 시안 목록</a>
+</div>
+<style>
+  :root{
+    --paper:#FBFAF7; --paper-2:#F3F1EC; --card:#FFFFFF;
+    --ink:#1B1E26; --ink-2:#4E525F; --ink-3:#868A98;
+    --rule:#E2DFD8; --rule-2:#CFCBC2;
+    --accent:#27467E; --accent-2:#E8EDF6;
+    --flag:#8A5A2B;
+    --f-serif:"Nanum Myeongjo","AppleMyungjo","Noto Serif KR","Iowan Old Style",Georgia,serif;
+    --f-sans:-apple-system,BlinkMacSystemFont,"Pretendard Variable",Pretendard,"Apple SD Gothic Neo","Noto Sans KR",system-ui,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#14161C; --paper-2:#1A1D25; --card:#1E212A;
+      --ink:#EAE7E0; --ink-2:#A9AEBC; --ink-3:#767C8C;
+      --rule:#2C303B; --rule-2:#3D424F;
+      --accent:#9DB8E8; --accent-2:#1E2735;
+      --flag:#D9A76C;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#14161C; --paper-2:#1A1D25; --card:#1E212A;
+    --ink:#EAE7E0; --ink-2:#A9AEBC; --ink-3:#767C8C;
+    --rule:#2C303B; --rule-2:#3D424F;
+    --accent:#9DB8E8; --accent-2:#1E2735;
+    --flag:#D9A76C;
+  }
+  :root[data-theme="light"]{
+    --paper:#FBFAF7; --paper-2:#F3F1EC; --card:#FFFFFF;
+    --ink:#1B1E26; --ink-2:#4E525F; --ink-3:#868A98;
+    --rule:#E2DFD8; --rule-2:#CFCBC2;
+    --accent:#27467E; --accent-2:#E8EDF6;
+    --flag:#8A5A2B;
+  }
+
+  body{background:var(--paper);color:var(--ink);font-family:var(--f-sans);
+       font-size:16px;line-height:1.75;-webkit-font-smoothing:antialiased;word-break:keep-all;}
+  .wrap{max-width:1000px;margin:0 auto;padding:clamp(30px,6vw,68px) clamp(18px,5vw,38px) 90px;
+        display:flex;flex-direction:column;gap:clamp(44px,7vw,80px);}
+  .prose{max-width:66ch;}
+
+  .eyebrow{font-family:var(--f-sans);font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+           color:var(--ink-3);display:flex;align-items:center;gap:12px;margin-bottom:16px;}
+  .eyebrow::after{content:"";flex:1;height:1px;background:var(--rule);}
+
+  h1{font-family:var(--f-serif);font-size:clamp(30px,5.6vw,50px);line-height:1.2;
+     letter-spacing:-.01em;font-weight:700;text-wrap:balance;margin-bottom:18px;}
+  h2{font-family:var(--f-serif);font-size:clamp(21px,3vw,27px);line-height:1.35;
+     font-weight:700;text-wrap:balance;margin-bottom:12px;}
+  h3{font-size:15.5px;font-weight:650;margin-bottom:5px;letter-spacing:-.01em;}
+  p{color:var(--ink-2);} p+p{margin-top:13px;}
+  strong{color:var(--ink);font-weight:650;}
+  .lede{font-family:var(--f-serif);font-size:clamp(17.5px,2.3vw,20px);line-height:1.72;color:var(--ink-2);}
+  .note{font-size:13.5px;color:var(--ink-3);line-height:1.68;}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.83em;
+       background:var(--paper-2);border:1px solid var(--rule);border-radius:3px;
+       padding:.08em .36em;color:var(--ink-2);word-break:break-all;}
+
+  .masthead{border-bottom:3px double var(--ink);padding-bottom:26px;}
+  .kicker{font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--flag);margin-bottom:20px;}
+  .thesis{margin-top:24px;padding:20px 24px;background:var(--paper-2);border-radius:3px;
+          font-family:var(--f-serif);font-size:17px;line-height:1.7;color:var(--ink);}
+
+  /* ---- verified finding ---- */
+  .verified{border:1px solid var(--rule-2);border-radius:4px;overflow:hidden;}
+  .verified-head{background:var(--paper-2);padding:15px 20px;border-bottom:1px solid var(--rule);
+                 font-size:14px;font-weight:650;color:var(--ink);}
+  .chain{display:flex;flex-direction:column;}
+  .link{padding:15px 20px;border-bottom:1px solid var(--rule);display:grid;gap:4px 16px;}
+  @media(min-width:760px){.link{grid-template-columns:210px 1fr;align-items:baseline;}}
+  .link:last-child{border-bottom:none;}
+  .link-what{font-size:13.5px;font-weight:600;color:var(--ink);}
+  .link-what span{display:block;font-family:ui-monospace,Menlo,monospace;font-size:10.5px;
+                  color:var(--ink-3);font-weight:400;margin-top:2px;}
+  .link p{font-size:13.5px;margin:0;line-height:1.6;}
+  .verdict{background:var(--accent-2);padding:16px 20px;font-size:14.5px;color:var(--ink);line-height:1.6;}
+
+  /* ---- device / screen ---- */
+  .screens{display:grid;gap:26px;}
+  @media(min-width:900px){.screens{grid-template-columns:1fr 1fr;align-items:start;}}
+  .scr-label{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);margin-bottom:9px;}
+  .device{background:var(--card);border:1px solid var(--rule-2);border-radius:6px;
+          padding:clamp(18px,2.6vw,26px);box-shadow:0 10px 30px -22px rgba(0,0,0,.5);}
+
+  /* edition */
+  .ed-head{border-bottom:1px solid var(--rule);padding-bottom:12px;margin-bottom:8px;}
+  .ed-date{font-family:var(--f-serif);font-size:20px;font-weight:700;}
+  .ed-sub{font-size:12px;color:var(--ink-3);margin-top:2px;}
+
+  .swapbar{background:var(--accent-2);border-radius:4px;padding:10px 13px;font-size:12.5px;
+           color:var(--ink);margin:12px 0 4px;display:none;line-height:1.5;}
+  .swapbar.on{display:block;}
+  .swapbar b{color:var(--accent);font-weight:650;}
+
+  .card{padding:18px 0;border-bottom:1px solid var(--rule);position:relative;
+        transition:transform .2s ease,opacity .2s ease;}
+  .card:last-of-type{border-bottom:none;}
+  .card.out{transform:translateX(-24px);opacity:0;}
+  .card.in{animation:rise .22s ease;}
+  @keyframes rise{from{transform:translateY(12px);opacity:0}to{transform:none;opacity:1}}
+  .c-tag{font-size:11.5px;color:var(--ink-3);margin-bottom:5px;}
+  .c-tag b{color:var(--flag);font-weight:600;}
+  .c-title{font-family:var(--f-serif);font-size:18.5px;line-height:1.42;font-weight:700;
+           color:var(--ink);margin-bottom:6px;}
+  .c-lede{font-size:13.5px;color:var(--ink-2);line-height:1.62;margin-bottom:8px;}
+  .c-foot{display:flex;justify-content:space-between;align-items:center;gap:12px;}
+  .c-src{font-size:11.5px;color:var(--ink-3);}
+  .c-no{font-size:12px;color:var(--ink-3);background:none;border:none;cursor:pointer;
+        font-family:var(--f-sans);padding:2px 0;border-bottom:1px solid var(--rule-2);}
+  .c-no:hover{color:var(--ink);border-color:var(--ink);}
+  .c-done{font-size:12px;color:var(--ink-3);font-style:italic;}
+  .ed-end{text-align:center;font-family:var(--f-serif);font-size:13.5px;color:var(--ink-3);
+          padding:22px 0 4px;}
+
+  /* demo control */
+  .demo{margin-top:16px;padding:13px 15px;border:1px dashed var(--rule-2);border-radius:4px;background:var(--paper-2);}
+  .demo-k{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);margin-bottom:8px;}
+  .demo-row{display:flex;flex-wrap:wrap;gap:6px;}
+  .demo-row button{font-family:var(--f-sans);font-size:12px;padding:5px 11px;border-radius:3px;
+                   border:1px solid var(--rule-2);background:var(--card);color:var(--ink-2);cursor:pointer;}
+  .demo-row button[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:var(--paper);}
+  .demo-note{font-size:11.5px;color:var(--ink-3);margin-top:8px;line-height:1.5;}
+
+  /* mirror page */
+  .mi-head{border-bottom:1px solid var(--rule);padding-bottom:12px;margin-bottom:16px;}
+  .mi-title{font-family:var(--f-serif);font-size:22px;font-weight:700;}
+  .mi-meta{font-size:12px;color:var(--ink-3);margin-top:3px;}
+  .mi-meta u{text-decoration-color:var(--rule-2);text-underline-offset:3px;cursor:help;}
+  .mi-lede{font-family:var(--f-serif);font-size:17px;line-height:1.7;color:var(--ink);margin-bottom:16px;}
+  .mi-lede b{font-weight:700;}
+  .mi-para{font-family:var(--f-serif);font-size:15px;line-height:1.78;color:var(--ink-2);margin-bottom:14px;}
+  .mi-para b{color:var(--ink);font-weight:700;}
+  .mi-para em{font-style:normal;color:var(--ink);font-weight:700;}
+  .mi-edge{font-size:13.5px;line-height:1.7;color:var(--ink-3);padding-top:12px;border-top:1px solid var(--rule);}
+  .mi-edge b{color:var(--ink-2);font-weight:600;}
+  .mi-sign{margin-top:18px;padding-top:14px;border-top:1px solid var(--rule);
+           font-size:12.5px;color:var(--ink-3);line-height:1.65;}
+  .mi-btn{margin-top:12px;width:100%;font-family:var(--f-serif);font-size:14px;padding:9px;
+          background:none;border:1px solid var(--rule-2);border-radius:3px;color:var(--ink-2);cursor:pointer;}
+  .mi-btn:hover{border-color:var(--ink);color:var(--ink);}
+  .rank-note{font-size:11.5px;color:var(--ink-3);margin-top:-8px;margin-bottom:14px;font-style:italic;}
+
+  /* axis table */
+  .tbl-scroll{overflow-x:auto;border:1px solid var(--rule);border-radius:4px;}
+  table{border-collapse:collapse;width:100%;min-width:640px;background:var(--card);}
+  th,td{text-align:left;padding:12px 15px;border-bottom:1px solid var(--rule);
+        font-size:13.5px;line-height:1.55;vertical-align:top;}
+  th{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);
+     font-weight:600;background:var(--paper-2);white-space:nowrap;}
+  td{color:var(--ink-2);} td:first-child{color:var(--ink);font-weight:600;}
+  tr:last-child td{border-bottom:none;}
+  .pill{font-size:10.5px;padding:1px 7px;border-radius:3px;white-space:nowrap;display:inline-block;
+        font-family:ui-monospace,Menlo,monospace;}
+  .p-mvp{background:var(--accent-2);color:var(--accent);}
+  .p-later{background:var(--paper-2);color:var(--ink-3);}
+  .p-block{background:#F6E3DE;color:#8A3B2A;}
+  @media (prefers-color-scheme:dark){.p-block{background:#3A241F;color:#E0A08D;}}
+  :root[data-theme="dark"] .p-block{background:#3A241F;color:#E0A08D;}
+
+  /* principles */
+  .prin{display:grid;gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:4px;overflow:hidden;}
+  @media(min-width:720px){.prin{grid-template-columns:1fr 1fr;}}
+  .prin-i{background:var(--card);padding:18px 20px;}
+  .prin-i h3{font-family:var(--f-serif);font-size:16px;}
+  .prin-i p{font-size:13.5px;margin:0;line-height:1.6;}
+
+  /* cut */
+  .cut{display:flex;flex-direction:column;gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:4px;overflow:hidden;}
+  .cut-r{background:var(--card);padding:15px 20px;display:grid;gap:3px 18px;}
+  @media(min-width:780px){.cut-r{grid-template-columns:200px 1fr;align-items:baseline;}}
+  .cut-n{font-size:14px;font-weight:650;color:var(--ink);}
+  .cut-r p{font-size:13.5px;margin:0;line-height:1.6;}
+
+  footer{border-top:1px solid var(--rule);padding-top:20px;font-size:12px;color:var(--ink-3);line-height:1.85;}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px;}
+  @media (prefers-reduced-motion:reduce){*{transition-duration:.01ms!important;animation-duration:.01ms!important;}}
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="kicker">밤새비서 · 관심사 &amp; 피드백 재설계 · 2판</div>
+    <h1>손잡이를 산출물에서 떼고<br>읽는 자리로 옮긴다</h1>
+    <p class="lede prose">
+      1판(조종석)은 사용자에게 스위치를 쥐여줬다. 그건 두 가지 이유로 틀렸다.
+      첫째, 사용자는 자기가 뭘 받고 싶은지 <strong>추상적으로는 모른다</strong> — 구체적인 글 한 편 앞에서만 안다.
+      둘째, 더 결정적으로, <strong>그 스위치는 실제로 아무것도 하지 않는다.</strong> 코드에 연결된 곳이 없다.
+    </p>
+    <div class="thesis prose">
+      관심사 화면에서 조작 장치를 <strong>전부</strong> 걷어낸다. 그 화면은 읽는 곳이 된다.
+      조정은 아침 리포트 카드 위의 <strong>단 하나의 동작</strong>으로 몰고, 그 동작은 이유도 대안도 묻지 않는다 —
+      이유는 <strong>사용자가 그 글을 얼마나 읽었는지</strong>로 추론하고, 대안은 <strong>새벽에 미리 만들어 둔 예비 카드</strong>로
+      0ms에 채운다. 사용자가 하는 판단은 카드당 최대 한 번, "밀까 말까"뿐이다.
+    </div>
+  </header>
+
+  <section>
+    <div class="eyebrow">확인된 사실 — 차단 경로는 존재하지 않는다</div>
+    <div class="verified">
+      <div class="verified-head">"관심사를 끈다 → 리포트에서 빠진다"를 코드에서 추적한 결과</div>
+      <div class="chain">
+        <div class="link">
+          <div class="link-what">① 컬럼은 있다<span>user_interests.is_blocked</span></div>
+          <p>레포 전체에서 <strong>단 한 번</strong> 등장하고, 그것도 읽는 쪽이다(<code>WHERE NOT interest.is_blocked</code>). true로 쓰는 코드가 없다.</p>
+        </div>
+        <div class="link">
+          <div class="link-what">② 쓸 자리도 없다<span>save_interest_profile_for_user</span></div>
+          <p>프로필 INSERT 컬럼은 <code>profile_id, user_id, topic, category, score, confidence, attributes</code> 7개다. <code>is_blocked</code>가 아예 빠져 있고, 재계산마다 프로필을 통째로 다시 만들기 때문에 <strong>어떻게든 true를 넣어도 다음 빌드에 false로 부활한다.</strong></p>
+        </div>
+        <div class="link">
+          <div class="link-what">③ 목록은 전달만 된다<span>blocked_interest_ids</span></div>
+          <p><code>svc_001</code>로 받아 <code>user_context_snapshots</code>에 저장하고 체크섬에 넣는다. 그게 끝이다. 어떤 조회·생성 쿼리의 필터로도 쓰이지 않는다.</p>
+        </div>
+        <div class="link">
+          <div class="link-what">④ 적용 단계는 항등 함수<span>report_012</span></div>
+          <p>docstring은 "관심사, 언어, <strong>비선호 설정을 반영한다</strong>". 실제 호출부가 넘기는 구현은 <code>lambda: selected.data.get("result", [])</code> — 받은 걸 그대로 돌려준다.</p>
+        </div>
+      </div>
+      <div class="verdict">
+        <strong>결론:</strong> 지금 UI에 차단 스위치를 그리면 눌러도 아무 일이 없다.
+        이건 미감 문제가 아니라 <strong>없는 기능을 있는 것처럼 그린 것</strong>이다.
+        그래서 이번 설계의 첫 번째 규칙은 <strong>"확인되지 않은 변화는 화면에서 말하지 않는다"</strong>이다.
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">두 화면</div>
+    <div class="screens">
+
+      <!-- ============ 홈 = 오늘의 에디션 ============ -->
+      <div>
+        <div class="scr-label">홈 — 오늘의 에디션 · 「이거 말고」가 실제로 동작합니다</div>
+        <div class="device">
+          <div class="ed-head">
+            <div class="ed-date">7월 31일 아침</div>
+            <div class="ed-sub">3편 · 약 8분</div>
+          </div>
+
+          <div class="swapbar" id="swapbar"></div>
+          <div id="deck"></div>
+          <div class="ed-end">오늘 브리핑 끝.</div>
+
+          <div class="demo">
+            <div class="demo-k">데모 — 이 카드를 얼마나 읽었다고 칠까요?</div>
+            <div class="demo-row" id="readsim">
+              <button type="button" data-read="none" aria-pressed="true">거의 안 읽음</button>
+              <button type="button" data-read="lede" aria-pressed="false">리드까지</button>
+              <button type="button" data-read="full" aria-pressed="false">끝까지 읽음</button>
+            </div>
+            <div class="demo-note">
+              고른 뒤 카드의 <strong>「이거 말고」</strong>를 누르세요. 같은 버튼인데 <strong>다른 축</strong>으로 대체됩니다 —
+              실제로는 이 값을 사용자가 고르지 않고 체류·스크롤로 관측합니다.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ 관심사 = 제가 읽은 당신 ============ -->
+      <div>
+        <div class="scr-label">관심사 — 조작 장치 0개. 읽는 화면입니다</div>
+        <div class="device">
+          <div class="mi-head">
+            <div class="mi-title">제가 읽은 당신</div>
+            <div class="mi-meta">7월 5주차 · 3판 · 저장하신 <u>62건</u> 중 <u>27건</u>을 읽었습니다 · 오늘 06:12</div>
+          </div>
+
+          <div class="mi-lede">
+            이번 주 당신은 <b>「LangGraph」</b>를 가운데 두고 읽었습니다.
+            최근 9일 사이 저장한 자료 11건 중 7건이 여기에 걸려 있습니다.
+          </div>
+
+          <div class="mi-para">
+            자료 <em>7건</em>이 여기를 가리키고, 그중 <em>2건은 직접 메모</em>를 남기셨습니다.
+            당신 지식 안에서 개념 셋과 이어져 있습니다 — 「RAG」, 「벡터 검색」, 「에이전트 메모리」.
+            마지막으로 이걸 저장하신 건 <em>3일 전</em>입니다. 「Lang Graph」로도 저장하셨더군요.
+          </div>
+          <div class="mi-para">
+            <b>「로컬 LLM 실행」</b>은 자료 <em>5건</em>이 가리킵니다. 개념 둘과 이어져 있고,
+            마지막 저장은 <em>6일 전</em>입니다.
+          </div>
+          <div class="mi-para">
+            <b>「벡터 검색」</b>은 자료 <em>3건</em>. 아직 다른 개념과는 하나만 이어져 있습니다.
+          </div>
+          <div class="rank-note">↑ 순위를 숫자·막대로 그리지 않았습니다. <strong>문단 길이가 곧 순위입니다.</strong></div>
+
+          <div class="mi-edge">
+            가장자리에는 이런 것들이 스칩니다 — <b>Kafka</b>(자료 3건, 5월 이후 조용),
+            <b>디자인 시스템</b>(자료 2건), <b>연금저축</b>(자료 2건, 지난주 저장).
+            아직 뭐라고 말하기엔 이릅니다.
+          </div>
+
+          <div class="mi-edge" style="margin-top:12px">
+            저장하신 <b>35건</b>은 아직 제가 못 읽었습니다. 오늘 밤 읽고 다음 판에 반영하겠습니다.
+          </div>
+
+          <div class="mi-sign">
+            이 글은 당신이 저장한 자료만 보고 썼습니다. 지어낸 문장은 없습니다.<br>
+            틀린 게 보여도 여기서 고치지 마세요 — 내일 아침 브리핑에서 밀어내면 제가 고칩니다.
+          </div>
+          <button class="mi-btn" type="button" id="reread">지금 다시 읽기</button>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">핵심 장치 — 사유를 묻지 않고 축을 추론한다</div>
+    <p class="prose" style="margin-bottom:16px">
+      "왜 별로였나요?"라고 물으면 선택지를 읽고 고르는 <strong>새 판단</strong>이 생긴다. 그건 AX 실패다.
+      대신 그 카드를 얼마나 읽었는지로 거절의 종류를 추론한다. 추론이 틀렸으면
+      <strong>같은 버튼을 한 번 더 누르는 것</strong>이 사유 수정을 대신한다 — 새 UI도, 새 개념도 0개다.
+    </p>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>관측한 읽은 양</th><th>추론한 거절</th><th>대체 축</th><th>관심사 점수 반영</th></tr></thead>
+        <tbody>
+          <tr><td>2초 미만 · 스크롤 0%</td><td>주제 자체가 안 맞음</td><td>축3 — 다른 관심사</td><td>−1.5 (14일 반감기)</td></tr>
+          <tr><td>리드까지 (1~40%)</td><td>주제는 맞는데 안 당김</td><td>축2 — 옆 주제(1홉 이웃)</td><td>−0.6</td></tr>
+          <tr><td>본문 40%↑ 또는 20초↑</td><td>주제는 맞고 <strong>이 글</strong>이 아님</td><td>축1 — 같은 주제, 다른 글</td><td><strong>0 — 건드리지 않음</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note prose" style="margin-top:13px">
+      축1에 점수를 안 주는 게 핵심이다. "이 글이 별로"를 주제 혐오로 오독하면
+      <strong>가장 잘 맞는 관심사가 무너진다.</strong> 축1은 topic 점수 대신 그 인용 도메인에만 페널티를 남긴다.
+    </p>
+  </section>
+
+  <section>
+    <div class="eyebrow">거절이 빈자리를 만들지 않는 법</div>
+    <div class="prin">
+      <div class="prin-i">
+        <h3>예비 카드는 새벽에 미리 만든다</h3>
+        <p>매일 본편 3장 + <strong>예비 1장</strong>을 같은 파이프라인으로 생성해 <code>publish_snapshots</code>에 쌓고, 기존 claim 루프로 단말에 미리 내려둔다. 도달 경로 신설 0개.</p>
+      </div>
+      <div class="prin-i">
+        <h3>스왑 시점 생성은 하지 않는다</h3>
+        <p>생성은 초 단위가 걸리고 워커 폴링까지 얹히면 사용자는 스피너를 본다. 그 순간 "거절이 빈자리를 만들지 않는다"가 정확히 반대로 구현된다.</p>
+      </div>
+      <div class="prin-i">
+        <h3>예비가 비면 4단으로 떨어진다</h3>
+        <p>① 예비 카드 → ② <strong>오늘 다른 슬롯의 안 읽은 카드를 끌어올림</strong>(생성 0·지연 0) → ③ 수집 풀에서 원문 1건만 얹은 짧은 카드 → ④ "오늘 이 자리는 여기까지 할게요."</p>
+      </div>
+      <div class="prin-i">
+        <h3>같은 게 또 오면 끝이다</h3>
+        <p>후보의 인용 URL 집합이 방금 민 카드와 겹치면 건너뛴다. <code>citations.url</code> + 콘텐츠 해시, SQL 한 번. 그리고 <strong>같은 개념의 다른 표기(<code>alias_of</code>)는 대안에서 항상 제외</strong>한다.</p>
+      </div>
+      <div class="prin-i">
+        <h3>오늘 민 주제는 오늘 다시 안 나온다</h3>
+        <p>점수 반영은 내일이어도, 민 주제가 그날 다른 슬롯에 또 뜨면 신뢰가 즉시 무너진다. 세션 상태로 당일 배제 — Agent 변경 불필요.</p>
+      </div>
+      <div class="prin-i">
+        <h3>세 번 밀면 자리를 닫는다</h3>
+        <p>무한 리롤은 슬롯머신이 된다. 3회 후 "오늘 이 자리는 여기까지 할게요. 내일은 다르게 가져올게요." — 빈자리가 아니라 <strong>명시적 종료</strong>다.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">신호 — 명시는 거들 뿐, 저장과 읽기가 본체</div>
+    <p class="prose" style="margin-bottom:16px">
+      대부분의 사용자는 아무것도 누르지 않는다. 그래서 명시 신호를 설계의 토대로 삼으면 안 된다.
+      아래 표에서 <span class="pill p-mvp">MVP</span>만 먼저 만든다.
+    </p>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>신호</th><th>종류</th><th>방향</th><th>수집 지점</th><th>범위</th></tr></thead>
+        <tbody>
+          <tr><td>저장 · 클리핑</td><td>행위</td><td>본체 (base)</td><td>기존 <code>svc_002/003/004</code></td><td><span class="pill p-mvp">MVP</span></td></tr>
+          <tr><td>swap_out</td><td>명시</td><td>축에 따라 0 / −0.6 / −1.5</td><td>카드 「이거 말고」</td><td><span class="pill p-mvp">MVP</span></td></tr>
+          <tr><td>more</td><td>명시</td><td>+1.0</td><td><strong>본문 끝</strong> 「이런 걸 더 보내주세요」</td><td><span class="pill p-mvp">MVP</span></td></tr>
+          <tr><td>source_open</td><td>암묵</td><td>+0.5 (7일 반감기)</td><td>출처 링크 탭 — 가장 신뢰도 높은 긍정</td><td><span class="pill p-mvp">MVP</span></td></tr>
+          <tr><td>read_through</td><td>암묵</td><td>+0.3</td><td>스크롤 90%↑ &amp; 체류 충분</td><td><span class="pill p-later">2차</span></td></tr>
+          <tr><td>skip_fast</td><td>암묵</td><td><strong>0 — 음수 금지</strong></td><td>3초 미만 이탈</td><td><span class="pill p-later">2차</span></td></tr>
+          <tr><td>pass_by</td><td>암묵</td><td>−0.15</td><td>에디션은 열었는데 이 카드는 안 봄</td><td><span class="pill p-later">2차</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prin" style="margin-top:20px">
+      <div class="prin-i">
+        <h3>부재와 거부를 구분한다</h3>
+        <p>앱을 안 연 날은 어떤 부정 신호도 세지 않는다. '바빴다'와 '무시했다'는 다른 사건이다. 3초 미만 이탈도 0으로 버린다 — "제목만 봐도 아는 내용"이라 안 연 경우가 흔하다.</p>
+      </div>
+      <div class="prin-i">
+        <h3>암묵 신호에 관심사 생성 자격을 주지 않는다</h3>
+        <p>지금 코드는 위키에 없는 topic도 양의 신호가 쌓이면 후보로 올린다. 그렇게 생긴 관심사는 <code>document_ids</code>가 비어 <strong>근거를 하나도 못 보여준다</strong> — 거울 원칙과 정면 충돌이다.</p>
+      </div>
+      <div class="prin-i">
+        <h3>포화시키고 묶는다</h3>
+        <p>현재는 선형 합산에 상한이 없다. 암묵 신호는 명시보다 수십 배 많아 한 주제가 랭킹을 독식한다. <code>log1p</code> 포화 + <strong>base의 ±60% 클램프</strong>로 저장 행위를 진실의 원천으로 유지한다.</p>
+      </div>
+      <div class="prin-i">
+        <h3>탐색 슬롯 1/3은 고정</h3>
+        <p>3장 중 1장은 상위 관심사 <strong>밖</strong>에서. 단 무작위 금지 — 반드시 내 위키 노드이거나 상위 20위 안. "저장하셨는데 아직 안 다뤄드렸네요"가 가장 좋은 후보다.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">선결 과제 — 이걸 먼저 하지 않으면 위 설계는 신호가 0이다</div>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>과제</th><th>지금 상태 (확인함)</th><th>필요한 일</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>신호 payload가 버려진다</td>
+            <td><code>save_feedback_signals_for_user</code>가 <code>{signal_type, topics, content_id}</code> <strong>고정 dict로 재조립</strong>해 INSERT. axis·dwell을 실어 보내도 조용히 버려지고 200을 반환한다</td>
+            <td>writer 확장 + 그걸 검증하는 테스트. <strong>모든 신호 설계의 0단계</strong></td>
+          </tr>
+          <tr>
+            <td>억제를 담을 자리가 없다</td>
+            <td>위 ①②③④ — 차단 경로 전 구간 미연결</td>
+            <td>별도 테이블 <code>user_topic_suppressions</code> + 생성 단계 필터. <strong>그전까지 '쉬는 중'·"빼 두었어요"를 화면에 띄우지 않는다</strong></td>
+          </tr>
+          <tr>
+            <td>명시 신호가 잘려 나간다</td>
+            <td>신호 조회가 <code>30일 · LIMIT 500</code> 단일 쿼리. 암묵 신호를 매일 쏘면 상한에 닿아 <strong>가장 비싸게 얻은 명시 신호부터 사라진다</strong></td>
+            <td>명시·암묵 분리 쿼리. 상한만 올리면 재계산 비용이 선형 증가</td>
+          </tr>
+          <tr>
+            <td>카드↔관심사 연결이 문자열</td>
+            <td><code>generation_requests.topic</code>이 text. <code>user_interests.id</code> FK가 아니다</td>
+            <td><code>interest_id</code> 계약 추가. 이게 붙기 전엔 <strong>자동·무성 교체를 켜지 않는다</strong> — 표기 흔들림 하나로 엉뚱한 관심사가 조용히 죽는다</td>
+          </tr>
+          <tr>
+            <td>계측은 Agent 밖에 있다</td>
+            <td>체류·스크롤·노출 판정은 Next.js + Spring 책임인데 <code>service-integration-guide.md</code>에 <strong>한 줄도 없다</strong></td>
+            <td>필드·판정 기준·정규화·배치 주기를 계약 문서에 먼저 못 박기. Agent 쪽은 싸고 <strong>난이도는 저쪽에 있다</strong></td>
+          </tr>
+          <tr>
+            <td>이전 판과 비교가 안 된다</td>
+            <td><code>int_010</code> 스텁. 과거 프로필 조회 경로 없음</td>
+            <td>버전 diff. <strong>그전까지 "2번째로 올렸어요" 같은 변화 문구는 금지</strong></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">버린 것</div>
+    <div class="cut">
+      <div class="cut-r">
+        <div class="cut-n">관심사 화면의 모든 스위치</div>
+        <p>작동하지 않을 뿐 아니라, 작동하게 만들어도 여전히 "내가 뭘 원하는지 미리 안다"를 요구한다. 조정은 구체물 앞에서만.</p>
+      </div>
+      <div class="cut-r">
+        <div class="cut-n">거절 사유 선택 메뉴</div>
+        <p>선택지를 읽고 고르는 것도 인지 부하다. 읽은 양으로 추론하고, 틀리면 한 번 더 미는 것으로 교정한다.</p>
+      </div>
+      <div class="cut-r">
+        <div class="cut-n">좋아요 · 하트 · 별점</div>
+        <p>이진 아이콘은 "이 글이 별로"인지 "이 주제가 별로"인지 구분하지 못한다. 그 모호함이 곧 잘못된 학습이다.</p>
+      </div>
+      <div class="cut-r">
+        <div class="cut-n">온보딩 취향 설문 · 카테고리 고르기</div>
+        <p>추상 선호를 물으면 없는 답을 지어내게 만든다. 첫 자료 하나를 저장받는 것으로 시작한다.</p>
+      </div>
+      <div class="cut-r">
+        <div class="cut-n">막대 · 도넛 · % · 신뢰도 배지</div>
+        <p><code>score</code>는 최댓값 1.0으로 정규화된 상대 랭크값이다. 막대로 그리는 순간 거짓말이 된다. 문단 길이가 정직한 번역이다.</p>
+      </div>
+      <div class="cut-r">
+        <div class="cut-n">무한 스크롤 · "더 보기"</div>
+        <p>다 읽으면 끝나는 제품이라는 걸 레이아웃이 말해야 한다. "오늘 브리핑 끝." 아래는 비운다.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    코드 확인 · <code>infrastructure/persistence/features/interest_profiles.py</code> ·
+    <code>domain/interests/features/scoring.py</code> ·
+    <code>agent/report_builder/features/context.py</code> · <code>agent/graph.py</code> ·
+    <code>infrastructure/persistence/postgres_wiki_graph.py</code><br>
+    입력 · llm_wiki_interest_ui_design.md · docs/wiki-interest-subscription-design.md<br>
+    2026-07-31 · 논의용 제안 — 팀 확정 전. 가중치·반감기는 D2 잠정값.
+  </footer>
+</div>
+
+<script>
+(function(){
+  var root = document.currentScript.parentElement;
+
+  // 카드 3장 + 축별 대체 후보
+  var DECK = [
+    { tag:"LangGraph", from:"내 자료 2건에서",
+      title:"LangGraph 0.4, 서브그래프 재시도를 노드 단위로 쪼갰다",
+      lede:"조건부 엣지에서 부분 실패만 되돌리는 패턴이 표준 API로 들어왔다. 기존 재시도 래퍼는 걷어내도 된다.",
+      src:"blog.langchain.dev · github.com 외 2곳 · 3분" },
+    { tag:"로컬 LLM 실행", from:"내 자료 3건에서",
+      title:"12GB VRAM에서 30B 모델을 돌리는 건 아직 타협이다",
+      lede:"Q4 양자화로 올라가긴 하지만 컨텍스트를 8K 넘기면 스왑이 시작된다. 실측 토큰/초와 함께 정리했다.",
+      src:"reddit.com · huggingface.co 외 3곳 · 4분" },
+    { tag:"벡터 검색", from:"내 자료 1건에서",
+      title:"하이브리드 검색에서 BM25 가중치를 언제 올려야 하나",
+      lede:"고유명사 비중이 높은 코퍼스일수록 밀집 벡터 단독은 불리하다. 전환점을 재본 실험.",
+      src:"arxiv.org · qdrant.tech · 5분" }
+  ];
+
+  var ALT = {
+    full: { axis:"같은 주제, 다른 글", tag:"LangGraph", from:"내 자료 2건에서",
+      title:"LangGraph 체크포인터를 Postgres로 옮길 때 생기는 잠금 경합",
+      lede:"동시 실행이 늘면 체크포인트 쓰기가 직렬화된다. advisory lock 범위를 좁힌 사례.",
+      src:"github.com · stackoverflow.com · 4분" },
+    lede: { axis:"옆 주제", tag:"에이전트 메모리", from:"「LangGraph」와 이어진 개념",
+      title:"장기 메모리를 요약으로 압축하면 무엇이 먼저 사라지는가",
+      lede:"요약 기반 메모리에서 가장 먼저 유실되는 건 시점 정보였다. 세 가지 압축 전략 비교.",
+      src:"arxiv.org · eugeneyan.com · 6분" },
+    none: { axis:"다른 관심사", tag:"연금저축", from:"지난주 저장하신 것",
+      title:"연금저축 세액공제 한도가 내년부터 어떻게 바뀌나",
+      lede:"납입 한도와 공제율이 함께 조정된다. 기존 가입자에게 적용되는 시점을 정리했다.",
+      src:"moef.go.kr · 외 2곳 · 3분" }
+  };
+
+  var AXIS_NOTE = {
+    full: "끝까지 읽으셨으니 <b>주제가 아니라 이 글</b>이 안 맞은 걸로 봤어요. 관심사 점수는 건드리지 않았습니다.",
+    lede: "리드까지만 보셨으니 <b>주제는 맞는데 이 각도</b>가 아닌 걸로 봤어요. 옆 개념으로 옮겨왔습니다.",
+    none: "거의 안 보셨으니 <b>주제 자체</b>가 안 맞은 걸로 봤어요. 다른 관심사에서 가져왔습니다."
+  };
+
+  var readMode = "none";
+  var swapCount = [0,0,0];
+
+  function cardHTML(c, i, opts){
+    opts = opts || {};
+    if (opts.closed) {
+      return '<div class="card" data-i="'+i+'"><div class="c-done">오늘 이 자리는 여기까지 할게요. 내일은 다르게 가져올게요.</div></div>';
+    }
+    return '<div class="card'+(opts.fresh?' in':'')+'" data-i="'+i+'">'
+      + '<div class="c-tag"><b>'+c.tag+'</b> · '+c.from+'</div>'
+      + '<div class="c-title">'+c.title+'</div>'
+      + '<div class="c-lede">'+c.lede+'</div>'
+      + '<div class="c-foot"><span class="c-src">'+c.src+'</span>'
+      + '<button class="c-no" type="button" data-i="'+i+'">이거 말고</button></div>'
+      + '</div>';
+  }
+
+  var state = DECK.map(function(c){ return {card:c, closed:false}; });
+
+  function render(freshIndex){
+    root.querySelector("#deck").innerHTML = state.map(function(s,i){
+      return cardHTML(s.card, i, {closed:s.closed, fresh:(i===freshIndex)});
+    }).join("");
+    bind();
+  }
+
+  function bind(){
+    root.querySelectorAll(".c-no").forEach(function(b){
+      b.addEventListener("click", function(){
+        var i = +b.dataset.i;
+        var card = root.querySelector('.card[data-i="'+i+'"]');
+        swapCount[i]++;
+        card.classList.add("out");
+        setTimeout(function(){
+          var bar = root.querySelector("#swapbar");
+          if (swapCount[i] >= 3){
+            state[i].closed = true;
+            bar.className = "swapbar on";
+            bar.innerHTML = "세 번 미셨네요. <b>오늘 이 자리는 닫았습니다.</b> 무한히 다시 뽑게 하지 않습니다.";
+          } else {
+            var alt = ALT[readMode];
+            state[i].card = alt;
+            bar.className = "swapbar on";
+            bar.innerHTML = "대신 이걸 가져왔어요 · <b>"+alt.axis+"</b><br>"+AXIS_NOTE[readMode];
+          }
+          render(i);
+        }, 200);
+      });
+    });
+  }
+
+  root.querySelectorAll("#readsim button").forEach(function(b){
+    b.addEventListener("click", function(){
+      readMode = b.dataset.read;
+      root.querySelectorAll("#readsim button").forEach(function(x){
+        x.setAttribute("aria-pressed", String(x===b));
+      });
+    });
+  });
+
+  root.querySelector("#reread").addEventListener("click", function(){
+    var btn = root.querySelector("#reread");
+    btn.textContent = "읽는 중…";
+    btn.disabled = true;
+    setTimeout(function(){
+      btn.textContent = "지금 다시 읽기";
+      btn.disabled = false;
+      root.querySelector(".mi-meta").innerHTML =
+        "7월 5주차 · 4판 · 저장하신 <u>62건</u> 중 <u>29건</u>을 읽었습니다 · 방금";
+    }, 1100);
+  });
+
+  render(-1);
+})();
+</script>
+
+</body>
+</html>
