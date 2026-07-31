@@ -85,12 +85,15 @@ class ResearchOutcome:
         calls: LLM이 실행한 도구 호출 기록(어떤 검색어를 왜 골랐는지 추적용)
         notes: LLM이 남긴 조사 요약
         stop_reason: 루프 종료 사유("final" 또는 "max_iterations")
+        input_tokens·output_tokens: 조사에 쓴 토큰 (벤치마크 비용 기록용)
     """
 
     documents: tuple[ReportContextDocument, ...] = ()
     calls: tuple[ToolCallRecord, ...] = ()
     notes: str = ""
     stop_reason: str = "final"
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 def _document_key(document: ReportContextDocument) -> str:
@@ -329,4 +332,6 @@ async def research_context(
         calls=result.calls,
         notes=result.text,
         stop_reason=result.stop_reason,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
     )
