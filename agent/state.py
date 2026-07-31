@@ -38,6 +38,11 @@ class ReportGenerationState(TypedDict):
     topic_intent: NotRequired[str]
     contexts: NotRequired[list[object]]
     generated: NotRequired[object]
+    # 검토자(critic)가 재작성을 요구하면 채운다. generate 노드가 이 지시를 받아
+    # 다시 쓰고, review_attempts가 상한에 닿으면 그대로 발행한다.
+    review_correction: NotRequired[str]
+    review_attempts: NotRequired[int]
+    review_outcome: NotRequired[str]
     latency_ms: NotRequired[int]
     result: NotRequired[dict[str, object]]
 

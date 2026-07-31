@@ -31,9 +31,11 @@ from agent.report_builder.api import (
     generate_report_content_with_quality,
     collect_live_context,
     GLOBAL_NAMESPACE,
+    critic_enabled,
     is_pool_sufficient,
     research_agent_enabled,
     research_context,
+    review_report,
     select_pool_documents,
     select_generation_context,
 )
@@ -56,6 +58,10 @@ from shared.contracts import FeatureRequest
 logger = logging.getLogger("agent.graph")
 
 type DictRow = dict[str, Any]
+
+# 검토자 지적으로 다시 쓰는 횟수 상한. 검토자가 계속 흠을 잡으면 리포트 하나에
+# LLM 호출이 무한히 늘어난다.
+REVIEW_MAX_REVISIONS = 1
 
 
 def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
@@ -483,6 +489,8 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                         language=state["language"],
                         contexts=state["contexts"],
                         model=state["model"],
+                        # 검토자가 지적해 다시 들어온 경우 그 지시를 반영해 쓴다.
+                        correction=str(state.get("review_correction") or ""),
                     )
                 },
             )
@@ -508,8 +516,52 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             raise RuntimeError("REPORT 생성 기능이 콘텐츠를 반환하지 않았습니다.")
         return {
             "generated": generated,
+            "review_correction": "",
             "latency_ms": int((monotonic() - started) * 1000),
         }
+
+    async def review(state: ReportGenerationState) -> dict[str, Any]:
+        """검토자 에이전트가 초안의 인용을 근거 원문과 대조한다.
+
+        `quality.py`의 무료 코드 검사는 이미 generate 안에서 끝났다. 여기는
+        글자 수로는 알 수 없는 사실관계를 본다 — 검토자가 도구로 원문을 직접
+        꺼내 확인한다.
+
+        검토가 불가능하면(스위치 꺼짐·LLM 장애·응답 파손) 그대로 통과시킨다.
+        검토는 품질을 높이는 장치지 발행을 막는 관문이 아니다.
+        """
+        attempts = int(state.get("review_attempts") or 0)
+        if not critic_enabled():
+            return {"review_outcome": "disabled", "review_correction": ""}
+        verdict = await review_report(
+            connection,
+            content=state["generated"],
+            contexts=state["contexts"],
+            user_id=state["user_id"],
+            topic=state["topic"],
+            topic_intent=str(state.get("topic_intent") or "news"),
+            model=state["model"],
+        )
+        if not verdict.should_regenerate:
+            return {"review_outcome": verdict.outcome, "review_correction": ""}
+        # 재작성은 한 번만 허용한다. 검토자가 계속 흠을 잡으면 비용이 무한히 는다.
+        if attempts >= REVIEW_MAX_REVISIONS:
+            logger.info(
+                "검토 재작성 상한(%d회) 도달, 지적을 남기고 발행합니다: %s",
+                REVIEW_MAX_REVISIONS,
+                verdict.problem,
+            )
+            return {"review_outcome": "revise_exhausted", "review_correction": ""}
+        logger.info("검토자가 재작성을 요구했습니다: %s", verdict.problem)
+        return {
+            "review_outcome": verdict.outcome,
+            "review_correction": verdict.correction,
+            "review_attempts": attempts + 1,
+        }
+
+    def route_after_review(state: ReportGenerationState) -> str:
+        """검토 결과에 따라 재작성으로 돌아갈지 저장으로 갈지 정한다."""
+        return "generate" if state.get("review_correction") else "persist"
 
     async def persist(state: ReportGenerationState) -> dict[str, Any]:
         """생성 Run·후보·Citation·Snapshot·Outbox를 저장 Transaction으로 기록한다."""
@@ -555,11 +607,16 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
     graph.add_node("research", research)
     graph.add_node("load_context", load_context)
     graph.add_node("generate", generate)
+    graph.add_node("review", review)
     graph.add_node("persist", persist)
     graph.set_entry_point("research")
     graph.add_edge("research", "load_context")
     graph.add_edge("load_context", "generate")
-    graph.add_edge("generate", "persist")
+    graph.add_edge("generate", "review")
+    # 검토자가 사실관계 문제를 찾으면 generate로 돌려보낸다(최대 1회).
+    graph.add_conditional_edges(
+        "review", route_after_review, {"generate": "generate", "persist": "persist"}
+    )
     graph.add_edge("persist", END)
     return graph.compile()
 

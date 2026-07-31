@@ -119,6 +119,7 @@ def generate_report_content_with_quality(
     contexts: Sequence[ReportContextDocument],
     model: str = "gpt-4.1-mini",
     max_regenerations: int = 1,
+    correction: str = "",
 ) -> GeneratedReportContent:
     """콘텐츠를 생성하고 무료 품질 검사를 거쳐, 필요하면 한 번 재생성한다.
 
@@ -133,11 +134,12 @@ def generate_report_content_with_quality(
     Args:
         topic·content_type·language·contexts·model: generate_report_content와 동일
         max_regenerations: 재생성 최대 횟수 (기본 1회)
+        correction: 첫 생성부터 반영할 교정 지시. 검토자(critic)가 재작성을
+            요구해 다시 들어올 때 그 지적을 넘겨받는 통로다.
 
     Returns:
         (가능하면 품질을 통과한) 생성 콘텐츠
     """
-    correction = ""
     content: GeneratedReportContent | None = None
     for attempt in range(max_regenerations + 1):
         try:

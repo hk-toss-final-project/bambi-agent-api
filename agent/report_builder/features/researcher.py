@@ -98,7 +98,48 @@ def _document_key(document: ReportContextDocument) -> str:
     return document.url or f"{document.namespace_key}:{document.document_version_id}"
 
 
-def _describe(documents: Sequence[ReportContextDocument]) -> str:
+async def search_stored_documents(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    query: str,
+    topic_intent: str = "news",
+) -> list[ReportContextDocument]:
+    """저장된 자료(개인 Wiki + Global 풀)를 검색해 쓸 만한 문서를 반환한다.
+
+    조사원과 검토자가 함께 쓰는 검색 경계다. 풀 문서는 기존 신선도·점수 컷오프
+    (select_pool_documents)를 그대로 적용하고, 개인 Wiki 문서는 그대로 통과시킨다.
+
+    Args:
+        connection: 검색에 사용할 DB 연결
+        user_id: 검색 Scope 사용자 식별자
+        query: 검색어
+        topic_intent: 토픽 성격("news"|"evergreen"). 풀 신선도 하한을 정한다.
+
+    Returns:
+        개인 Wiki 문서와 컷오프를 통과한 풀 문서 목록
+    """
+    async with connection.transaction():
+        await set_personal_wiki_scope(connection, user_id=user_id)
+        hybrid = await prag_003(connection, user_id=user_id, query=query)
+        freshness = await load_global_document_freshness(
+            connection,
+            [
+                document.document_version_id
+                for document in hybrid
+                if document.namespace_key == GLOBAL_NAMESPACE
+            ],
+        )
+    personal = [
+        document for document in hybrid if document.namespace_key != GLOBAL_NAMESPACE
+    ]
+    pool = select_pool_documents(
+        hybrid, published_at=freshness, topic_intent=topic_intent
+    )
+    return [*personal, *pool]
+
+
+def describe_documents(documents: Sequence[ReportContextDocument]) -> str:
     """도구 실행 결과를 LLM이 판단할 수 있는 관찰 문자열로 만든다.
 
     제목만 주면 관련성을 판단할 수 없고, 본문 전체를 주면 대화가 폭발한다.
@@ -184,26 +225,10 @@ def build_research_tools(
         """저장된 자료(개인 Wiki + Global 풀)에서 검색어로 자료를 찾는다."""
         if not query.strip():
             return "검색어가 비어 있다."
-        async with connection.transaction():
-            await set_personal_wiki_scope(connection, user_id=user_id)
-            hybrid = await prag_003(connection, user_id=user_id, query=query)
-            freshness = await load_global_document_freshness(
-                connection,
-                [
-                    document.document_version_id
-                    for document in hybrid
-                    if document.namespace_key == GLOBAL_NAMESPACE
-                ],
-            )
-        personal = [
-            document
-            for document in hybrid
-            if document.namespace_key != GLOBAL_NAMESPACE
-        ]
-        pool = select_pool_documents(
-            hybrid, published_at=freshness, topic_intent=topic_intent
+        found = await search_stored_documents(
+            connection, user_id=user_id, query=query, topic_intent=topic_intent
         )
-        return _describe(collector.add([*personal, *pool]))
+        return describe_documents(collector.add(found))
 
     async def collect_live(keyword: str) -> str:
         """인터넷에서 키워드로 최신 자료를 수집한다(느리고 비용이 든다)."""
@@ -212,7 +237,7 @@ def build_research_tools(
         documents = await to_thread(
             collect_live_context, keyword, user_id, model=model
         )
-        return _describe(collector.add(documents))
+        return describe_documents(collector.add(documents))
 
     keyword_schema = {
         "type": "object",

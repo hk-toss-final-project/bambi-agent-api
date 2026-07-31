@@ -12,6 +12,7 @@ from .features.pool_context import (
     is_pool_sufficient,
     select_pool_documents,
 )
+from .features.critic import CriticVerdict, critic_enabled, review_report
 from .features.researcher import (
     ResearchOutcome,
     research_agent_enabled,

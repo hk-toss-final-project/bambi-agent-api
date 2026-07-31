@@ -222,13 +222,19 @@ def test_run_personal_wiki_build_survives_interest_recalc_failure(
     assert result["chunk_count"] == 2
 
 
-def _disable_research(monkeypatch: pytest.MonkeyPatch) -> None:
-    """조사원 에이전트를 끄고 토픽 성격 판정도 고정한다.
+def _disable_critic(monkeypatch: pytest.MonkeyPatch) -> None:
+    """검토자 에이전트를 끈다. 켜두면 그래프 테스트가 실제 LLM을 호출한다."""
+    monkeypatch.setattr(agent_graph, "critic_enabled", lambda: False)
 
-    두 함수 모두 실제 LLM·DB를 사용하므로 그래프 테스트에서는 대체한다.
+
+def _disable_research(monkeypatch: pytest.MonkeyPatch) -> None:
+    """조사원·검토자 에이전트를 끄고 토픽 성격 판정도 고정한다.
+
+    셋 다 실제 LLM·DB를 사용하므로 그래프 테스트에서는 대체한다.
     """
     monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: False)
     monkeypatch.setattr(agent_graph, "resolve_topic_intent", lambda *args: "news")
+    _disable_critic(monkeypatch)
 
 
 def test_run_report_generation_chains_search_generate_persist(
@@ -336,6 +342,7 @@ def _patch_generation_tail(
     monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
     monkeypatch.setattr(agent_graph, "resolve_topic_intent", lambda *args: "news")
     monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    _disable_critic(monkeypatch)
     return used_contexts
 
 
@@ -426,6 +433,141 @@ def test_research_failure_falls_back_to_fixed_collection_path(
     result = _run_generation()
 
     assert order == ["research", "load_context", "collect_live", "generate", "persist"]
+    assert result == {"content_candidate_id": "candidate-1"}
+
+
+def _patch_for_review(
+    monkeypatch: pytest.MonkeyPatch, order: list[str]
+) -> list[str]:
+    """검토 루프 테스트용으로 조사·생성·저장을 대체하고 교정 지시를 모은다."""
+    corrections: list[str] = []
+
+    async def fake_research(connection: Any, **kwargs: Any) -> Any:
+        """근거 한 건을 모은 조사 결과를 돌려준다."""
+        return SimpleNamespace(
+            documents=("doc-1",), calls=(), notes="", stop_reason="final"
+        )
+
+    async def fake_prag_006(contexts: list[Any]) -> list[Any]:
+        """맥락화 단계를 통과시킨다."""
+        return contexts
+
+    def fake_generate(**kwargs: Any) -> str:
+        """생성 호출을 세고 전달받은 교정 지시를 기록한다."""
+        order.append("generate")
+        corrections.append(str(kwargs.get("correction") or ""))
+        return "generated"
+
+    async def fake_prag_007(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """저장 단계를 대체한다."""
+        order.append("persist")
+        return {"content_candidate_id": "candidate-1"}
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """Scope 설정을 생략한다."""
+
+    monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: True)
+    monkeypatch.setattr(agent_graph, "research_context", fake_research)
+    monkeypatch.setattr(agent_graph, "resolve_topic_intent", lambda *args: "news")
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
+    monkeypatch.setattr(
+        agent_graph, "generate_report_content_with_quality", fake_generate
+    )
+    monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "critic_enabled", lambda: True)
+    return corrections
+
+
+def test_critic_revision_sends_the_draft_back_to_generate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """검토자가 문제를 찾으면 교정 지시와 함께 다시 쓰게 한다."""
+    order: list[str] = []
+    corrections = _patch_for_review(monkeypatch, order)
+    reviews: list[int] = []
+
+    async def fake_review(connection: Any, **kwargs: Any) -> Any:
+        """1회차는 재작성 요구, 2회차는 통과."""
+        order.append("review")
+        reviews.append(1)
+        if len(reviews) == 1:
+            return SimpleNamespace(
+                outcome="revise",
+                should_regenerate=True,
+                problem="당일 급락이 빠졌다",
+                correction="급락 폭을 본문에 넣으세요",
+                calls=(),
+            )
+        return SimpleNamespace(
+            outcome="pass",
+            should_regenerate=False,
+            problem="",
+            correction="",
+            calls=(),
+        )
+
+    monkeypatch.setattr(agent_graph, "review_report", fake_review)
+
+    result = _run_generation()
+
+    assert order == ["generate", "review", "generate", "review", "persist"]
+    assert corrections == ["", "급락 폭을 본문에 넣으세요"]
+    assert result == {"content_candidate_id": "candidate-1"}
+
+
+def test_critic_revision_is_capped_at_one_round(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """검토자가 계속 흠을 잡아도 재작성은 한 번만 한다.
+
+    상한이 없으면 리포트 하나에 LLM 호출이 무한히 늘어난다.
+    """
+    order: list[str] = []
+    _patch_for_review(monkeypatch, order)
+
+    async def always_revise(connection: Any, **kwargs: Any) -> Any:
+        """항상 재작성을 요구한다."""
+        order.append("review")
+        return SimpleNamespace(
+            outcome="revise",
+            should_regenerate=True,
+            problem="아직 부족하다",
+            correction="더 고치세요",
+            calls=(),
+        )
+
+    monkeypatch.setattr(agent_graph, "review_report", always_revise)
+
+    result = _run_generation()
+
+    assert order == ["generate", "review", "generate", "review", "persist"]
+    assert result == {"content_candidate_id": "candidate-1"}
+
+
+def test_critic_failure_does_not_block_publishing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """검토가 불가능해도 초안을 그대로 발행한다."""
+    order: list[str] = []
+    _patch_for_review(monkeypatch, order)
+
+    async def unavailable(connection: Any, **kwargs: Any) -> Any:
+        """검토 불가 판정을 돌려준다."""
+        order.append("review")
+        return SimpleNamespace(
+            outcome="unavailable",
+            should_regenerate=False,
+            problem="",
+            correction="",
+            calls=(),
+        )
+
+    monkeypatch.setattr(agent_graph, "review_report", unavailable)
+
+    result = _run_generation()
+
+    assert order == ["generate", "review", "persist"]
     assert result == {"content_candidate_id": "candidate-1"}
 
 

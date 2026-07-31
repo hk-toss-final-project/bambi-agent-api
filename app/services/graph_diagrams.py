@@ -54,8 +54,11 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
             description=(
                 "조사원 에이전트가 도구(search_pool·collect_live)를 골라 근거 "
                 "수집(research) → 생성용 Context 선별(load_context) → "
-                "콘텐츠 생성(generate) → Citation·Snapshot 저장(persist). "
-                "research가 자료를 못 모으면 load_context가 기존 고정 경로로 되돌아간다."
+                "콘텐츠 생성(generate) → 검토자 에이전트가 도구(get_source·"
+                "search_pool)로 인용을 원문과 대조(review) → Citation·Snapshot "
+                "저장(persist). 검토자가 사실관계 문제를 찾으면 generate로 "
+                "되돌려 한 번 다시 쓰게 하고, research가 자료를 못 모으면 "
+                "load_context가 기존 고정 경로로 되돌아간다."
             ),
             mermaid=_mermaid_of(build_report_generation_graph(None)),
         ),
