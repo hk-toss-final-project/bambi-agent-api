@@ -7,6 +7,12 @@
 --
 -- snapshot_hash는 애플리케이션과 같은 방식(sha256 of "title\nsummary\nbody")으로
 -- 계산했다. 본문을 고치면 해시도 다시 계산해야 ACK 검증이 통과한다.
+--
+-- 2026-08-03 픽스: user_context_snapshots의 실제 유니크 키는 (user_id, context_version)이다
+-- (0001_initial.sql). 사용자 28은 가입 시 service가 이미 (28, 1) 컨텍스트를 동기화해 두므로
+-- 고정 id 기준 ON CONFLICT (id)로는 충돌을 못 잡아 duplicate key로 시드 전체가 실패했다
+-- (07-30 이후 배포 빨간불의 원인). 실키 기준 DO NOTHING으로 바꾸고, 이미 존재하는(랜덤 id)
+-- 실제 컨텍스트 행을 쓰도록 generation_requests의 참조를 서브쿼리로 조회한다.
 
 \set ON_ERROR_STOP on
 
@@ -31,11 +37,7 @@ INSERT INTO agent.user_context_snapshots (
     true,
     '{"seed": true}'::jsonb
 )
-ON CONFLICT (id) DO UPDATE SET
-    plan = EXCLUDED.plan,
-    preferred_language = EXCLUDED.preferred_language,
-    personalization_enabled = EXCLUDED.personalization_enabled,
-    attributes = EXCLUDED.attributes;
+ON CONFLICT (user_id, context_version) DO NOTHING;
 
 INSERT INTO agent.agent_jobs (
     id,
@@ -89,7 +91,8 @@ INSERT INTO agent.generation_requests (
     '30000000-0000-4000-8000-000000000028',
     '20000000-0000-4000-8000-000000000028',
     '28',
-    '10000000-0000-4000-8000-000000000028',
+    (SELECT id FROM agent.user_context_snapshots
+      WHERE user_id = '28' AND context_version = 1),
     '환율',
     'interest_news_card',
     'free',
