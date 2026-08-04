@@ -232,6 +232,31 @@ class InMemoryAgentJobRepository:
             source_document_version_id=f"version-{record.job_id[:8]}",
         )
 
+    async def submit_onboarding_seed(
+        self,
+        *,
+        user_id: str,
+        source_event_id: str,
+        title: str,
+        content: str,
+        metadata: dict[str, Any],
+        occurred_at: datetime | None,
+        request_id: str,
+    ) -> SubmittedSourceJob:
+        """온보딩 씨앗을 멱등 접수하고 Wiki Build Job과 원본 ID를 반환한다."""
+        record, _created = self._submit_job(
+            feature_id="WSE-014",
+            job_type="personal_wiki_build",
+            user_id=user_id,
+            idempotency_key=source_event_id,
+            request_id=request_id,
+        )
+        return SubmittedSourceJob(
+            job=record,
+            source_document_id=f"source-{record.job_id[:8]}",
+            source_document_version_id=f"version-{record.job_id[:8]}",
+        )
+
     async def submit_generation(
         self,
         *,
@@ -290,6 +315,10 @@ class InMemoryAgentJobRepository:
     async def fail_job(self, **_: object) -> str:
         """Worker 실패 계약은 라우트 테스트 범위가 아니다."""
         return "failed"
+
+    def jobs_with_feature(self, feature_id: str) -> list[AgentJobRecord]:
+        """지정한 기능 ID로 접수된 Job 목록을 테스트가 조회하게 한다."""
+        return [job for job in self._jobs.values() if job.feature_id == feature_id]
 
     def finish_job(self, job_id: str, result: dict[str, object]) -> None:
         """테스트가 Worker 완료를 흉내 내 Job 결과를 기록하게 한다."""

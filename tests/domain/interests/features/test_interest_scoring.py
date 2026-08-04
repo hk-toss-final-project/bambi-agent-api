@@ -88,6 +88,25 @@ def test_int_005_applies_half_life_decay() -> None:
     assert scored[0].evidence["recency_factor"] == pytest.approx(0.5, abs=0.01)
 
 
+def test_int_005_ranks_onboarding_seed_below_real_source() -> None:
+    """다른 조건이 같으면 온보딩 씨앗이 실제 저장 근거보다 낮게 매겨지는지 검증한다."""
+    scored = asyncio.run(
+        int_005(
+            [
+                _candidate("씨앗 주제", source_types=["onboarding_seed"]),
+                _candidate("클리핑 주제", source_types=["web_clipping"]),
+            ],
+            now=_NOW,
+            limit=10,
+        )
+    )
+
+    assert [candidate.topic for candidate in scored] == ["클리핑 주제", "씨앗 주제"]
+    seed = next(c for c in scored if c.topic == "씨앗 주제")
+    real = next(c for c in scored if c.topic == "클리핑 주제")
+    assert seed.evidence["behavior_intensity"] < real.evidence["behavior_intensity"]
+
+
 def test_int_005_rewards_stronger_user_behavior() -> None:
     """직접 작성한 근거가 있는 관심사가 단순 클리핑보다 높은지 검증한다."""
     scored = asyncio.run(

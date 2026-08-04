@@ -5,6 +5,8 @@ PostgreSQL Agent Job 저장소를 필수로 사용한다. 저장소가 없는 �
 발행 Snapshot 조정은 PublishSnapshotService가 담당한다.
 """
 
+import logging
+
 from fastapi import status
 
 from app.exceptions import AgentApiError, ErrorDetail
@@ -26,16 +28,19 @@ from app.schemas.mvp import (
 from app.services.agent_jobs import (
     AgentJobRecord,
     AgentJobRepository,
+    StoredUserContextRecord,
     SubmittedGenerationJob,
     SubmittedSourceJob,
 )
 from domain.jobs.api import job_002
-from domain.personal_wiki.source_events.api import wse_001, wse_011
+from domain.personal_wiki.source_events.api import wse_001, wse_011, wse_014
 from infrastructure.persistence.api import (
     GeneratedContentNotFoundError,
     StaleContextVersionError,
     UserContextRequiredError,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 class AgentApiMvpService:
@@ -249,6 +254,7 @@ class AgentApiMvpService:
                     message="현재 버전보다 새로운 사용자 컨텍스트가 필요합니다.",
                 ),
             ) from exc
+        await self._seed_onboarding_interests(stored, request_id=request_id)
         return UserContextResponse(
             user_id=stored.user_id,
             context_version=stored.context_version,
@@ -266,6 +272,41 @@ class AgentApiMvpService:
             updated_at=stored.created_at,
             request_id=request_id,
         )
+
+    async def _seed_onboarding_interests(
+        self, stored: StoredUserContextRecord, *, request_id: str
+    ) -> None:
+        """온보딩 선택으로 관심사 씨앗 원본·Wiki Build Job을 best-effort로 접수한다.
+
+        신규 사용자의 콜드스타트를 위해 온보딩 Category·Topic(WSE-014)을 씨앗
+        문서로 합성해 접수한다. 씨앗 접수 실패가 컨텍스트 저장(이미 성공)까지
+        되돌리면 안 되므로 예외를 삼키고 로그만 남긴다. 선택 내용 기반 멱등이라
+        같은 온보딩이 반복 전달돼도 씨앗은 한 번만 만들어진다.
+        """
+        if not stored.signup_interests:
+            return
+        try:
+            seed = await wse_014(
+                stored.signup_interests,
+                interest_taxonomy_version=stored.interest_taxonomy_version,
+                selected_category_ids=stored.selected_category_ids,
+                selected_topic_ids=stored.selected_topic_ids,
+            )
+            if seed is None:
+                return
+            await self._agent_jobs.submit_onboarding_seed(
+                user_id=stored.user_id,
+                source_event_id=seed.source_event_id,
+                title=seed.title,
+                content=seed.content,
+                metadata=seed.metadata,
+                occurred_at=stored.created_at,
+                request_id=request_id,
+            )
+        except Exception:  # noqa: BLE001 - 씨앗 접수는 컨텍스트 저장과 분리된 부가 작업
+            _logger.warning(
+                "온보딩 관심사 씨앗 접수 실패 (user_id=%s)", stored.user_id, exc_info=True
+            )
 
     async def get_job(self, job_id: str) -> JobStatusResponse:
         """식별자에 해당하는 Agent Job 상태를 조회한다."""

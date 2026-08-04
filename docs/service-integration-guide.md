@@ -55,8 +55,19 @@ flowchart LR
 - 호출 시점: **회원가입 직후 1회(필수)** + 플랜·언어·차단 설정 변경 시마다.
 - `signup_interests`는 사용자가 **선언한** 관심사 시드다. 위키에서 파생·재계산되는
   관심사 프로필과 달리 재계산으로 지워지지 않도록 버전 관리되는
-  `agent.user_context_snapshots.attributes`에 함께 보존한다. (콜드스타트에서 프로필이
-  이 시드를 읽는 연결은 관심사 도메인 후속 작업)
+  `agent.user_context_snapshots.attributes`에 함께 보존한다.
+- **콜드스타트 관심사 씨앗 (WSE-014, 자동)**: `signup_interests`가 있으면 이 컨텍스트
+  수신 시 Agent가 온보딩 선택을 씨앗 Markdown으로 합성해 `onboarding_seed` 원본과
+  Personal Wiki Build Job으로 **자동 접수**한다. 빌드가 끝나면 기존 INT-011 훅이
+  관심사 프로필을 파생시켜, 아무것도 저장하지 않은 신규 사용자도 관심사가 비지 않는다.
+  Service의 추가 호출은 필요 없다. 이 접수는 컨텍스트 저장과 분리된 best-effort이며,
+  선택 내용 기반 멱등이라 같은 온보딩이 반복 전달돼도 씨앗은 한 번만 만들어진다.
+- **가입 즉시 웰컴 리포트 (Service 트리거)**: "가입하자마자 리포트 1개"는 생성 트리거라
+  MVP 결정(2026-07-20)상 **Service 소유**다. Service가 온보딩 완료 직후
+  `POST /internal/v1/users/{user_id}/generations`를 아래 값으로 1회 호출한다.
+  - `topic`: `signup_interests`에서 고른 대표 관심사(여러 개면 랜덤 1개)
+  - `content_type`: `interest_news_card` (기본값)
+  - `idempotency_key`: `welcome:{user_id}` — 멱등키로 재호출해도 리포트는 1개만 생성됨
 - ⚠️ 컨텍스트가 없는 사용자의 생성 요청은 `409 USER_CONTEXT_REQUIRED`로
   거부됩니다. 가입 플로우에 반드시 포함하세요.
 - ⚠️ `blocked_*_ids`의 ID 체계(무엇의 ID인지)는 아직 양팀 미합의 상태입니다.

@@ -337,6 +337,113 @@ async def save_web_clipping_and_enqueue(
     )
 
 
+async def save_onboarding_seed_and_enqueue(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    source_event_id: str,
+    title: str,
+    content: str,
+    metadata: dict[str, object],
+    occurred_at: datetime | None,
+    request_id: str,
+) -> PersistedSourceSubmission:
+    """온보딩 관심사 씨앗 문서와 Wiki Build Job을 같은 트랜잭션에 멱등 저장한다.
+
+    WSE-014가 합성한 씨앗 Markdown을 `onboarding_seed` 원본 Version으로 저장하고
+    클리핑과 같은 Personal Wiki Build 파이프라인을 태운다. 실제 저장 근거가 없는
+    신규 사용자의 콜드스타트를 위한 경로이며, `(user_id, source_event_id)` 유일
+    제약으로 같은 선택의 중복 접수를 막는다(WSE-011).
+
+    Args:
+        connection: agent-db 커넥션 (호출자가 트랜잭션·scope를 소유)
+        user_id: 씨앗 원본의 소유자
+        source_event_id: 선택 내용으로 만든 멱등 이벤트 ID
+        title: 씨앗 원본 문서 제목
+        content: 씨앗 Markdown 본문
+        metadata: 안정 ID·taxonomy 버전 등 근거 메타데이터
+        occurred_at: 온보딩 발생 시각
+        request_id: 요청 추적 ID
+    """
+    namespace_key = f"user/{user_id}"
+    content_hash = compute_content_hash(content)
+    event_cursor = await connection.execute(
+        """
+        INSERT INTO agent.wiki_source_events (
+            user_id,
+            source_event_id,
+            source_type,
+            occurred_at,
+            payload,
+            status
+        ) VALUES (
+            %s, %s, 'onboarding_seed', COALESCE(%s, clock_timestamp()), %s, 'received'
+        )
+        ON CONFLICT (user_id, source_event_id) DO UPDATE SET
+            payload = EXCLUDED.payload,
+            status = CASE
+                WHEN agent.wiki_source_events.status = 'completed' THEN 'completed'
+                ELSE 'received'
+            END,
+            error_code = NULL,
+            error_message = NULL,
+            updated_at = clock_timestamp()
+        RETURNING id
+        """,
+        (
+            user_id,
+            source_event_id,
+            occurred_at,
+            Jsonb({**_event_payload(title=title), **metadata}),
+        ),
+    )
+    event_row = await event_cursor.fetchone()
+    source_event_row_id = str(event_row["id"])
+
+    (
+        source_document_id,
+        source_document_version_id,
+        source_version,
+    ) = await _upsert_user_source_version(
+        connection,
+        user_id=user_id,
+        namespace_key=namespace_key,
+        source_type="onboarding_seed",
+        canonical_url=None,
+        source_event_row_id=source_event_row_id,
+        title=title,
+        author=None,
+        published_at=None,
+        clipped_on=None,
+        description=None,
+        tags=[],
+        content=content,
+        content_hash=content_hash,
+        head_metadata={"ingested_by": "onboarding-seed"},
+        version_metadata={"origin": "onboarding_seed", **metadata},
+    )
+
+    enqueued = await enqueue_personal_wiki_build_job(
+        connection,
+        user_id=user_id,
+        source_document_id=source_document_id,
+        source_document_version_id=source_document_version_id,
+        source_version=source_version,
+        source_event_id=source_event_id,
+        source_event_row_id=source_event_row_id,
+        feature_id="WSE-014",
+        request_id=request_id,
+    )
+    return PersistedSourceSubmission(
+        source_document_id=source_document_id,
+        source_document_version_id=source_document_version_id,
+        source_version=source_version,
+        source_event_row_id=source_event_row_id,
+        job_id=enqueued.job_id,
+        job_created=enqueued.created,
+    )
+
+
 async def save_content_mark_and_enqueue(
     connection: AsyncConnection[DictRow],
     *,

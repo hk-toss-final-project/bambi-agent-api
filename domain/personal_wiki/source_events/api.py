@@ -4,6 +4,7 @@
 """
 
 from .features.ingestion import (
+    OnboardingSeedDocument,
     wse_001,
     wse_002,
     wse_003,
@@ -12,6 +13,7 @@ from .features.ingestion import (
     wse_006,
     wse_007,
     wse_008,
+    wse_014,
 )
 from .features.deletion import wse_009
 from .features.rebuild import wse_010
@@ -20,6 +22,7 @@ from .features.policy import wse_012
 from .features.status import wse_013
 
 __all__ = [
+    "OnboardingSeedDocument",
     "wse_001",
     "wse_002",
     "wse_003",
@@ -33,4 +36,5 @@ __all__ = [
     "wse_011",
     "wse_012",
     "wse_013",
+    "wse_014",
 ]

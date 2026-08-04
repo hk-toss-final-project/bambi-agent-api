@@ -175,7 +175,11 @@
 | `selected_topic_ids` | X | 온보딩 선택 | 선택한 Topic 안정 ID 목록(최대 12개) |
 | `blocked_interest_ids` | X | 사용자가 삭제한 관심사 | 송우 확인(07-21): agent가 `agent.user_context_snapshots`(테이블 실재 확인)에 반영. 현재 빈 배열, 삭제 기능 붙으면 채움 |
 | `blocked_source_ids` | X | 사용자가 삭제한 소스 | 위와 동일 |
-| `signup_interests` | X | 가입 시 고른 관심 카테고리·토픽 | `[{"category","topics":[...]}]`. agent가 `user_context_snapshots.attributes.signup_interests`에 버전과 함께 보존(재계산에 안 지워짐). 프로필 콜드스타트 반영은 후속 |
+| `signup_interests` | X | 가입 시 고른 관심 카테고리·토픽 | `[{"category","topics":[...]}]`. agent가 `user_context_snapshots.attributes.signup_interests`에 버전과 함께 보존(재계산에 안 지워짐). **있으면 agent가 온보딩 씨앗(WSE-014)을 자동 접수해 콜드스타트 관심사를 파생** — 아래 참고 |
+
+### 4.2-1 온보딩 관심사 씨앗 + 웰컴 리포트 (콜드스타트)
+- **씨앗 (WSE-014, agent 자동):** `signup_interests`가 있으면 context 수신 시 agent가 선택을 씨앗 Markdown으로 합성해 `onboarding_seed` 원본·Personal Wiki Build Job으로 **자동 접수**한다. 빌드 완료 후 INT-011 훅이 관심사 프로필을 파생시킨다. 컨텍스트 저장과 분리된 best-effort이고, 선택 내용 기반 멱등(같은 온보딩 반복 전달 → 씨앗 1개). Service의 추가 호출 불필요.
+- **웰컴 리포트 (Service 트리거):** "가입 즉시 리포트 1개"는 생성 트리거라 MVP 결정(2026-07-20)상 Service 소유다. Service가 온보딩 완료 직후 `POST /generations`를 `topic`=대표 관심사(여러 개면 랜덤), `content_type`=`interest_news_card`, `idempotency_key`=`welcome:{user_id}`로 1회 호출한다(멱등키로 재호출해도 1개만).
 
 ### 4.3 버전 관리 (핵심)
 - `context_version`은 **사용자별로 단조 증가**해야 한다. 같거나 작은 값 재전송 → `STALE_CONTEXT_VERSION`.

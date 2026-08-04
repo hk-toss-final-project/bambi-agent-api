@@ -144,6 +144,20 @@ class AgentJobRepository(Protocol):
         """위키마킹한 생성 콘텐츠를 원본 Version으로 물질화하고 Build Job을 저장한다."""
         ...
 
+    async def submit_onboarding_seed(
+        self,
+        *,
+        user_id: str,
+        source_event_id: str,
+        title: str,
+        content: str,
+        metadata: dict[str, Any],
+        occurred_at: datetime | None,
+        request_id: str,
+    ) -> SubmittedSourceJob:
+        """온보딩 관심사 씨앗 원본과 Personal Wiki Build Job을 저장한다."""
+        ...
+
     async def submit_feedback_signals(
         self,
         *,

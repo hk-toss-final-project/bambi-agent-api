@@ -81,6 +81,7 @@ from .features.source_ingestion import (
     db_002,
     register_url_and_enqueue,
     save_content_mark_and_enqueue,
+    save_onboarding_seed_and_enqueue,
     save_web_clipping_and_enqueue,
 )
 from .features.generation_runtime import (

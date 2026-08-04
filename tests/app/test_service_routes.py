@@ -75,6 +75,61 @@ def test_user_context_upsert_defaults_signup_interests_to_empty(
     assert response.json()["signup_interests"] == []
 
 
+def test_onboarding_with_interests_enqueues_seed_job(
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
+) -> None:
+    """signup_interests가 있으면 온보딩 관심사 씨앗(WSE-014) Build Job이 접수되는지 검증한다."""
+    response = client.put(
+        "/internal/v1/users/seed-user/context",
+        json={
+            "context_version": 1,
+            "plan": "free",
+            "signup_interests": [{"category": "기술", "topics": ["AI"]}],
+        },
+    )
+
+    assert response.status_code == 200
+    seed_jobs = agent_jobs_fake.jobs_with_feature("WSE-014")
+    assert len(seed_jobs) == 1
+    assert seed_jobs[0].job_type == "personal_wiki_build"
+
+
+def test_onboarding_without_interests_skips_seed_job(
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
+) -> None:
+    """signup_interests가 없으면 씨앗 Job을 접수하지 않는지 검증한다."""
+    response = client.put(
+        "/internal/v1/users/no-seed-user/context",
+        json={"context_version": 1, "plan": "free"},
+    )
+
+    assert response.status_code == 200
+    assert agent_jobs_fake.jobs_with_feature("WSE-014") == []
+
+
+def test_onboarding_seed_failure_does_not_break_context(
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
+) -> None:
+    """씨앗 접수가 실패해도 컨텍스트 저장(200)은 유지되는지 검증한다."""
+
+    async def _raise(**_: object) -> None:
+        raise RuntimeError("씨앗 저장소 장애")
+
+    agent_jobs_fake.submit_onboarding_seed = _raise  # type: ignore[method-assign]
+
+    response = client.put(
+        "/internal/v1/users/seed-fail-user/context",
+        json={
+            "context_version": 1,
+            "plan": "free",
+            "signup_interests": [{"category": "경제", "topics": ["금리"]}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["signup_interests"] == [{"category": "경제", "topics": ["금리"]}]
+
+
 def test_web_clipping_request_is_idempotent(client: TestClient) -> None:
     """같은 Source Event로 요청한 웹 클리핑이 하나의 Job으로 접수되는지 검증한다."""
     payload = {

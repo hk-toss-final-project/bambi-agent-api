@@ -26,6 +26,7 @@ from infrastructure.persistence.api import (
     db_002,
     save_content_mark_and_enqueue,
     save_feedback_signals_for_user,
+    save_onboarding_seed_and_enqueue,
     claim_agent_job_by_id,
     complete_agent_job,
     enqueue_personal_wiki_build_job,
@@ -150,6 +151,40 @@ class PostgresAgentJobRepository:
                 stored = await get_agent_job(connection, job_id=saved.job_id)
                 if stored is None:
                     raise RuntimeError(f"저장한 Wiki Job을 찾을 수 없습니다: {saved.job_id}")
+        return SubmittedSourceJob(
+            job=self._to_job_record(stored),
+            source_document_id=saved.source_document_id,
+            source_document_version_id=saved.source_document_version_id,
+        )
+
+    async def submit_onboarding_seed(
+        self,
+        *,
+        user_id: str,
+        source_event_id: str,
+        title: str,
+        content: str,
+        metadata: dict[str, Any],
+        occurred_at: datetime | None,
+        request_id: str,
+    ) -> SubmittedSourceJob:
+        """온보딩 씨앗 원본과 Wiki Build Job을 저장하고 조회 가능한 결과를 반환한다."""
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await set_personal_wiki_scope(connection, user_id=user_id)
+                saved = await save_onboarding_seed_and_enqueue(
+                    connection,
+                    user_id=user_id,
+                    source_event_id=source_event_id,
+                    title=title,
+                    content=content,
+                    metadata=metadata,
+                    occurred_at=occurred_at,
+                    request_id=request_id,
+                )
+                stored = await get_agent_job(connection, job_id=saved.job_id)
+                if stored is None:
+                    raise RuntimeError(f"저장한 씨앗 Job을 찾을 수 없습니다: {saved.job_id}")
         return SubmittedSourceJob(
             job=self._to_job_record(stored),
             source_document_id=saved.source_document_id,
