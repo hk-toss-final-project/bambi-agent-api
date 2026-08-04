@@ -62,6 +62,7 @@ class StoredUserContextRecord:
     personalization_enabled: bool
     blocked_interest_ids: list[str]
     blocked_source_ids: list[str]
+    signup_interests: list[dict[str, Any]]
     created_at: datetime
 
 
@@ -86,6 +87,7 @@ class AgentJobRepository(Protocol):
         personalization_enabled: bool,
         blocked_interest_ids: list[str],
         blocked_source_ids: list[str],
+        signup_interests: list[dict[str, Any]],
     ) -> StoredUserContextRecord:
         """새 사용자 Context Snapshot을 PostgreSQL에 저장한다."""
         ...

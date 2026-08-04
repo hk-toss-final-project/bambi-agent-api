@@ -122,6 +122,7 @@ class InMemoryAgentJobRepository:
         personalization_enabled: bool,
         blocked_interest_ids: list[str],
         blocked_source_ids: list[str],
+        signup_interests: list[dict[str, Any]],
     ) -> StoredUserContextRecord:
         """단조 증가 버전만 허용하며 새 Context Snapshot을 저장한다."""
         current = self._contexts.get(user_id)
@@ -135,6 +136,10 @@ class InMemoryAgentJobRepository:
             personalization_enabled=personalization_enabled,
             blocked_interest_ids=list(blocked_interest_ids),
             blocked_source_ids=list(blocked_source_ids),
+            signup_interests=[
+                {"category": str(item["category"]), "topics": list(item.get("topics", []))}
+                for item in signup_interests
+            ],
             created_at=_utc_now(),
         )
         self._contexts[user_id] = stored

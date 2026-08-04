@@ -17,6 +17,7 @@ from app.schemas.mvp import (
     JobResultResponse,
     JobStatus,
     JobStatusResponse,
+    SignupInterest,
     UserContextResponse,
     UserContextUpsertRequest,
     UrlWikiSourceRequest,
@@ -233,6 +234,9 @@ class AgentApiMvpService:
                 personalization_enabled=payload.personalization_enabled,
                 blocked_interest_ids=payload.blocked_interest_ids,
                 blocked_source_ids=payload.blocked_source_ids,
+                signup_interests=[
+                    interest.model_dump() for interest in payload.signup_interests
+                ],
             )
         except StaleContextVersionError as exc:
             raise AgentApiError(
@@ -250,6 +254,9 @@ class AgentApiMvpService:
             personalization_enabled=stored.personalization_enabled,
             blocked_interest_ids=stored.blocked_interest_ids,
             blocked_source_ids=stored.blocked_source_ids,
+            signup_interests=[
+                SignupInterest(**interest) for interest in stored.signup_interests
+            ],
             updated_at=stored.created_at,
             request_id=request_id,
         )

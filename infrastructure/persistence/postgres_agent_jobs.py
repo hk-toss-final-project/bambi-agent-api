@@ -217,6 +217,7 @@ class PostgresAgentJobRepository:
         personalization_enabled: bool,
         blocked_interest_ids: list[str],
         blocked_source_ids: list[str],
+        signup_interests: list[dict[str, Any]],
     ) -> StoredUserContextRecord:
         """사용자 Context를 사용자 RLS Scope의 새 Snapshot으로 저장한다."""
         async with self._pool.connection() as connection:
@@ -231,6 +232,7 @@ class PostgresAgentJobRepository:
                     personalization_enabled=personalization_enabled,
                     blocked_interest_ids=blocked_interest_ids,
                     blocked_source_ids=blocked_source_ids,
+                    signup_interests=signup_interests,
                 )
         return StoredUserContextRecord(
             user_id=stored.user_id,
@@ -240,6 +242,7 @@ class PostgresAgentJobRepository:
             personalization_enabled=stored.personalization_enabled,
             blocked_interest_ids=stored.blocked_interest_ids,
             blocked_source_ids=stored.blocked_source_ids,
+            signup_interests=stored.signup_interests,
             created_at=stored.created_at,
         )
 

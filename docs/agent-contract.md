@@ -148,6 +148,7 @@
 | `personalization_enabled` | X | 사용자 설정 | 기본 `true` |
 | `blocked_interest_ids` | X | 사용자가 삭제한 관심사 | 송우 확인(07-21): agent가 `agent.user_context_snapshots`(테이블 실재 확인)에 반영. 현재 빈 배열, 삭제 기능 붙으면 채움 |
 | `blocked_source_ids` | X | 사용자가 삭제한 소스 | 위와 동일 |
+| `signup_interests` | X | 가입 시 고른 관심 카테고리·토픽 | `[{"category","topics":[...]}]`. agent가 `user_context_snapshots.attributes.signup_interests`에 버전과 함께 보존(재계산에 안 지워짐). 프로필 콜드스타트 반영은 후속 |
 
 ### 4.3 버전 관리 (핵심)
 - `context_version`은 **사용자별로 단조 증가**해야 한다. 같거나 작은 값 재전송 → `STALE_CONTEXT_VERSION`.

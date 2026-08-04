@@ -35,6 +35,40 @@ def test_user_context_upsert_rejects_stale_version(client: TestClient) -> None:
     assert stale.json()["code"] == "STALE_CONTEXT_VERSION"
 
 
+def test_user_context_upsert_preserves_signup_interests(client: TestClient) -> None:
+    """회원가입 시 고른 관심 카테고리·토픽이 컨텍스트 응답에 그대로 반영되는지 검증한다."""
+    payload = {
+        "context_version": 1,
+        "plan": "free",
+        "signup_interests": [
+            {"category": "기술", "topics": ["AI", "반도체"]},
+            {"category": "경제", "topics": []},
+        ],
+    }
+
+    response = client.put("/internal/v1/users/signup-user/context", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["signup_interests"] == [
+        {"category": "기술", "topics": ["AI", "반도체"]},
+        {"category": "경제", "topics": []},
+    ]
+
+
+def test_user_context_upsert_defaults_signup_interests_to_empty(
+    client: TestClient,
+) -> None:
+    """signup_interests를 생략해도 기존 계약대로 빈 목록으로 처리되는지 검증한다."""
+    response = client.put(
+        "/internal/v1/users/no-interest-user/context",
+        json={"context_version": 1, "plan": "free"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["signup_interests"] == []
+
+
 def test_web_clipping_request_is_idempotent(client: TestClient) -> None:
     """같은 Source Event로 요청한 웹 클리핑이 하나의 Job으로 접수되는지 검증한다."""
     payload = {

@@ -47,8 +47,13 @@ flowchart LR
 | `personalization_enabled` | X | 기본 `true` |
 | `blocked_interest_ids` | X | 차단 관심사 ID 목록 |
 | `blocked_source_ids` | X | 차단 Source ID 목록 |
+| `signup_interests` | X | 회원가입 시 고른 관심 카테고리·토픽 시드. `[{"category": "기술", "topics": ["AI", "반도체"]}, ...]` — 카테고리만 골랐으면 `topics`는 빈 배열. 생략하면 빈 목록으로 저장 |
 
 - 호출 시점: **회원가입 직후 1회(필수)** + 플랜·언어·차단 설정 변경 시마다.
+- `signup_interests`는 사용자가 **선언한** 관심사 시드다. 위키에서 파생·재계산되는
+  관심사 프로필과 달리 재계산으로 지워지지 않도록 버전 관리되는
+  `agent.user_context_snapshots.attributes`에 함께 보존한다. (콜드스타트에서 프로필이
+  이 시드를 읽는 연결은 관심사 도메인 후속 작업)
 - ⚠️ 컨텍스트가 없는 사용자의 생성 요청은 `409 USER_CONTEXT_REQUIRED`로
   거부됩니다. 가입 플로우에 반드시 포함하세요.
 - ⚠️ `blocked_*_ids`의 ID 체계(무엇의 ID인지)는 아직 양팀 미합의 상태입니다.
