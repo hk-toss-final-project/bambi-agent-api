@@ -37,7 +37,15 @@ class _FakeConnection:
     async def execute(
         self, query: str, params: tuple[Any, ...] | None = None
     ) -> _FakeCursor:
-        """SQL을 기록하고 순서별 고정 Cursor를 반환한다."""
+        """SQL을 기록하고 순서별 고정 Cursor를 반환한다.
+
+        실제 psycopg처럼 자리표시자 수와 파라미터 수가 어긋나면 즉시 실패시킨다.
+        컬럼만 추가하고 `%s`를 빠뜨리면 런타임에서야 터지기 때문이다.
+        """
+        if params is not None and query.count("%s") != len(params):
+            raise AssertionError(
+                f"자리표시자 {query.count('%s')}개와 파라미터 {len(params)}개가 다릅니다."
+            )
         self.executed.append((query, params))
         rows = self._responses.pop(0) if self._responses else []
         return _FakeCursor(rows)

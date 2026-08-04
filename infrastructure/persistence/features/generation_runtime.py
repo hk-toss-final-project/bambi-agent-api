@@ -126,7 +126,7 @@ async def upsert_user_context_snapshot(
             blocked_source_ids,
             attributes,
             checksum
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id, created_at
         """,
         (
