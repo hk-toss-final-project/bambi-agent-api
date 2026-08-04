@@ -37,8 +37,12 @@ class StoredUserContext:
     plan: str
     preferred_language: str
     personalization_enabled: bool
+    interest_taxonomy_version: str | None
+    selected_category_ids: list[str]
+    selected_topic_ids: list[str]
     blocked_interest_ids: list[str]
     blocked_source_ids: list[str]
+    signup_interests: list[dict[str, Any]]
     created_at: datetime
 
 
@@ -58,10 +62,19 @@ async def upsert_user_context_snapshot(
     plan: str,
     preferred_language: str,
     personalization_enabled: bool,
+    interest_taxonomy_version: str | None,
+    selected_category_ids: Sequence[str],
+    selected_topic_ids: Sequence[str],
     blocked_interest_ids: Sequence[str],
     blocked_source_ids: Sequence[str],
+    signup_interests: Sequence[dict[str, Any]] = (),
 ) -> StoredUserContext:
-    """새로운 사용자 Context Version만 append-only Snapshot으로 저장한다."""
+    """새로운 사용자 Context Version만 append-only Snapshot으로 저장한다.
+
+    회원가입 시 선택한 관심 카테고리·토픽(`signup_interests`)은 파생 뷰인 관심사
+    프로필이 아니라 사용자가 선언한 사실이므로, 버전 관리되는 이 Snapshot의
+    `attributes.signup_interests`에 함께 보존한다.
+    """
     await connection.execute(
         "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
         (f"context/{user_id}",),
@@ -79,13 +92,21 @@ async def upsert_user_context_snapshot(
     current = await current_cursor.fetchone()
     if current is not None and context_version <= int(current["context_version"]):
         raise StaleContextVersionError(user_id)
+    normalized_interests = [
+        {"category": str(item["category"]), "topics": list(item.get("topics", []))}
+        for item in signup_interests
+    ]
     checksum_payload = {
         "context_version": context_version,
         "plan": plan,
         "preferred_language": preferred_language,
         "personalization_enabled": personalization_enabled,
+        "interest_taxonomy_version": interest_taxonomy_version,
+        "selected_category_ids": list(selected_category_ids),
+        "selected_topic_ids": list(selected_topic_ids),
         "blocked_interest_ids": list(blocked_interest_ids),
         "blocked_source_ids": list(blocked_source_ids),
+        "signup_interests": normalized_interests,
     }
     checksum = hashlib.sha256(
         json.dumps(checksum_payload, sort_keys=True).encode("utf-8")
@@ -98,10 +119,14 @@ async def upsert_user_context_snapshot(
             plan,
             preferred_language,
             personalization_enabled,
+            interest_taxonomy_version,
+            selected_category_ids,
+            selected_topic_ids,
             blocked_interest_ids,
             blocked_source_ids,
+            attributes,
             checksum
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id, created_at
         """,
         (
@@ -110,8 +135,12 @@ async def upsert_user_context_snapshot(
             plan,
             preferred_language,
             personalization_enabled,
+            interest_taxonomy_version,
+            list(selected_category_ids),
+            list(selected_topic_ids),
             list(blocked_interest_ids),
             list(blocked_source_ids),
+            Jsonb({"signup_interests": normalized_interests}),
             checksum,
         ),
     )
@@ -123,8 +152,12 @@ async def upsert_user_context_snapshot(
         plan=plan,
         preferred_language=preferred_language,
         personalization_enabled=personalization_enabled,
+        interest_taxonomy_version=interest_taxonomy_version,
+        selected_category_ids=list(selected_category_ids),
+        selected_topic_ids=list(selected_topic_ids),
         blocked_interest_ids=list(blocked_interest_ids),
         blocked_source_ids=list(blocked_source_ids),
+        signup_interests=normalized_interests,
         created_at=row["created_at"],
     )
 

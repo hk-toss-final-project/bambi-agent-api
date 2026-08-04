@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import (
     AliasChoices,
@@ -25,6 +25,17 @@ class UserPlan(StrEnum):
 
     FREE = "free"
     PAID = "paid"
+
+
+TaxonomyId = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=100,
+        pattern=r"^[a-z0-9_-]+$",
+        description="Service 관심사 분류체계의 안정 ID",
+    ),
+]
 
 
 class JobStatus(StrEnum):
@@ -67,6 +78,22 @@ class VersionResponse(ImmutableSchema):
     environment: str = Field(description="실행 환경")
 
 
+class SignupInterest(ImmutableSchema):
+    """회원가입 시 사용자가 고른 관심 카테고리와 그 하위 토픽 묶음.
+
+    카테고리만 선택하고 세부 토픽은 고르지 않을 수 있으므로 `topics`는 비어 있을 수
+    있다. 내부 관심사 모델(`user_interests`)의 `(category, topic)` 쌍으로 확장된다.
+    """
+
+    category: str = Field(
+        min_length=1, max_length=100, description="가입 시 선택한 관심 카테고리"
+    )
+    topics: list[str] = Field(
+        default_factory=list,
+        description="카테고리 하위로 선택한 관심 토픽 목록 (선택 사항)",
+    )
+
+
 class UserContextUpsertRequest(ImmutableSchema):
     """Service API가 전달하는 최소 사용자 컨텍스트."""
 
@@ -78,12 +105,41 @@ class UserContextUpsertRequest(ImmutableSchema):
     personalization_enabled: bool = Field(
         default=True, description="개인화 기능 사용 여부"
     )
+    interest_taxonomy_version: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=50,
+        description="선택 Category·Topic ID를 해석할 관심사 분류체계 버전",
+    )
+    selected_category_ids: list[TaxonomyId] = Field(
+        default_factory=list,
+        max_length=8,
+        description="온보딩에서 선택한 Category 안정 ID 목록",
+    )
+    selected_topic_ids: list[TaxonomyId] = Field(
+        default_factory=list,
+        max_length=12,
+        description="온보딩에서 선택한 Topic 안정 ID 목록",
+    )
     blocked_interest_ids: list[str] = Field(
         default_factory=list, description="차단한 관심사 식별자 목록"
     )
     blocked_source_ids: list[str] = Field(
         default_factory=list, description="차단한 Source 식별자 목록"
     )
+    signup_interests: list[SignupInterest] = Field(
+        default_factory=list,
+        description="회원가입 시 선택한 관심 카테고리·토픽 목록 (콜드스타트 관심사 시드)",
+    )
+
+    @model_validator(mode="after")
+    def validate_interest_taxonomy_version(self) -> "UserContextUpsertRequest":
+        """Category·Topic 선택이 있으면 이를 해석할 분류체계 버전을 요구한다."""
+        if (
+            self.selected_category_ids or self.selected_topic_ids
+        ) and self.interest_taxonomy_version is None:
+            raise ValueError("선택한 Category·Topic에는 interest_taxonomy_version이 필요합니다.")
+        return self
 
 
 class UserContextResponse(ImmutableSchema):
@@ -95,8 +151,16 @@ class UserContextResponse(ImmutableSchema):
     plan: UserPlan = Field(description="반영된 사용자 플랜")
     preferred_language: str = Field(description="반영된 선호 언어")
     personalization_enabled: bool = Field(description="개인화 사용 여부")
+    interest_taxonomy_version: str | None = Field(
+        description="반영된 관심사 분류체계 버전"
+    )
+    selected_category_ids: list[str] = Field(description="반영된 Category 선택 목록")
+    selected_topic_ids: list[str] = Field(description="반영된 Topic 선택 목록")
     blocked_interest_ids: list[str] = Field(description="차단 관심사 목록")
     blocked_source_ids: list[str] = Field(description="차단 Source 목록")
+    signup_interests: list[SignupInterest] = Field(
+        default_factory=list, description="반영된 회원가입 관심 카테고리·토픽 목록"
+    )
     updated_at: datetime = Field(description="컨텍스트 갱신 시각")
     request_id: str = Field(description="요청 추적 ID")
 

@@ -7,6 +7,7 @@ from typing import Any
 from infrastructure.persistence.features.generation_runtime import (
     enqueue_report_generation_job,
     persist_report_generation,
+    upsert_user_context_snapshot,
 )
 from shared.report_models import GeneratedReportContent
 
@@ -51,6 +52,48 @@ def _connection_with_context() -> _FakeConnection:
             [{"id": "request-1"}],
         ]
     )
+
+
+def test_upsert_user_context_persists_onboarding_selections() -> None:
+    """온보딩 Category·Topic과 taxonomy version이 Snapshot과 checksum 입력에 포함된다."""
+    created_at = datetime(2026, 8, 4, tzinfo=UTC)
+    connection = _FakeConnection(
+        [
+            [],
+            [],
+            [{"id": "context-1", "created_at": created_at}],
+        ]
+    )
+
+    stored = asyncio.run(
+        upsert_user_context_snapshot(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            context_version=2,
+            plan="free",
+            preferred_language="ko",
+            personalization_enabled=True,
+            interest_taxonomy_version="1.0.0",
+            selected_category_ids=["tech", "business"],
+            selected_topic_ids=["ai_ml", "startup"],
+            blocked_interest_ids=[],
+            blocked_source_ids=[],
+        )
+    )
+
+    insert_sql, insert_params = connection.executed[2]
+    assert "interest_taxonomy_version" in insert_sql
+    assert "selected_category_ids" in insert_sql
+    assert "selected_topic_ids" in insert_sql
+    assert insert_params is not None
+    assert insert_params[5:8] == (
+        "1.0.0",
+        ["tech", "business"],
+        ["ai_ml", "startup"],
+    )
+    assert len(str(insert_params[-1])) == 64
+    assert stored.selected_category_ids == ["tech", "business"]
+    assert stored.selected_topic_ids == ["ai_ml", "startup"]
 
 
 def test_enqueue_persists_scheduled_at_for_reserved_generation() -> None:

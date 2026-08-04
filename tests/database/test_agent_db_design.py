@@ -39,6 +39,12 @@ GLOBAL_SOURCE_CACHE_MIGRATION_PATH = (
     / "migrations"
     / "0008_extract_global_source_cache.sql"
 )
+USER_CONTEXT_SELECTION_MIGRATION_PATH = (
+    PROJECT_ROOT
+    / "database"
+    / "migrations"
+    / "0009_user_context_onboarding_selections.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
@@ -47,6 +53,7 @@ MIGRATION_PATHS = (
     STRUCTURED_WIKI_MIGRATION_PATH,
     REPORT_BUILDER_RENAME_MIGRATION_PATH,
     GLOBAL_SOURCE_CACHE_MIGRATION_PATH,
+    USER_CONTEXT_SELECTION_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
@@ -186,6 +193,19 @@ def test_migration_contains_all_agent_db_feature_tables() -> None:
     }
 
     assert required_tables <= table_names
+
+
+def test_user_context_migration_adds_onboarding_selection_columns() -> None:
+    """DB-001 Snapshot이 온보딩 분류체계 버전과 선택 ID 배열을 보존하는지 검증한다."""
+    migration = _read(USER_CONTEXT_SELECTION_MIGRATION_PATH)
+
+    assert "ADD COLUMN interest_taxonomy_version text" in migration
+    assert "ADD COLUMN selected_category_ids text[] NOT NULL DEFAULT '{}'" in migration
+    assert "ADD COLUMN selected_topic_ids text[] NOT NULL DEFAULT '{}'" in migration
+    assert "cardinality(selected_category_ids) <= 8" in migration
+    assert "cardinality(selected_topic_ids) <= 12" in migration
+    assert "OR interest_taxonomy_version IS NOT NULL" in migration
+    assert "VALUES (9," in migration
 
 
 def test_migration_defines_vector_search_and_rls_boundaries() -> None:
