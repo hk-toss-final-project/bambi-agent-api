@@ -90,7 +90,6 @@ def _tools(
         _FakeConnection(),  # type: ignore[arg-type]
         user_id="user-1",
         topic_intent="news",
-        model="gpt-4.1-mini",
         collector=collector,
     )
     return {spec.name: spec for spec in specs}
@@ -183,7 +182,6 @@ def test_search_pool_tool_rejects_blank_query(
         _FakeConnection(),  # type: ignore[arg-type]
         user_id="user-1",
         topic_intent="news",
-        model="gpt-4.1-mini",
         collector=collector,
     )
     search = {spec.name: spec for spec in specs}["search_pool"]
@@ -194,42 +192,100 @@ def test_search_pool_tool_rejects_blank_query(
     assert queries == []
 
 
-def test_collect_live_tool_collects_fetched_documents(
+def test_live_collection_is_not_exposed_as_a_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """실시간 수집 도구가 수집 결과를 근거 문서로 모은다."""
-    collector = DocumentCollector()
-    keywords: list[str] = []
+    """실시간 수집은 도구로 노출하지 않는다.
 
-    def fake_collect(topic, user_id, *, model):
-        """수집 키워드를 기록하고 문서 한 건을 반환한다."""
-        keywords.append(topic)
-        return [_document("L1", title="새 기사", url="https://example.com/live")]
+    언제 부를지가 "근거가 몇 건인가"에 달린 셈의 문제라 LLM에게 맡기지 않는다.
+    도구로 남겨두면 프롬프트에서 언급을 빼도 모델이 임의로 부를 수 있다.
+    """
+    tools = _tools(monkeypatch, DocumentCollector(), [])
 
-    monkeypatch.setattr(researcher, "collect_live_context", fake_collect)
-    tools = _tools(monkeypatch, collector, [])
-
-    observation = asyncio.run(tools["collect_live"].run(keyword="Anthropic"))
-
-    assert keywords == ["Anthropic"]
-    assert "새 기사" in observation
-    assert len(collector.documents) == 1
+    assert list(tools) == ["search_pool"]
 
 
-def test_research_context_returns_documents_gathered_by_chosen_tools(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """LLM이 고른 도구 호출로 모인 문서가 조사 결과로 반환된다."""
-    hybrid = [_document("G1", title="코스피 급락", url="https://example.com/a")]
-    _patch_db(monkeypatch, hybrid)
+def _run_research(
+    monkeypatch: pytest.MonkeyPatch, found: list[ReportContextDocument]
+) -> tuple[object, list[str]]:
+    """검색이 주어진 문서를 찾은 상황으로 조사를 실행하고 수집 호출을 기록한다."""
+    _patch_db(monkeypatch, found)
+    collected: list[str] = []
 
     async def fake_loop(system_prompt, user_prompt, tools, **kwargs):
         """LLM이 search_pool을 한 번 고른 상황을 재현한다."""
         chosen = {spec.name: spec for spec in tools}["search_pool"]
         await chosen.run(query="코스피")
-        return ToolLoopResult(text="코스피 자료 1건을 모았다.", stop_reason="final")
+        return ToolLoopResult(text="모았다.", stop_reason="final")
+
+    def fake_collect(topic, user_id, *, model):
+        """실시간 수집 호출을 기록하고 문서 한 건을 반환한다."""
+        collected.append(topic)
+        return [_document("L1", title="새 기사", url="https://example.com/live")]
 
     monkeypatch.setattr(researcher, "run_tool_loop", fake_loop)
+    monkeypatch.setattr(researcher, "collect_live_context", fake_collect)
+
+    outcome = asyncio.run(
+        research_context(
+            _FakeConnection(),  # type: ignore[arg-type]
+            topic="코스피",
+            user_id="user-1",
+        )
+    )
+    return outcome, collected
+
+
+def test_live_collection_runs_when_stored_documents_fall_short(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """저장 자료가 기준에 못 미치면 코드가 실시간 수집을 부른다."""
+    outcome, collected = _run_research(
+        monkeypatch, [_document("G1", title="코스피 급락", url="https://example.com/a")]
+    )
+
+    assert collected == ["코스피"]
+    assert [document.title for document in outcome.documents] == [
+        "코스피 급락",
+        "새 기사",
+    ]
+
+
+def test_live_collection_is_skipped_when_stored_documents_suffice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """저장 자료가 충분하면 실시간 수집을 부르지 않는다.
+
+    이 판정이 LLM에게 있을 때 정확도가 80%였다(2026-07-31 벤치마크).
+    """
+    found = [
+        _document(f"G{n}", title=f"기사 {n}", url=f"https://example.com/{n}")
+        for n in range(1, 4)
+    ]
+
+    outcome, collected = _run_research(monkeypatch, found)
+
+    assert collected == []
+    assert len(outcome.documents) == 3
+
+
+def test_research_survives_live_collection_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """실시간 수집이 실패해도 지금까지 모은 근거는 살린다."""
+    _patch_db(monkeypatch, [_document("G1", title="코스피", url="https://x/1")])
+
+    async def fake_loop(system_prompt, user_prompt, tools, **kwargs):
+        """검색 한 번만 수행한다."""
+        await {spec.name: spec for spec in tools}["search_pool"].run(query="코스피")
+        return ToolLoopResult(text="모았다.", stop_reason="final")
+
+    def broken_collect(topic, user_id, *, model):
+        """수집 중 오류를 재현한다."""
+        raise RuntimeError("네트워크 실패")
+
+    monkeypatch.setattr(researcher, "run_tool_loop", fake_loop)
+    monkeypatch.setattr(researcher, "collect_live_context", broken_collect)
 
     outcome = asyncio.run(
         research_context(
@@ -239,26 +295,15 @@ def test_research_context_returns_documents_gathered_by_chosen_tools(
         )
     )
 
-    assert [document.title for document in outcome.documents] == ["코스피 급락"]
-    assert outcome.notes == "코스피 자료 1건을 모았다."
-    assert outcome.stop_reason == "final"
+    assert [document.title for document in outcome.documents] == ["코스피"]
 
 
-def test_research_prompt_tells_the_model_to_try_pool_first() -> None:
-    """조사 지침이 풀 우선·연관 키워드 확장 원칙을 담고 있는지 확인한다.
+def test_research_prompt_focuses_on_search_only() -> None:
+    """조사 지침이 검색어 확장에만 집중하고 수집 판단은 다루지 않는다.
 
-    이 두 원칙이 빠지면 조사원이 매번 실시간 수집을 불러 비용이 폭증한다.
+    "몇 건이면 충분한가"를 프롬프트에 넣었을 때 판단 정확도가 80%에 그쳤고,
+    문구를 두 번 고쳐도 과호출이 과소호출로 바뀔 뿐이었다(2026-07-31 벤치마크).
+    그 판정은 is_pool_sufficient가 맡는다.
     """
-    assert "먼저 search_pool" in researcher.SYSTEM_PROMPT
     assert "주제어 하나로만 찾지 마라" in researcher.SYSTEM_PROMPT
-
-
-def test_research_prompt_states_a_concrete_stop_condition() -> None:
-    """근거가 충분하면 멈추고 실시간 수집도 하지 말라고 명시한다.
-
-    2026-07-31 벤치마크에서 이 지시가 모호해 케이스의 86.7%가 반복 상한까지
-    가고, 창고에서 충분히 얻고도 collect_live를 불렀다(판단 정확도 53.3%).
-    문구를 구체화해 각각 46.7% / 100%로 개선했다.
-    """
-    assert "collect_live도 부르지 마라" in researcher.SYSTEM_PROMPT
-    assert "건에 못 미칠 때만" in researcher.SYSTEM_PROMPT
+    assert "collect_live" not in researcher.SYSTEM_PROMPT

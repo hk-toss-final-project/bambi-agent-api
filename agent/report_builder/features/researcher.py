@@ -36,7 +36,7 @@ from shared.report_models import ReportContextDocument
 from .live_sources import collect_live_context
 from .pool_context import (
     GLOBAL_NAMESPACE,
-    POOL_MIN_DOCUMENTS,
+    is_pool_sufficient,
     select_pool_documents,
 )
 
@@ -47,21 +47,22 @@ type DictRow = dict[str, Any]
 RESEARCH_MAX_ITERATIONS = 5
 _OBSERVATION_SNIPPET_CHARS = 160
 
+# 조사원에게는 "무엇을 검색할까"만 맡긴다. "몇 건이면 충분한가"는 세는 문제라
+# 코드(is_pool_sufficient)가 판정한다 — 2026-07-31 벤치마크에서 LLM에게 셈을
+# 맡겼을 때 판단 정확도가 80%에 그쳤고, 프롬프트를 두 번 고쳐도 오류 방향만
+# 바뀌었다. 상세는 bench/researcher/results/ 참고.
 SYSTEM_PROMPT = (
     "너는 리포트 작성에 쓸 근거 자료를 모으는 조사원이다.\n"
-    "도구를 사용해 자료를 모으고, 다 모았으면 무엇을 모았는지 한 문단으로 요약한다.\n"
+    "search_pool로 자료를 모으고, 다 모았으면 무엇을 모았는지 한 문단으로 요약한다.\n"
     "\n"
     "원칙:\n"
-    "1. 먼저 search_pool로 이미 모아둔 자료를 확인한다. 비용과 시간이 들지 않는다.\n"
+    "1. 주제어로 먼저 검색한다.\n"
     "2. 주제어 하나로만 찾지 마라. 첫 결과에 주제와 밀접한 용어가 보이면\n"
     "   그 용어로 한두 번 더 search_pool을 불러 자료를 넓힌다.\n"
-    f"3. **모은 근거가 {POOL_MIN_DOCUMENTS}건 이상이면 거기서 멈추고 요약한다.**\n"
-    "   더 검색하지 말고 collect_live도 부르지 마라. 이미 충분하다.\n"
-    f"4. collect_live는 **근거가 {POOL_MIN_DOCUMENTS}건에 못 미칠 때만** 쓴다.\n"
-    "   인터넷을 직접 뒤지므로 느리고 비용이 크다. 충분한데 부르면 낭비다.\n"
-    "5. 검색어를 바꿨는데 새로 나온 자료가 없으면 그 방향은 접는다.\n"
+    "3. 검색어를 바꿨는데 새로 나온 자료가 없으면 그 방향은 접는다.\n"
     "   비슷한 말로 바꿔 가며 같은 검색을 반복하지 마라.\n"
-    "6. 주제와 무관한 자료가 나오면 그 검색어는 버리고 다른 검색어를 시도한다.\n"
+    "4. 주제와 무관한 자료가 나오면 그 검색어는 버리고 다른 검색어를 시도한다.\n"
+    "5. 더 넓힐 방향이 없으면 그만 찾고 요약한다.\n"
 )
 
 
@@ -211,16 +212,18 @@ def build_research_tools(
     *,
     user_id: str,
     topic_intent: str,
-    model: str,
     collector: DocumentCollector,
 ) -> list[ToolSpec]:
     """조사원이 사용할 도구 목록을 만든다.
 
+    **검색 도구 하나만 준다.** 실시간 수집(collect_live)은 도구로 노출하지
+    않는다 — 언제 부를지가 "근거가 몇 건인가"에 달린 셈의 문제라, 조사원이
+    끝난 뒤 `research_context`가 `is_pool_sufficient`로 판정해 직접 부른다.
+
     Args:
         connection: 풀·개인 Wiki 검색에 사용할 DB 연결
-        user_id: 검색 Scope와 수집 이력에 사용할 사용자 식별자
+        user_id: 검색 Scope에 사용할 사용자 식별자
         topic_intent: 토픽 성격("news"|"evergreen"). 풀 신선도 하한을 정한다.
-        model: 실시간 수집 비서가 사용할 모델
         collector: 도구가 찾은 문서를 모을 수집기
 
     Returns:
@@ -236,52 +239,23 @@ def build_research_tools(
         )
         return describe_documents(collector.add(found))
 
-    async def collect_live(keyword: str) -> str:
-        """인터넷에서 키워드로 최신 자료를 수집한다(느리고 비용이 든다)."""
-        if not keyword.strip():
-            return "검색어가 비어 있다."
-        documents = await to_thread(
-            collect_live_context, keyword, user_id, model=model
-        )
-        return describe_documents(collector.add(documents))
-
-    keyword_schema = {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "찾을 검색어. 주제어 또는 연관 키워드",
-            }
-        },
-        "required": ["query"],
-    }
     return [
         ToolSpec(
             name="search_pool",
             description=(
-                "이미 저장해 둔 자료(개인 Wiki + 수집해 놓은 뉴스 풀)에서 찾는다. "
-                "빠르고 비용이 없으므로 항상 먼저 시도한다."
-            ),
-            parameters=keyword_schema,
-            run=search_pool,
-        ),
-        ToolSpec(
-            name="collect_live",
-            description=(
-                "인터넷에서 최신 자료를 새로 수집한다. 느리고 비용이 들므로 "
-                "search_pool 결과가 없거나 부족할 때만 사용한다."
+                "이미 저장해 둔 자료(개인 Wiki + 수집해 놓은 뉴스 풀)에서 찾는다."
             ),
             parameters={
                 "type": "object",
                 "properties": {
-                    "keyword": {
+                    "query": {
                         "type": "string",
-                        "description": "수집할 키워드",
+                        "description": "찾을 검색어. 주제어 또는 연관 키워드",
                     }
                 },
-                "required": ["keyword"],
+                "required": ["query"],
             },
-            run=collect_live,
+            run=search_pool,
         ),
     ]
 
@@ -295,7 +269,12 @@ async def research_context(
     model: str = "gpt-4.1-mini",
     max_iterations: int = RESEARCH_MAX_ITERATIONS,
 ) -> ResearchOutcome:
-    """조사원 에이전트가 도구를 골라 가며 근거 자료를 모은다.
+    """조사원이 저장된 자료를 훑고, 부족하면 실시간 수집으로 보강한다.
+
+    **역할을 둘로 나눈다.** "무엇을 검색할까"는 LLM이 정하고(연관 키워드 확장),
+    "몇 건이면 충분한가"는 `is_pool_sufficient`가 센다. 셈까지 LLM에게 맡겼을
+    때 판단 정확도가 80%에 머물렀고, 프롬프트를 두 번 고쳐도 과호출이
+    과소호출로 바뀔 뿐이었다(2026-07-31 벤치마크).
 
     Args:
         connection: 검색에 사용할 DB 연결
@@ -313,7 +292,6 @@ async def research_context(
         connection,
         user_id=user_id,
         topic_intent=topic_intent,
-        model=model,
         collector=collector,
     )
     result = await run_tool_loop(
@@ -323,10 +301,25 @@ async def research_context(
         model=model,
         max_iterations=max_iterations,
     )
+    searched = len(collector.documents)
+
+    # 저장된 자료가 기준에 못 미치면 인터넷에서 보강한다. 실패해도 예외를
+    # 올리지 않는다 — 수집이 안 됐다고 지금까지 모은 근거까지 버릴 이유는 없다.
+    collected_live = False
+    if not is_pool_sufficient(collector.documents):
+        collected_live = True
+        try:
+            live = await to_thread(collect_live_context, topic, user_id, model=model)
+            collector.add(live)
+        except Exception:
+            logger.exception("실시간 수집에 실패해 저장된 자료만 사용합니다.")
+
     logger.info(
-        "조사 완료: topic=%s 도구호출=%d 문서=%d 종료=%s",
+        "조사 완료: topic=%s 도구호출=%d 저장자료=%d 실시간수집=%s 최종=%d 종료=%s",
         topic,
         len(result.calls),
+        searched,
+        "수행" if collected_live else "생략",
         len(collector.documents),
         result.stop_reason,
     )
