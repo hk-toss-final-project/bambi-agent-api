@@ -120,9 +120,33 @@
 > ⚠️ `report`·카드 관심사 태그는 **service DB 스키마 변경** → 영현·우석 소유. 소라+서빈이 스케줄링/Pull 저장 구현.
 
 **citation 구조 주의 (검증):** 생성 카드(`generated-contents`)의 citation은
-`{citation_id, ordinal, reference("P1"/"G1"), document_version_id, chunk_id, title, url, quoted_text}` 형태다.
-- **개인 위키(P) citation은 `url=null`**(위키엔 외부 URL 없음) → `card_sources.url`이 빈다. 외부(G) citation만 url이 있다.
-- P/G 구분(`reference`)은 `card_sources`에 저장 시 소실 → 필요하면 컬럼 추가.
+`{citation_id, ordinal, reference("P1"/"G1"/"L1"), document_version_id, chunk_id, global_source_document_id, title, url, quoted_text}` 형태다.
+
+#### 출처 종류는 셋이다 (2026-08-04 실측 확인)
+
+`reference` 접두 문자로 구분하며, **채워지는 컬럼 조합이 종류마다 다르다.**
+
+| 종류 | 무엇 | `document_version_id` | `global_source_document_id` | `url` |
+|---|---|---|---|---|
+| `P` | 개인 Wiki 문서 | ✅ Wiki 문서 UUID | ✖ | ✖ (위키엔 외부 URL 없음) |
+| `G` | Global 풀(수집 캐시) 문서 | ✖ | ✅ 캐시 문서 UUID | ✅ 기사 주소 |
+| `L` | 실시간 수집 자료 | ✖ | ✖ | ✅ 기사 주소만 |
+
+```
+[P7] 시가총액 방식              document_version_id=0ae18143-…  url=null
+[G1] 환율 월평균 39.1원 …        global_source_document_id=33932b1c-…  url=https://view.asiae.co.kr/…
+[L1] DDD: I wrote a free …      둘 다 null                     url=https://www.reddit.com/…
+```
+
+**`G`와 `L`의 차이가 화면 설계에 영향을 준다.** 둘 다 외부 기사이고 `url`이 있지만,
+`G`는 본문이 우리 DB(`global_source_documents.markdown`)에 보존돼 있어 원문이 바뀌거나
+사라져도 근거를 확인할 수 있다. `L`은 URL이 유일한 증빙이다. 같게 취급하면 `G`의
+이 장점이 화면에서 사라진다.
+
+- P/G/L 구분(`reference`)은 `card_sources`에 저장 시 소실 → 필요하면 컬럼 추가.
+- ⚠️ **2026-07-28 이전에 생성된 `G` citation 4건은 `global_source_document_id`가 비어 있다.**
+  Migration 0008(캐시 테이블 분리) 적용 전에 만들어진 것이라 소급되지 않는다.
+  이후 생성분은 정상이며, 과거 데이터를 다루는 쪽은 null 가능성을 전제해야 한다.
 - 참고: **발행 Snapshot(claim) 카드의 citation은 `{citation_id,title,url}`로 더 단순** — 두 citation 모양이 다르다.
 - 발행 Snapshot payload는 citation 외에 **`tags`**(카드 관심사 태그)를 함께 싣는다. 상세는 [service-integration-guide.md](service-integration-guide.md) "Claim 응답" 절.
 - 참고: 기존 동기 계약의 `BookmarkProcessResponse{summary, interests[], tags[], confidence}` 중 `confidence`·`tags`는 agent 실제 결과에 대응이 불명확 → 관심사 태그로 정리되며 자연 흡수.

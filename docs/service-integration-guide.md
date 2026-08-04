@@ -194,6 +194,25 @@ user_id, version, snapshot_hash, title, summary, body, citations, tags)가 포�
   `/interests`의 topic과 일치시킬 필요는 없습니다(2026-07-30 송우 확인).
 - 이 필드가 붙기 전에 저장된 Snapshot에는 없어서 `[]`로 내려갑니다.
 
+**`citations`는 `{citation_id, title, url}` 세 필드뿐입니다.**
+
+```json
+"citations": [
+  { "citation_id": "…", "title": "환율 월평균 39.1원 …", "url": "https://view.asiae.co.kr/…" }
+]
+```
+
+⚠️ **출처 종류(개인 Wiki / 수집 캐시 / 실시간)는 이 payload에 실리지 않습니다.**
+agent 쪽에는 셋을 구분하는 정보가 있지만(`agent-contract.md` §3.1), claim 응답에는
+빠져 있어 워커가 종류를 알 수 없습니다.
+
+- `url`이 비어 있으면 개인 Wiki 출처입니다(위키엔 외부 URL이 없습니다). 이건 구분됩니다.
+- 반면 **수집 캐시(G)와 실시간(L)은 둘 다 `url`이 있어 구별되지 않습니다.** 차이는
+  캐시본이 우리 DB에 보존돼 원문이 바뀌어도 근거를 확인할 수 있다는 점입니다.
+
+화면에서 이 둘을 다르게 보여줄 계획이면 payload에 종류 필드를 추가해야 합니다.
+필요해지면 알려주세요 — `tags` 때와 같이 필드 추가로 처리할 수 있습니다.
+
 > **왜 태그 엔티티가 아니라 문자열인가 (2026-07-30 합의: 송우·유림)**
 >
 > 태그를 `tags(id, name)` + `card_tags` 연결 테이블로 정규화하는 방식도
