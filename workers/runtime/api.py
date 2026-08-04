@@ -6,6 +6,7 @@
 from .features.queue import (
     consume_report_generation_jobs,
     consume_personal_wiki_jobs,
+    consume_url_collection_jobs,
     wc_001,
     wc_002,
 )
@@ -36,4 +37,5 @@ __all__ = [
     "wc_015",
     "wc_016",
     "wc_017",
+    "consume_url_collection_jobs",
 ]

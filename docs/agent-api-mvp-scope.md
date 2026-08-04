@@ -30,7 +30,7 @@
 
 - [x] `SVC-001` 사용자 컨텍스트 전달 — `user_context_snapshots` 저장, `STALE_CONTEXT_VERSION` 검증
 - [x] `SVC-002` 웹 클리핑 처리 요청 — 원본·Version·Job 한 Transaction Commit 후 202
-- [x] `SVC-003` URL 처리 요청 — URL Head 저장 + `personal_wiki_url` 수집 Job 등록
+- [x] `SVC-003` URL 처리 요청 — URL Head 저장 + `personal_wiki_url` 수집 Job 등록 + 상주 `url-collection` Worker의 Jina 본문 Version 저장·후속 Wiki Job 연결
 - [x] `SVC-004` 위키마킹 처리 요청 — 생성 후보 본문을 `content_mark` 원본 Version으로 물질화 후 기존 `personal_wiki_build` Job으로 처리 (별도 Handler 불필요, 2026-07-27 구현. 대상 콘텐츠 없으면 404)
 - [x] `SVC-006` 사용자 피드백 전달 — 좋아요·숨김·신고 신호를 `feedback` 이벤트로 멱등 저장(Wiki 문서 미생성). 다음 재계산 때 INT-005가 점수 반영 (2026-07-27 구현)
 - [x] `SVC-008` 콘텐츠 생성 요청 — `generation_requests` + `report_generation` Job 멱등 등록, `scheduled_at` 예약 실행 지원

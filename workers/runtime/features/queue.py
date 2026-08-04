@@ -3,8 +3,8 @@
 WC-001, WC-002 기능의 실제 구현 위치를 제공한다.
 
 WC-001은 실행 가능한 Job Batch를 설정된 크기만큼 반복해서 가져오는 상주
-소비 루프다. Personal Wiki Build와 Report Builder Generation이 같은 루프 규칙을
-사용한다. Job Claim 자체(WC-002)와 조용 시간 정책(SCH-009)은
+소비 루프다. URL 수집, Personal Wiki Build와 Report Builder Generation이 같은
+루프 규칙을 사용한다. Job Claim 자체(WC-002)와 조용 시간 정책(SCH-009)은
 scheduled_at <= now 조건을 통해 Claim SQL이 존중하므로, 이 루프는
 실행 시각이 되지 않은 Job을 가져오지 않는다.
 """
@@ -166,6 +166,36 @@ async def consume_report_generation_jobs(
     )
 
 
+async def consume_url_collection_jobs(
+    *,
+    database_url: str,
+    worker_id: str,
+    limit: int,
+    lease_seconds: int,
+    interval_seconds: int = 60,
+    max_batches: int | None = None,
+    batch_runner: BatchRunner | None = None,
+    on_batch: BatchObserver | None = None,
+) -> BatchResults:
+    """실행 가능한 사용자 URL 수집 Job Batch를 반복해서 가져와 처리한다."""
+    if batch_runner is None:
+        from workers.api import run_url_collection_batch
+
+        batch_runner = run_url_collection_batch
+    return await _consume_job_batches(
+        batch_runner=batch_runner,
+        runner_kwargs={
+            "database_url": database_url,
+            "worker_id": worker_id,
+            "limit": limit,
+            "lease_seconds": lease_seconds,
+        },
+        interval_seconds=interval_seconds,
+        max_batches=max_batches,
+        on_batch=on_batch,
+    )
+
+
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def wc_001(
     *,
@@ -181,17 +211,31 @@ async def wc_001(
 ) -> BatchResults:
     """[WC-001] Queue Job Consume.
 
-    설정된 Batch 크기만큼 실행 가능한 Personal Wiki 작업을 가져온다.
+    설정된 Batch 크기만큼 실행 가능한 URL 수집·Wiki·생성 작업을 가져온다.
     max_batches 횟수만큼 Batch를 소비하고 처리 결과를 반환한다.
     """
     if not database_url:
         raise ValueError("WC-001에 database_url이 필요합니다.")
     if not worker_id:
         raise ValueError("WC-001에 worker_id가 필요합니다.")
-    if not model:
+    if job_type != "personal_wiki_url" and not model:
         raise ValueError("WC-001의 model은 빈 문자열이면 안 됩니다.")
-    if job_type not in ("personal_wiki_build", "report_generation"):
+    if job_type not in (
+        "personal_wiki_url",
+        "personal_wiki_build",
+        "report_generation",
+    ):
         raise ValueError("WC-001이 지원하지 않는 job_type입니다.")
+    if job_type == "personal_wiki_url":
+        return await consume_url_collection_jobs(
+            database_url=database_url,
+            worker_id=worker_id,
+            limit=limit,
+            lease_seconds=lease_seconds,
+            interval_seconds=interval_seconds,
+            max_batches=max_batches,
+            on_batch=on_batch,
+        )
     consumer = (
         consume_report_generation_jobs
         if job_type == "report_generation"

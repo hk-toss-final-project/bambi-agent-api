@@ -127,6 +127,7 @@ Wiki 빌드와 Report Builder 생성은 OpenAI를 실제 호출하므로 비용�
 
 | Worker | 용도 | 모드 |
 |---|---|---|
+| `url-collection` | 사용자 URL을 Jina Reader로 읽어 Markdown 원문 Version 저장 | 단발 / `--loop` 상주 |
 | `personal-wiki` | 클리핑·URL 원본을 LLM Wiki로 빌드 (Chunk 포함, Embedding은 보류) | 단발 / `--loop` 상주 |
 | `report-generation` | 생성 Job을 처리해 콘텐츠·발행 Snapshot 저장 | 단발 / `--loop` 상주 |
 | `global-collector` | 키워드로 외부 기사 수집 (`--keywords` 필수, Provider 기본 `gdelt,naver,google_news`) | 단발 |
@@ -134,10 +135,13 @@ Wiki 빌드와 Report Builder 생성은 OpenAI를 실제 호출하므로 비용�
 
 ```bash
 # 단발: 대기 Job 한 Batch를 처리하고 종료
+uv run python -m workers.main --worker url-collection
 uv run python -m workers.main --worker personal-wiki
 uv run python -m workers.main --worker report-generation
 
 # 상주: Job이 생기면 자동 처리 (없으면 60초 간격으로 확인)
+uv run python -m workers.main --worker url-collection --loop --interval-seconds 5
+uv run python -m workers.main --worker personal-wiki --loop
 uv run python -m workers.main --worker report-generation --loop
 
 # 외부 기사 수집 → 본문 확보
@@ -148,6 +152,12 @@ uv run python -m workers.main --worker global-content
 `--limit`, `--lease-seconds`, `--model`, `--interval-seconds`(상주 모드) 옵션으로
 Batch 크기와 실행을 조정합니다. 상주 Worker는 `scheduled_at`이 도래한 Job만
 Claim하므로 예약 생성 요청은 지정 시각에 처리됩니다.
+
+URL 등록 API는 URL Head와 `personal_wiki_url` Job을 먼저 Commit하고 202를
+반환합니다. `url-collection` 상주 Worker가 Job을 감지하면 Jina Reader로 본문을
+읽어 `user_source_document_versions.raw_content`에 Markdown으로 저장하고, 본문이
+변경된 경우 `personal_wiki_build` Job을 등록합니다. 따라서 운영 환경에서는
+`url-collection`과 `personal-wiki` Worker를 함께 실행해야 합니다.
 
 ### 6. 정기 수집 Scheduler
 

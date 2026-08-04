@@ -4,8 +4,14 @@ import asyncio
 from datetime import UTC, date, datetime
 from typing import Any
 
+import pytest
+
+from infrastructure.persistence.features import source_ingestion
+from infrastructure.persistence.features.jobs import EnqueuedWikiBuildJob
+from infrastructure.persistence.features.personal_wiki import SavedUserSourceVersion
 from infrastructure.persistence.features.source_ingestion import (
     PersistedSourceSubmission,
+    save_fetched_url_and_enqueue,
     save_web_clipping_and_enqueue,
 )
 
@@ -140,6 +146,96 @@ def test_save_web_clipping_reuses_same_source_version_and_job() -> None:
         "INSERT INTO agent.user_source_document_versions" in sql
         for sql, _ in connection.executed
     )
+
+
+def test_save_fetched_url_persists_version_and_enqueues_wiki_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Jina Markdown 저장 결과가 후속 Wiki Build Job과 연결되는지 검증한다."""
+    saved_kwargs: dict[str, Any] = {}
+    enqueued_kwargs: dict[str, Any] = {}
+
+    async def fake_save(connection: Any, **kwargs: Any) -> SavedUserSourceVersion:
+        """원본 Version 저장 인자를 기록한다."""
+        saved_kwargs.update(kwargs)
+        return SavedUserSourceVersion(
+            source_version_id="source-version-1",
+            version=1,
+            content_hash="a" * 64,
+        )
+
+    async def fake_enqueue(connection: Any, **kwargs: Any) -> EnqueuedWikiBuildJob:
+        """후속 Wiki Job 등록 인자를 기록한다."""
+        enqueued_kwargs.update(kwargs)
+        return EnqueuedWikiBuildJob(job_id="wiki-job-1", created=True)
+
+    monkeypatch.setattr(source_ingestion, "save_user_url_document_version", fake_save)
+    monkeypatch.setattr(source_ingestion, "enqueue_personal_wiki_build_job", fake_enqueue)
+
+    result = asyncio.run(
+        save_fetched_url_and_enqueue(
+            object(),  # type: ignore[arg-type]
+            user_id="user-1",
+            source_document_id="source-1",
+            source_event_id="event-1",
+            source_event_row_id="event-row-1",
+            title="수집 제목",
+            markdown="# Jina 본문",
+            resolved_url="https://example.com/final",
+            published_at=datetime(2026, 8, 4, tzinfo=UTC),
+        )
+    )
+
+    assert result == {
+        "source_document_id": "source-1",
+        "source_document_version_id": "source-version-1",
+        "source_version": 1,
+        "wiki_build_job_id": "wiki-job-1",
+        "unchanged": False,
+    }
+    assert saved_kwargs["raw_content"] == "# Jina 본문"
+    assert enqueued_kwargs["source_event_id"] == "event-1"
+    assert enqueued_kwargs["feature_id"] == "SVC-003"
+
+
+def test_save_fetched_url_marks_unchanged_event_completed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """동일 본문 재수집은 Version·Wiki Job 없이 URL 이벤트만 완료하는지 검증한다."""
+    marked: dict[str, Any] = {}
+
+    async def fake_save(connection: Any, **kwargs: Any) -> None:
+        """동일한 최신 Version이 존재하는 상황을 반환한다."""
+        return None
+
+    async def fake_mark(connection: Any, **kwargs: Any) -> None:
+        """이벤트 완료 처리 인자를 기록한다."""
+        marked.update(kwargs)
+
+    async def fail_enqueue(connection: Any, **kwargs: Any) -> EnqueuedWikiBuildJob:
+        """변경 없는 본문에 Wiki Job이 생기면 테스트를 실패시킨다."""
+        raise AssertionError("변경 없는 본문에 Wiki Job을 등록했습니다.")
+
+    monkeypatch.setattr(source_ingestion, "save_user_url_document_version", fake_save)
+    monkeypatch.setattr(source_ingestion, "mark_url_source_event", fake_mark)
+    monkeypatch.setattr(source_ingestion, "enqueue_personal_wiki_build_job", fail_enqueue)
+
+    result = asyncio.run(
+        save_fetched_url_and_enqueue(
+            object(),  # type: ignore[arg-type]
+            user_id="user-1",
+            source_document_id="source-1",
+            source_event_id="event-1",
+            source_event_row_id="event-row-1",
+            title="수집 제목",
+            markdown="# 동일 본문",
+            resolved_url="https://example.com/final",
+            published_at=None,
+        )
+    )
+
+    assert result == {"source_document_id": "source-1", "unchanged": True}
+    assert marked == {"source_event_row_id": "event-row-1", "status": "completed"}
 
 
 def test_save_content_mark_bookmarks_report_regardless_of_author() -> None:

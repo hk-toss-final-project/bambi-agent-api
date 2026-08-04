@@ -25,18 +25,16 @@ from infrastructure.persistence.api import (
     ClaimedAgentJob,
     db_002,
     save_content_mark_and_enqueue,
+    save_fetched_url_and_enqueue,
     save_feedback_signals_for_user,
     save_onboarding_seed_and_enqueue,
     claim_agent_job_by_id,
     complete_agent_job,
-    enqueue_personal_wiki_build_job,
     fail_agent_job,
     get_agent_job,
     enqueue_report_generation_job,
     list_runnable_agent_jobs,
-    mark_url_source_event,
     register_url_and_enqueue,
-    save_user_url_document_version,
     set_personal_wiki_scope,
     set_system_job_scope,
     upsert_user_context_snapshot,
@@ -412,43 +410,17 @@ class PostgresAgentJobRepository:
         async with self._pool.connection() as connection:
             async with connection.transaction():
                 await set_personal_wiki_scope(connection, user_id=job.user_id)
-                saved = await save_user_url_document_version(
+                return await save_fetched_url_and_enqueue(
                     connection,
                     user_id=job.user_id,
                     source_document_id=source_document_id,
+                    source_event_id=source_event_id,
                     source_event_row_id=source_event_row_id,
                     title=title,
-                    raw_content=markdown,
+                    markdown=markdown,
                     resolved_url=resolved_url,
                     published_at=published_at,
                 )
-                if saved is None:
-                    await mark_url_source_event(
-                        connection,
-                        source_event_row_id=source_event_row_id,
-                        status="completed",
-                    )
-                    return {
-                        "source_document_id": source_document_id,
-                        "unchanged": True,
-                    }
-                enqueued = await enqueue_personal_wiki_build_job(
-                    connection,
-                    user_id=job.user_id,
-                    source_document_id=source_document_id,
-                    source_document_version_id=saved.source_version_id,
-                    source_version=saved.version,
-                    source_event_id=source_event_id,
-                    source_event_row_id=source_event_row_id,
-                    feature_id="SVC-003",
-                )
-        return {
-            "source_document_id": source_document_id,
-            "source_document_version_id": saved.source_version_id,
-            "source_version": saved.version,
-            "wiki_build_job_id": enqueued.job_id,
-            "unchanged": False,
-        }
 
     @asynccontextmanager
     async def acquire_connection(

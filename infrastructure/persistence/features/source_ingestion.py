@@ -16,7 +16,11 @@ from infrastructure.persistence.features.jobs import (
     enqueue_personal_wiki_build_job,
     enqueue_url_collection_job,
 )
-from infrastructure.persistence.features.personal_wiki import register_user_url_source
+from infrastructure.persistence.features.personal_wiki import (
+    mark_url_source_event,
+    register_user_url_source,
+    save_user_url_document_version,
+)
 
 type DictRow = dict[str, Any]
 
@@ -679,3 +683,64 @@ async def register_url_and_enqueue(
         job_id=enqueued.job_id,
         job_created=enqueued.created,
     )
+
+
+async def save_fetched_url_and_enqueue(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    source_document_id: str,
+    source_event_id: str,
+    source_event_row_id: str,
+    title: str,
+    markdown: str,
+    resolved_url: str,
+    published_at: datetime | None,
+) -> dict[str, object]:
+    """Jina 본문을 원본 Version으로 저장하고 후속 Wiki Build Job을 등록한다.
+
+    호출자가 사용자 RLS Scope와 Transaction을 설정한 상태에서 실행한다. 최신
+    Version과 본문 해시가 같으면 새 Version·Wiki Job을 만들지 않고 URL 이벤트만
+    완료 처리한다.
+
+    Returns:
+        저장된 원본 Version과 후속 Wiki Job 식별자 또는 변경 없음 결과
+    """
+    saved = await save_user_url_document_version(
+        connection,
+        user_id=user_id,
+        source_document_id=source_document_id,
+        source_event_row_id=source_event_row_id,
+        title=title,
+        raw_content=markdown,
+        resolved_url=resolved_url,
+        published_at=published_at,
+    )
+    if saved is None:
+        await mark_url_source_event(
+            connection,
+            source_event_row_id=source_event_row_id,
+            status="completed",
+        )
+        return {
+            "source_document_id": source_document_id,
+            "unchanged": True,
+        }
+
+    enqueued = await enqueue_personal_wiki_build_job(
+        connection,
+        user_id=user_id,
+        source_document_id=source_document_id,
+        source_document_version_id=saved.source_version_id,
+        source_version=saved.version,
+        source_event_id=source_event_id,
+        source_event_row_id=source_event_row_id,
+        feature_id="SVC-003",
+    )
+    return {
+        "source_document_id": source_document_id,
+        "source_document_version_id": saved.source_version_id,
+        "source_version": saved.version,
+        "wiki_build_job_id": enqueued.job_id,
+        "unchanged": False,
+    }

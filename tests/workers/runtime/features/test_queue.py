@@ -5,9 +5,11 @@ from typing import Any
 
 import pytest
 
+from workers.runtime.features import queue
 from workers.runtime.features.queue import (
     consume_report_generation_jobs,
     consume_personal_wiki_jobs,
+    consume_url_collection_jobs,
     wc_001,
 )
 
@@ -82,6 +84,62 @@ def test_consume_report_generation_jobs_passes_generation_arguments() -> None:
     assert runner.calls[0]["worker_id"] == "report-worker-1"
     assert runner.calls[0]["model"] == "gpt-4.1-mini"
     assert "embedding_model" not in runner.calls[0]
+
+
+def test_consume_url_collection_jobs_passes_no_llm_model() -> None:
+    """URL 수집 소비 루프가 Jina Batch 실행기에 DB·Lease 인자만 전달한다."""
+    runner = _FakeBatchRunner([[{"job_id": "url-job-1", "status": "completed"}]])
+
+    results = asyncio.run(
+        consume_url_collection_jobs(
+            database_url="postgresql://test",
+            worker_id="url-worker-1",
+            limit=4,
+            lease_seconds=120,
+            interval_seconds=0,
+            max_batches=1,
+            batch_runner=runner,
+        )
+    )
+
+    assert [result["job_id"] for result in results] == ["url-job-1"]
+    assert runner.calls[0] == {
+        "database_url": "postgresql://test",
+        "worker_id": "url-worker-1",
+        "limit": 4,
+        "lease_seconds": 120,
+    }
+
+
+def test_wc_001_routes_url_job_type_to_collection_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WC-001이 LLM 모델 없이 personal_wiki_url 상주 소비기를 선택하는지 검증한다."""
+    recorded: dict[str, Any] = {}
+
+    async def fake_consume(**kwargs: Any) -> list[dict[str, object]]:
+        """URL 소비기 인자를 기록한다."""
+        recorded.update(kwargs)
+        return [{"job_id": "url-job-1", "status": "completed"}]
+
+    monkeypatch.setattr(queue, "consume_url_collection_jobs", fake_consume)
+
+    results = asyncio.run(
+        wc_001(
+            database_url="postgresql://test",
+            worker_id="url-worker-1",
+            limit=3,
+            lease_seconds=120,
+            model="",
+            interval_seconds=5,
+            max_batches=1,
+            job_type="personal_wiki_url",
+        )
+    )
+
+    assert results[0]["job_id"] == "url-job-1"
+    assert recorded["interval_seconds"] == 5
+    assert recorded["max_batches"] == 1
 
 
 def test_consume_returns_empty_when_no_jobs_are_claimable() -> None:

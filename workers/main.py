@@ -12,6 +12,7 @@ import sys
 from app.config import Settings, load_settings
 from workers.api import (
     run_global_content_fetch_batch,
+    run_url_collection_batch,
     worker_001,
     worker_002,
     worker_003,
@@ -26,6 +27,7 @@ def _parse_args() -> argparse.Namespace:
         "--worker",
         choices=[
             "personal-wiki",
+            "url-collection",
             "report-generation",
             "global-collector",
             "global-content",
@@ -125,6 +127,15 @@ async def _run_batch_once(
             database_url=settings.agent_database_url,
             limit=args.limit or settings.personal_wiki_worker_batch_size,
         )
+    if args.worker == "url-collection":
+        return await run_url_collection_batch(
+            database_url=settings.agent_database_url,
+            worker_id=worker_id,
+            limit=args.limit or settings.personal_wiki_worker_batch_size,
+            lease_seconds=(
+                args.lease_seconds or settings.personal_wiki_job_lease_seconds
+            ),
+        )
     if args.worker == "report-generation":
         return await worker_003(
             database_url=settings.agent_database_url,
@@ -185,6 +196,20 @@ async def _run() -> None:
             interval_seconds=args.interval_seconds,
             max_batches=None,
             job_type="report_generation",
+            on_batch=on_batch,
+        )
+        return
+    if args.worker == "url-collection":
+        await wc_001(
+            database_url=settings.agent_database_url,
+            worker_id=worker_id,
+            limit=args.limit or settings.personal_wiki_worker_batch_size,
+            lease_seconds=(
+                args.lease_seconds or settings.personal_wiki_job_lease_seconds
+            ),
+            interval_seconds=args.interval_seconds,
+            max_batches=None,
+            job_type="personal_wiki_url",
             on_batch=on_batch,
         )
         return

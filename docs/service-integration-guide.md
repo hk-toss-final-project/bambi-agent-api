@@ -101,6 +101,13 @@ flowchart LR
 | `url` | O | 수집할 URL (Jina Reader로 본문 수집) |
 | `occurred_at`, `memo` | X | 메타데이터 |
 
+- 응답 시점에는 URL Head와 `personal_wiki_url` Job까지 Agent DB에 저장됩니다.
+- 상주 `url-collection` Worker가 Job을 감지해 Jina Reader로 본문을 읽고 Markdown
+  원본 Version으로 저장합니다. 새 Version이면 후속 `personal_wiki_build` Job을
+  등록하므로, Service가 별도의 실행 API를 호출할 필요는 없습니다.
+- Jina 수집 실패는 Job과 Source Event에 기록되고 재시도 정책을 따르며, URL 저장
+  요청 자체의 202 응답을 되돌리지 않습니다.
+
 ### 3.4 콘텐츠 생성 요청 + 사용자 지정 시간 스케줄러
 
 `POST /internal/v1/users/{user_id}/generations`

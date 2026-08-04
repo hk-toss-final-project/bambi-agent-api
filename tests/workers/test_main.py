@@ -5,11 +5,15 @@ Windows 콘솔(cp949)에서 이모지가 섞인 결과를 출력하다 프로세
 기능 테스트가 담당한다.
 """
 
+import asyncio
 import sys
+from argparse import Namespace
 from typing import Any
 
 import pytest
 
+from app.config import Settings
+from workers import main as worker_main
 from workers.main import configure_output_encoding
 
 
@@ -58,3 +62,71 @@ def test_configure_output_encoding_tolerates_unsupported_streams(
     monkeypatch.setattr(sys, "stderr", _FailingStream())
 
     configure_output_encoding()
+
+
+def test_run_batch_once_dispatches_url_collection_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CLI의 url-collection 선택이 URL Job Batch 실행기로 연결되는지 검증한다."""
+    recorded: dict[str, Any] = {}
+
+    async def fake_url_batch(**kwargs: Any) -> list[dict[str, object]]:
+        """URL Batch 실행 인자를 기록한다."""
+        recorded.update(kwargs)
+        return [{"job_id": "url-job-1", "status": "completed"}]
+
+    monkeypatch.setattr(worker_main, "run_url_collection_batch", fake_url_batch)
+    args = Namespace(
+        worker="url-collection",
+        limit=7,
+        lease_seconds=180,
+    )
+    settings = Settings(
+        agent_database_url="postgresql://test",
+        personal_wiki_worker_batch_size=1,
+        personal_wiki_job_lease_seconds=600,
+    )
+
+    result = asyncio.run(
+        worker_main._run_batch_once(args, settings, worker_id="url-worker-1")
+    )
+
+    assert result[0]["status"] == "completed"
+    assert recorded == {
+        "database_url": "postgresql://test",
+        "worker_id": "url-worker-1",
+        "limit": 7,
+        "lease_seconds": 180,
+    }
+
+
+def test_run_loop_dispatches_resident_url_collection_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CLI 상주 모드가 personal_wiki_url Queue 소비 루프를 계속 실행하도록 연결되는지 검증한다."""
+    recorded: dict[str, Any] = {}
+    args = Namespace(
+        worker="url-collection",
+        worker_id="url-worker-1",
+        limit=4,
+        lease_seconds=120,
+        loop=True,
+        interval_seconds=5,
+    )
+    settings = Settings(agent_database_url="postgresql://test")
+
+    async def fake_consume(**kwargs: Any) -> list[dict[str, object]]:
+        """상주 Queue 소비 인자를 기록하고 즉시 종료한다."""
+        recorded.update(kwargs)
+        return []
+
+    monkeypatch.setattr(worker_main, "_parse_args", lambda: args)
+    monkeypatch.setattr(worker_main, "load_settings", lambda: settings)
+    monkeypatch.setattr(worker_main, "wc_001", fake_consume)
+
+    asyncio.run(worker_main._run())
+
+    assert recorded["job_type"] == "personal_wiki_url"
+    assert recorded["interval_seconds"] == 5
+    assert recorded["max_batches"] is None
+    assert recorded["worker_id"] == "url-worker-1"
