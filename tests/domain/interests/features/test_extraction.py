@@ -124,6 +124,105 @@ def test_int_001_is_deterministic_and_validates_limit() -> None:
         asyncio.run(int_001(nodes, limit=0))
 
 
+def test_int_001_drops_seed_only_node_outside_onboarding_labels() -> None:
+    """씨앗이 유일한 근거인 묶음 노드를 관심 후보에서 빼는지 검증한다."""
+    candidates = asyncio.run(
+        int_001(
+            [
+                _node(
+                    "doc-1",
+                    "온보딩 관심 주제",
+                    degree=3.0,
+                    document_kind="concept",
+                    source_types=["onboarding_seed"],
+                ),
+                _node(
+                    "doc-2",
+                    "생성형 AI",
+                    degree=1.0,
+                    source_types=["onboarding_seed"],
+                ),
+            ],
+            limit=10,
+            onboarding_seed_labels=["생성형 AI", "반도체"],
+        )
+    )
+
+    assert [candidate.topic for candidate in candidates] == ["생성형 AI"]
+
+
+def test_int_001_keeps_seed_node_matching_label_partially() -> None:
+    """Wiki Builder가 라벨을 늘여 쓴 씨앗 노드는 후보로 남기는지 검증한다."""
+    candidates = asyncio.run(
+        int_001(
+            [_node("doc-1", "기준금리", source_types=["onboarding_seed"])],
+            limit=10,
+            onboarding_seed_labels=["금리"],
+        )
+    )
+
+    assert [candidate.topic for candidate in candidates] == ["기준금리"]
+
+
+def test_int_001_keeps_seed_node_matching_label_by_alias() -> None:
+    """제목은 달라도 별칭이 라벨과 맞으면 후보로 남기는지 검증한다."""
+    candidates = asyncio.run(
+        int_001(
+            [
+                _node(
+                    "doc-1",
+                    "Generative AI",
+                    aliases=["생성형 AI"],
+                    source_types=["onboarding_seed"],
+                )
+            ],
+            limit=10,
+            onboarding_seed_labels=["생성형 AI"],
+        )
+    )
+
+    assert [candidate.topic for candidate in candidates] == ["Generative AI"]
+
+
+def test_int_001_keeps_seed_node_once_real_sources_arrive() -> None:
+    """실제 저장 근거가 쌓인 노드는 라벨과 무관하게 후보로 남기는지 검증한다."""
+    candidates = asyncio.run(
+        int_001(
+            [
+                _node(
+                    "doc-1",
+                    "온보딩 관심 주제",
+                    document_kind="concept",
+                    source_types=["onboarding_seed", "web_clipping"],
+                )
+            ],
+            limit=10,
+            onboarding_seed_labels=["생성형 AI"],
+        )
+    )
+
+    assert [candidate.topic for candidate in candidates] == ["온보딩 관심 주제"]
+
+
+def test_int_001_keeps_seed_nodes_when_labels_unknown() -> None:
+    """라벨을 알 수 없으면 씨앗 노드를 임의로 빼지 않는지 검증한다."""
+    candidates = asyncio.run(
+        int_001(
+            [
+                _node(
+                    "doc-1",
+                    "온보딩 관심 주제",
+                    document_kind="concept",
+                    source_types=["onboarding_seed"],
+                )
+            ],
+            limit=10,
+        )
+    )
+
+    assert [candidate.topic for candidate in candidates] == ["온보딩 관심 주제"]
+
+
 def test_int_001_ignores_rows_without_identity() -> None:
     """document_id나 제목이 없는 Row를 후보에서 제외하는지 검증한다."""
     candidates = asyncio.run(

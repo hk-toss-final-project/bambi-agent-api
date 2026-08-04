@@ -4,18 +4,23 @@ INT-001의 실제 구현 위치다. LLM 호출 없이 현재 Wiki의 Entity·Con
 연결 관계(degree)만으로 결정적인 관심 후보를 만든다. 노드 제목은 Wiki Builder가
 이미 정제한 개념 이름이므로 토큰으로 다시 쪼개지 않는다. 최신성과 사용자 행동
 강도를 반영한 최종 점수는 INT-005가 계산한다.
+
+온보딩 씨앗(WSE-014)이 유일한 근거인 노드는 사용자가 고른 라벨과 맞을 때만
+후보로 인정한다. 씨앗 문서에서 파생된 상위 묶음 노드가 관심사 1위를 차지하는
+것을 막기 위해서다.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from shared.wiki_models import InterestCandidate
 
 _GENERIC_DOMAINS = {"other"}
+_ONBOARDING_SEED_SOURCE_TYPE = "onboarding_seed"
 
 
 @dataclass(slots=True)
@@ -86,6 +91,45 @@ def _source_types(value: object) -> list[str]:
     return sorted({str(item).strip() for item in value if str(item).strip()})
 
 
+def _matches_onboarding_label(names: Iterable[str], labels: Sequence[str]) -> bool:
+    """노드 이름·별칭 중 하나가 온보딩에서 고른 라벨과 맞는지 확인한다.
+
+    Wiki Builder가 라벨을 그대로 쓰지 않고 조금 늘여 쓸 수 있으므로
+    (`금리` → `기준금리`) 대소문자를 무시한 양방향 부분 일치로 본다.
+    """
+    for name in names:
+        marker = name.casefold().strip()
+        if not marker:
+            continue
+        for label in labels:
+            token = label.casefold().strip()
+            if token and (token in marker or marker in token):
+                return True
+    return False
+
+
+def _is_unselected_seed_node(
+    node: Mapping[str, object], labels: Sequence[str]
+) -> bool:
+    """온보딩 씨앗에서만 나왔고 사용자가 고르지 않은 노드인지 판정한다.
+
+    씨앗 Markdown을 Wiki Builder에 태우면 사용자가 고른 주제 노드와 함께 그것들을
+    묶는 상위 개념 노드("온보딩 관심 주제")가 생긴다. 이 묶음 노드는 연결 수가
+    가장 많아 관심사 1위를 차지하지만 사용자가 선언한 관심사가 아니다. 씨앗이
+    유일한 근거인 노드는 온보딩 라벨과 맞을 때만 관심 후보로 인정한다.
+
+    실제 저장(클리핑·메모 등)이 같은 노드에 쌓이면 근거 종류가 늘어 이 판정에서
+    빠지므로, 나중에 사용자가 그 주제를 실제로 저장하면 관심사로 되살아난다.
+    """
+    if not labels:
+        return False
+    source_types = set(_source_types(node.get("source_types")))
+    if source_types != {_ONBOARDING_SEED_SOURCE_TYPE}:
+        return False
+    names = [str(node.get("title") or ""), *_aliases(node.get("source_metadata"))]
+    return not _matches_onboarding_label(names, labels)
+
+
 def _isoformat(value: object) -> str | None:
     """근거 원문의 최신 활동 시각을 JSON 저장용 ISO 문자열로 변환한다.
 
@@ -104,7 +148,10 @@ def _isoformat(value: object) -> str | None:
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def int_001(
-    documents: Sequence[Mapping[str, object]], *, limit: int = 20
+    documents: Sequence[Mapping[str, object]],
+    *,
+    limit: int = 20,
+    onboarding_seed_labels: Sequence[str] = (),
 ) -> list[InterestCandidate]:
     """[INT-001] 관심사 Topic 추출.
 
@@ -115,6 +162,9 @@ async def int_001(
     Args:
         documents: 활성 Wiki의 Entity·Concept 노드 Row 목록
         limit: 반환할 최대 관심 후보 수 (1~100)
+        onboarding_seed_labels: 온보딩에서 고른 관심 라벨 목록(WSE-014 씨앗).
+            주어지면 씨앗이 유일한 근거인 노드 중 이 라벨과 맞지 않는 노드를
+            후보에서 제외한다. 비어 있으면 종전대로 모든 노드를 후보로 둔다.
 
     Returns:
         Wiki 구조 점수 내림차순으로 정렬된 관심 후보 목록
@@ -122,11 +172,14 @@ async def int_001(
     if not 1 <= limit <= 100:
         raise ValueError("관심 후보 limit은 1에서 100 사이여야 합니다.")
 
+    labels = [str(label) for label in onboarding_seed_labels if str(label).strip()]
     groups: dict[str, _NodeGroup] = {}
     for node in documents:
         document_id = str(node.get("document_id") or "")
         title = str(node.get("title") or "").strip()
         if not document_id or not title:
+            continue
+        if _is_unselected_seed_node(node, labels):
             continue
         key = title.casefold()
         if key not in groups:

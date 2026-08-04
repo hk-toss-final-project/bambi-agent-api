@@ -19,6 +19,27 @@ from shared.wiki_models import InterestCandidate
 type DictRow = dict[str, Any]
 
 
+def _onboarding_seed_labels(rows: Sequence[DictRow]) -> list[str]:
+    """온보딩 씨앗 Version들이 담아 둔 선택 라벨을 중복 없이 모은다.
+
+    선택이 바뀌면 새 씨앗 Version이 생기고 이전 씨앗에서 나온 Wiki 노드도 남아
+    있으므로, 특정 Version만 보지 않고 모든 씨앗의 라벨을 합집합으로 쓴다.
+    """
+    labels: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        values = row.get("labels")
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            label = str(value).strip()
+            marker = label.casefold()
+            if label and marker not in seen:
+                seen.add(marker)
+                labels.append(label)
+    return labels
+
+
 async def load_interest_documents_for_user(
     connection: AsyncConnection[DictRow], *, user_id: str
 ) -> Mapping[str, object]:
@@ -32,7 +53,7 @@ async def load_interest_documents_for_user(
         user_id: 관심사를 계산할 사용자 ID
 
     Returns:
-        활성 Wiki Version 정보와 현재 문서 Row 목록
+        활성 Wiki Version 정보, 현재 문서 Row 목록과 온보딩 씨앗 선택 라벨
     """
     namespace_key = f"user/{user_id}"
     async with connection.transaction():
@@ -127,8 +148,25 @@ async def load_interest_documents_for_user(
             (namespace_key,),
         )
         documents = await document_cursor.fetchall()
+        # 온보딩 씨앗(WSE-014)이 담아 둔 선택 라벨. 씨앗에서만 나온 묶음 노드를
+        # 관심 후보에서 걸러내는 기준으로 INT-001에 넘긴다.
+        label_cursor = await connection.execute(
+            """
+            SELECT version.source_metadata -> 'labels' AS labels
+            FROM agent.user_source_document_versions AS version
+            JOIN agent.user_source_documents AS document
+              ON document.id = version.source_document_id
+             AND document.namespace_key = version.namespace_key
+            WHERE document.namespace_key = %s
+              AND document.source_type = 'onboarding_seed'
+            ORDER BY version.created_at DESC
+            """,
+            (namespace_key,),
+        )
+        label_rows = await label_cursor.fetchall()
     return {
         "user_id": user_id,
+        "onboarding_seed_labels": _onboarding_seed_labels(label_rows),
         "wiki_version_id": (
             str(wiki_version["id"]) if wiki_version is not None else None
         ),

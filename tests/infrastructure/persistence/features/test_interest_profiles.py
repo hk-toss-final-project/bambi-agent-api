@@ -120,6 +120,34 @@ def test_load_interest_documents_reads_weighted_relation_and_source_stats() -> N
     assert "document.status = 'active'" in document_query
 
 
+def test_load_interest_documents_collects_onboarding_seed_labels() -> None:
+    """씨앗 Version들의 선택 라벨을 중복 없이 모아 INT-001 입력으로 넘긴다."""
+    connection = _FakeConnection(
+        [
+            None,  # set_personal_wiki_scope
+            {"id": "wiki-version-1", "version": 1},
+            [],  # 문서 조회
+            [
+                {"labels": ["생성형 AI", "반도체"]},
+                {"labels": ["반도체", "금리"]},
+                {"labels": None},
+            ],
+        ]
+    )
+
+    payload = asyncio.run(
+        load_interest_documents_for_user(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+        )
+    )
+
+    assert payload["onboarding_seed_labels"] == ["생성형 AI", "반도체", "금리"]
+    label_query = connection.executed[3][0]
+    assert "source_type = 'onboarding_seed'" in label_query
+    assert "source_metadata -> 'labels'" in label_query
+
+
 def test_load_interest_documents_handles_missing_active_wiki() -> None:
     """활성 Wiki가 없으면 Version 정보를 None으로 반환한다."""
     connection = _FakeConnection([None, None, []])
