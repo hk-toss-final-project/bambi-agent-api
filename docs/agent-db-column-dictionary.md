@@ -131,6 +131,9 @@ Service 원본을 복제하지 않고 AI 처리에 필요한 최소 사용자 �
 | plan | text | 필수 | 사용자 플랜: free 또는 paid |
 | preferred_language | text | 자동, ko | 기본 생성·번역 언어 |
 | personalization_enabled | boolean | 자동, true | 개인화 검색과 생성 적용 여부 |
+| interest_taxonomy_version | text | 선택 | 선택 Category·Topic ID를 해석할 Service 분류체계 버전 |
+| selected_category_ids | text[] | 자동, 빈 Array | 온보딩에서 선택한 Category 안정 ID 목록 |
+| selected_topic_ids | text[] | 자동, 빈 Array | 온보딩에서 선택한 Topic 안정 ID 목록 |
 | blocked_interest_ids | text[] | 자동, 빈 Array | 검색·생성에서 제외할 관심사 식별자 |
 | blocked_source_ids | text[] | 자동, 빈 Array | 검색·생성에서 제외할 Source 식별자 |
 | attributes | jsonb | 자동, 빈 Object | 명시적 Column 외의 최소 AI Context |

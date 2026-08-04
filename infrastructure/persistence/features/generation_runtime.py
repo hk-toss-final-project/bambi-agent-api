@@ -37,6 +37,9 @@ class StoredUserContext:
     plan: str
     preferred_language: str
     personalization_enabled: bool
+    interest_taxonomy_version: str | None
+    selected_category_ids: list[str]
+    selected_topic_ids: list[str]
     blocked_interest_ids: list[str]
     blocked_source_ids: list[str]
     signup_interests: list[dict[str, Any]]
@@ -59,6 +62,9 @@ async def upsert_user_context_snapshot(
     plan: str,
     preferred_language: str,
     personalization_enabled: bool,
+    interest_taxonomy_version: str | None,
+    selected_category_ids: Sequence[str],
+    selected_topic_ids: Sequence[str],
     blocked_interest_ids: Sequence[str],
     blocked_source_ids: Sequence[str],
     signup_interests: Sequence[dict[str, Any]] = (),
@@ -95,6 +101,9 @@ async def upsert_user_context_snapshot(
         "plan": plan,
         "preferred_language": preferred_language,
         "personalization_enabled": personalization_enabled,
+        "interest_taxonomy_version": interest_taxonomy_version,
+        "selected_category_ids": list(selected_category_ids),
+        "selected_topic_ids": list(selected_topic_ids),
         "blocked_interest_ids": list(blocked_interest_ids),
         "blocked_source_ids": list(blocked_source_ids),
         "signup_interests": normalized_interests,
@@ -110,6 +119,9 @@ async def upsert_user_context_snapshot(
             plan,
             preferred_language,
             personalization_enabled,
+            interest_taxonomy_version,
+            selected_category_ids,
+            selected_topic_ids,
             blocked_interest_ids,
             blocked_source_ids,
             attributes,
@@ -123,6 +135,9 @@ async def upsert_user_context_snapshot(
             plan,
             preferred_language,
             personalization_enabled,
+            interest_taxonomy_version,
+            list(selected_category_ids),
+            list(selected_topic_ids),
             list(blocked_interest_ids),
             list(blocked_source_ids),
             Jsonb({"signup_interests": normalized_interests}),
@@ -137,6 +152,9 @@ async def upsert_user_context_snapshot(
         plan=plan,
         preferred_language=preferred_language,
         personalization_enabled=personalization_enabled,
+        interest_taxonomy_version=interest_taxonomy_version,
+        selected_category_ids=list(selected_category_ids),
+        selected_topic_ids=list(selected_topic_ids),
         blocked_interest_ids=list(blocked_interest_ids),
         blocked_source_ids=list(blocked_source_ids),
         signup_interests=normalized_interests,

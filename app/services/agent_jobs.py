@@ -60,6 +60,9 @@ class StoredUserContextRecord:
     plan: str
     preferred_language: str
     personalization_enabled: bool
+    interest_taxonomy_version: str | None
+    selected_category_ids: list[str]
+    selected_topic_ids: list[str]
     blocked_interest_ids: list[str]
     blocked_source_ids: list[str]
     signup_interests: list[dict[str, Any]]
@@ -85,6 +88,9 @@ class AgentJobRepository(Protocol):
         plan: str,
         preferred_language: str,
         personalization_enabled: bool,
+        interest_taxonomy_version: str | None,
+        selected_category_ids: list[str],
+        selected_topic_ids: list[str],
         blocked_interest_ids: list[str],
         blocked_source_ids: list[str],
         signup_interests: list[dict[str, Any]],

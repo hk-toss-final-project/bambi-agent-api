@@ -45,6 +45,9 @@ flowchart LR
 | `plan` | O | `free` \| `paid` |
 | `preferred_language` | X | 기본 `ko` |
 | `personalization_enabled` | X | 기본 `true` |
+| `interest_taxonomy_version` | X | 선택 ID를 해석할 Service 관심사 분류체계 버전 |
+| `selected_category_ids` | X | 온보딩에서 선택한 Category 안정 ID 목록(최대 8개) |
+| `selected_topic_ids` | X | 온보딩에서 선택한 Topic 안정 ID 목록(최대 12개) |
 | `blocked_interest_ids` | X | 차단 관심사 ID 목록 |
 | `blocked_source_ids` | X | 차단 Source ID 목록 |
 | `signup_interests` | X | 회원가입 시 고른 관심 카테고리·토픽 시드. `[{"category": "기술", "topics": ["AI", "반도체"]}, ...]` — 카테고리만 골랐으면 `topics`는 빈 배열. 생략하면 빈 목록으로 저장 |

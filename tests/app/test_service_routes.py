@@ -21,6 +21,9 @@ def test_user_context_upsert_rejects_stale_version(client: TestClient) -> None:
         "plan": "paid",
         "preferred_language": "ko",
         "personalization_enabled": True,
+        "interest_taxonomy_version": "1.0.0",
+        "selected_category_ids": ["tech", "business"],
+        "selected_topic_ids": ["ai_ml", "startup"],
         "blocked_interest_ids": ["blocked-interest"],
         "blocked_source_ids": ["blocked-source"],
     }
@@ -31,6 +34,9 @@ def test_user_context_upsert_rejects_stale_version(client: TestClient) -> None:
     assert first.status_code == 200
     assert first.json()["feature_id"] == "SVC-001"
     assert first.json()["context_version"] == 1
+    assert first.json()["interest_taxonomy_version"] == "1.0.0"
+    assert first.json()["selected_category_ids"] == ["tech", "business"]
+    assert first.json()["selected_topic_ids"] == ["ai_ml", "startup"]
     assert stale.status_code == 409
     assert stale.json()["code"] == "STALE_CONTEXT_VERSION"
 

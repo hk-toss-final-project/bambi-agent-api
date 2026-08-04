@@ -137,7 +137,7 @@
 
 ### 4.1 언제 호출하나 (Spring 훅)
 1. **회원가입 성공 직후 1회 (필수)** — `context_version=1`로 최초 등록.
-2. **설정 변경 시마다** — plan(무료↔유료)·선호 언어·개인화 on/off·차단 관심사/소스 변경.
+2. **설정 변경 시마다** — 온보딩 Category·Topic 선택, plan(무료↔유료)·선호 언어·개인화 on/off·차단 관심사/소스 변경.
 
 ### 4.2 요청 필드 매핑 (service-db 원천 → agent context)
 | agent 필드 | 필수 | service 원천 | 비고 |
@@ -146,19 +146,22 @@
 | `plan` | O | `user.plan` | `free` \| `paid` |
 | `preferred_language` | X | 사용자 설정 | 기본 `ko` |
 | `personalization_enabled` | X | 사용자 설정 | 기본 `true` |
+| `interest_taxonomy_version` | X | 온보딩 선택 | Category·Topic 안정 ID를 해석할 분류체계 버전 |
+| `selected_category_ids` | X | 온보딩 선택 | 선택한 Category 안정 ID 목록(최대 8개) |
+| `selected_topic_ids` | X | 온보딩 선택 | 선택한 Topic 안정 ID 목록(최대 12개) |
 | `blocked_interest_ids` | X | 사용자가 삭제한 관심사 | 송우 확인(07-21): agent가 `agent.user_context_snapshots`(테이블 실재 확인)에 반영. 현재 빈 배열, 삭제 기능 붙으면 채움 |
 | `blocked_source_ids` | X | 사용자가 삭제한 소스 | 위와 동일 |
 | `signup_interests` | X | 가입 시 고른 관심 카테고리·토픽 | `[{"category","topics":[...]}]`. agent가 `user_context_snapshots.attributes.signup_interests`에 버전과 함께 보존(재계산에 안 지워짐). 프로필 콜드스타트 반영은 후속 |
 
 ### 4.3 버전 관리 (핵심)
 - `context_version`은 **사용자별로 단조 증가**해야 한다. 같거나 작은 값 재전송 → `STALE_CONTEXT_VERSION`.
-- **제안:** service-db 사용자 레코드에 `agent_context_version` 컬럼(정수). 가입 시 1, 컨텍스트 변경마다 +1 후 그 값으로 PUT.
+- **구현:** service-db `users.agent_context_version`을 사용자 행 lock 아래 +1하고, 같은 트랜잭션에 Outbox payload를 적재한다.
 - `STALE_CONTEXT_VERSION(409)`은 **오류가 아니라 "이미 최신"** 신호 → Gateway가 삼키고 성공 처리(§5.4).
 
 ### 4.4 순서·실패 정책
 - **순서 불변식:** 특정 사용자의 `generations` 이전에 그 사용자의 `context`가 반드시 한 번 반영돼 있어야 한다.
-- **실패 시(가입 중 agent 다운):** 가입은 사용자向 흐름, agent는 내부 비필수 → **가입 자체를 막지 않는다.**
-  사용자를 "agent 미동기(agent_synced=false)"로 표시하고 **재동기(backfill) 큐/재시도**로 나중에 PUT. 재동기 전엔 그 사용자 생성 요청을 보류.
+- **실패 시(agent 다운·응답 유실):** 가입 커밋에는 `service.agent_context_outbox`가 함께 남는다. 커밋 직후 전송이 실패하면
+  lease 기반 폴링 워커가 같은 버전·payload를 지수 backoff로 at-least-once 재전송한다. 프로세스 중단 시에도 만료 lease를 재-claim한다.
 - (검증 완료: `PUT context` → 200 `feature_id:"SVC-001"`, 필드 그대로 echo.)
 
 ---
@@ -245,9 +248,9 @@ service-api엔 이미 **동기** `AgentClient` 인터페이스가 있다(`com.ba
 | GAP-3 | 카드/리포트 매핑(§3.1) | 송우·영현·소라 | ✅ **확정(07-22): card=요약+관심사태그 / body=service report 보존 / why_for_you 폐기** |
 | GAP-4 | 저장 스키마 분담 | 송우·영현 | 🔶 방향 확정(service가 report 소유·Pull 저장). `report` 테이블·카드 태그 스키마 변경은 영현·우석 확인 |
 | 순서 전제 | 생성 전 위키/관심사 필요 — 저장→생성 트리거(스케줄러) 시점 | 소라·서빈·송우 | ⬜ (service-api swagger 스케줄링 계약 확인) |
-| 컨텍스트 | `agent_context_version` 컬럼·재동기 큐 도입 | 소라·영현 | ⬜ |
+| 컨텍스트 | `agent_context_version` + Transactional Outbox 재시도 | 소라·영현 | ✅ |
 | 변환 경계 | Gateway = `{success,data,error}` 변환 지점 확정 | 소라·영현 | ⬜ |
 | 내부 인증 | Agent 전용 opaque Bearer 토큰 + 네트워크 격리 | 전원 | ✅ |
 | 차단 ID | `blocked_*_ids` 실제 연결(삭제 기능) | 소라·송우 | ⬜(개인화 고도화) |
 
-**다음 스텝 (07-27 갱신):** ~~결정 1(B/C) 동의~~ ✅ (C) 확정 → ① `reports` 테이블(본문 보존, GAP-3/4 이행) V4 마이그레이션(영현) ② 클리핑·조회 API 중계 + claim/ack HTTP 클라이언트(소라) ③ 생성 트리거 스케줄러 — service 책임(송우 가이드 §3.4, 담당 확정 필요) ④ 컨텍스트 동기화는 구현 완료(단 `agent_context_version` 컬럼 없어 재동기 불가 — 별도).
+**다음 스텝 (08-04 갱신):** ~~결정 1(B/C) 동의~~ ✅ (C) 확정 → ① `reports` 테이블(본문 보존, GAP-3/4 이행) V4 마이그레이션(영현) ② 클리핑·조회 API 중계 + claim/ack HTTP 클라이언트(소라) ③ 생성 트리거 스케줄러 — service 책임(송우 가이드 §3.4, 담당 확정 필요) ④ 컨텍스트 버전·Transactional Outbox 재시도 구현 완료.

@@ -232,6 +232,9 @@ class AgentApiMvpService:
                 plan=payload.plan.value,
                 preferred_language=payload.preferred_language,
                 personalization_enabled=payload.personalization_enabled,
+                interest_taxonomy_version=payload.interest_taxonomy_version,
+                selected_category_ids=payload.selected_category_ids,
+                selected_topic_ids=payload.selected_topic_ids,
                 blocked_interest_ids=payload.blocked_interest_ids,
                 blocked_source_ids=payload.blocked_source_ids,
                 signup_interests=[
@@ -252,6 +255,9 @@ class AgentApiMvpService:
             plan=stored.plan,
             preferred_language=stored.preferred_language,
             personalization_enabled=stored.personalization_enabled,
+            interest_taxonomy_version=stored.interest_taxonomy_version,
+            selected_category_ids=stored.selected_category_ids,
+            selected_topic_ids=stored.selected_topic_ids,
             blocked_interest_ids=stored.blocked_interest_ids,
             blocked_source_ids=stored.blocked_source_ids,
             signup_interests=[
