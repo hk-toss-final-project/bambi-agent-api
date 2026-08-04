@@ -1,18 +1,18 @@
 {
-  "model": "gpt-4.1-mini",
+  "model": "gpt-4.1-nano",
   "summary": {
     "total": 30,
-    "correct": 29,
-    "accuracy": 0.967,
+    "correct": 24,
+    "accuracy": 0.8,
     "revise_total": 15,
-    "detection_rate": 0.933,
+    "detection_rate": 0.733,
     "pass_total": 15,
-    "false_flag_rate": 0.0,
+    "false_flag_rate": 0.133,
     "unavailable": 0,
-    "avg_tool_calls": 1.53,
-    "avg_latency_ms": 2471,
-    "input_tokens": 39696,
-    "output_tokens": 2631
+    "avg_tool_calls": 2.1,
+    "avg_latency_ms": 1948,
+    "input_tokens": 46406,
+    "output_tokens": 3197
   },
   "results": [
     {
@@ -27,10 +27,10 @@
         "get_source",
         "get_source"
       ],
-      "latency_ms": 4482,
+      "latency_ms": 3303,
       "input_tokens": 1295,
-      "output_tokens": 167,
-      "problem": "인용한 P1과 P2 원문에는 코스피 폐지나 KRX-100 지수 대체, 상장사 재심사에 관한 내용이 전혀 없음"
+      "output_tokens": 178,
+      "problem": "초안에서 P1은 코스피의 정의와 폐지에 대한 내용을 인용한 것처럼 보이나, 원문은 코스피의 산출 방식에 관한 설명일 뿐 폐지와 관련된 내용이 없다. P2는 투자자 예탁금에 관한 설명으로, 폐지와 관련된 내용이 없다."
     },
     {
       "id": "rev-02-number-inflated",
@@ -39,14 +39,15 @@
       "actual": "revise",
       "correct": true,
       "outcome": "revise",
-      "tool_calls": 1,
+      "tool_calls": 2,
       "tools_used": [
-        "get_source"
+        "get_source",
+        "search_pool"
       ],
-      "latency_ms": 2649,
-      "input_tokens": 1152,
-      "output_tokens": 115,
-      "problem": "본문에서 '지난달 반도체 수출액이 전년 동월 대비 32% 증가'라고 했으나, 근거 원문 G1에는 '3.2% 증가'로 되어 있어 수치가 과장됨."
+      "latency_ms": 2613,
+      "input_tokens": 1793,
+      "output_tokens": 131,
+      "problem": "초안에서는 반도체 수출이 32% 증가했다고 인용했으나, 원문(G1)에서는 3.2% 증가라고 명확히 밝혀져 있다."
     },
     {
       "id": "rev-03-causal-invented",
@@ -61,10 +62,10 @@
         "get_source",
         "search_pool"
       ],
-      "latency_ms": 5627,
-      "input_tokens": 2008,
-      "output_tokens": 214,
-      "problem": "본문에서 '한국은행 분석 결과 이것이 지난달 물가 상승률 2.1%의 가장 큰 원인으로 확인됐다'고 했으나, 근거 원문 G2에는 물가 상승률 2.1% 수치만 있을 뿐 환율 상승이 물가 상승의 주된 원인이라는 내용이 없다."
+      "latency_ms": 2593,
+      "input_tokens": 2006,
+      "output_tokens": 202,
+      "problem": "초안이 환율 상승이 물가 상승의 주된 원인임을 주장하고 있으나, 인용한 근거(G2)가 환율과 물가 상승 간의 인과관계를 직접적으로 설명하지 않음."
     },
     {
       "id": "rev-04-wrong-subject",
@@ -73,14 +74,17 @@
       "actual": "revise",
       "correct": true,
       "outcome": "revise",
-      "tool_calls": 1,
+      "tool_calls": 4,
       "tools_used": [
-        "get_source"
+        "get_source",
+        "get_source",
+        "search_pool",
+        "search_pool"
       ],
-      "latency_ms": 3042,
-      "input_tokens": 1093,
-      "output_tokens": 125,
-      "problem": "본문에서 '구글이 새로운 추론 모델을 공개했다고 밝혔다'고 했으나, 근거 원문 G1에는 'OpenAI가 새로운 추론 모델을 공개했다고 밝혔다'고 되어 있어 인용 내용이 사실과 다름."
+      "latency_ms": 2840,
+      "input_tokens": 2382,
+      "output_tokens": 197,
+      "problem": "초안에서는 구글이 추론 모델을 공개했다고 명시했으나, 원문(G1)은 OpenAI가 새로운 추론 모델을 공개했다고 명확히 밝히고 있습니다. 따라서 구글이 공개했다고 인용한 내용이 사실과 다릅니다."
     },
     {
       "id": "rev-05-time-shifted",
@@ -89,14 +93,15 @@
       "actual": "revise",
       "correct": true,
       "outcome": "revise",
-      "tool_calls": 1,
+      "tool_calls": 2,
       "tools_used": [
-        "get_source"
+        "get_source",
+        "search_pool"
       ],
-      "latency_ms": 2870,
-      "input_tokens": 1128,
-      "output_tokens": 126,
-      "problem": "본문에서 '이번 달 금융통화위원회에서 기준금리를 3.25%로 동결했다'고 했으나, 근거 G1 원문에는 '지난해 11월 기준금리를 3.25%로 동결했다'고 되어 있어 시점이 다르다."
+      "latency_ms": 2126,
+      "input_tokens": 1759,
+      "output_tokens": 165,
+      "problem": "초안에서는 한국은행이 이번 달 기준금리를 3.25%로 동결했다고 주장했으나, 근거 원문(G1)은 지난해 11월 기준금리 동결을 언급하고 있으며, 이번 달 동결에 대한 정보가 없다."
     },
     {
       "id": "rev-06-half-true",
@@ -105,16 +110,15 @@
       "actual": "revise",
       "correct": true,
       "outcome": "revise",
-      "tool_calls": 3,
+      "tool_calls": 2,
       "tools_used": [
-        "get_source",
         "get_source",
         "search_pool"
       ],
-      "latency_ms": 4832,
-      "input_tokens": 1986,
-      "output_tokens": 216,
-      "problem": "본문에서 '국내 3사가 올해 하반기부터 전 차종에 전고체 배터리를 탑재하기로 확정했다'는 내용은 근거 원문(P1)에 없음. P1에는 전고체 배터리의 고체 전해질 사용과 안전성에 대한 내용만 있음."
+      "latency_ms": 1682,
+      "input_tokens": 1232,
+      "output_tokens": 157,
+      "problem": "인용한 내용이 원문에 정확히 일치하지 않거나, 상용화 여부에 대한 구체적 근거가 없다."
     },
     {
       "id": "rev-07-reversed",
@@ -123,31 +127,35 @@
       "actual": "revise",
       "correct": true,
       "outcome": "revise",
-      "tool_calls": 1,
+      "tool_calls": 5,
       "tools_used": [
-        "get_source"
+        "get_source",
+        "get_source",
+        "get_source",
+        "search_pool",
+        "search_pool"
       ],
-      "latency_ms": 3064,
-      "input_tokens": 1113,
-      "output_tokens": 122,
-      "problem": "본문에서 '지난달 서울 아파트 거래량은 전월 대비 12% 늘었다'고 했으나, 근거 원문 G1에는 '12% 줄었다'고 명확히 나와 있어 인용 내용이 사실과 다름."
+      "latency_ms": 3702,
+      "input_tokens": 3164,
+      "output_tokens": 238,
+      "problem": "초안에서는 서울 아파트 거래량이 전월 대비 12% 늘었다고 주장했으나, 근거 자료(G1)에서는 거래량이 전월 대비 12% 줄었다고 명확히 나타나 있다."
     },
     {
       "id": "rev-08-invented-quote",
       "kind": "없는 발언",
       "expected": "revise",
-      "actual": "revise",
-      "correct": true,
-      "outcome": "revise",
+      "actual": "pass",
+      "correct": false,
+      "outcome": "pass",
       "tool_calls": 2,
       "tools_used": [
         "get_source",
         "get_source"
       ],
-      "latency_ms": 4186,
-      "input_tokens": 1833,
-      "output_tokens": 132,
-      "problem": "본문에서 최고재무책임자의 발언 '내년에는 두 배 성장할 것'이라는 내용이 근거 원문 G1에 존재하지 않음"
+      "latency_ms": 1198,
+      "input_tokens": 1236,
+      "output_tokens": 53,
+      "problem": ""
     },
     {
       "id": "rev-09-invented-policy",
@@ -156,16 +164,15 @@
       "actual": "revise",
       "correct": true,
       "outcome": "revise",
-      "tool_calls": 3,
+      "tool_calls": 2,
       "tools_used": [
-        "get_source",
         "get_source",
         "search_pool"
       ],
-      "latency_ms": 4015,
-      "input_tokens": 1981,
-      "output_tokens": 172,
-      "problem": "본문에서 '정부는 내년부터 보증금 전액을 지원하는 신규 제도를 도입한다'고 했으나, 근거 원문(P1)에는 해당 내용이 없다."
+      "latency_ms": 2027,
+      "input_tokens": 1223,
+      "output_tokens": 208,
+      "problem": "초안에서 인용한 내용이 P1 원문에 정확히 일치하지 않거나, 인용한 내용이 원문에 없는 부분이 있음."
     },
     {
       "id": "rev-10-overgeneralized",
@@ -174,47 +181,49 @@
       "actual": "revise",
       "correct": true,
       "outcome": "revise",
-      "tool_calls": 1,
+      "tool_calls": 2,
       "tools_used": [
-        "get_source"
+        "get_source",
+        "search_pool"
       ],
-      "latency_ms": 2367,
-      "input_tokens": 1132,
-      "output_tokens": 120,
-      "problem": "본문에서는 '조사 대상 기업 전부가 주 2회 재택근무를 유지'한다고 했으나, 근거 원문 P1에는 '일부는 주 2회 재택근무를 유지'라고 되어 있어 사실과 다름."
+      "latency_ms": 2188,
+      "input_tokens": 1760,
+      "output_tokens": 177,
+      "problem": "초안의 요약 내용과 본문 내용이 일치하지 않음. 요약에서는 모든 기업이 재택근무를 유지한다고 했으나, 본문에서는 일부 기업만 주 2회 재택근무를 유지한다고 명시되어 있음."
     },
     {
       "id": "rev-11-english-misread",
       "kind": "영문 근거 오독",
       "expected": "revise",
-      "actual": "revise",
-      "correct": true,
-      "outcome": "revise",
-      "tool_calls": 1,
+      "actual": "pass",
+      "correct": false,
+      "outcome": "pass",
+      "tool_calls": 2,
       "tools_used": [
-        "get_source"
+        "get_source",
+        "search_pool"
       ],
-      "latency_ms": 3038,
-      "input_tokens": 1142,
-      "output_tokens": 166,
-      "problem": "본문에서 '클라우드 매출은 전년 대비 18% 성장해 직전 분기 24%보다 성장세가 빨라졌다'고 했으나, 근거 원문 G1에는 '18% 성장했으나 직전 분기 24%보다 성장세가 느려졌다'고 명확히 나와 있음. 인용 내용이 원문과 반대임."
+      "latency_ms": 1732,
+      "input_tokens": 1767,
+      "output_tokens": 56,
+      "problem": ""
     },
     {
       "id": "rev-12-missing-reference",
       "kind": "없는 참조",
       "expected": "revise",
-      "actual": "revise",
-      "correct": true,
-      "outcome": "revise",
+      "actual": "pass",
+      "correct": false,
+      "outcome": "pass",
       "tool_calls": 2,
       "tools_used": [
         "get_source",
-        "get_source"
+        "search_pool"
       ],
-      "latency_ms": 2799,
-      "input_tokens": 1178,
-      "output_tokens": 142,
-      "problem": "P7 인용이 근거 원문에 존재하지 않음. '최근 지수는 큰 폭으로 하락했습니다'라는 내용이 인용한 자료에 없음."
+      "latency_ms": 1207,
+      "input_tokens": 1171,
+      "output_tokens": 57,
+      "problem": ""
     },
     {
       "id": "rev-13-crossed-reference",
@@ -228,10 +237,10 @@
         "get_source",
         "get_source"
       ],
-      "latency_ms": 1936,
+      "latency_ms": 1221,
       "input_tokens": 1225,
-      "output_tokens": 85,
-      "problem": "인용한 내용이 원문에 정확히 있으며, 주제상 필요한 주요 사실도 빠지지 않았다."
+      "output_tokens": 53,
+      "problem": ""
     },
     {
       "id": "rev-14-unit-changed",
@@ -240,14 +249,15 @@
       "actual": "revise",
       "correct": true,
       "outcome": "revise",
-      "tool_calls": 1,
+      "tool_calls": 2,
       "tools_used": [
-        "get_source"
+        "get_source",
+        "search_pool"
       ],
-      "latency_ms": 2045,
-      "input_tokens": 1106,
-      "output_tokens": 83,
-      "problem": "본문에서 '8조 원'이라고 했으나 근거 원문(P1)에는 '8천억 원'으로 되어 있어 금액이 과장됨."
+      "latency_ms": 2582,
+      "input_tokens": 1725,
+      "output_tokens": 128,
+      "problem": "초안에서는 '8조 원'이라고 썼으나, 원문에서는 '8천억 원'으로 되어 있어 금액이 다름."
     },
     {
       "id": "rev-15-forecast-as-fact",
@@ -256,14 +266,15 @@
       "actual": "revise",
       "correct": true,
       "outcome": "revise",
-      "tool_calls": 1,
+      "tool_calls": 2,
       "tools_used": [
-        "get_source"
+        "get_source",
+        "search_pool"
       ],
-      "latency_ms": 2490,
-      "input_tokens": 1127,
-      "output_tokens": 110,
-      "problem": "본문에서 '내년 경제성장률은 2.0%로 확정 발표됐다'고 했으나, 근거 원문 G1에는 '2.0% 안팎으로 전망했다'고 되어 있어 확정 발표가 아님."
+      "latency_ms": 2505,
+      "input_tokens": 1753,
+      "output_tokens": 187,
+      "problem": "초안에서는 '내년 성장률이 2.0%로 확정됐습니다'라고 썼지만, 근거 원문(G1)에서는 '연구기관은 내년 경제성장률을 2.0% 안팎으로 전망했다'고 되어 있어, 확정된 수치가 아니라 전망임을 명확히 해야 합니다."
     },
     {
       "id": "pass-01-plain-summary",
@@ -272,13 +283,14 @@
       "actual": "pass",
       "correct": true,
       "outcome": "pass",
-      "tool_calls": 1,
+      "tool_calls": 2,
       "tools_used": [
-        "get_source"
+        "get_source",
+        "search_pool"
       ],
-      "latency_ms": 1471,
-      "input_tokens": 1147,
-      "output_tokens": 29,
+      "latency_ms": 1823,
+      "input_tokens": 1791,
+      "output_tokens": 67,
       "problem": ""
     },
     {
@@ -288,13 +300,14 @@
       "actual": "pass",
       "correct": true,
       "outcome": "pass",
-      "tool_calls": 1,
+      "tool_calls": 2,
       "tools_used": [
-        "get_source"
+        "get_source",
+        "search_pool"
       ],
-      "latency_ms": 1545,
-      "input_tokens": 1186,
-      "output_tokens": 29,
+      "latency_ms": 1611,
+      "input_tokens": 1233,
+      "output_tokens": 59,
       "problem": ""
     },
     {
@@ -309,9 +322,9 @@
         "get_source",
         "get_source"
       ],
-      "latency_ms": 1703,
+      "latency_ms": 1292,
       "input_tokens": 1256,
-      "output_tokens": 60,
+      "output_tokens": 53,
       "problem": ""
     },
     {
@@ -321,13 +334,14 @@
       "actual": "pass",
       "correct": true,
       "outcome": "pass",
-      "tool_calls": 1,
+      "tool_calls": 2,
       "tools_used": [
-        "get_source"
+        "get_source",
+        "search_pool"
       ],
-      "latency_ms": 1387,
-      "input_tokens": 1158,
-      "output_tokens": 22,
+      "latency_ms": 1854,
+      "input_tokens": 1793,
+      "output_tokens": 58,
       "problem": ""
     },
     {
@@ -341,9 +355,9 @@
       "tools_used": [
         "get_source"
       ],
-      "latency_ms": 1431,
+      "latency_ms": 1171,
       "input_tokens": 1112,
-      "output_tokens": 22,
+      "output_tokens": 38,
       "problem": ""
     },
     {
@@ -353,13 +367,14 @@
       "actual": "pass",
       "correct": true,
       "outcome": "pass",
-      "tool_calls": 1,
+      "tool_calls": 2,
       "tools_used": [
-        "get_source"
+        "get_source",
+        "search_pool"
       ],
-      "latency_ms": 1510,
-      "input_tokens": 1157,
-      "output_tokens": 29,
+      "latency_ms": 1485,
+      "input_tokens": 1204,
+      "output_tokens": 59,
       "problem": ""
     },
     {
@@ -373,9 +388,9 @@
       "tools_used": [
         "get_source"
       ],
-      "latency_ms": 1850,
+      "latency_ms": 1548,
       "input_tokens": 1128,
-      "output_tokens": 22,
+      "output_tokens": 38,
       "problem": ""
     },
     {
@@ -385,16 +400,15 @@
       "actual": "pass",
       "correct": true,
       "outcome": "pass",
-      "tool_calls": 4,
+      "tool_calls": 3,
       "tools_used": [
         "get_source",
         "get_source",
-        "get_source",
-        "search_pool"
+        "get_source"
       ],
-      "latency_ms": 3591,
-      "input_tokens": 2917,
-      "output_tokens": 93,
+      "latency_ms": 1440,
+      "input_tokens": 1379,
+      "output_tokens": 68,
       "problem": ""
     },
     {
@@ -408,26 +422,27 @@
       "tools_used": [
         "get_source"
       ],
-      "latency_ms": 1439,
+      "latency_ms": 1305,
       "input_tokens": 1133,
-      "output_tokens": 22,
+      "output_tokens": 38,
       "problem": ""
     },
     {
       "id": "pass-10-number-exact",
       "kind": "수치 정확",
       "expected": "pass",
-      "actual": "pass",
-      "correct": true,
-      "outcome": "pass",
-      "tool_calls": 1,
+      "actual": "revise",
+      "correct": false,
+      "outcome": "revise",
+      "tool_calls": 2,
       "tools_used": [
-        "get_source"
+        "get_source",
+        "search_pool"
       ],
-      "latency_ms": 1419,
-      "input_tokens": 1140,
-      "output_tokens": 22,
-      "problem": ""
+      "latency_ms": 2949,
+      "input_tokens": 1781,
+      "output_tokens": 207,
+      "problem": "초안의 내용과 인용한 근거(G1)가 일치하지 않음. 초안에서는 '반도체 수출이 소폭 늘었다'고만 했지만, 근거에서는 구체적으로 '전년 동월 대비 3.2% 증가'라고 명확히 제시되어 있음. 또한, 초안의 요약과 본문 내용이 일치하지 않음."
     },
     {
       "id": "pass-11-order-changed",
@@ -441,9 +456,9 @@
         "get_source",
         "get_source"
       ],
-      "latency_ms": 1672,
+      "latency_ms": 1350,
       "input_tokens": 1225,
-      "output_tokens": 60,
+      "output_tokens": 53,
       "problem": ""
     },
     {
@@ -458,9 +473,9 @@
         "get_source",
         "get_source"
       ],
-      "latency_ms": 1784,
+      "latency_ms": 1225,
       "input_tokens": 1237,
-      "output_tokens": 60,
+      "output_tokens": 53,
       "problem": ""
     },
     {
@@ -470,13 +485,14 @@
       "actual": "pass",
       "correct": true,
       "outcome": "pass",
-      "tool_calls": 1,
+      "tool_calls": 2,
       "tools_used": [
-        "get_source"
+        "get_source",
+        "search_pool"
       ],
-      "latency_ms": 1274,
-      "input_tokens": 1159,
-      "output_tokens": 22,
+      "latency_ms": 2604,
+      "input_tokens": 1798,
+      "output_tokens": 57,
       "problem": ""
     },
     {
@@ -490,26 +506,27 @@
       "tools_used": [
         "get_source"
       ],
-      "latency_ms": 1336,
+      "latency_ms": 1104,
       "input_tokens": 1149,
-      "output_tokens": 22,
+      "output_tokens": 38,
       "problem": ""
     },
     {
       "id": "pass-15-ai-model",
       "kind": "주체 정확",
       "expected": "pass",
-      "actual": "pass",
-      "correct": true,
-      "outcome": "pass",
-      "tool_calls": 1,
+      "actual": "revise",
+      "correct": false,
+      "outcome": "revise",
+      "tool_calls": 2,
       "tools_used": [
-        "get_source"
+        "get_source",
+        "search_pool"
       ],
-      "latency_ms": 1301,
-      "input_tokens": 1093,
-      "output_tokens": 22,
-      "problem": ""
+      "latency_ms": 2166,
+      "input_tokens": 1696,
+      "output_tokens": 124,
+      "problem": "초안의 인용 내용이 원문과 일치하지 않거나, 인용이 충분하지 않음"
     }
   ]
 }
