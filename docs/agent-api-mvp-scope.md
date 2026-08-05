@@ -39,7 +39,7 @@
 - [x] `WSE-001` 웹 클리핑 이벤트 수신 — `wiki_source_events` + Frontmatter 필드 저장
 - [x] `WSE-011` 이벤트 중복 처리 방지 — `user_id + source_event_id` 식별 및 DB Unique·Upsert 적용
 - [x] `WSE-013` 이벤트 처리 상태 관리 — Claim·완료·실패 시 Source Event 상태 동기화
-- [x] `WSE-014` 온보딩 관심사 시드 수신 — 온보딩 컨텍스트 수신 시 선택 Category·Topic을 씨앗 Markdown으로 합성해 `onboarding_seed` 원본·Wiki Build Job으로 접수(콜드스타트 관심사 파생). 선택 내용 기반 멱등, best-effort(컨텍스트 저장과 분리)
+- [x] `WSE-014` 온보딩 관심사 시드 수신 — 온보딩 컨텍스트 수신 시 선택 Category·Topic을 시드 Markdown으로 합성해 `onboarding_seed` 원본·Wiki Build Job으로 접수(콜드스타트 관심사 파생). 선택 내용 기반 멱등, best-effort(컨텍스트 저장과 분리)
 - [x] `PWIKI-006` 개인 Wiki 문서 버전 관리 — 원본 Version·Wiki Version·Build Snapshot 분리 보존
 - [x] `PWIKI-007` Wiki 문서 출처 추적 — `wiki_document_sources` 연결
 - [ ] `PWIKI-011` Wiki 문서 정규화 — ❌ 독립 정규화 기능 미구현. Frontmatter 저장은 `WSE-001/DB-002`, Wiki 구조 변환은 `WBA-003`이 담당하며 기존 항등 위임 함수는 스텁으로 복원
@@ -162,7 +162,7 @@ HTML이나 URL에 삽입하지 않습니다. `/system/*` 상태 확인 API는 �
 | WSE-001 | 웹 클리핑 이벤트 수신 | title, source, author, published, created, description, tags와 Markdown 본문을 수신한다. |
 | WSE-011 | 이벤트 중복 처리 방지 | 사용자와 source_event_id 조합으로 동일 클리핑의 중복 저장·Job 생성을 막는다. |
 | WSE-013 | 이벤트 처리 상태 관리 | 클리핑의 received, processing, completed, failed 상태를 Worker 처리와 동기화한다. |
-| WSE-014 | 온보딩 관심사 시드 수신 | 온보딩에서 고른 Category·Topic을 씨앗 Markdown 문서로 합성해 개인 Wiki 반영 후보로 수신한다. |
+| WSE-014 | 온보딩 관심사 시드 수신 | 온보딩에서 고른 Category·Topic을 시드 Markdown 문서로 합성해 개인 Wiki 반영 후보로 수신한다. |
 | PWIKI-006 | 개인 Wiki 문서 버전 관리 | 원본 변경 이력과 생성된 Wiki 변경 이력을 각각 Version으로 관리한다. |
 | PWIKI-007 | Wiki 문서 출처 추적 | 생성된 Wiki Version과 참고한 원본 Version의 관계를 보존한다. |
 | PWIKI-011 | Wiki 문서 정규화 | Frontmatter와 Markdown 원본을 읽어 LLM Wiki 문서 구조로 변환한다. |
