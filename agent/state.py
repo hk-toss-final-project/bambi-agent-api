@@ -46,6 +46,8 @@ class ReportGenerationState(TypedDict):
     review_correction: NotRequired[str]
     review_attempts: NotRequired[int]
     review_outcome: NotRequired[str]
+    # 검토자가 남긴 지적 문장. 결과 코드만으로는 왜 못 고쳤는지 알 수 없다.
+    review_problem: NotRequired[str]
     latency_ms: NotRequired[int]
     result: NotRequired[dict[str, object]]
 

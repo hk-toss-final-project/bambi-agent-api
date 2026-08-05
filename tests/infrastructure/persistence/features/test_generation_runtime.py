@@ -402,3 +402,36 @@ def test_run_metadata_keeps_review_outcome_empty_when_not_given() -> None:
     _persist(connection)
 
     assert _run_metadata(connection)["review_outcome"] == ""
+
+
+def test_run_metadata_records_what_the_critic_objected_to() -> None:
+    """검토자 지적 문장도 함께 남긴다.
+
+    결과 코드(revise_exhausted)만으로는 "무엇을 끝내 고치지 못했는지"를 알 수
+    없어 로그를 뒤져야 했다(2026-08-05 실측: 같은 진단에 반나절이 들었다).
+    """
+    connection = _connection_for_persist("프로야구")
+
+    asyncio.run(
+        persist_report_generation(
+            connection,  # type: ignore[arg-type]
+            job_id="job-1",
+            user_id="user-1",
+            attempt_number=1,
+            content_type="interest_news_card",
+            generated=GeneratedReportContent(
+                title="제목",
+                summary="요약",
+                body="본문",
+                citation_references=(),
+            ),
+            contexts=[],
+            latency_ms=100,
+            review_outcome="revise_exhausted",
+            review_problem="인용한 G2 원문은 코스피 상승에 관한 내용이다.",
+        )
+    )
+
+    metadata = _run_metadata(connection)
+    assert metadata["review_outcome"] == "revise_exhausted"
+    assert metadata["review_problem"] == "인용한 G2 원문은 코스피 상승에 관한 내용이다."

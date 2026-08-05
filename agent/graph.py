@@ -573,7 +573,11 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             model=state["model"],
         )
         if not verdict.should_regenerate:
-            return {"review_outcome": verdict.outcome, "review_correction": ""}
+            return {
+                "review_outcome": verdict.outcome,
+                "review_correction": "",
+                "review_problem": "",
+            }
         # 재작성은 한 번만 허용한다. 검토자가 계속 흠을 잡으면 비용이 무한히 는다.
         if attempts >= REVIEW_MAX_REVISIONS:
             logger.info(
@@ -581,11 +585,18 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 REVIEW_MAX_REVISIONS,
                 verdict.problem,
             )
-            return {"review_outcome": "revise_exhausted", "review_correction": ""}
+            # 지적 내용을 함께 남긴다. 결과 코드만으로는 "왜 못 고쳤는지"를 알 수
+            # 없어 로그를 뒤져야 했다(2026-08-05 실측: 같은 진단에 반나절이 들었다).
+            return {
+                "review_outcome": "revise_exhausted",
+                "review_correction": "",
+                "review_problem": verdict.problem,
+            }
         logger.info("검토자가 재작성을 요구했습니다: %s", verdict.problem)
         return {
             "review_outcome": verdict.outcome,
             "review_correction": verdict.correction,
+            "review_problem": verdict.problem,
             "review_attempts": attempts + 1,
         }
 
@@ -607,6 +618,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 contexts=state["contexts"],
                 latency_ms=state["latency_ms"],
                 review_outcome=str(state.get("review_outcome") or ""),
+                review_problem=str(state.get("review_problem") or ""),
             )
             persisted = await report_018(
                 FeatureRequest(

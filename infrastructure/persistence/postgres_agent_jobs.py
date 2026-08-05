@@ -620,6 +620,7 @@ class PostgresAgentJobRepository:
             # 검토자 판정을 응답으로 꺼낸다. 발행된 결과물만 봐서는 "검토를
             # 통과했다"와 "검토가 실패해 그냥 나갔다"를 구분할 수 없다.
             "review_outcome": str(run_metadata.get("review_outcome") or ""),
+            "review_problem": str(run_metadata.get("review_problem") or ""),
             "citations": [
                 {
                     **dict(citation),

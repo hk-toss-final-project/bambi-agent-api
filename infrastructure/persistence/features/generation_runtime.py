@@ -540,6 +540,7 @@ async def persist_report_generation(
     contexts: Sequence[ReportContextDocument],
     latency_ms: int,
     review_outcome: str = "",
+    review_problem: str = "",
 ) -> dict[str, object]:
     """생성 Run·후보·Citation·Publish Snapshot·Outbox를 한 트랜잭션에 저장한다.
 
@@ -589,6 +590,7 @@ async def persist_report_generation(
                         context.reference: context.score for context in contexts
                     },
                     "review_outcome": review_outcome,
+                    "review_problem": review_problem,
                 }
             ),
         ),
