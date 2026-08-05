@@ -600,6 +600,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 generated=state["generated"],
                 contexts=state["contexts"],
                 latency_ms=state["latency_ms"],
+                review_outcome=str(state.get("review_outcome") or ""),
             )
             persisted = await report_018(
                 FeatureRequest(

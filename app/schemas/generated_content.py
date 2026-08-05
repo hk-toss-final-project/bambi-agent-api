@@ -57,4 +57,12 @@ class GeneratedContentDetailResponse(GeneratedContentSummary):
     generation_request_id: str = Field(description="생성 요청 UUID")
     generation_run_id: str = Field(description="생성 실행 UUID")
     latency_ms: int | None = Field(default=None, ge=0, description="LLM 생성 지연시간")
+    review_outcome: str = Field(
+        default="",
+        description=(
+            "검토자(critic) 최종 판정. pass=대조 통과, revise_exhausted=지적을 "
+            "받아 다시 썼지만 상한까지 해결 못 함, unavailable=검토 실패(발행은 "
+            "막지 않음), disabled=검토자 꺼짐, 빈 값=이 필드 도입 이전 생성분"
+        ),
+    )
     citations: list[GeneratedContentCitation] = Field(description="본문 근거 목록")

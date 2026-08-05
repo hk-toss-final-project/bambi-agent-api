@@ -22,6 +22,7 @@ async def prag_007(
     generated: GeneratedReportContent,
     contexts: Sequence[ReportContextDocument],
     latency_ms: int,
+    review_outcome: str = "",
 ) -> dict[str, object]:
     """[PRAG-007] Citation 연결.
 
@@ -42,4 +43,5 @@ async def prag_007(
         generated=generated,
         contexts=contexts,
         latency_ms=latency_ms,
+        review_outcome=review_outcome,
     )

@@ -353,3 +353,52 @@ def test_snapshot_row_mapping_tolerates_snapshots_saved_before_new_fields() -> N
     assert snapshot.generation_topic == ""
     assert snapshot.tags == []
     assert snapshot.content_tags == []
+
+
+def _run_metadata(connection: _FakeConnection) -> dict[str, Any]:
+    """기록된 질의에서 generation_runs INSERT의 run_metadata를 꺼낸다."""
+    for sql, params in connection.executed:
+        if "INSERT INTO agent.generation_runs" in sql:
+            assert params is not None
+            return params[4].obj  # Jsonb로 감싼 run_metadata
+    raise AssertionError("generation_runs INSERT를 찾지 못했다.")
+
+
+def test_run_metadata_records_the_critic_verdict() -> None:
+    """검토자 판정을 생성 Run에 남긴다.
+
+    검토자는 실패해도 발행을 막지 않으므로, 결과물만 봐서는 "검토를 통과했다"와
+    "검토가 실패해 그냥 나갔다"를 구분할 수 없다(2026-08-05 실측: 인용이 엉뚱한
+    리포트가 발행됐는데 검토자가 돌았는지조차 로그 없이는 알 수 없었다).
+    """
+    connection = _connection_for_persist("반도체")
+
+    asyncio.run(
+        persist_report_generation(
+            connection,  # type: ignore[arg-type]
+            job_id="job-1",
+            user_id="user-1",
+            attempt_number=1,
+            content_type="interest_news_card",
+            generated=GeneratedReportContent(
+                title="제목",
+                summary="요약",
+                body="본문",
+                citation_references=(),
+            ),
+            contexts=[],
+            latency_ms=100,
+            review_outcome="unavailable",
+        )
+    )
+
+    assert _run_metadata(connection)["review_outcome"] == "unavailable"
+
+
+def test_run_metadata_keeps_review_outcome_empty_when_not_given() -> None:
+    """판정을 넘기지 않으면 빈 값으로 남긴다(이 필드 도입 이전 생성분과 같은 모양)."""
+    connection = _connection_for_persist("반도체")
+
+    _persist(connection)
+
+    assert _run_metadata(connection)["review_outcome"] == ""

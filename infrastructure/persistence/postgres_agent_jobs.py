@@ -579,7 +579,8 @@ class PostgresAgentJobRepository:
                         candidate.created_at,
                         candidate.generation_request_id,
                         candidate.generation_run_id,
-                        run.latency_ms
+                        run.latency_ms,
+                        run.run_metadata
                     FROM agent.generated_content_candidates AS candidate
                     JOIN agent.generation_runs AS run
                       ON run.id = candidate.generation_run_id
@@ -608,6 +609,7 @@ class PostgresAgentJobRepository:
                     (candidate_id, user_id),
                 )
                 citations = await citation_cursor.fetchall()
+        run_metadata = dict(row["run_metadata"] or {})
         return {
             **dict(row),
             "candidate_id": str(row["candidate_id"]),
@@ -615,6 +617,9 @@ class PostgresAgentJobRepository:
             "generation_run_id": str(row["generation_run_id"]),
             "structured_body": dict(row["structured_body"] or {}),
             "user_id": user_id,
+            # 검토자 판정을 응답으로 꺼낸다. 발행된 결과물만 봐서는 "검토를
+            # 통과했다"와 "검토가 실패해 그냥 나갔다"를 구분할 수 없다.
+            "review_outcome": str(run_metadata.get("review_outcome") or ""),
             "citations": [
                 {
                     **dict(citation),

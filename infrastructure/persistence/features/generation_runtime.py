@@ -539,8 +539,16 @@ async def persist_report_generation(
     generated: GeneratedReportContent,
     contexts: Sequence[ReportContextDocument],
     latency_ms: int,
+    review_outcome: str = "",
 ) -> dict[str, object]:
-    """생성 Run·후보·Citation·Publish Snapshot·Outbox를 한 트랜잭션에 저장한다."""
+    """생성 Run·후보·Citation·Publish Snapshot·Outbox를 한 트랜잭션에 저장한다.
+
+    review_outcome은 검토자(critic)가 이 리포트에 내린 최종 판정이다. 발행된
+    결과물만 봐서는 "검토를 통과했다"와 "검토가 실패해 그냥 나갔다"를 구분할 수
+    없어서 함께 남긴다 — 검토자는 실패해도 발행을 막지 않기 때문이다
+    (2026-08-05 실측: 인용이 엉뚱한 리포트가 발행됐는데 검토자가 돌았는지조차
+    로그 없이는 알 수 없었다).
+    """
     request_cursor = await connection.execute(
         """
         SELECT id, topic
@@ -580,6 +588,7 @@ async def persist_report_generation(
                     "retrieval_scores": {
                         context.reference: context.score for context in contexts
                     },
+                    "review_outcome": review_outcome,
                 }
             ),
         ),
