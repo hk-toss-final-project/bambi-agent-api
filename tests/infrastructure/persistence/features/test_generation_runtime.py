@@ -232,3 +232,30 @@ def test_publish_payload_omits_blank_topic_tag() -> None:
     _persist(connection)
 
     assert _publish_payload(connection)["tags"] == []
+
+
+def test_report_context_search_excludes_wiki_schema_documents() -> None:
+    """Wiki 목차(schema) 문서는 본 검색과 폴백 검색 모두에서 제외한다.
+
+    목차 파일은 Namespace의 모든 문서 제목을 담고 있어 어떤 검색어에도 걸리지만
+    내용은 링크 목록뿐이라 근거가 되지 못한다. 특히 폴백(매칭 0건일 때 최근
+    문서를 채우는 질의)으로 더 자주 들어온다.
+    """
+    from infrastructure.persistence.features.generation_runtime import (
+        load_report_context,
+    )
+
+    # 본 검색이 빈 결과 → 폴백 질의까지 실행되게 한다.
+    connection = _FakeConnection([[], []])
+
+    asyncio.run(
+        load_report_context(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            query="반도체",
+        )
+    )
+
+    assert len(connection.executed) == 2
+    for sql, _ in connection.executed:
+        assert "document.document_kind <> 'schema'" in sql

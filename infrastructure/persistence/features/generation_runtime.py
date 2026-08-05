@@ -291,6 +291,16 @@ async def load_report_context(
     캐시 문서는 Wiki Version·Chunk가 없으므로 참조 식별자를
     `gsrc:<캐시 문서 UUID>` 형태로 만들어 반환한다 — Citation 저장 시
     이 접두사로 캐시 출처를 구분한다.
+
+    `document_kind = 'schema'` 문서는 제외한다. Wiki 목차 파일은 Namespace의
+    모든 문서 제목을 담고 있어 어떤 검색어에도 걸리지만, 내용은 링크 목록뿐이라
+    근거가 되지 못한다. 근거 자리를 차지하고 LLM이 링크 목록에서 사실을 지어낼
+    여지도 남는다. (2026-08-05 실측: '반도체'·'코스피' 검색에서 0.126으로 통과해
+    근거에 포함됐다.)
+
+    본 검색이 한 건도 못 찾으면 최근 문서를 0점으로 채워 주는 폴백 질의가 있다.
+    폴백에도 같은 제외 조건이 필요하다 — 오히려 목차 파일이 이 경로로 더 자주
+    들어온다.
     """
     if not 1 <= top_k_per_scope <= 20:
         raise ValueError("Report Builder 검색 top_k는 1에서 20 사이여야 합니다.")
@@ -320,6 +330,7 @@ async def load_report_context(
             WHERE chunk.namespace_key = %s
               AND chunk.is_searchable
               AND document.deleted_at IS NULL
+              AND document.document_kind <> 'schema'
               AND (
                     similarity(chunk.content, %s) > 0.05
                     OR chunk.search_vector @@ plainto_tsquery('simple', %s)
@@ -398,6 +409,7 @@ async def load_report_context(
                 WHERE chunk.namespace_key = %s
                   AND chunk.is_searchable
                   AND document.deleted_at IS NULL
+                  AND document.document_kind <> 'schema'
             ), global_cache AS (
                 SELECT
                     'gsrc:' || cache.id AS document_version_id,
