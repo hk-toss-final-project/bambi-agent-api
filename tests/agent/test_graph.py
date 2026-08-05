@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from agent import graph as agent_graph
+from agent.report_builder.api import ResearchOutcome
 
 
 class _FakeConnection:
@@ -380,6 +381,7 @@ def test_research_agent_output_becomes_generation_context(
         return SimpleNamespace(
             documents=("doc-1", "doc-2"),
             calls=(),
+            collected_live=False,
             notes="두 건을 모았다.",
             stop_reason="final",
         )
@@ -445,7 +447,11 @@ def _patch_for_review(
     async def fake_research(connection: Any, **kwargs: Any) -> Any:
         """근거 한 건을 모은 조사 결과를 돌려준다."""
         return SimpleNamespace(
-            documents=("doc-1",), calls=(), notes="", stop_reason="final"
+            documents=("doc-1",),
+            calls=(),
+            collected_live=False,
+            notes="",
+            stop_reason="final",
         )
 
     async def fake_prag_006(contexts: list[Any]) -> list[Any]:
@@ -599,4 +605,46 @@ def test_research_node_is_skipped_when_disabled(
     result = _run_generation()
 
     assert order[0] == "load_context"
+    assert result == {"content_candidate_id": "candidate-1"}
+
+
+def test_legacy_path_skips_live_collection_when_researcher_already_tried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """조사원이 실시간 수집을 이미 시도했으면 고정 경로가 다시 부르지 않는다.
+
+    조사원이 빈손으로 돌아오면 고정 경로로 넘어오는데, 같은 주제로 같은 수집을
+    한 번 더 돌리면 지연과 외부 API 호출이 두 배가 된다.
+    """
+    order: list[str] = []
+    _patch_generation_tail(monkeypatch, order)
+
+    async def empty_research(connection: Any, **kwargs: Any) -> Any:
+        """수집까지 시도했지만 한 건도 못 모은 조사원을 재현한다."""
+        order.append("research")
+        return ResearchOutcome(documents=(), collected_live=True)
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[str]:
+        """고정 경로의 개인 Wiki 검색을 대체한다."""
+        order.append("load_context")
+        return ["context-1"]
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """Scope 설정을 생략한다."""
+
+    def fake_collect(topic: str, user_id: str, *, model: str = "") -> list[Any]:
+        """호출되면 안 되는 실시간 수집."""
+        order.append("collect_live")
+        return []
+
+    monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: True)
+    monkeypatch.setattr(agent_graph, "research_context", empty_research)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect)
+
+    result = _run_generation()
+
+    assert order == ["research", "load_context", "generate", "persist"]
+    assert "collect_live" not in order
     assert result == {"content_candidate_id": "candidate-1"}

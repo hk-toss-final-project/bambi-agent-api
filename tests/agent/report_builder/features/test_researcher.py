@@ -396,3 +396,66 @@ def test_search_drops_personal_documents_below_score_floor(
     )
 
     assert [document.title for document in found] == ["관련 문서"]
+
+
+def test_outcome_records_that_live_collection_was_attempted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """실시간 수집을 시도했으면 결과에 표시한다.
+
+    호출자(graph.load_context)가 같은 수집을 한 번 더 돌리지 않으려면 이 표식이
+    필요하다. 성공 여부가 아니라 시도 여부다.
+    """
+    outcome, collected = _run_research(
+        monkeypatch, [_document("G1", title="기사", url="https://example.com/a")]
+    )
+
+    assert collected == ["코스피"]
+    assert outcome.collected_live is True
+
+
+def test_outcome_marks_attempt_even_when_live_collection_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """실시간 수집이 실패해도 '시도했다'로 남긴다.
+
+    실패했다면 조건이 같으므로 고정 경로가 다시 불러도 대개 또 실패한다.
+    """
+    _patch_db(monkeypatch, [_document("G1", title="코스피", url="https://x/1")])
+
+    async def fake_loop(system_prompt, user_prompt, tools, **kwargs):
+        """검색 한 번만 수행한다."""
+        await {spec.name: spec for spec in tools}["search_pool"].run(query="코스피")
+        return ToolLoopResult(text="모았다.", stop_reason="final")
+
+    def broken_collect(topic, user_id, *, model):
+        """수집 중 오류를 재현한다."""
+        raise RuntimeError("네트워크 실패")
+
+    monkeypatch.setattr(researcher, "run_tool_loop", fake_loop)
+    monkeypatch.setattr(researcher, "collect_live_context", broken_collect)
+
+    outcome = asyncio.run(
+        research_context(
+            _FakeConnection(),  # type: ignore[arg-type]
+            topic="코스피",
+            user_id="user-1",
+        )
+    )
+
+    assert outcome.collected_live is True
+
+
+def test_outcome_reports_no_attempt_when_pool_suffices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """창고가 충분하면 시도하지 않았다고 남긴다."""
+    found = [
+        _document(f"G{n}", title=f"기사 {n}", url=f"https://example.com/{n}")
+        for n in range(1, 4)
+    ]
+
+    outcome, collected = _run_research(monkeypatch, found)
+
+    assert collected == []
+    assert outcome.collected_live is False

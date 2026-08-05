@@ -91,6 +91,9 @@ class ResearchOutcome:
         calls: LLM이 실행한 도구 호출 기록(어떤 검색어를 왜 골랐는지 추적용)
         notes: LLM이 남긴 조사 요약
         stop_reason: 루프 종료 사유("final" 또는 "max_iterations")
+        collected_live: 실시간 수집을 **시도했는지**. 성공 여부가 아니라 시도
+            여부다 — 호출자(graph.load_context)가 같은 수집을 한 번 더
+            돌리지 않도록 판단하는 데 쓴다.
         input_tokens·output_tokens: 조사에 쓴 토큰 (벤치마크 비용 기록용)
     """
 
@@ -98,6 +101,7 @@ class ResearchOutcome:
     calls: tuple[ToolCallRecord, ...] = ()
     notes: str = ""
     stop_reason: str = "final"
+    collected_live: bool = False
     input_tokens: int = 0
     output_tokens: int = 0
 
@@ -380,6 +384,7 @@ async def research_context(
         calls=result.calls,
         notes=result.text,
         stop_reason=result.stop_reason,
+        collected_live=collected_live,
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
     )

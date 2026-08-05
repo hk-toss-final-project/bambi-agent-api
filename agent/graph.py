@@ -291,6 +291,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             "topic_intent": topic_intent,
             "research_documents": list(outcome.documents),
             "research_notes": outcome.notes,
+            "research_collected_live": outcome.collected_live,
             "research_calls": [
                 {
                     "tool": call.name,
@@ -382,6 +383,16 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         # REPORT-005: 실시간 외부 자료(뉴스 RSS·YouTube·Reddit)를 키워드 비서로 수집한다.
         # 이전에는 개인 Wiki 결과를 그대로 흘려보내는 패스스루라, 저장된 문서만 근거가 됐다.
         # 네트워크·LLM이 걸리는 동기 함수라 Transaction 밖 스레드에서 실행한다.
+        # 조사원이 이미 실시간 수집을 시도했으면 다시 부르지 않는다. 조사원이
+        # 빈손으로 돌아오면 이 경로로 넘어오는데, 같은 주제로 같은 수집을 한 번
+        # 더 돌리면 지연과 외부 API 호출이 두 배가 된다. 실패했다면 조건이
+        # 같으므로 대개 또 실패한다.
+        already_collected_live = bool(state.get("research_collected_live"))
+        skip_live = pool_is_enough or already_collected_live
+        if already_collected_live and not pool_is_enough:
+            logger.info(
+                "실시간 수집 생략: topic=%s 조사원이 이미 시도했다.", state["topic"]
+            )
         live = await report_005(
             FeatureRequest(
                 request_id=state["job_id"],
@@ -390,7 +401,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 payload={
                     "implementation": (
                         (lambda: [])
-                        if pool_is_enough
+                        if skip_live
                         else lambda: to_thread(
                             collect_live_context,
                             state["topic"],

@@ -35,6 +35,9 @@ class ReportGenerationState(TypedDict):
     research_documents: NotRequired[list[object]]
     research_notes: NotRequired[str]
     research_calls: NotRequired[list[dict[str, object]]]
+    # 조사원이 실시간 수집을 이미 시도했는지. 고정 경로가 같은 수집을 한 번 더
+    # 돌리지 않게 하는 표식이다(성공 여부가 아니라 시도 여부).
+    research_collected_live: NotRequired[bool]
     topic_intent: NotRequired[str]
     contexts: NotRequired[list[object]]
     generated: NotRequired[object]
