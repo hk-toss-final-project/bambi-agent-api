@@ -28,6 +28,52 @@ _CITATION_REF = re.compile(r"\[([PGL]\d+)\]")
 _MAX_CONTEXT_CHARS = 16000
 
 
+# [REPORT-010] 콘텐츠 태그 제약. 검색·추천 UI가 카드에 노출하므로 개수와 길이를
+# 코드가 강제한다 — 프롬프트로만 부탁하면 모델이 10개를 주거나 문장을 넣는다.
+_MAX_CONTENT_TAGS = 5
+_MAX_CONTENT_TAG_CHARS = 20
+
+
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
+def normalize_content_tags(raw_tags: object) -> tuple[str, ...]:
+    """[REPORT-010] 생성 응답의 태그를 검증·정리해 반환한다.
+
+    **실패하지 않는다.** 태그는 검색·추천을 돕는 보조 정보라, 형식이 잘못됐다고
+    리포트 생성 전체를 버릴 이유가 없다. 쓸 수 없는 값은 조용히 걸러낸다.
+
+    정리 규칙:
+    - 문자열이 아니거나 빈 값은 버린다.
+    - 앞뒤 공백을 정리하고 연속 공백을 하나로 줄인다.
+    - 20자를 넘으면 버린다(자르면 뜻이 깨진 태그가 남는다).
+    - 대소문자·공백을 무시하고 중복을 제거한다. 먼저 온 표기를 남긴다.
+    - 최대 5개까지만 취한다.
+
+    Args:
+        raw_tags: LLM 응답의 `tags` 값. 목록이 아니면 빈 튜플을 반환한다.
+
+    Returns:
+        정리된 태그 튜플. 쓸 수 있는 태그가 없으면 빈 튜플.
+    """
+    if not isinstance(raw_tags, list):
+        return ()
+    selected: list[str] = []
+    seen: set[str] = set()
+    for item in raw_tags:
+        if not isinstance(item, str):
+            continue
+        tag = " ".join(item.split())
+        if not tag or len(tag) > _MAX_CONTENT_TAG_CHARS:
+            continue
+        key = tag.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(tag)
+        if len(selected) >= _MAX_CONTENT_TAGS:
+            break
+    return tuple(selected)
+
+
 def parse_report_generation(
     raw_response: str,
     *,
@@ -61,6 +107,7 @@ def parse_report_generation(
         summary=summary,
         body=body,
         citation_references=tuple(citations),
+        content_tags=normalize_content_tags(payload.get("tags")),
     )
 
 
@@ -200,9 +247,10 @@ async def report_009(request: FeatureRequest) -> FeatureResult:
     return await execute_feature_implementation(request, feature_id="REPORT-009")
 
 
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def report_010(request: FeatureRequest) -> FeatureResult:
     """[REPORT-010] 콘텐츠 태그 생성.
 
     콘텐츠 검색과 추천에 사용할 태그를 생성한다.
     """
-    raise NotImplementedError("[REPORT-010] 기능 구현이 필요합니다.")
+    return await execute_feature_implementation(request, feature_id="REPORT-010")

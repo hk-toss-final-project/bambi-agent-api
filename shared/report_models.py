@@ -32,3 +32,8 @@ class GeneratedReportContent:
     summary: str
     body: str
     citation_references: tuple[str, ...]
+    # [REPORT-010] 생성된 내용에서 뽑은 검색·추천용 태그. 생성 요청 topic과는
+    # 분리해 보존한다 — 요청 주제와 실제 작성된 내용이 갈리기 때문이다
+    # (실측: '의존성 구조' 요청이 강한 결합·DDD·Application Layer를 다뤘다).
+    # 보조 정보라 비어 있어도 생성은 성공한다.
+    content_tags: tuple[str, ...] = ()

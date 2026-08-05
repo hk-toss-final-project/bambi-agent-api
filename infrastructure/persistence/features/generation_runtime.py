@@ -707,12 +707,23 @@ async def persist_report_generation(
     # topic 1개로 생성되므로 항상 원소 1개짜리 목록이다. service 워커는 받은
     # 문자열을 그대로 저장·노출하므로 빈 문자열은 빈 태그로 보이게 된다.
     topic = str(generation_request["topic"] or "").strip()
+    # 요청 주제와 콘텐츠 태그를 분리해 싣는다(2026-08-05 이송우 협의).
+    #
+    #   generation_topic  왜 이 리포트가 만들어졌는지 (요청 원본)
+    #   tags              관심사 연결용. Service가 card_interest_tags로 소비 중이라
+    #                     의미를 바꾸지 않는다 — 바꾸면 계약이 깨진다.
+    #   content_tags      실제 작성된 내용에서 뽑은 검색·추천용 태그(REPORT-010)
+    #
+    # 요청 주제와 실제 내용은 갈릴 수 있다(실측: '의존성 구조' 요청이 강한 결합·
+    # DDD·Application Layer를 다뤘다). 검색·추천에는 뒤쪽이 쓸모 있다.
     publish_payload = {
         "title": generated.title,
         "summary": generated.summary,
         "body": generated.body,
         "citations": citation_payloads,
+        "generation_topic": topic,
         "tags": [topic] if topic else [],
+        "content_tags": list(generated.content_tags),
     }
     await connection.execute(
         """

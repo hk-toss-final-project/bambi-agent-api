@@ -23,6 +23,7 @@ from agent.report_builder.api import (
     report_006,
     report_008,
     report_009,
+    report_010,
     report_011,
     report_012,
     report_018,
@@ -503,12 +504,24 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 payload={"implementation": lambda: summary.data.get("result")},
             )
         )
+        tagged = await report_010(
+            FeatureRequest(
+                request_id=state["job_id"],
+                actor_id="report-generation-graph",
+                user_id=state["user_id"],
+                # 태그는 본문과 같은 생성 응답에서 함께 받는다(parse_report_generation이
+                # normalize_content_tags로 정리한다). 별도 LLM 호출을 두지 않는 것이
+                # 이 설계의 요점이다 — 추가 비용·지연 없이 제목·본문과 같은 근거를
+                # 바탕으로 태그가 나온다(2026-08-05 이송우 협의).
+                payload={"implementation": lambda: body.data.get("result")},
+            )
+        )
         cited = await report_011(
             FeatureRequest(
                 request_id=state["job_id"],
                 actor_id="report-generation-graph",
                 user_id=state["user_id"],
-                payload={"implementation": lambda: body.data.get("result")},
+                payload={"implementation": lambda: tagged.data.get("result")},
             )
         )
         generated = cited.data.get("result")

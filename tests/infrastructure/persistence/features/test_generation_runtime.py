@@ -259,3 +259,36 @@ def test_report_context_search_excludes_wiki_schema_documents() -> None:
     assert len(connection.executed) == 2
     for sql, _ in connection.executed:
         assert "document.document_kind <> 'schema'" in sql
+
+
+def test_publish_payload_separates_generation_topic_from_content_tags() -> None:
+    """요청 주제와 콘텐츠 태그를 분리해 싣는다.
+
+    tags는 Service가 card_interest_tags로 소비 중이라 의미를 바꾸지 않는다.
+    실제 내용 기반 태그는 content_tags로 따로 전달한다(2026-08-05 이송우 협의).
+    """
+    connection = _connection_for_persist("의존성 구조")
+
+    asyncio.run(
+        persist_report_generation(
+            connection,  # type: ignore[arg-type]
+            job_id="job-1",
+            user_id="user-1",
+            attempt_number=1,
+            content_type="interest_news_card",
+            generated=GeneratedReportContent(
+                title="제목",
+                summary="요약",
+                body="본문",
+                citation_references=(),
+                content_tags=("강한 결합", "DDD", "Application Layer"),
+            ),
+            contexts=[],
+            latency_ms=100,
+        )
+    )
+
+    payload = _publish_payload(connection)
+    assert payload["generation_topic"] == "의존성 구조"
+    assert payload["tags"] == ["의존성 구조"]
+    assert payload["content_tags"] == ["강한 결합", "DDD", "Application Layer"]
