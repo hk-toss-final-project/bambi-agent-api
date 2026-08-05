@@ -280,3 +280,39 @@ def test_title_mismatch_falls_back_to_head() -> None:
     selected = select_pool_documents([document], now=_NOW)
 
     assert "본문 시작 문장" in selected[0].content
+
+
+def test_select_personal_documents_drops_scores_below_the_floor() -> None:
+    """점수 하한에 못 미치는 개인 Wiki 문서는 근거에서 뺀다.
+
+    본 검색이 한 건도 못 찾으면 폴백 질의가 최근 문서를 0점으로 채워 반환한다.
+    거르지 않으면 Wiki 목차 조각이 근거로 들어온다(2026-08-05 실측: '고대 이집트
+    미라 제작' 리포트가 'API 키 발급'을 인용했다).
+    """
+    from agent.report_builder.features.pool_context import select_personal_documents
+
+    documents = [
+        _document("P1", namespace="user/user-1", score=0.13),
+        _document("P2", namespace="user/user-1", score=0.0),
+        _document("G1", namespace="global", score=0.9),
+    ]
+
+    selected = select_personal_documents(documents)
+
+    assert [document.reference for document in selected] == ["P1"]
+
+
+def test_select_personal_documents_is_shared_by_both_context_paths() -> None:
+    """조사원 경로와 고정 경로가 같은 함수를 쓴다.
+
+    두 경로가 어긋나 있던 것이 2026-08-05 버그의 원인이었다. 한쪽만 고치면
+    조사원이 빈손으로 돌아온 순간 잡음이 다시 들어온다.
+    """
+    from agent.graph import select_personal_documents as graph_side
+    from agent.report_builder.features.researcher import (
+        select_personal_documents as researcher_side,
+    )
+    from agent.report_builder.features.pool_context import select_personal_documents
+
+    assert graph_side is select_personal_documents
+    assert researcher_side is select_personal_documents

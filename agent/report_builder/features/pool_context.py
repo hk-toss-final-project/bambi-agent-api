@@ -85,6 +85,20 @@ POOL_SCORE_RATIO: float = _env_float("POOL_SCORE_RATIO", 0.75)
 # 1위(0.096)와 차이가 작아 상대 비율로도 걸러지지 않는다.
 POOL_SCORE_FLOOR: float = _env_float("POOL_SCORE_FLOOR", 0.05)
 
+# 개인 Wiki 문서를 근거로 채택할 점수 하한. 풀 문서(POOL_SCORE_FLOOR)와 같은 취지의
+# 절대 하한이지만, 검색 경로가 달라 값을 따로 잰다.
+#
+# 실측(2026-08-05, mock-clipping-user 46문서 기준):
+#
+#   관련 있음   0.112 ~ 0.240  ('반도체'→SK하이닉스 0.137, '코스피'→서킷 브레이커 0.240,
+#                              '블록체인'→로빈후드 체인 0.112)
+#   잡음        0.000          ('요가 스트레칭'·'커피 원두 로스팅' 각 5건 전부)
+#
+# 0점은 본 검색이 한 건도 못 찾았을 때 최근 문서를 채워 주는 폴백 질의의 결과다
+# (load_report_context 참고). 이 하한이 실제로 걷어내는 것은 그 폴백분이다 —
+# 본 검색 결과는 점수에 0.05가 더해져 들어오므로 약한 매칭도 하한은 넘는다.
+PERSONAL_SCORE_FLOOR: float = _env_float("PERSONAL_SCORE_FLOOR", 0.05)
+
 # 실시간 수집을 생략하려면 컷오프를 통과한 풀 문서가 이만큼 있어야 한다.
 # 생성 프롬프트 상한이 12건이고 개인 Wiki가 보통 4~5건을 채우므로, 3건이면
 # 합쳐서 7~8건이 되어 근거로 부족하지 않다. 실측 후 조정 대상이다.
@@ -204,6 +218,32 @@ def _with_cleaned_content(document: ReportContextDocument) -> ReportContextDocum
     if not cleaned.strip():
         return document
     return replace(document, content=cleaned)
+
+
+def select_personal_documents(
+    documents: Sequence[ReportContextDocument],
+) -> list[ReportContextDocument]:
+    """개인 Wiki 문서 중 근거로 쓸 만한 것만 고른다.
+
+    **조사원 경로와 고정 경로가 같은 규칙을 쓰게 하려고 여기에 둔다.** 두 경로가
+    어긋나 있던 것이 2026-08-05 버그의 원인이었다 — 조사원 쪽에만 하한을 넣었더니,
+    조사원이 빈손으로 돌아와 고정 경로로 넘어간 순간 0점짜리 Wiki 목차 조각이
+    근거로 들어왔다(실측: '고대 이집트 미라 제작' 리포트가 'API 키 발급'을 인용).
+
+    Args:
+        documents: prag_003이 반환한 개인·풀 혼합 문서 목록
+
+    Returns:
+        점수 하한을 통과한 개인 Wiki 문서 목록
+    """
+    # 점수 속성이 없는 형태(테스트 더미 등)는 그대로 통과시킨다
+    # — select_generation_context와 같은 관용 규칙이다.
+    return [
+        document
+        for document in documents
+        if getattr(document, "namespace_key", "") != GLOBAL_NAMESPACE
+        and getattr(document, "score", PERSONAL_SCORE_FLOOR) >= PERSONAL_SCORE_FLOOR
+    ]
 
 
 def is_pool_sufficient(pool_documents: Sequence[ReportContextDocument]) -> bool:

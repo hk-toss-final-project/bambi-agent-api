@@ -9,7 +9,9 @@ from .features.retrieval import report_004, report_005, report_006
 from .features.live_sources import collect_live_context, select_generation_context
 from .features.pool_context import (
     GLOBAL_NAMESPACE,
+    PERSONAL_SCORE_FLOOR,
     is_pool_sufficient,
+    select_personal_documents,
     select_pool_documents,
 )
 from .features.critic import CriticVerdict, critic_enabled, review_report

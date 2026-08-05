@@ -37,6 +37,7 @@ from agent.report_builder.api import (
     research_agent_enabled,
     research_context,
     review_report,
+    select_personal_documents,
     select_pool_documents,
     select_generation_context,
 )
@@ -363,11 +364,10 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         # 탈락시킨 풀 문서는 근거에서도 뺀다. 판정에만 쓰고 근거로는 그대로 넘기면
         # 잡음이 뒷문으로 다시 들어가고(실측: 무관한 "Microsoft 사이버보안" 기사가
         # 인용됨), 근거 상한(12건)을 먼저 차지해 실시간 수집분이 밀려난다.
-        personal_only = [
-            document
-            for document in hybrid
-            if getattr(document, "namespace_key", "") != GLOBAL_NAMESPACE
-        ]
+        # 조사원 경로와 같은 점수 하한을 쓴다. 여기에만 하한이 없어서, 조사원이
+        # 빈손으로 돌아와 이 경로로 넘어오는 순간 0점짜리 Wiki 목차 조각이 근거로
+        # 들어왔다(2026-08-05 실측: '고대 이집트 미라 제작'이 'API 키 발급' 인용).
+        personal_only = select_personal_documents(hybrid)
         contextualized = await prag_006([*personal_only, *pool_documents])
         personal = await report_004(
             FeatureRequest(

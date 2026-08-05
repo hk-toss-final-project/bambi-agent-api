@@ -37,6 +37,7 @@ from .live_sources import collect_live_context
 from .pool_context import (
     GLOBAL_NAMESPACE,
     is_pool_sufficient,
+    select_personal_documents,
     select_pool_documents,
 )
 
@@ -47,18 +48,6 @@ type DictRow = dict[str, Any]
 RESEARCH_MAX_ITERATIONS = 5
 _OBSERVATION_SNIPPET_CHARS = 160
 
-# 개인 Wiki 문서를 근거로 채택할 점수 하한. 풀 문서(POOL_SCORE_FLOOR)와 같은 취지의
-# 절대 하한이지만, 검색 경로가 달라 값을 따로 잰다.
-#
-# 실측(2026-08-05, mock-clipping-user 46문서 기준):
-#
-#   관련 있음   0.112 ~ 0.240  ('반도체'→SK하이닉스 0.137, '코스피'→서킷 브레이커 0.240,
-#                              '블록체인'→로빈후드 체인 0.112)
-#   잡음        0.000          ('요가 스트레칭'·'커피 원두 로스팅' 각 5건 전부)
-#
-# 개인 Wiki 검색은 매칭이 없어도 문서를 채워 반환하지만 점수를 0으로 정직하게
-# 남긴다. 0.05는 잡음(0)의 명백히 위, 관련 최소(0.112)의 절반 아래다.
-PERSONAL_SCORE_FLOOR: float = float(os.getenv("PERSONAL_SCORE_FLOOR", "0.05"))
 
 # 조사원에게는 "무엇을 검색할까"만 맡긴다. "몇 건이면 충분한가"는 세는 문제라
 # 코드(is_pool_sufficient)가 판정한다 — 2026-07-31 벤치마크에서 LLM에게 셈을
@@ -156,12 +145,7 @@ async def search_stored_documents(
                 if document.namespace_key == GLOBAL_NAMESPACE
             ],
         )
-    personal = [
-        document
-        for document in hybrid
-        if document.namespace_key != GLOBAL_NAMESPACE
-        and document.score >= PERSONAL_SCORE_FLOOR
-    ]
+    personal = select_personal_documents(hybrid)
     pool = select_pool_documents(
         hybrid, published_at=freshness, topic_intent=topic_intent
     )
