@@ -144,7 +144,11 @@ _SCHEDULE_SELECT = """
             source.display_name,
             source.status,
             source.schedule_cron,
-            source.keywords,
+            CASE
+                WHEN source.source_key = 'interest-taxonomy-google-news'
+                    THEN source.keywords || COALESCE(due_targets.keywords, '{}')
+                ELSE source.keywords
+            END AS keywords,
             source.languages,
             source.quota_policy,
             source.connector_config,
@@ -164,6 +168,30 @@ _SCHEDULE_SELECT = """
             WHERE run.source_id = source.id
               AND run.started_at >= date_trunc('day', clock_timestamp())
         ) AS today ON true
+        LEFT JOIN LATERAL (
+            SELECT array_agg(
+                target.query
+                ORDER BY target.subscriber_count DESC, target.priority, target.target_key
+            )
+                AS keywords
+            FROM (
+                SELECT
+                    collection_target.target_key,
+                    collection_target.query,
+                    collection_target.subscriber_count,
+                    collection_target.next_collection_at AS priority
+                FROM agent.interest_collection_targets AS collection_target
+                WHERE collection_target.status = 'active'
+                  AND collection_target.preferred_provider = source.connector_type
+                  AND collection_target.next_collection_at <= clock_timestamp()
+                ORDER BY
+                    collection_target.subscriber_count DESC,
+                    collection_target.next_collection_at,
+                    collection_target.target_key
+                LIMIT 50
+            ) AS target
+        ) AS due_targets
+          ON source.source_key = 'interest-taxonomy-google-news'
 """
 
 
@@ -566,6 +594,36 @@ async def persist_collected_articles(
                 "source_name": article.source_name,
                 "language": article.language,
             }
+        )
+
+    urls = [article.url.strip() for article in articles if article.url.strip()]
+    if urls:
+        await connection.execute(
+            """
+            INSERT INTO agent.global_source_document_topics (
+                global_source_document_id, target_key, search_query
+            )
+            SELECT document.id, target.target_key, %s
+            FROM agent.global_source_documents AS document
+            JOIN agent.interest_collection_targets AS target
+              ON lower(btrim(target.query)) = lower(btrim(%s))
+             AND target.status = 'active'
+            WHERE document.canonical_url = ANY(%s)
+            ON CONFLICT (global_source_document_id, target_key) DO NOTHING
+            """,
+            (query, query, urls),
+        )
+        await connection.execute(
+            """
+            UPDATE agent.interest_collection_targets
+            SET
+                last_collected_at = clock_timestamp(),
+                next_collection_at = clock_timestamp()
+                    + make_interval(mins => refresh_interval_minutes)
+            WHERE status = 'active'
+              AND lower(btrim(query)) = lower(btrim(%s))
+            """,
+            (query,),
         )
 
     await connection.execute(

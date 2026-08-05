@@ -103,6 +103,14 @@ def test_persist_skips_existing_url_and_saves_new_as_pending() -> None:
     assert "ON CONFLICT (canonical_url) DO NOTHING" in document_sql
     assert document_params is not None
     assert document_params[8] == "pending"
+    assert any(
+        "INSERT INTO agent.global_source_document_topics" in query
+        for query, _params in connection.executed
+    )
+    assert any(
+        "UPDATE agent.interest_collection_targets" in query
+        for query, _params in connection.executed
+    )
 
 
 def test_persist_returns_json_serializable_published_at() -> None:
