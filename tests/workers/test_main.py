@@ -130,3 +130,37 @@ def test_run_loop_dispatches_resident_url_collection_worker(
     assert recorded["interval_seconds"] == 5
     assert recorded["max_batches"] is None
     assert recorded["worker_id"] == "url-worker-1"
+
+
+def test_worker_entrypoint_configures_logging(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Worker 진입점이 로깅을 구성한다.
+
+    Worker는 FastAPI 앱을 만들지 않으므로 여기서 부르지 않으면 root에 핸들러가
+    없어 agent.*·workers.* 로거 출력이 통째로 버려진다. 2026-08-05 배포 Worker
+    stdout에 logger 라인이 0건이었고, 진단이 필요한 순간에 로그가 없었다.
+    """
+    configured: list[dict[str, str]] = []
+
+    def fake_configure(*, log_level: str, log_directory: str) -> None:
+        """로깅 구성 호출을 기록한다."""
+        configured.append({"log_level": log_level, "log_directory": log_directory})
+
+    monkeypatch.setattr(worker_main, "configure_logging", fake_configure)
+    monkeypatch.setattr(
+        worker_main, "_parse_args", lambda: Namespace(worker="personal-wiki")
+    )
+
+    class _Settings:
+        """진입점이 읽는 최소 설정."""
+
+        log_level = "INFO"
+        log_directory = "logs"
+        agent_database_url = ""
+
+    monkeypatch.setattr(worker_main, "load_settings", lambda: _Settings())
+
+    with pytest.raises(RuntimeError):
+        # DB URL이 비어 있어 곧바로 중단되지만, 로깅 구성은 그 전에 끝나야 한다.
+        asyncio.run(worker_main._run())
+
+    assert configured == [{"log_level": "INFO", "log_directory": "logs"}]

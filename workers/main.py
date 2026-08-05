@@ -10,6 +10,7 @@ import socket
 import sys
 
 from app.config import Settings, load_settings
+from app.logging_config import configure_logging
 from workers.api import (
     run_global_content_fetch_batch,
     run_url_collection_batch,
@@ -167,6 +168,13 @@ async def _run() -> None:
     """
     args = _parse_args()
     settings = load_settings()
+    # Worker는 FastAPI 앱을 만들지 않으므로 로깅을 여기서 직접 구성한다. 없으면
+    # root에 핸들러가 없어 agent.*·workers.* 로거 출력이 통째로 버려진다
+    # (2026-08-05 실측: 배포 Worker stdout에 logger 라인 0건. print만 보였다).
+    # 진단이 필요한 순간에 가장 먼저 아쉬운 것이 이 로그다.
+    configure_logging(
+        log_level=settings.log_level, log_directory=settings.log_directory
+    )
     if not settings.agent_database_url:
         raise RuntimeError("AGENT_DATABASE_URL이 필요합니다.")
     worker_id = args.worker_id or f"{socket.gethostname()}-{args.worker}"

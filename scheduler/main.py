@@ -23,6 +23,8 @@ import socket
 import sys
 from dataclasses import asdict
 
+from app.config import load_settings
+from app.logging_config import configure_logging
 from scheduler.api import (
     CollectionScheduleResult,
     build_scheduler,
@@ -68,6 +70,11 @@ def _print_results(results: list[CollectionScheduleResult]) -> None:
 async def _run() -> None:
     """단발 또는 상주 모드로 수집 Scheduler를 실행한다."""
     args = _parse_args()
+    # Worker와 같은 이유로 로깅을 직접 구성한다(workers/main.py 주석 참고).
+    settings = load_settings()
+    configure_logging(
+        log_level=settings.log_level, log_directory=settings.log_directory
+    )
     if args.force and not args.once:
         # 상주 모드에서 force를 쓰면 tick마다 수집해 호출 한도를 태운다.
         raise RuntimeError("--force는 --once와 함께만 사용할 수 있습니다.")
