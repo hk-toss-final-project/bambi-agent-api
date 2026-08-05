@@ -1,6 +1,9 @@
 """풀 우선 소비 판정(점수 컷오프·신선도·충분 여부)을 검증한다."""
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from agent.report_builder.features import pool_context
 from agent.report_builder.features.pool_context import (
@@ -316,3 +319,80 @@ def test_select_personal_documents_is_shared_by_both_context_paths() -> None:
 
     assert graph_side is select_personal_documents
     assert researcher_side is select_personal_documents
+
+
+def test_pool_relevance_uses_the_best_matching_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """관련성은 최고 유사도 하나로 판정한다.
+
+    문서를 하나씩 분류하려 하면 실패한다 — 실측에서 관련(0.202~0.566)과
+    잡음(0.115~0.361)이 겹쳤다. 우리가 묻는 것은 "이 주제 자료가 있는가"이므로
+    가장 잘 맞는 것 하나만 보면 된다.
+    """
+    from agent.report_builder.features import pool_context
+
+    scores = {"프로야구 개막": 0.62, "반도체 수출": 0.11}
+
+    def fake_embed(texts: list[str]) -> list[list[float]]:
+        """검색어와 제목을 구분할 수 있는 가짜 벡터를 만든다."""
+        return [[1.0] if text == "프로야구" else [scores[text]] for text in texts]
+
+    monkeypatch.setattr(pool_context, "embed_texts", fake_embed)
+    monkeypatch.setattr(pool_context, "cosine_similarity", lambda a, b: a[0] * b[0])
+
+    documents = [
+        _document("G1", 0.9, namespace="global"),
+        _document("G2", 0.9, namespace="global"),
+    ]
+    documents = [
+        replace(documents[0], title="반도체 수출"),
+        replace(documents[1], title="프로야구 개막"),
+    ]
+
+    assert pool_context.pool_topic_similarity("프로야구", documents) == 0.62
+    assert pool_context.is_pool_relevant("프로야구", documents) is True
+
+
+def test_pool_is_not_relevant_when_every_title_is_off_topic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """제목이 전부 무관하면 개수가 많아도 관련 없음으로 본다.
+
+    2026-08-05 실측: '프로야구' 판정풀=6이었지만 야구 기사는 0건이었고,
+    개수만 세는 판정이 통과시켜 반도체 리포트가 발행됐다.
+    """
+    from agent.report_builder.features import pool_context
+
+    def fake_embed(texts: list[str]) -> list[list[float]]:
+        """주제는 1.0, 제목은 전부 낮은 값으로 만든다."""
+        return [[1.0] if index == 0 else [0.19] for index, _ in enumerate(texts)]
+
+    monkeypatch.setattr(pool_context, "embed_texts", fake_embed)
+    monkeypatch.setattr(pool_context, "cosine_similarity", lambda a, b: a[0] * b[0])
+
+    documents = [_document(f"G{n}", 0.9, namespace="global") for n in range(1, 7)]
+
+    assert pool_context.is_pool_relevant("프로야구", documents) is False
+
+
+def test_pool_relevance_falls_back_to_collecting_when_embedding_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """임베딩 호출이 실패하면 관련 없음으로 본다.
+
+    "확인하지 못했다"를 "관련 있다"로 처리하면 주제가 다른 리포트가 나간다.
+    실시간 수집을 한 번 더 하는 편이 싸다.
+    """
+    from agent.report_builder.features import pool_context
+
+    def broken_embed(texts: list[str]) -> list[list[float]]:
+        """임베딩 장애를 재현한다."""
+        raise RuntimeError("임베딩 API 오류")
+
+    monkeypatch.setattr(pool_context, "embed_texts", broken_embed)
+
+    documents = [_document("G1", 0.9, namespace="global")]
+
+    assert pool_context.pool_topic_similarity("프로야구", documents) == 0.0
+    assert pool_context.is_pool_relevant("프로야구", documents) is False

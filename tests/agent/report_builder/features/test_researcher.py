@@ -76,6 +76,12 @@ def _patch_db(
     monkeypatch.setattr(
         researcher, "select_pool_documents", lambda docs, **kwargs: list(docs)
     )
+    # 주제 관련성 판정은 임베딩 API를 부른다. 단위 테스트는 네트워크를 타지
+    # 않아야 하므로 "풀 문서가 있으면 관련 있다"로 대체한다. 판정 규칙 자체는
+    # tests/agent/report_builder/features/test_pool_context.py가 검증한다.
+    monkeypatch.setattr(
+        researcher, "is_pool_relevant", lambda topic, documents: bool(documents)
+    )
     return queries
 
 

@@ -24,13 +24,17 @@ DB를 직접 보지 않는 순수 함수만 둔다. 발행일은 호출자가 �
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from agent.assistant.api import clean_article_body
+from agent.selection.api import cosine_similarity, embed_texts
 from shared.report_models import ReportContextDocument
+
+logger = logging.getLogger("agent.report_builder.pool_context")
 
 GLOBAL_NAMESPACE = "global"
 
@@ -244,6 +248,68 @@ def select_personal_documents(
         if getattr(document, "namespace_key", "") != GLOBAL_NAMESPACE
         and getattr(document, "score", PERSONAL_SCORE_FLOOR) >= PERSONAL_SCORE_FLOOR
     ]
+
+
+# 풀이 "이 주제 자료를 갖고 있다"고 보려면 가장 잘 맞는 문서 제목이 이만큼은
+# 주제와 닮아야 한다.
+#
+# **개수만 세면 안 된다.** 검색은 주제와 무관한 기사도 돌려주기 때문이다 —
+# 저장된 본문이 기사 본문이 아니라 페이지 통짜(2.6만~4.5만 자)라, 관련기사
+# 목록이나 메뉴에 낀 단어 하나로 걸린다(2026-08-05 실측: '블록체인' 검색에
+# 방탄소년단 기사가 걸렸고 본문에 실제로 그 단어가 있었다).
+#
+# **문서를 하나씩 분류하려 하면 실패한다.** 제목 유사도로 개별 판정을 시도하면
+# 관련(0.202~0.566)과 잡음(0.115~0.361)이 겹친다. 그러나 우리가 묻는 것은
+# "이 주제 자료가 있는가"이므로 **최고값 하나만** 보면 된다. 그렇게 재면 갈린다.
+#
+#   창고에 있는 주제   반도체 0.477 · 코스피 0.566
+#   창고에 없는 주제   블록체인 0.361 · 커피 0.255 · 프로야구 0.188
+#
+# 0.40은 위 두 집단 사이다. 표본이 5개 주제뿐이라 확정값이 아니며, 틀릴 때
+# 덜 아픈 쪽으로 잡았다 — 높으면 수집을 자주 해 느려질 뿐이지만, 낮으면 주제가
+# 다른 리포트가 나간다(실측: '프로야구' 요청에 반도체 리포트가 발행됐다).
+POOL_TOPIC_SIMILARITY_FLOOR: float = _env_float("POOL_TOPIC_SIMILARITY_FLOOR", 0.40)
+
+
+def pool_topic_similarity(
+    topic: str, pool_documents: Sequence[ReportContextDocument]
+) -> float:
+    """주제와 가장 닮은 풀 문서 제목의 코사인 유사도를 반환한다.
+
+    제목만 쓴다. 본문으로 재면 페이지 통짜에 섞인 잡음까지 임베딩에 들어가
+    신호가 흐려진다(2026-08-05 실측).
+
+    임베딩 호출이 실패하면 0.0을 반환한다 — "관련 있다고 확인하지 못했다"로
+    보고 실시간 수집을 하게 만드는 쪽이 안전하다.
+
+    Args:
+        topic: 리포트 주제
+        pool_documents: 컷오프를 통과한 풀 문서
+
+    Returns:
+        0.0 ~ 1.0. 문서가 없거나 측정에 실패하면 0.0.
+    """
+    titles = [str(getattr(document, "title", "") or "").strip() for document in pool_documents]
+    titles = [title for title in titles if title]
+    if not topic.strip() or not titles:
+        return 0.0
+    try:
+        vectors = embed_texts([topic, *titles])
+    except Exception:
+        logger.warning("주제 유사도 측정에 실패해 풀을 부족한 것으로 봅니다: %s", topic)
+        return 0.0
+    topic_vector, title_vectors = vectors[0], vectors[1:]
+    return max(
+        (cosine_similarity(topic_vector, vector) for vector in title_vectors),
+        default=0.0,
+    )
+
+
+def is_pool_relevant(
+    topic: str, pool_documents: Sequence[ReportContextDocument]
+) -> bool:
+    """풀에 이 주제에 관한 자료가 실제로 있는지 판정한다."""
+    return pool_topic_similarity(topic, pool_documents) >= POOL_TOPIC_SIMILARITY_FLOOR
 
 
 def is_pool_sufficient(pool_documents: Sequence[ReportContextDocument]) -> bool:

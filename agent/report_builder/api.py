@@ -10,7 +10,10 @@ from .features.live_sources import collect_live_context, select_generation_conte
 from .features.pool_context import (
     GLOBAL_NAMESPACE,
     PERSONAL_SCORE_FLOOR,
+    POOL_TOPIC_SIMILARITY_FLOOR,
+    is_pool_relevant,
     is_pool_sufficient,
+    pool_topic_similarity,
     select_personal_documents,
     select_pool_documents,
 )

@@ -36,6 +36,7 @@ from shared.report_models import ReportContextDocument
 from .live_sources import collect_live_context
 from .pool_context import (
     GLOBAL_NAMESPACE,
+    is_pool_relevant,
     is_pool_sufficient,
     select_personal_documents,
     select_pool_documents,
@@ -358,10 +359,15 @@ async def research_context(
     searched = len(collector.documents)
     decision_pool = pool_documents_for_decision(collector.documents)
 
+    # 개수와 관련성을 모두 요구한다. 개수만 세면 무관한 기사 6건이 "충분"으로
+    # 통과해 수집을 건너뛴다(2026-08-05 실측: '프로야구' 판정풀=6, 야구 기사 0건
+    # → 반도체 리포트 발행).
+    relevant = await to_thread(is_pool_relevant, topic, decision_pool)
+
     # 저장된 자료가 기준에 못 미치면 인터넷에서 보강한다. 실패해도 예외를
     # 올리지 않는다 — 수집이 안 됐다고 지금까지 모은 근거까지 버릴 이유는 없다.
     collected_live = False
-    if not is_pool_sufficient(decision_pool):
+    if not (is_pool_sufficient(decision_pool) and relevant):
         collected_live = True
         try:
             live = await to_thread(collect_live_context, topic, user_id, model=model)
@@ -370,11 +376,12 @@ async def research_context(
             logger.exception("실시간 수집에 실패해 저장된 자료만 사용합니다.")
 
     logger.info(
-        "조사 완료: topic=%s 도구호출=%d 저장자료=%d 판정풀=%d 실시간수집=%s 최종=%d 종료=%s",
+        "조사 완료: topic=%s 도구호출=%d 저장자료=%d 판정풀=%d 주제관련=%s 실시간수집=%s 최종=%d 종료=%s",
         topic,
         len(result.calls),
         searched,
         len(decision_pool),
+        "예" if relevant else "아니오",
         "수행" if collected_live else "생략",
         len(collector.documents),
         result.stop_reason,

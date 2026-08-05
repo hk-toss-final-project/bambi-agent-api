@@ -33,6 +33,7 @@ from agent.report_builder.api import (
     collect_live_context,
     GLOBAL_NAMESPACE,
     critic_enabled,
+    is_pool_relevant,
     is_pool_sufficient,
     research_agent_enabled,
     research_context,
@@ -353,12 +354,17 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         pool_documents = select_pool_documents(
             hybrid, published_at=pool_freshness, topic_intent=topic_intent
         )
-        pool_is_enough = is_pool_sufficient(pool_documents)
+        # 개수와 관련성을 모두 요구한다(조사원 경로와 같은 규칙).
+        pool_is_relevant = await to_thread(
+            is_pool_relevant, state["topic"], pool_documents
+        )
+        pool_is_enough = is_pool_sufficient(pool_documents) and pool_is_relevant
         logger.info(
-            "풀 근거 판정: topic=%s intent=%s 풀 채택 %d건 → 실시간 수집 %s",
+            "풀 근거 판정: topic=%s intent=%s 풀 채택 %d건 주제관련=%s → 실시간 수집 %s",
             state["topic"],
             topic_intent,
             len(pool_documents),
+            "예" if pool_is_relevant else "아니오",
             "생략" if pool_is_enough else "수행",
         )
 
