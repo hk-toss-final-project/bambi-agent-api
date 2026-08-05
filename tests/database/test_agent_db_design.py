@@ -45,6 +45,12 @@ USER_CONTEXT_SELECTION_MIGRATION_PATH = (
     / "migrations"
     / "0009_user_context_onboarding_selections.sql"
 )
+INTEREST_TAXONOMY_MIGRATION_PATH = (
+    PROJECT_ROOT
+    / "database"
+    / "migrations"
+    / "0011_interest_taxonomy_pipeline.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
@@ -206,6 +212,20 @@ def test_user_context_migration_adds_onboarding_selection_columns() -> None:
     assert "cardinality(selected_topic_ids) <= 12" in migration
     assert "OR interest_taxonomy_version IS NOT NULL" in migration
     assert "VALUES (9," in migration
+
+
+def test_interest_taxonomy_migration_adds_snapshots_targets_and_subscriptions() -> None:
+    """taxonomy 복제·Topic 수집·사용자 구독 테이블과 스케줄 Source를 검증한다."""
+    migration = _read(INTEREST_TAXONOMY_MIGRATION_PATH)
+
+    assert "CREATE TABLE agent.interest_taxonomy_versions" in migration
+    assert "CREATE TABLE agent.interest_taxonomy_categories" in migration
+    assert "CREATE TABLE agent.interest_taxonomy_topics" in migration
+    assert "CREATE TABLE agent.interest_collection_targets" in migration
+    assert "CREATE TABLE agent.user_interest_subscriptions" in migration
+    assert "CREATE TABLE agent.global_source_document_topics" in migration
+    assert "'interest-taxonomy-google-news'" in migration
+    assert "VALUES (11," in migration
 
 
 def test_migration_defines_vector_search_and_rls_boundaries() -> None:

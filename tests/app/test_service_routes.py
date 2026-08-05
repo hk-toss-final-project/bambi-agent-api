@@ -5,6 +5,35 @@ from fastapi.testclient import TestClient
 from tests.conftest import InMemoryAgentJobRepository
 
 
+def _taxonomy_payload() -> dict[str, object]:
+    """Service가 보내는 최소 taxonomy Snapshot 요청을 만든다."""
+    return {
+        "version": "1.0.0",
+        "source_hash": "a" * 64,
+        "locale": "ko-KR",
+        "categories": [
+            {
+                "id": "technology",
+                "name": "기술",
+                "name_en": "Technology",
+                "description": "기술 설명",
+                "emoji": "💻",
+                "order": 1,
+                "topics": [
+                    {
+                        "id": "generative_ai",
+                        "name": "생성형 AI",
+                        "name_en": "Generative AI",
+                        "description": "생성형 AI 설명",
+                        "order": 1,
+                        "keywords": ["LLM"],
+                    }
+                ],
+            }
+        ],
+    }
+
+
 def _put_context(client: TestClient, user_id: str, version: int = 1) -> None:
     """생성 요청의 전제인 사용자 컨텍스트를 등록한다."""
     response = client.put(
@@ -41,7 +70,36 @@ def test_user_context_upsert_rejects_stale_version(client: TestClient) -> None:
     assert stale.json()["code"] == "STALE_CONTEXT_VERSION"
 
 
-def test_user_context_upsert_preserves_signup_interests(client: TestClient) -> None:
+def test_interest_taxonomy_upsert_is_idempotent(client: TestClient) -> None:
+    """같은 버전·Hash의 taxonomy Snapshot을 반복 동기화할 수 있는지 검증한다."""
+    payload = _taxonomy_payload()
+
+    first = client.put("/internal/v1/interest-taxonomies/1.0.0", json=payload)
+    duplicate = client.put("/internal/v1/interest-taxonomies/1.0.0", json=payload)
+
+    assert first.status_code == 200
+    assert duplicate.status_code == 200
+    assert first.json() == {
+        "version": "1.0.0",
+        "source_hash": "a" * 64,
+        "category_count": 1,
+        "topic_count": 1,
+    }
+
+
+def test_interest_taxonomy_rejects_path_version_mismatch(client: TestClient) -> None:
+    """경로와 본문 taxonomy 버전이 다르면 Snapshot을 저장하지 않는다."""
+    response = client.put(
+        "/internal/v1/interest-taxonomies/2.0.0", json=_taxonomy_payload()
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "INTEREST_TAXONOMY_VERSION_MISMATCH"
+
+
+def test_user_context_upsert_preserves_signup_interests(
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
+) -> None:
     """회원가입 시 고른 관심 카테고리·토픽이 컨텍스트 응답에 그대로 반영되는지 검증한다."""
     payload = {
         "context_version": 1,
@@ -59,6 +117,24 @@ def test_user_context_upsert_preserves_signup_interests(client: TestClient) -> N
     assert body["signup_interests"] == [
         {"category": "기술", "topics": ["AI", "반도체"]},
         {"category": "경제", "topics": []},
+    ]
+    assert len(agent_jobs_fake.jobs_with_feature("SVC-008")) == 2
+
+
+def test_user_context_accepts_custom_topic_without_category(client: TestClient) -> None:
+    """사용자 추가 Topic은 Category null 상태로 Snapshot에 보존되는지 검증한다."""
+    response = client.put(
+        "/internal/v1/users/custom-topic-user/context",
+        json={
+            "context_version": 1,
+            "plan": "free",
+            "signup_interests": [{"category": None, "topics": ["양자 센서"]}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["signup_interests"] == [
+        {"category": None, "topics": ["양자 센서"]}
     ]
 
 
@@ -92,6 +168,9 @@ def test_onboarding_with_interests_enqueues_seed_job(
     seed_jobs = agent_jobs_fake.jobs_with_feature("WSE-014")
     assert len(seed_jobs) == 1
     assert seed_jobs[0].job_type == "personal_wiki_build"
+    report_jobs = agent_jobs_fake.jobs_with_feature("SVC-008")
+    assert len(report_jobs) == 1
+    assert report_jobs[0].idempotency_key.startswith("interest-report:")
 
 
 def test_onboarding_without_interests_skips_seed_job(

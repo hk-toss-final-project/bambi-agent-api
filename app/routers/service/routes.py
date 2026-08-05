@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 
+from app.exceptions import AgentApiError, ErrorDetail
 from app.dependencies import (
     get_collection_schedule_service,
     get_mvp_service,
@@ -24,6 +25,10 @@ from app.schemas.generated_content import (
     GeneratedContentListResponse,
 )
 from app.schemas.interests import InterestProfileResponse, InterestRebuildRequest
+from app.schemas.interest_taxonomy import (
+    InterestTaxonomyResponse,
+    InterestTaxonomyUpsertRequest,
+)
 from app.schemas.mvp import (
     AcceptedJobResponse,
     ContentMarkRequest,
@@ -74,6 +79,29 @@ UserId = Annotated[str, Path(min_length=1, max_length=128, description="사용�
 def _request_id(request: Request) -> str:
     """추적 미들웨어가 생성한 Request ID를 반환한다."""
     return request.state.request_id
+
+
+@router.put(
+    "/interest-taxonomies/{version}",
+    response_model=InterestTaxonomyResponse,
+    operation_id="upsert_interest_taxonomy",
+    summary="관심사 taxonomy Snapshot 반영",
+)
+async def upsert_interest_taxonomy(
+    version: Annotated[str, Path(min_length=1, max_length=50)],
+    payload: InterestTaxonomyUpsertRequest,
+    service: AgentApiMvpService = Depends(get_mvp_service),
+) -> InterestTaxonomyResponse:
+    """Service DB의 taxonomy를 Agent DB에 버전 단위로 복제한다."""
+    if version != payload.version:
+        raise AgentApiError(
+            status.HTTP_409_CONFLICT,
+            ErrorDetail(
+                code="INTEREST_TAXONOMY_VERSION_MISMATCH",
+                message="경로와 본문의 taxonomy 버전이 다릅니다.",
+            ),
+        )
+    return await service.upsert_interest_taxonomy(payload)
 
 
 @router.put(

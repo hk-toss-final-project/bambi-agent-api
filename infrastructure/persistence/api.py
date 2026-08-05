@@ -96,6 +96,12 @@ from .features.generation_runtime import (
     persist_report_generation,
     upsert_user_context_snapshot,
 )
+from .features.interest_taxonomy import (
+    InterestTaxonomyConflictError,
+    StoredInterestTaxonomy,
+    sync_user_interest_subscriptions,
+    upsert_interest_taxonomy_snapshot,
+)
 from .features.events import db_027
 from .features.api_keys import db_028
 from .features.usage import db_029

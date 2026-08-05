@@ -27,6 +27,7 @@ from app.main import create_app
 from app.services.agent_jobs import (
     AgentJobRecord,
     ClaimedJobRecord,
+    StoredInterestTaxonomyRecord,
     StoredUserContextRecord,
     SubmittedGenerationJob,
     SubmittedSourceJob,
@@ -35,6 +36,7 @@ from app.services.mvp import AgentApiMvpService
 from app.services.publish_snapshots import PublishSnapshotService
 from infrastructure.persistence.api import (
     GeneratedContentNotFoundError,
+    InterestTaxonomyConflictError,
     StaleContextVersionError,
     UserContextRequiredError,
 )
@@ -61,6 +63,7 @@ class InMemoryAgentJobRepository:
         self._idempotency: dict[tuple[str, str, str], str] = {}
         self._generated_contents: set[tuple[str, str]] = set()
         self._feedback_events: set[tuple[str, str]] = set()
+        self._taxonomies: dict[str, StoredInterestTaxonomyRecord] = {}
 
     def register_generated_content(self, user_id: str, content_id: str) -> None:
         """위키마킹 대상이 될 생성 콘텐츠를 테스트용으로 등록한다."""
@@ -132,6 +135,7 @@ class InMemoryAgentJobRepository:
         if current is not None and context_version <= current.context_version:
             raise StaleContextVersionError(user_id)
         stored = StoredUserContextRecord(
+            context_id=uuid4().hex,
             user_id=user_id,
             context_version=context_version,
             plan=plan,
@@ -143,12 +147,42 @@ class InMemoryAgentJobRepository:
             blocked_interest_ids=list(blocked_interest_ids),
             blocked_source_ids=list(blocked_source_ids),
             signup_interests=[
-                {"category": str(item["category"]), "topics": list(item.get("topics", []))}
+                {
+                    "category": (
+                        str(item["category"])
+                        if item.get("category") is not None
+                        else None
+                    ),
+                    "topics": list(item.get("topics", [])),
+                }
                 for item in signup_interests
             ],
             created_at=_utc_now(),
         )
         self._contexts[user_id] = stored
+        return stored
+
+    async def upsert_interest_taxonomy(
+        self,
+        *,
+        version: str,
+        source_hash: str,
+        locale: str,
+        categories: list[dict[str, Any]],
+    ) -> StoredInterestTaxonomyRecord:
+        """taxonomy Snapshot을 테스트 메모리에 멱등 저장한다."""
+        existing = self._taxonomies.get(version)
+        if existing is not None:
+            if existing.source_hash != source_hash:
+                raise InterestTaxonomyConflictError(version)
+            return existing
+        stored = StoredInterestTaxonomyRecord(
+            version=version,
+            source_hash=source_hash,
+            category_count=len(categories),
+            topic_count=sum(len(category.get("topics", [])) for category in categories),
+        )
+        self._taxonomies[version] = stored
         return stored
 
     async def submit_web_clipping(

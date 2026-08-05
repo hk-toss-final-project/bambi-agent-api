@@ -55,6 +55,7 @@ class SubmittedSourceJob:
 class StoredUserContextRecord:
     """PostgreSQL에 저장된 사용자 Context Snapshot의 애플리케이션 표현."""
 
+    context_id: str
     user_id: str
     context_version: int
     plan: str
@@ -67,6 +68,16 @@ class StoredUserContextRecord:
     blocked_source_ids: list[str]
     signup_interests: list[dict[str, Any]]
     created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class StoredInterestTaxonomyRecord:
+    """PostgreSQL에 저장된 관심사 taxonomy Snapshot 요약."""
+
+    version: str
+    source_hash: str
+    category_count: int
+    topic_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +107,17 @@ class AgentJobRepository(Protocol):
         signup_interests: list[dict[str, Any]],
     ) -> StoredUserContextRecord:
         """새 사용자 Context Snapshot을 PostgreSQL에 저장한다."""
+        ...
+
+    async def upsert_interest_taxonomy(
+        self,
+        *,
+        version: str,
+        source_hash: str,
+        locale: str,
+        categories: list[dict[str, Any]],
+    ) -> StoredInterestTaxonomyRecord:
+        """Service taxonomy를 Agent DB의 불변 Snapshot으로 저장한다."""
         ...
 
     async def submit_web_clipping(

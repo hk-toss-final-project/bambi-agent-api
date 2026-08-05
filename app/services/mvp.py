@@ -5,6 +5,7 @@ PostgreSQL Agent Job 저장소를 필수로 사용한다. 저장소가 없는 �
 발행 Snapshot 조정은 PublishSnapshotService가 담당한다.
 """
 
+import hashlib
 import logging
 
 from fastapi import status
@@ -25,6 +26,10 @@ from app.schemas.mvp import (
     UrlWikiSourceRequest,
     WebClippingRequest,
 )
+from app.schemas.interest_taxonomy import (
+    InterestTaxonomyResponse,
+    InterestTaxonomyUpsertRequest,
+)
 from app.services.agent_jobs import (
     AgentJobRecord,
     AgentJobRepository,
@@ -36,6 +41,7 @@ from domain.jobs.api import job_002
 from domain.personal_wiki.source_events.api import wse_001, wse_011, wse_014
 from infrastructure.persistence.api import (
     GeneratedContentNotFoundError,
+    InterestTaxonomyConflictError,
     StaleContextVersionError,
     UserContextRequiredError,
 )
@@ -49,6 +55,32 @@ class AgentApiMvpService:
     def __init__(self, agent_job_repository: AgentJobRepository) -> None:
         """사용자 원본·Job PostgreSQL 저장소를 주입한다."""
         self._agent_jobs = agent_job_repository
+
+    async def upsert_interest_taxonomy(
+        self, payload: InterestTaxonomyUpsertRequest
+    ) -> InterestTaxonomyResponse:
+        """Service taxonomy 전체를 Agent DB의 버전 Snapshot으로 멱등 저장한다."""
+        try:
+            stored = await self._agent_jobs.upsert_interest_taxonomy(
+                version=payload.version,
+                source_hash=payload.source_hash,
+                locale=payload.locale,
+                categories=[category.model_dump() for category in payload.categories],
+            )
+        except InterestTaxonomyConflictError as exc:
+            raise AgentApiError(
+                status.HTTP_409_CONFLICT,
+                ErrorDetail(
+                    code="INTEREST_TAXONOMY_VERSION_CONFLICT",
+                    message="같은 taxonomy 버전에 다른 원본이 이미 저장되어 있습니다.",
+                ),
+            ) from exc
+        return InterestTaxonomyResponse(
+            version=stored.version,
+            source_hash=stored.source_hash,
+            category_count=stored.category_count,
+            topic_count=stored.topic_count,
+        )
 
     @staticmethod
     def _accepted_job_response(
@@ -255,6 +287,7 @@ class AgentApiMvpService:
                 ),
             ) from exc
         await self._seed_onboarding_interests(stored, request_id=request_id)
+        await self._enqueue_interest_reports(stored, request_id=request_id)
         return UserContextResponse(
             user_id=stored.user_id,
             context_version=stored.context_version,
@@ -307,6 +340,43 @@ class AgentApiMvpService:
             _logger.warning(
                 "온보딩 관심사 씨앗 접수 실패 (user_id=%s)", stored.user_id, exc_info=True
             )
+
+    async def _enqueue_interest_reports(
+        self, stored: StoredUserContextRecord, *, request_id: str
+    ) -> None:
+        """가입 Topic별 비동기 리포트 Job을 멱등 등록한다.
+
+        Report Worker는 Topic으로 Global Source 캐시를 먼저 검색하고 근거가
+        부족할 때만 Worker 안에서 실시간 검색한다. 컨텍스트 저장 성공을 부가
+        작업 실패가 되돌리지 않도록 등록 실패는 로그만 남긴다.
+        """
+        topics = dict.fromkeys(
+            str(raw_topic).strip()
+            for group in stored.signup_interests
+            for raw_topic in group.get("topics", [])
+            if str(raw_topic).strip()
+        )
+        for topic in topics:
+            digest = hashlib.sha256(
+                f"{stored.user_id}\0{topic.casefold()}".encode("utf-8")
+            ).hexdigest()[:32]
+            try:
+                await self._agent_jobs.submit_generation(
+                    user_id=stored.user_id,
+                    idempotency_key=f"interest-report:{digest}",
+                    topic=topic,
+                    content_type="interest_news_card",
+                    language=stored.preferred_language,
+                    scheduled_at=None,
+                    request_id=request_id,
+                )
+            except Exception:  # noqa: BLE001 - 리포트 등록은 컨텍스트 저장과 분리된 부가 작업
+                _logger.warning(
+                    "가입 관심사 리포트 등록 실패 (user_id=%s, topic=%s)",
+                    stored.user_id,
+                    topic,
+                    exc_info=True,
+                )
 
     async def get_job(self, job_id: str) -> JobStatusResponse:
         """식별자에 해당하는 Agent Job 상태를 조회한다."""

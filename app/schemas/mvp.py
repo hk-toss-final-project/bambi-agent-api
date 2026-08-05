@@ -85,8 +85,10 @@ class SignupInterest(ImmutableSchema):
     있다. 내부 관심사 모델(`user_interests`)의 `(category, topic)` 쌍으로 확장된다.
     """
 
-    category: str = Field(
-        min_length=1, max_length=100, description="가입 시 선택한 관심 카테고리"
+    category: str | None = Field(
+        default=None,
+        max_length=100,
+        description="가입 시 선택한 관심 카테고리. 사용자 추가 Topic이면 null",
     )
     topics: list[str] = Field(
         default_factory=list,

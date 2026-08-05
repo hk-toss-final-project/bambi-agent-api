@@ -93,7 +93,12 @@ async def upsert_user_context_snapshot(
     if current is not None and context_version <= int(current["context_version"]):
         raise StaleContextVersionError(user_id)
     normalized_interests = [
-        {"category": str(item["category"]), "topics": list(item.get("topics", []))}
+        {
+            "category": (
+                str(item["category"]) if item.get("category") is not None else None
+            ),
+            "topics": list(item.get("topics", [])),
+        }
         for item in signup_interests
     ]
     checksum_payload = {
@@ -343,15 +348,25 @@ async def load_report_context(
                 cache.title,
                 cache.markdown AS content,
                 COALESCE(cache.resolved_url, cache.canonical_url) AS url,
+                CASE WHEN topic_match.exact THEN 1.0 ELSE 0.0 END +
                 GREATEST(
                     similarity(cache.markdown, %s),
                     ts_rank(cache.search_vector, plainto_tsquery('simple', %s))
                 ) AS score
             FROM agent.global_source_documents AS cache
+            CROSS JOIN LATERAL (
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM agent.global_source_document_topics AS mapped
+                    WHERE mapped.global_source_document_id = cache.id
+                      AND lower(btrim(mapped.search_query)) = lower(btrim(%s))
+                ) AS exact
+            ) AS topic_match
             WHERE cache.content_status = 'fetched'
               AND cache.markdown IS NOT NULL
               AND (
-                    similarity(cache.markdown, %s) > 0.05
+                    topic_match.exact
+                    OR similarity(cache.markdown, %s) > 0.05
                     OR cache.search_vector @@ plainto_tsquery('simple', %s)
               )
         ), scored AS (
@@ -374,6 +389,7 @@ async def load_report_context(
             query,
             query,
             namespace_key,
+            query,
             query,
             query,
             query,

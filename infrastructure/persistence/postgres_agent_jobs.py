@@ -17,6 +17,7 @@ from psycopg_pool import AsyncConnectionPool
 from app.services.agent_jobs import (
     AgentJobRecord,
     ClaimedJobRecord,
+    StoredInterestTaxonomyRecord,
     StoredUserContextRecord,
     SubmittedGenerationJob,
     SubmittedSourceJob,
@@ -37,6 +38,8 @@ from infrastructure.persistence.api import (
     register_url_and_enqueue,
     set_personal_wiki_scope,
     set_system_job_scope,
+    sync_user_interest_subscriptions,
+    upsert_interest_taxonomy_snapshot,
     upsert_user_context_snapshot,
 )
 
@@ -255,10 +258,10 @@ class PostgresAgentJobRepository:
         blocked_source_ids: list[str],
         signup_interests: list[dict[str, Any]],
     ) -> StoredUserContextRecord:
-        """사용자 Context를 사용자 RLS Scope의 새 Snapshot으로 저장한다."""
+        """사용자 Context와 Topic 수집 구독을 같은 Transaction에서 저장한다."""
         async with self._pool.connection() as connection:
             async with connection.transaction():
-                await set_personal_wiki_scope(connection, user_id=user_id)
+                await set_system_job_scope(connection)
                 stored = await upsert_user_context_snapshot(
                     connection,
                     user_id=user_id,
@@ -273,7 +276,16 @@ class PostgresAgentJobRepository:
                     blocked_source_ids=blocked_source_ids,
                     signup_interests=signup_interests,
                 )
+                await sync_user_interest_subscriptions(
+                    connection,
+                    user_id=user_id,
+                    context_snapshot_id=stored.context_id,
+                    interest_taxonomy_version=interest_taxonomy_version,
+                    selected_topic_ids=selected_topic_ids,
+                    signup_interests=signup_interests,
+                )
         return StoredUserContextRecord(
+            context_id=stored.context_id,
             user_id=stored.user_id,
             context_version=stored.context_version,
             plan=stored.plan,
@@ -286,6 +298,32 @@ class PostgresAgentJobRepository:
             blocked_source_ids=stored.blocked_source_ids,
             signup_interests=stored.signup_interests,
             created_at=stored.created_at,
+        )
+
+    async def upsert_interest_taxonomy(
+        self,
+        *,
+        version: str,
+        source_hash: str,
+        locale: str,
+        categories: list[dict[str, Any]],
+    ) -> StoredInterestTaxonomyRecord:
+        """Service taxonomy를 시스템 Scope의 불변 Snapshot으로 저장한다."""
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await set_system_job_scope(connection)
+                stored = await upsert_interest_taxonomy_snapshot(
+                    connection,
+                    version=version,
+                    source_hash=source_hash,
+                    locale=locale,
+                    categories=categories,
+                )
+        return StoredInterestTaxonomyRecord(
+            version=stored.version,
+            source_hash=stored.source_hash,
+            category_count=stored.category_count,
+            topic_count=stored.topic_count,
         )
 
     async def submit_url_source(
