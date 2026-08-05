@@ -7,6 +7,7 @@
 > 상위 설계: [wiki-interest-subscription-design.md](wiki-interest-subscription-design.md)
 > (입력원 → LLM Wiki → 관심사 프로필 → 구독의 단방향 파생 원칙).
 > "확인됨"은 코드·스키마로 검증한 사실, "결정 필요"는 팀이 정해야 하는 항목이다.
+> 용어: 영어 `seed`의 한국어 표기는 **시드**로 통일한다.
 
 ---
 
@@ -64,7 +65,7 @@ graph LR
 #### (b) 채택 후 확인된 부작용 — 묶음 노드 (2026-08-04 E2E 검증)
 
 (b)로 실제 파이프라인을 돌려 보니, Wiki Builder가 고른 주제 노드와 함께
-**씨앗 문서 자체를 가리키는 상위 개념 노드**("온보딩 관심 주제")를 만들었다.
+**시드 문서 자체를 가리키는 상위 개념 노드**("온보딩 관심 주제")를 만들었다.
 이 노드는 선택 주제 전부와 연결돼 degree가 가장 높아 **관심사 1위**를 차지했다.
 
 | 순위 | Topic | score |
@@ -73,8 +74,8 @@ graph LR
 | 2~4 | 금리 / 반도체 / 생성형 AI | 0.710 |
 
 사용자가 선언한 관심사가 아니므로 INT-001에서 걸러낸다. 규칙은
-**"씨앗이 유일한 근거인 노드는 온보딩 라벨과 맞을 때만 관심 후보로 인정한다"** —
-라벨은 씨앗 Version의 `source_metadata.labels`에서 읽는다. 실제 저장이 같은
+**"시드가 유일한 근거인 노드는 온보딩 라벨과 맞을 때만 관심 후보로 인정한다"** —
+라벨은 시드 Version의 `source_metadata.labels`에서 읽는다. 실제 저장이 같은
 노드에 쌓이면 근거 종류가 늘어 이 판정에서 빠지므로 그때는 후보로 되살아난다.
 
 ### 4.3 점수 가중치 — 결정 S2
@@ -133,15 +134,15 @@ B(시드)가 A(리포트)보다 먼저 반영되면 웰컴 리포트가 시드 �
 
 | ID | 결정 | 결과 |
 |---|---|---|
-| S1 | 시드 Wiki 노드 생성 방식 | **(b) 합성 문서 + 기존 LLM Wiki Build** — 씨앗 Markdown을 `run_personal_wiki_build`에 태워 노드 생성 |
+| S1 | 시드 Wiki 노드 생성 방식 | **(b) 합성 문서 + 기존 LLM Wiki Build** — 시드 Markdown을 `run_personal_wiki_build`에 태워 노드 생성 |
 | S2 | `onboarding_seed` 가중치·최신성 취급 | **0.15**(클리핑 0.2보다 낮게)·중립 최신성 — `bench/onboarding_seed`로 노드 생성 품질 검증 |
 | S3 | 시드 명시 삭제 UI 필요 여부 | **자연 하락만** — 실제 저장이 쌓이면 재계산 시 밀려남(별도 삭제 UI 없음) |
 | A1 | 웰컴 리포트 `content_type` | **`interest_news_card`**(카드형, 이미 기본값) |
 | A2 | 다중 선택 시 topic 선정 | **랜덤 1개** — 트리거 소유자인 Service가 선택 |
-| 트리거 | 웰컴 리포트 발행 주체 | **Service**(`POST /generations`, MVP 2026-07-20 결정 준수). Agent는 씨앗(Part B)만 담당 |
+| 트리거 | 웰컴 리포트 발행 주체 | **Service**(`POST /generations`, MVP 2026-07-20 결정 준수). Agent는 시드(Part B)만 담당 |
 | A3 | 웰컴 리포트 게이팅 | 미결 — 봇·대량 가입 비용은 Service 트리거와 함께 별도 논의 |
 
-구현 현황: Part B(씨앗)는 `agent-api`에 구현 완료(WSE-014). Part A(웰컴 리포트)는 계약 문서로
+구현 현황: Part B(시드)는 `agent-api`에 구현 완료(WSE-014). Part A(웰컴 리포트)는 계약 문서로
 Service에 위임([service-integration-guide.md](service-integration-guide.md) §3.1,
 [agent-contract.md](agent-contract.md) §4.2-1).
 
