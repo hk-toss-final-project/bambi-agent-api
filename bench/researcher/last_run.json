@@ -1,20 +1,395 @@
 {
   "model": "gpt-4.1-mini",
   "summary": {
-    "total": 4,
-    "expansion_cases": 3,
-    "expansion_targets": 5,
+    "total": 19,
+    "expansion_cases": 11,
+    "expansion_targets": 18,
     "expansion_recall": 1.0,
-    "expansion_case_pass": 4,
-    "live_decision_accuracy": 0.75,
-    "noise_cases": 1,
-    "avg_tool_calls": 5.5,
-    "max_iterations_hit": 2,
-    "avg_latency_ms": 4880,
-    "input_tokens": 8142,
-    "output_tokens": 604
+    "expansion_case_pass": 19,
+    "live_decision_accuracy": 1.0,
+    "noise_cases": 0,
+    "avg_tool_calls": 4.68,
+    "max_iterations_hit": 8,
+    "avg_latency_ms": 5743,
+    "input_tokens": 37098,
+    "output_tokens": 2722
   },
   "results": [
+    {
+      "id": "exp-01-kospi",
+      "kind": "확장 필요",
+      "queries": [
+        "코스피",
+        "시가총액 가중 방식",
+        "서킷 브레이커",
+        "투자자 예탁금"
+      ],
+      "expansion_found": [
+        "d2",
+        "d3"
+      ],
+      "expansion_missed": [],
+      "expansion_ok": true,
+      "noise_collected": [],
+      "expect_live": false,
+      "live_called": false,
+      "live_ok": true,
+      "documents": 3,
+      "tool_calls": 4,
+      "stop_reason": "final",
+      "latency_ms": 9717,
+      "input_tokens": 2116,
+      "output_tokens": 149
+    },
+    {
+      "id": "exp-02-samsung",
+      "kind": "확장 필요",
+      "queries": [
+        "삼성전자",
+        "HBM 메모리",
+        "파운드리 수율"
+      ],
+      "expansion_found": [
+        "d2",
+        "d3"
+      ],
+      "expansion_missed": [],
+      "expansion_ok": true,
+      "noise_collected": [],
+      "expect_live": false,
+      "live_called": false,
+      "live_ok": true,
+      "documents": 3,
+      "tool_calls": 3,
+      "stop_reason": "final",
+      "latency_ms": 7375,
+      "input_tokens": 1574,
+      "output_tokens": 168
+    },
+    {
+      "id": "exp-03-ev",
+      "kind": "확장 필요",
+      "queries": [
+        "전기차",
+        "배터리 화재 안전성",
+        "충전 인프라",
+        "전기차 보급",
+        "전기차 시장 동향"
+      ],
+      "expansion_found": [
+        "d2",
+        "d3"
+      ],
+      "expansion_missed": [],
+      "expansion_ok": true,
+      "noise_collected": [],
+      "expect_live": false,
+      "live_called": false,
+      "live_ok": true,
+      "documents": 3,
+      "tool_calls": 5,
+      "stop_reason": "max_iterations",
+      "latency_ms": 5127,
+      "input_tokens": 2104,
+      "output_tokens": 91
+    },
+    {
+      "id": "exp-04-inflation",
+      "kind": "확장 필요",
+      "queries": [
+        "인플레이션",
+        "기준금리 인상",
+        "인플레이션 영향",
+        "인플레이션 원인",
+        "인플레이션 대응"
+      ],
+      "expansion_found": [
+        "d2"
+      ],
+      "expansion_missed": [],
+      "expansion_ok": true,
+      "noise_collected": [],
+      "expect_live": true,
+      "live_called": true,
+      "live_ok": true,
+      "documents": 2,
+      "tool_calls": 5,
+      "stop_reason": "max_iterations",
+      "latency_ms": 4689,
+      "input_tokens": 2010,
+      "output_tokens": 91
+    },
+    {
+      "id": "exp-05-llm",
+      "kind": "확장 필요",
+      "queries": [
+        "LLM",
+        "RAG",
+        "파인튜닝"
+      ],
+      "expansion_found": [
+        "d2",
+        "d3"
+      ],
+      "expansion_missed": [],
+      "expansion_ok": true,
+      "noise_collected": [],
+      "expect_live": false,
+      "live_called": false,
+      "live_ok": true,
+      "documents": 3,
+      "tool_calls": 3,
+      "stop_reason": "final",
+      "latency_ms": 4735,
+      "input_tokens": 1562,
+      "output_tokens": 152
+    },
+    {
+      "id": "exp-06-housing",
+      "kind": "확장 필요",
+      "queries": [
+        "부동산",
+        "전세 제도",
+        "청약 경쟁률"
+      ],
+      "expansion_found": [
+        "d2",
+        "d3"
+      ],
+      "expansion_missed": [],
+      "expansion_ok": true,
+      "noise_collected": [],
+      "expect_live": false,
+      "live_called": false,
+      "live_ok": true,
+      "documents": 3,
+      "tool_calls": 3,
+      "stop_reason": "final",
+      "latency_ms": 5010,
+      "input_tokens": 1562,
+      "output_tokens": 164
+    },
+    {
+      "id": "noexp-01-python",
+      "kind": "확장 불필요",
+      "queries": [
+        "파이썬",
+        "파이썬 패키징",
+        "파이썬 타입 힌트",
+        "파이썬 프로그래밍",
+        "파이썬 특징"
+      ],
+      "expansion_found": [],
+      "expansion_missed": [],
+      "expansion_ok": true,
+      "noise_collected": [],
+      "expect_live": false,
+      "live_called": false,
+      "live_ok": true,
+      "documents": 3,
+      "tool_calls": 5,
+      "stop_reason": "final",
+      "latency_ms": 7221,
+      "input_tokens": 2344,
+      "output_tokens": 276
+    },
+    {
+      "id": "noexp-02-olympic",
+      "kind": "확장 불필요",
+      "queries": [
+        "올림픽",
+        "올림픽 개막식",
+        "올림픽 메달 집계",
+        "올림픽 역사",
+        "올림픽 개최국"
+      ],
+      "expansion_found": [],
+      "expansion_missed": [],
+      "expansion_ok": true,
+      "noise_collected": [],
+      "expect_live": true,
+      "live_called": true,
+      "live_ok": true,
+      "documents": 2,
+      "tool_calls": 5,
+      "stop_reason": "max_iterations",
+      "latency_ms": 4647,
+      "input_tokens": 2009,
+      "output_tokens": 90
+    },
+    {
+      "id": "noexp-03-kimchi",
+      "kind": "확장 불필요",
+      "queries": [
+        "김치",
+        "김치 담그기",
+        "김치 수출",
+        "김치냉장고",
+        "김치 역사",
+        "김치 종류"
+      ],
+      "expansion_found": [],
+      "expansion_missed": [],
+      "expansion_ok": true,
+      "noise_collected": [],
+      "expect_live": false,
+      "live_called": false,
+      "live_ok": true,
+      "documents": 3,
+      "tool_calls": 6,
+      "stop_reason": "final",
+      "latency_ms": 6859,
+      "input_tokens": 2286,
+      "output_tokens": 241
+    },
+    {
+      "id": "noexp-04-coffee",
+      "kind": "확장 불필요",
+      "queries": [
+        "커피",
+        "커피 원두",
+        "커피 시장",
+        "커피와 건강",
+        "커피 로스팅",
+        "카페인",
+        "커피 브랜드"
+      ],
+      "expansion_found": [],
+      "expansion_missed": [],
+      "expansion_ok": true,
+      "noise_collected": [],
+      "expect_live": false,
+      "live_called": false,
+      "live_ok": true,
+      "documents": 3,
+      "tool_calls": 7,
+      "stop_reason": "max_iterations",
+      "latency_ms": 4920,
+      "input_tokens": 2262,
+      "output_tokens": 131
+    },
+    {
+      "id": "live-01-blockchain",
+      "kind": "실시간 수집 필요",
+      "queries": [
+        "블록체인",
+        "blockchain",
+        "분산원장",
+        "암호화폐"
+      ],
+      "expansion_found": [],
+      "expansion_missed": [],
+      "expansion_ok": true,
+      "noise_collected": [],
+      "expect_live": true,
+      "live_called": true,
+      "live_ok": true,
+      "documents": 2,
+      "tool_calls": 4,
+      "stop_reason": "final",
+      "latency_ms": 6670,
+      "input_tokens": 1784,
+      "output_tokens": 125
+    },
+    {
+      "id": "live-02-space",
+      "kind": "실시간 수집 필요",
+      "queries": [
+        "우주 관광",
+        "우주 여행",
+        "우주 관광 산업",
+        "민간 우주 여행",
+        "스페이스X 우주 관광"
+      ],
+      "expansion_found": [],
+      "expansion_missed": [],
+      "expansion_ok": true,
+      "noise_collected": [],
+      "expect_live": true,
+      "live_called": true,
+      "live_ok": true,
+      "documents": 1,
+      "tool_calls": 5,
+      "stop_reason": "max_iterations",
+      "latency_ms": 4076,
+      "input_tokens": 1779,
+      "output_tokens": 87
+    },
+    {
+      "id": "live-03-quantum",
+      "kind": "실시간 수집 필요",
+      "queries": [
+        "양자컴퓨터",
+        "quantum computer",
+        "quantum computing",
+        "quantum technology"
+      ],
+      "expansion_found": [],
+      "expansion_missed": [],
+      "expansion_ok": true,
+      "noise_collected": [],
+      "expect_live": true,
+      "live_called": true,
+      "live_ok": true,
+      "documents": 1,
+      "tool_calls": 4,
+      "stop_reason": "final",
+      "latency_ms": 4900,
+      "input_tokens": 1784,
+      "output_tokens": 117
+    },
+    {
+      "id": "edge-01-english",
+      "kind": "영문 주제",
+      "queries": [
+        "Kubernetes",
+        "오토스케일링",
+        "인그레스 설정",
+        "Kubernetes 아키텍처",
+        "Kubernetes 클러스터"
+      ],
+      "expansion_found": [
+        "d2"
+      ],
+      "expansion_missed": [],
+      "expansion_ok": true,
+      "noise_collected": [],
+      "expect_live": true,
+      "live_called": true,
+      "live_ok": true,
+      "documents": 2,
+      "tool_calls": 5,
+      "stop_reason": "max_iterations",
+      "latency_ms": 4682,
+      "input_tokens": 1974,
+      "output_tokens": 88
+    },
+    {
+      "id": "edge-02-ambiguous",
+      "kind": "모호한 주제",
+      "queries": [
+        "보안",
+        "랜섬웨어",
+        "보안 취약점",
+        "정보보안",
+        "사이버 보안"
+      ],
+      "expansion_found": [
+        "d2"
+      ],
+      "expansion_missed": [],
+      "expansion_ok": true,
+      "noise_collected": [],
+      "expect_live": true,
+      "live_called": true,
+      "live_ok": true,
+      "documents": 2,
+      "tool_calls": 5,
+      "stop_reason": "max_iterations",
+      "latency_ms": 4903,
+      "input_tokens": 1983,
+      "output_tokens": 83
+    },
     {
       "id": "wiki-01-noise-chunks",
       "kind": "개인 Wiki 잡음",
@@ -26,18 +401,16 @@
       "expansion_found": [],
       "expansion_missed": [],
       "expansion_ok": true,
-      "noise_collected": [
-        "wiki-schema"
-      ],
+      "noise_collected": [],
       "expect_live": true,
       "live_called": true,
       "live_ok": true,
-      "documents": 2,
+      "documents": 1,
       "tool_calls": 3,
       "stop_reason": "final",
-      "latency_ms": 5231,
-      "input_tokens": 1472,
-      "output_tokens": 126
+      "latency_ms": 5276,
+      "input_tokens": 1376,
+      "output_tokens": 106
     },
     {
       "id": "wiki-02-wiki-only",
@@ -47,7 +420,7 @@
         "서킷 브레이커",
         "코스피지수",
         "투자자 예탁금",
-        "코스피 시장",
+        "한국 증시",
         "한국 주식시장"
       ],
       "expansion_found": [
@@ -59,14 +432,14 @@
       "expansion_ok": true,
       "noise_collected": [],
       "expect_live": true,
-      "live_called": false,
-      "live_ok": false,
-      "documents": 3,
+      "live_called": true,
+      "live_ok": true,
+      "documents": 4,
       "tool_calls": 6,
       "stop_reason": "final",
-      "latency_ms": 5825,
-      "input_tokens": 2340,
-      "output_tokens": 229
+      "latency_ms": 6917,
+      "input_tokens": 2338,
+      "output_tokens": 239
     },
     {
       "id": "wiki-03-pool-chunks",
@@ -74,9 +447,9 @@
       "queries": [
         "전기차",
         "전기차 배터리",
-        "전기차 시장 동향",
-        "전기차 배터리 시장",
-        "전기차 기술"
+        "전기차 시장",
+        "전기차 기술",
+        "전기차 배터리 시장 동향"
       ],
       "expansion_found": [
         "pool-ev"
@@ -90,8 +463,8 @@
       "documents": 2,
       "tool_calls": 5,
       "stop_reason": "max_iterations",
-      "latency_ms": 3925,
-      "input_tokens": 1910,
+      "latency_ms": 4357,
+      "input_tokens": 1903,
       "output_tokens": 91
     },
     {
@@ -99,13 +472,11 @@
       "kind": "개인 Wiki 잡음",
       "queries": [
         "반도체",
-        "SK하이닉스",
-        "반도체 수출",
-        "HBM 메모리",
-        "파운드리 수율",
-        "반도체 산업",
         "메모리 반도체",
-        "파운드리"
+        "반도체 수출",
+        "파운드리",
+        "HBM 메모리",
+        "반도체 산업"
       ],
       "expansion_found": [
         "g1"
@@ -117,11 +488,11 @@
       "live_called": false,
       "live_ok": true,
       "documents": 4,
-      "tool_calls": 8,
-      "stop_reason": "max_iterations",
-      "latency_ms": 4540,
-      "input_tokens": 2420,
-      "output_tokens": 158
+      "tool_calls": 6,
+      "stop_reason": "final",
+      "latency_ms": 7046,
+      "input_tokens": 2348,
+      "output_tokens": 233
     }
   ]
 }
