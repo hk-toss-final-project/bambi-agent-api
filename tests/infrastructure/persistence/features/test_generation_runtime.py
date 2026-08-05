@@ -292,3 +292,64 @@ def test_publish_payload_separates_generation_topic_from_content_tags() -> None:
     assert payload["generation_topic"] == "의존성 구조"
     assert payload["tags"] == ["의존성 구조"]
     assert payload["content_tags"] == ["강한 결합", "DDD", "Application Layer"]
+
+
+def test_snapshot_row_mapping_exposes_every_payload_field_we_write() -> None:
+    """저장 payload에 넣은 필드가 응답 매핑에서 빠지지 않는지 확인한다.
+
+    읽는 쪽이 키를 명시적으로 고르므로, 쓰는 쪽에만 필드를 추가하면 응답에는
+    나오지 않는다(2026-08-05 실측: content_tags가 저장은 됐는데 응답이 늘 빈
+    목록이었다).
+    """
+    from datetime import UTC, datetime
+
+    from infrastructure.persistence.postgres_publish_snapshots import (
+        PostgresPublishSnapshotRepository,
+    )
+
+    row = {
+        "content_id": "content-1",
+        "user_id": "user-1",
+        "version": 1,
+        "snapshot_hash": "h" * 64,
+        "created_at": datetime(2026, 8, 5, tzinfo=UTC),
+        "payload": {
+            "title": "제목",
+            "summary": "요약",
+            "body": "본문",
+            "citations": [],
+            "generation_topic": "의존성 구조",
+            "tags": ["의존성 구조"],
+            "content_tags": ["강한 결합", "DDD"],
+        },
+    }
+
+    snapshot = PostgresPublishSnapshotRepository._snapshot_from_row(row)
+
+    assert snapshot.generation_topic == "의존성 구조"
+    assert snapshot.tags == ["의존성 구조"]
+    assert snapshot.content_tags == ["강한 결합", "DDD"]
+
+
+def test_snapshot_row_mapping_tolerates_snapshots_saved_before_new_fields() -> None:
+    """새 필드가 없던 시절 Snapshot도 기본값으로 읽힌다."""
+    from datetime import UTC, datetime
+
+    from infrastructure.persistence.postgres_publish_snapshots import (
+        PostgresPublishSnapshotRepository,
+    )
+
+    row = {
+        "content_id": "content-1",
+        "user_id": "user-1",
+        "version": 1,
+        "snapshot_hash": "h" * 64,
+        "created_at": datetime(2026, 8, 5, tzinfo=UTC),
+        "payload": {"title": "제목", "summary": "요약", "body": "본문"},
+    }
+
+    snapshot = PostgresPublishSnapshotRepository._snapshot_from_row(row)
+
+    assert snapshot.generation_topic == ""
+    assert snapshot.tags == []
+    assert snapshot.content_tags == []

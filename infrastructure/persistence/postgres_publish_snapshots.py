@@ -80,8 +80,14 @@ class PostgresPublishSnapshotRepository:
                 "summary": payload["summary"],
                 "body": payload["body"],
                 "citations": payload.get("citations", []),
-                # tags는 나중에 추가된 필드라, 그 전에 저장된 Snapshot에는 없다.
+                # 아래 셋은 나중에 추가된 필드라, 그 전에 저장된 Snapshot에는 없다.
+                # 쓰는 쪽(generation_runtime.persist_report_generation)에 필드를
+                # 추가할 때 이 매핑도 함께 고쳐야 한다 — 여기서 키를 명시적으로
+                # 고르므로 payload에만 넣으면 응답에 나오지 않는다
+                # (2026-08-05 실측: content_tags가 저장은 됐는데 응답이 늘 빈 목록).
+                "generation_topic": payload.get("generation_topic", ""),
                 "tags": payload.get("tags", []),
+                "content_tags": payload.get("content_tags", []),
                 "created_at": row["created_at"],
             }
         )
