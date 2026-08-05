@@ -102,6 +102,15 @@ class Settings(BaseModel):
             "API를 여러 인스턴스로 띄우면 수집이 중복되므로 그때는 끈다"
         ),
     )
+    collection_content_fetch_limit: int = Field(
+        default=5,
+        ge=0,
+        le=100,
+        description=(
+            "Scheduler tick마다 Jina Reader로 본문을 채울 문서 수 (0이면 끔). "
+            "수집은 URL만 저장하므로 이 값이 0이면 본문 없는 문서만 쌓인다"
+        ),
+    )
 
     @property
     def dev_agent_api_enabled(self) -> bool:
@@ -171,5 +180,8 @@ def load_settings() -> Settings:
         ),
         enable_collection_scheduler=_boolean_env(
             "ENABLE_COLLECTION_SCHEDULER", True
+        ),
+        collection_content_fetch_limit=_integer_env(
+            "COLLECTION_CONTENT_FETCH_LIMIT", 5
         ),
     )

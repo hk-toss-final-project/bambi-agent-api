@@ -5,6 +5,7 @@
 """
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -115,6 +116,30 @@ def test_first_run_collects_without_waiting_for_cron(
     assert calls[0]["providers"] == ["naver"]
     assert calls[0]["language"] == "ko"
     assert calls[0]["naver_client_id"] == "id"
+
+
+def test_collection_records_run_under_the_requesting_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """수집 실행을 지시한 Source의 Key를 Worker로 넘기는지 검증한다.
+
+    Provider 이름으로 되돌리면 실행 이력이 `latest-{provider}`에만 쌓여,
+    Cron 주기·일일 한도 판정이 쓰는 마지막 실행 시각이 영영 비어 있게 된다.
+    """
+    schedule = _schedule(last_started_at=None)
+    schedule = replace(schedule, source_key="interest-taxonomy-google-news")
+    calls = _patch(monkeypatch, [schedule])
+
+    asyncio.run(
+        sch_002(
+            _FakeConnection(),  # type: ignore[arg-type]
+            database_url="postgresql://fake",
+            credentials=_CREDENTIALS,
+            now=_NOW,
+        )
+    )
+
+    assert calls[0]["source_key"] == "interest-taxonomy-google-news"
 
 
 def test_each_keyword_is_collected_as_its_own_query(

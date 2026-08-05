@@ -213,6 +213,10 @@ async def collect_schedule_keywords(
             gdelt_base_url=credentials.gdelt_base_url,
             news_api_key=credentials.news_api_key,
             search_options=dict(schedule.search_options),
+            # 실행 이력을 이 수집을 지시한 Source에 남긴다. Provider 이름으로
+            # 되돌리면 Cron 주기·일일 한도 판정이 쓰는 "마지막 실행 시각"이
+            # 엉뚱한 Source에 쌓인다(persist_collected_articles 주석 참고).
+            source_key=schedule.source_key,
         )
         if remaining is not None:
             remaining -= 1

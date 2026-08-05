@@ -2,6 +2,9 @@
 
 실제 DB 연결 없이 Connection과 스케줄 기능을 대역으로 주입해, 설정에서
 Scheduler를 구성하는 흐름·Provider별 실패 격리·상주 루프를 확인한다.
+
+tick은 수집에서 끝나지 않고 본문 수집까지 이어지므로, 수집만 보는 테스트는
+본문 수집 Batch를 대역으로 막아 네트워크·DB 접근을 없앤다.
 """
 
 import asyncio
@@ -48,6 +51,23 @@ def _patch_connection(
     monkeypatch.setattr(runtime, "AsyncConnection", _FakeAsyncConnection)
 
 
+def _patch_content_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    fetched: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """본문 수집 Batch를 대역으로 바꾸고 호출 인자를 기록한다."""
+    calls: list[dict[str, Any]] = []
+
+    async def _run(**kwargs: Any) -> list[dict[str, Any]]:
+        """호출 인자를 기록하고 지정한 결과를 돌려준다."""
+        calls.append(kwargs)
+        return list(fetched or [])
+
+    monkeypatch.setattr(runtime, "run_global_content_fetch_batch", _run)
+    return calls
+
+
 def _settings(**overrides: Any) -> Settings:
     """Scheduler 구성에 필요한 최소 설정을 만든다."""
     values: dict[str, Any] = {
@@ -84,6 +104,7 @@ def test_build_scheduler_reads_credentials_from_settings() -> None:
 
     assert scheduler.database_url == "postgresql://fake"
     assert scheduler.tick_seconds == 120
+    assert scheduler.content_fetch_limit == 5
     assert scheduler.credentials == CollectionCredentials(
         naver_client_id="id",
         naver_client_secret="secret",
@@ -102,6 +123,7 @@ def test_run_once_collects_every_provider(monkeypatch: pytest.MonkeyPatch) -> No
     """등록된 Provider 세 개를 모두 판정하고 연결을 닫는지 검증한다."""
     connection = _FakeConnection()
     _patch_connection(monkeypatch, connection)
+    _patch_content_fetch(monkeypatch)
     called: list[str] = []
 
     def _recording(provider: str):
@@ -156,6 +178,7 @@ def test_run_once_isolates_provider_failure(
     """한 Provider가 예외로 죽어도 나머지 Provider 수집이 계속되는지 검증한다."""
     connection = _FakeConnection()
     _patch_connection(monkeypatch, connection)
+    _patch_content_fetch(monkeypatch)
 
     async def _failing(_connection: Any, **kwargs: Any) -> list[
         CollectionScheduleResult
@@ -182,10 +205,77 @@ def test_run_once_isolates_provider_failure(
     assert connection.closed is True
 
 
+def test_run_once_fetches_pending_content_after_collection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """수집을 끝낸 tick이 이어서 본문 수집 Batch를 돌리는지 검증한다.
+
+    수집은 URL만 저장하므로 이 단계가 빠지면 본문 없는 문서만 풀에 쌓인다.
+    """
+    connection = _FakeConnection()
+    _patch_connection(monkeypatch, connection)
+    calls = _patch_content_fetch(
+        monkeypatch,
+        fetched=[{"url": "https://a", "status": "completed"}],
+    )
+    monkeypatch.setattr(runtime, "PROVIDER_SCHEDULES", {"naver": _completed("naver")})
+
+    results = asyncio.run(build_scheduler(_settings()).run_once(now=_NOW))
+
+    assert calls == [{"database_url": "postgresql://fake", "limit": 5}]
+    content = results[-1]
+    assert content.provider == runtime.CONTENT_FETCH_STEP
+    assert content.status == "completed"
+    assert content.results == [{"url": "https://a", "status": "completed"}]
+
+
+def test_run_once_skips_content_fetch_when_limit_is_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """본문 수집 건수를 0으로 끄면 Batch를 아예 부르지 않는지 검증한다."""
+    connection = _FakeConnection()
+    _patch_connection(monkeypatch, connection)
+    calls = _patch_content_fetch(monkeypatch)
+    monkeypatch.setattr(runtime, "PROVIDER_SCHEDULES", {"naver": _completed("naver")})
+
+    settings = _settings(collection_content_fetch_limit=0)
+    results = asyncio.run(build_scheduler(settings).run_once(now=_NOW))
+
+    assert calls == []
+    assert [result.provider for result in results] == ["naver"]
+
+
+def test_run_once_isolates_content_fetch_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """본문 수집이 실패해도 수집 결과가 살아남는지 검증한다.
+
+    Jina Reader 장애로 tick 전체가 예외로 끝나면 정기 수집까지 함께 멈춘다.
+    """
+    connection = _FakeConnection()
+    _patch_connection(monkeypatch, connection)
+
+    async def _failing(**_kwargs: Any) -> list[dict[str, Any]]:
+        """본문 수집 도중 예기치 못한 오류를 발생시킨다."""
+        raise RuntimeError("Jina 장애")
+
+    monkeypatch.setattr(runtime, "run_global_content_fetch_batch", _failing)
+    monkeypatch.setattr(runtime, "PROVIDER_SCHEDULES", {"naver": _completed("naver")})
+
+    results = asyncio.run(build_scheduler(_settings()).run_once(now=_NOW))
+
+    assert results[0].status == "completed"
+    content = results[-1]
+    assert content.provider == runtime.CONTENT_FETCH_STEP
+    assert content.status == "skipped"
+    assert content.reason is not None and "Jina 장애" in content.reason
+
+
 def test_scheduler_loop_runs_each_tick(monkeypatch: pytest.MonkeyPatch) -> None:
     """상주 루프가 tick마다 판정을 실행하고 결과를 Callback으로 넘기는지 검증한다."""
     connection = _FakeConnection()
     _patch_connection(monkeypatch, connection)
+    _patch_content_fetch(monkeypatch)
     monkeypatch.setattr(runtime, "PROVIDER_SCHEDULES", {"naver": _completed("naver")})
     ticks: list[list[CollectionScheduleResult]] = []
 

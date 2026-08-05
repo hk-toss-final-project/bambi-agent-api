@@ -19,6 +19,7 @@ from .features.collection import (
 )
 from .features.wiki import WikiScheduleResult, sch_009, sch_010
 from .features.runtime import (
+    CONTENT_FETCH_STEP,
     PROVIDER_SCHEDULES,
     CollectionScheduler,
     build_collection_credentials,
@@ -42,6 +43,7 @@ from .features.management import (
 )
 
 __all__ = [
+    "CONTENT_FETCH_STEP",
     "PROVIDER_SCHEDULES",
     "SCHEDULED_PROVIDERS",
     "CollectionCredentials",

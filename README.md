@@ -131,7 +131,7 @@ Wiki 빌드와 Report Builder 생성은 OpenAI를 실제 호출하므로 비용�
 | `personal-wiki` | 클리핑·URL 원본을 LLM Wiki로 빌드 (Chunk 포함, Embedding은 보류) | 단발 / `--loop` 상주 |
 | `report-generation` | 생성 Job을 처리해 콘텐츠·발행 Snapshot 저장 | 단발 / `--loop` 상주 |
 | `global-collector` | 키워드로 외부 기사 수집 (`--keywords` 필수, Provider 기본 `gdelt,naver,google_news`) | 단발 |
-| `global-content` | 수집된 기사의 본문 확보 | 단발 |
+| `global-content` | 수집된 기사의 본문 확보 (**Scheduler가 tick마다 자동 실행**, 이 CLI는 수동 점검·backlog 소진용) | 단발 |
 
 ```bash
 # 단발: 대기 Job 한 Batch를 처리하고 종료
@@ -164,6 +164,13 @@ URL 등록 API는 URL Head와 `personal_wiki_url` Job을 먼저 Commit하고 202
 Global 풀을 채우는 정기 수집(SCH-001·SCH-002·SCH-003·SCH-004)입니다. **API 서버를 띄우면
 같이 돕니다** — 별도 실행이 필요 없습니다. 기동 시 백그라운드 Task로 올라가
 tick(기본 60초)마다 실행 차례가 된 Source만 수집합니다.
+
+tick 하나는 두 단계입니다.
+
+1. **수집** — 실행 차례가 된 Source를 검색해 기사 URL만 저장합니다(본문은 `pending`).
+2. **본문 확보** — 본문이 비어 있는 문서를 `COLLECTION_CONTENT_FETCH_LIMIT`건(기본 5)만큼
+   Jina Reader로 읽어 채웁니다. 0으로 두면 이 단계를 끄고, 그때는 `global-content`
+   Worker를 따로 돌려야 본문이 채워집니다.
 
 > **시계는 한 벌만 돌아야 합니다.** API를 여러 인스턴스로 띄우면 같은 수집이
 > 인스턴스 수만큼 중복 실행됩니다. 그런 배포에서는 `ENABLE_COLLECTION_SCHEDULER=false`로
@@ -228,8 +235,10 @@ Provider는 `naver`·`google_news`·`gdelt`·`newsapi` 넷을 지원합니다. �
 NewsAPI 무료 플랜은 하루 100회가 한계이므로 `daily_max_runs`를 반드시 함께
 설정하세요. `--once --force`는 Cron 실행 시각만 건너뛰고 호출 한도는 지킵니다.
 
-수집된 기사는 본문 없는 `pending` 상태로 쌓이므로, `global-content` Worker도
-함께 돌려야 Jina Reader가 본문을 채웁니다.
+수집 단계는 기사 URL만 저장하고 본문은 `pending`으로 남깁니다. 본문은 같은 tick의
+2단계가 채우므로 평상시에는 따로 실행할 필요가 없습니다. 쌓인 backlog를 빨리
+비우고 싶을 때만 `global-content` Worker를 별도로 돌리세요 — 점유가
+`FOR UPDATE SKIP LOCKED`라 Scheduler와 동시에 돌아도 같은 문서를 두 번 읽지 않습니다.
 
 ## 리포트 생성 에이전트
 

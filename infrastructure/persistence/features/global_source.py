@@ -482,6 +482,7 @@ async def persist_collected_articles(
     query: str,
     articles: list[LatestArticle],
     content_status: str = "pending",
+    source_key: str | None = None,
 ) -> dict[str, object]:
     """수집한 뉴스 기사 URL을 Global 수집 캐시에 중복 없이 저장한다.
 
@@ -495,10 +496,23 @@ async def persist_collected_articles(
         query: 이번 수집에 사용한 검색 키워드 문자열
         articles: Provider가 정규화한 최신 기사 목록
         content_status: 새로 저장한 문서의 초기 본문 상태 (기본 pending)
+        source_key: 실행 이력을 귀속할 Source Key. 정기 수집은 실행을 지시한
+            Source의 Key를 넘긴다. 생략하면 Provider 기본 Source에 기록한다
 
     Returns:
         source_id, run_id와 수집·생성·중복 건수, 저장된 문서 항목 목록
     """
+    # 실행 이력은 "이 수집을 지시한 Source"에 남아야 한다. 예전에는 무조건
+    # `latest-{provider}`에 기록해서, taxonomy 수집이 아무리 돌아도
+    # `interest-taxonomy-google-news`의 마지막 실행 시각이 영영 비어 있었다.
+    # 그러면 Scheduler는 그 Source를 "한 번도 안 돈 Source"로 보고 Cron 주기를
+    # 건너뛰며(collection._evaluate_schedule), 일일 실행 한도도 0으로 세어
+    # 아무 때도 걸리지 않는다. 즉 주기·쿼터 설정이 통째로 무력화된다.
+    #
+    # 이미 있는 Source는 updated_at만 건드린다. 표시명·주기·중지 여부는 Service가
+    # 스케줄 API(SCH-017~020)로 정하는 값이라, 수집이 돌 때마다 덮어쓰면 중지해 둔
+    # Source가 수동 실행 한 번에 되살아난다.
+    resolved_source_key = source_key or f"latest-{provider}"
     source_cursor = await connection.execute(
         """
         INSERT INTO agent.global_sources (
@@ -509,14 +523,11 @@ async def persist_collected_articles(
             connector_config
         ) VALUES (%s, %s, %s, 'active', %s)
         ON CONFLICT (source_key) DO UPDATE SET
-            connector_type = EXCLUDED.connector_type,
-            display_name = EXCLUDED.display_name,
-            status = 'active',
             updated_at = clock_timestamp()
         RETURNING id
         """,
         (
-            f"latest-{provider}",
+            resolved_source_key,
             provider,
             f"Latest {provider}",
             Jsonb({"managed_by": "global-source-collector"}),
@@ -613,18 +624,24 @@ async def persist_collected_articles(
             """,
             (query, query, urls),
         )
-        await connection.execute(
-            """
-            UPDATE agent.interest_collection_targets
-            SET
-                last_collected_at = clock_timestamp(),
-                next_collection_at = clock_timestamp()
-                    + make_interval(mins => refresh_interval_minutes)
-            WHERE status = 'active'
-              AND lower(btrim(query)) = lower(btrim(%s))
-            """,
-            (query,),
-        )
+
+    # 다음 수집 시각은 결과가 0건이어도 미룬다. 예전에는 URL이 하나라도 있을
+    # 때만 갱신해서, 검색 결과가 없는 Topic은 next_collection_at이 과거에 멈춘 채
+    # 계속 "수집할 차례"로 남았다. Scheduler tick(기본 60초)마다 같은 Topic을
+    # 다시 검색하게 되어, 아무것도 못 찾는 주제일수록 외부 API를 가장 많이
+    # 태우는 거꾸로 된 동작이 된다.
+    await connection.execute(
+        """
+        UPDATE agent.interest_collection_targets
+        SET
+            last_collected_at = clock_timestamp(),
+            next_collection_at = clock_timestamp()
+                + make_interval(mins => refresh_interval_minutes)
+        WHERE status = 'active'
+          AND lower(btrim(query)) = lower(btrim(%s))
+        """,
+        (query,),
+    )
 
     await connection.execute(
         """
