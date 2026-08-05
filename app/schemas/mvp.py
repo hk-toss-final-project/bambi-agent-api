@@ -379,9 +379,20 @@ class PublishSnapshotResponse(ImmutableSchema):
     citations: list[CitationSchema] = Field(
         default_factory=list, description="본문과 연결된 출처 목록"
     )
+    generation_topic: str = Field(
+        default="",
+        description="생성 요청의 원본 주제. 이 리포트가 왜 만들어졌는지를 남긴다.",
+    )
     tags: list[str] = Field(
         default_factory=list,
         description="카드에 노출할 관심사 태그 목록 (생성 요청 topic)",
+    )
+    content_tags: list[str] = Field(
+        default_factory=list,
+        description=(
+            "생성된 리포트 내용에서 뽑은 검색·추천용 태그 (REPORT-010). "
+            "요청 주제와 실제 작성된 내용이 다를 수 있어 분리해 보존한다."
+        ),
     )
     created_at: datetime = Field(description="Snapshot 생성 시각")
 

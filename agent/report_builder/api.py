@@ -27,6 +27,7 @@ from .features.generation import (
     report_010,
     generate_report_content,
     generate_report_content_with_quality,
+    normalize_content_tags,
     parse_report_generation,
 )
 from .features.citations import report_011

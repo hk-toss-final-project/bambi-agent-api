@@ -1,5 +1,7 @@
 """개인·Global 문서 근거 기반 Report Builder 생성 응답 검증을 테스트한다."""
 
+import json
+
 import pytest
 
 from agent.report_builder.features import generation
@@ -203,3 +205,78 @@ def test_quality_retry_reraises_if_regeneration_also_malformed(monkeypatch: pyte
         generation.generate_report_content_with_quality(
             topic="주제", content_type="card", language="ko", contexts=[_context()], model="m"
         )
+
+
+def test_content_tags_are_parsed_from_the_same_generation_response() -> None:
+    """태그는 제목·본문과 같은 응답에서 함께 받는다(별도 LLM 호출 없음)."""
+    raw = json.dumps(
+        {
+            "title": "코스피 동향",
+            "summary": "요약",
+            "body": "본문 [P1]",
+            "citation_refs": ["P1"],
+            "tags": ["외국인 수급", "반도체주", "코스피 전망"],
+        },
+        ensure_ascii=False,
+    )
+
+    content = parse_report_generation(raw, allowed_references=["P1"])
+
+    assert content.content_tags == ("외국인 수급", "반도체주", "코스피 전망")
+
+
+def test_malformed_tags_do_not_fail_report_generation() -> None:
+    """태그 형식이 잘못돼도 리포트 생성은 성공한다.
+
+    태그는 검색·추천을 돕는 보조 정보다. 형식 하나 때문에 생성 전체를 버리면
+    본문까지 잃는다.
+    """
+    raw = json.dumps(
+        {
+            "title": "제목",
+            "summary": "요약",
+            "body": "본문 [P1]",
+            "citation_refs": ["P1"],
+            "tags": "태그가 문자열로 왔다",
+        },
+        ensure_ascii=False,
+    )
+
+    content = parse_report_generation(raw, allowed_references=["P1"])
+
+    assert content.content_tags == ()
+    assert content.title == "제목"
+
+
+def test_normalize_content_tags_applies_count_length_and_dedup_rules() -> None:
+    """개수·길이·중복 규칙을 코드가 강제한다.
+
+    프롬프트로만 부탁하면 모델이 10개를 주거나 문장을 넣는다.
+    """
+    from agent.report_builder.features.generation import normalize_content_tags
+
+    tags = normalize_content_tags(
+        [
+            "  외국인   수급  ",  # 공백 정리
+            "외국인 수급",  # 중복
+            "가" * 21,  # 길이 초과
+            "",  # 빈 값
+            None,  # 문자열 아님
+            "반도체주",
+            "코스피 전망",
+            "금리",
+            "환율",
+            "유가",  # 5개 초과분
+        ]
+    )
+
+    assert tags == ("외국인 수급", "반도체주", "코스피 전망", "금리", "환율")
+
+
+def test_normalize_content_tags_drops_case_insensitive_duplicates() -> None:
+    """영문 태그는 대소문자만 다르면 하나로 본다. 먼저 온 표기를 남긴다."""
+    from agent.report_builder.features.generation import normalize_content_tags
+
+    assert normalize_content_tags(["Kubernetes", "kubernetes", "KUBERNETES"]) == (
+        "Kubernetes",
+    )
