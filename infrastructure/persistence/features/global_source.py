@@ -27,6 +27,7 @@ from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
 from shared.hashing import compute_content_hash
+from shared.search_text import build_search_body
 from infrastructure.sources.connectors.api import LatestArticle
 from shared.contracts import FeatureRequest, FeatureResult
 
@@ -747,6 +748,10 @@ async def save_fetched_article_content(
         저장한 캐시 문서 ID와 전환된 상태
     """
     content_hash = compute_content_hash(markdown)
+    # 검색 색인은 페이지 통짜가 아니라 기사 본문만 본다(마이그레이션 0012).
+    # 제목을 함께 넘겨 메뉴 구간을 건너뛴다 — 앞에서부터 자르면 메뉴가 긴 매체는
+    # 본문에 닿기 전에 잘린다(실측: 평균 6,255자가 메뉴였다).
+    search_body = build_search_body(markdown, title=title or "")
     cursor = await connection.execute(
         """
         UPDATE agent.global_source_documents
@@ -755,6 +760,7 @@ async def save_fetched_article_content(
             -- 제목을 그대로 둔다.
             title = COALESCE(%s, title),
             markdown = %s,
+            search_body = %s,
             content_hash = %s,
             resolved_url = %s,
             published_at = COALESCE(%s, published_at),
@@ -763,7 +769,15 @@ async def save_fetched_article_content(
         WHERE id = %s
         RETURNING id
         """,
-        (title, markdown, content_hash, resolved_url, published_at, document_id),
+        (
+            title,
+            markdown,
+            search_body,
+            content_hash,
+            resolved_url,
+            published_at,
+            document_id,
+        ),
     )
     updated = await cursor.fetchone()
     if updated is None:

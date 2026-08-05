@@ -308,7 +308,10 @@ def test_save_fetched_content_fills_cache_document() -> None:
     assert update_params is not None
     assert update_params[0] == "본문 제목"
     assert update_params[1] == "# 전체 본문\n\n내용"
-    assert update_params[3] == "https://example.com/final"
+    # 원문 다음에 검색 색인용 정제본이 들어간다(마이그레이션 0012).
+    assert "search_body = %s" in update_sql
+    assert update_params[2]
+    assert update_params[4] == "https://example.com/final"
 
 
 def test_save_fetched_content_raises_for_missing_document() -> None:

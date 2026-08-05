@@ -350,7 +350,7 @@ async def load_report_context(
                 COALESCE(cache.resolved_url, cache.canonical_url) AS url,
                 CASE WHEN topic_match.exact THEN 1.0 ELSE 0.0 END +
                 GREATEST(
-                    similarity(cache.markdown, %s),
+                    similarity(COALESCE(cache.search_body, cache.markdown), %s),
                     ts_rank(cache.search_vector, plainto_tsquery('simple', %s))
                 ) AS score
             FROM agent.global_source_documents AS cache
@@ -366,7 +366,7 @@ async def load_report_context(
               AND cache.markdown IS NOT NULL
               AND (
                     topic_match.exact
-                    OR similarity(cache.markdown, %s) > 0.05
+                    OR similarity(COALESCE(cache.search_body, cache.markdown), %s) > 0.05
                     OR cache.search_vector @@ plainto_tsquery('simple', %s)
               )
         ), scored AS (
