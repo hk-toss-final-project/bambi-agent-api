@@ -307,3 +307,92 @@ def test_research_prompt_focuses_on_search_only() -> None:
     """
     assert "주제어 하나로만 찾지 마라" in researcher.SYSTEM_PROMPT
     assert "collect_live" not in researcher.SYSTEM_PROMPT
+
+
+def test_personal_wiki_documents_do_not_count_toward_sufficiency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """개인 Wiki 문서는 실시간 수집 판정에서 세지 않는다.
+
+    판정이 묻는 것은 "인터넷에 새로 나가야 하는가"다. 어제 저장한 Wiki 문서가
+    있다고 오늘 소식이 필요 없어지지 않는다. (2026-08-05 실측: 무관한 주제에서
+    Wiki 문서 5건이 잡혀 실시간 수집이 통째로 생략됐다.)
+    """
+    found = [
+        _document(f"P{n}", title=f"위키 {n}", namespace="wiki", url=f"https://w/{n}")
+        for n in range(1, 6)
+    ]
+
+    outcome, collected = _run_research(monkeypatch, found)
+
+    assert collected == ["코스피"]
+    # 판정에서만 빼고, 근거로는 그대로 남긴다.
+    assert [document.title for document in outcome.documents] == [
+        "위키 1",
+        "위키 2",
+        "위키 3",
+        "위키 4",
+        "위키 5",
+        "새 기사",
+    ]
+
+
+def test_chunks_of_one_document_count_as_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """같은 문서의 청크 여러 건을 1건으로 센다.
+
+    Wiki·풀 검색은 청크 단위로 반환하므로, 세지 않으면 문서 하나가 여러 건으로
+    부풀어 기준(3건)을 넘겨버린다.
+    """
+    found = [
+        ReportContextDocument(
+            reference=f"G{n}",
+            document_version_id="ver-same",
+            chunk_id=f"chunk-{n}",
+            namespace_key="global",
+            title=f"조각 {n}",
+            content="본문",
+            url=f"https://example.com/{n}",
+            score=0.9,
+        )
+        for n in range(1, 6)
+    ]
+
+    outcome, collected = _run_research(monkeypatch, found)
+
+    assert collected == ["코스피"]
+    assert len(outcome.documents) == 6
+
+
+def test_search_drops_personal_documents_below_score_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """점수 하한에 못 미치는 개인 Wiki 문서는 근거에서 뺀다.
+
+    Wiki 검색은 매칭이 없어도 문서를 채워 반환하되 점수를 0으로 남긴다. 거르지
+    않으면 무관한 주제에서 목차 파일(Schema) 청크가 근거로 들어온다.
+    """
+    _patch_db(
+        monkeypatch,
+        [
+            _document("P1", title="관련 문서", namespace="wiki", score=0.13),
+            _document("P2", title="Schema", namespace="wiki", score=0.0),
+        ],
+    )
+    # 이 검사는 개인 Wiki 컷오프만 본다. 풀 선별은 제 규칙대로 동작하게 둔다.
+    monkeypatch.setattr(
+        researcher,
+        "select_pool_documents",
+        lambda docs, **kwargs: [d for d in docs if d.namespace_key == "global"],
+    )
+
+    found = asyncio.run(
+        researcher.search_stored_documents(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            query="코스피",
+        )
+    )
+
+    assert [document.title for document in found] == ["관련 문서"]

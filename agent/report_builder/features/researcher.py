@@ -47,6 +47,19 @@ type DictRow = dict[str, Any]
 RESEARCH_MAX_ITERATIONS = 5
 _OBSERVATION_SNIPPET_CHARS = 160
 
+# 개인 Wiki 문서를 근거로 채택할 점수 하한. 풀 문서(POOL_SCORE_FLOOR)와 같은 취지의
+# 절대 하한이지만, 검색 경로가 달라 값을 따로 잰다.
+#
+# 실측(2026-08-05, mock-clipping-user 46문서 기준):
+#
+#   관련 있음   0.112 ~ 0.240  ('반도체'→SK하이닉스 0.137, '코스피'→서킷 브레이커 0.240,
+#                              '블록체인'→로빈후드 체인 0.112)
+#   잡음        0.000          ('요가 스트레칭'·'커피 원두 로스팅' 각 5건 전부)
+#
+# 개인 Wiki 검색은 매칭이 없어도 문서를 채워 반환하지만 점수를 0으로 정직하게
+# 남긴다. 0.05는 잡음(0)의 명백히 위, 관련 최소(0.112)의 절반 아래다.
+PERSONAL_SCORE_FLOOR: float = float(os.getenv("PERSONAL_SCORE_FLOOR", "0.05"))
+
 # 조사원에게는 "무엇을 검색할까"만 맡긴다. "몇 건이면 충분한가"는 세는 문제라
 # 코드(is_pool_sufficient)가 판정한다 — 2026-07-31 벤치마크에서 LLM에게 셈을
 # 맡겼을 때 판단 정확도가 80%에 그쳤고, 프롬프트를 두 번 고쳐도 오류 방향만
@@ -115,7 +128,13 @@ async def search_stored_documents(
     """저장된 자료(개인 Wiki + Global 풀)를 검색해 쓸 만한 문서를 반환한다.
 
     조사원과 검토자가 함께 쓰는 검색 경계다. 풀 문서는 기존 신선도·점수 컷오프
-    (select_pool_documents)를 그대로 적용하고, 개인 Wiki 문서는 그대로 통과시킨다.
+    (select_pool_documents)를 적용하고, 개인 Wiki 문서에는 PERSONAL_SCORE_FLOOR를
+    적용한다.
+
+    개인 Wiki도 컷오프가 필요하다 — 검색은 매칭이 없어도 문서를 채워 반환하므로,
+    거르지 않으면 무관한 주제에서 Wiki 목차 파일(Schema) 청크가 근거로 들어온다
+    (2026-08-05 실측: '요가 스트레칭'·'커피 원두 로스팅'이 각각 0.000점 5건을
+    돌려줬고, 5건 모두 같은 목차 문서의 청크였다).
 
     Args:
         connection: 검색에 사용할 DB 연결
@@ -138,7 +157,10 @@ async def search_stored_documents(
             ],
         )
     personal = [
-        document for document in hybrid if document.namespace_key != GLOBAL_NAMESPACE
+        document
+        for document in hybrid
+        if document.namespace_key != GLOBAL_NAMESPACE
+        and document.score >= PERSONAL_SCORE_FLOOR
     ]
     pool = select_pool_documents(
         hybrid, published_at=freshness, topic_intent=topic_intent
@@ -159,6 +181,46 @@ def describe_documents(documents: Sequence[ReportContextDocument]) -> str:
         snippet = " ".join(document.content.split())[:_OBSERVATION_SNIPPET_CHARS]
         lines.append(f"{index}. {document.title}\n   {snippet}")
     return "\n".join(lines)
+
+
+def pool_documents_for_decision(
+    documents: Sequence[ReportContextDocument],
+) -> list[ReportContextDocument]:
+    """실시간 수집 여부 판정에 쓸 풀 문서만 문서 단위로 추린다.
+
+    두 가지를 바로잡는다.
+
+    1. **개인 Wiki를 세지 않는다.** 판정이 묻는 것은 "인터넷에 새로 나가야 하는가"
+       인데, 어제 저장한 Wiki 문서가 있다고 오늘 소식이 필요 없어지지는 않는다.
+       기존 고정 경로(graph.load_context)도 풀 문서만 센다.
+    2. **같은 문서의 청크를 1건으로 센다.** Wiki 검색은 청크 단위로 반환하므로
+       문서 하나가 5건으로 부풀어 기준(3건)을 넘겨버린다.
+
+    (2026-08-05 실측: '요가 스트레칭'이 목차 문서 1개의 청크 5건으로 "자료 충분"
+    판정을 받아 실시간 수집을 건너뛰었다.)
+
+    Args:
+        documents: 조사원이 모은 개인·풀 혼합 문서
+
+    Returns:
+        문서 단위로 중복을 제거한 풀 문서 목록
+    """
+    selected: list[ReportContextDocument] = []
+    seen: set[str] = set()
+    for document in documents:
+        if getattr(document, "namespace_key", "") != GLOBAL_NAMESPACE:
+            continue
+        # 문서 ID가 없으면 URL로, 그것도 없으면 참조 ID로 문서를 구분한다.
+        key = (
+            str(getattr(document, "document_version_id", "") or "")
+            or str(getattr(document, "url", "") or "")
+            or document.reference
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(document)
+    return selected
 
 
 class DocumentCollector:
@@ -276,6 +338,10 @@ async def research_context(
     때 판단 정확도가 80%에 머물렀고, 프롬프트를 두 번 고쳐도 과호출이
     과소호출로 바뀔 뿐이었다(2026-07-31 벤치마크).
 
+    판정 대상은 `pool_documents_for_decision`이 추린 풀 문서뿐이다. 근거로는
+    개인 Wiki 문서도 그대로 넘어간다 — 판정에서 빼는 것과 근거에서 빼는 것은
+    다른 문제다.
+
     Args:
         connection: 검색에 사용할 DB 연결
         topic: 리포트 주제
@@ -302,11 +368,12 @@ async def research_context(
         max_iterations=max_iterations,
     )
     searched = len(collector.documents)
+    decision_pool = pool_documents_for_decision(collector.documents)
 
     # 저장된 자료가 기준에 못 미치면 인터넷에서 보강한다. 실패해도 예외를
     # 올리지 않는다 — 수집이 안 됐다고 지금까지 모은 근거까지 버릴 이유는 없다.
     collected_live = False
-    if not is_pool_sufficient(collector.documents):
+    if not is_pool_sufficient(decision_pool):
         collected_live = True
         try:
             live = await to_thread(collect_live_context, topic, user_id, model=model)
@@ -315,10 +382,11 @@ async def research_context(
             logger.exception("실시간 수집에 실패해 저장된 자료만 사용합니다.")
 
     logger.info(
-        "조사 완료: topic=%s 도구호출=%d 저장자료=%d 실시간수집=%s 최종=%d 종료=%s",
+        "조사 완료: topic=%s 도구호출=%d 저장자료=%d 판정풀=%d 실시간수집=%s 최종=%d 종료=%s",
         topic,
         len(result.calls),
         searched,
+        len(decision_pool),
         "수행" if collected_live else "생략",
         len(collector.documents),
         result.stop_reason,

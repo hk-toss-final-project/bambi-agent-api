@@ -16,6 +16,15 @@
 달라져 회귀 비교가 불가능하다. 케이스마다 정의한 `pool`을 대상으로,
 키워드가 질의에 포함되면(또는 그 반대면) 맞은 것으로 본다.
 
+대체하는 위치는 **DB 호출(`prag_003`)**이다. 예전에는 `search_stored_documents`
+자체를 갈아끼웠는데, 그러면 그 함수 안의 컷오프(개인 Wiki 점수 하한·풀 선별)가
+통째로 건너뛰어져 회귀를 잡지 못했다 — 2026-08-05에 개인 Wiki 잡음이 실시간
+수집을 막던 버그가 이 벤치마크를 100%로 통과했다. 이제 한 단계 아래를 대체해
+실제 컷오프 코드가 실행된다.
+
+코퍼스 항목은 `namespace`("global"|"wiki"), `document_id`(같은 문서의 청크를
+표현), `score`를 선택적으로 가진다. 생략하면 각각 "global", 항목 `id`, 1.0이다.
+
 비용이 발생하므로 --confirm-cost를 명시해야 실행된다.
 """
 
@@ -23,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import selectors
 import sys
@@ -69,18 +79,52 @@ def matches(document: dict[str, object], query: str) -> bool:
     return False
 
 
+def entry_namespace(entry: dict[str, object]) -> str:
+    """코퍼스 항목의 출처 구분을 반환한다. 생략하면 창고(global)로 본다."""
+    return str(entry.get("namespace", "global"))
+
+
+def entry_document_id(entry: dict[str, object]) -> str:
+    """코퍼스 항목이 속한 문서 ID를 반환한다.
+
+    여러 항목이 같은 `document_id`를 가지면 한 문서의 청크를 뜻한다. 실시간 수집
+    판정은 이 ID 단위로 세므로, 청크가 여러 건이어도 1건으로 계산돼야 한다.
+    """
+    return str(entry.get("document_id", entry["id"]))
+
+
 def to_context(entry: dict[str, object], reference: str) -> ReportContextDocument:
     """코퍼스 항목을 근거 문서로 만든다."""
     return ReportContextDocument(
         reference=reference,
-        document_version_id=str(entry["id"]),
+        document_version_id=entry_document_id(entry),
         chunk_id=f"chunk-{entry['id']}",
-        namespace_key="global",
+        namespace_key=entry_namespace(entry),
         title=str(entry["title"]),
         content=str(entry["content"]),
         url=None,
-        score=1.0,
+        score=float(entry.get("score", 1.0)),  # type: ignore[arg-type]
     )
+
+
+class _FakeConnection:
+    """transaction()만 지원하는 DB 연결 Test Double."""
+
+    @asynccontextmanager
+    async def transaction(self):  # type: ignore[no-untyped-def]
+        """아무것도 하지 않는 트랜잭션 구간을 연다."""
+        yield self
+
+
+async def _skip_scope(connection: object, *, user_id: str) -> None:
+    """RLS Scope 설정을 생략한다."""
+
+
+async def _skip_freshness(
+    connection: object, ids: list[str]
+) -> dict[str, object]:
+    """발행 시각 조회를 생략한다. 비어 있으면 신선도 검사를 건너뛴다."""
+    return {}
 
 
 class Recorder:
@@ -93,16 +137,24 @@ class Recorder:
         self.live_called = False
 
     async def search(
-        self, connection: object, *, user_id: str, query: str, topic_intent: str = "news"
+        self, connection: object, *, user_id: str, query: str, **kwargs: object
     ) -> list[ReportContextDocument]:
-        """고정 코퍼스에서 질의에 맞는 문서를 반환한다."""
+        """DB 검색(prag_003) 자리에서 고정 코퍼스의 일치 문서를 반환한다.
+
+        개인 Wiki(P)와 창고(G) 참조 번호를 각각 매긴다. 컷오프는 여기서 하지
+        않는다 — 실제 `search_stored_documents`가 적용하는지를 보는 것이 목적이다.
+        """
         self.queries.append(query)
         pool = self.case.get("pool", [])  # type: ignore[union-attr]
-        return [
-            to_context(entry, f"P{index}")
-            for index, entry in enumerate(pool, start=1)  # type: ignore[arg-type]
-            if matches(entry, query)
-        ]
+        documents: list[ReportContextDocument] = []
+        counters: dict[str, int] = {}
+        for entry in pool:  # type: ignore[union-attr]
+            if not matches(entry, query):
+                continue
+            prefix = "G" if entry_namespace(entry) == "global" else "P"
+            counters[prefix] = counters.get(prefix, 0) + 1
+            documents.append(to_context(entry, f"{prefix}{counters[prefix]}"))
+        return documents
 
     def collect(self, topic: str, user_id: str, *, model: str = "") -> list[
         ReportContextDocument
@@ -128,20 +180,25 @@ async def run_cases(
     results: list[dict[str, object]] = []
     for case in cases:
         recorder = Recorder(case)
-        researcher.search_stored_documents = recorder.search  # type: ignore[assignment]
+        # DB 호출만 대체한다. search_stored_documents 안의 컷오프는 실제 코드가
+        # 실행돼야 개인 Wiki 잡음·청크 중복 회귀를 잡을 수 있다.
+        researcher.prag_003 = recorder.search  # type: ignore[assignment]
+        researcher.set_personal_wiki_scope = _skip_scope  # type: ignore[assignment]
+        researcher.load_global_document_freshness = _skip_freshness  # type: ignore[assignment]
         researcher.collect_live_context = recorder.collect  # type: ignore[assignment]
 
         started = time.perf_counter()
         outcome = await research_context(
-            None,  # type: ignore[arg-type]
+            _FakeConnection(),  # type: ignore[arg-type]
             topic=str(case["topic"]),
             user_id="bench-user",
             model=model,
         )
         found = collected_ids(outcome.documents)
         must_find = set(case.get("must_find", []))  # type: ignore[arg-type]
+        # 근거에 남으면 안 되는 항목. 문서 ID로 비교한다(청크는 같은 문서다).
         irrelevant = {
-            str(entry["id"])
+            entry_document_id(entry)
             for entry in case.get("pool", [])  # type: ignore[union-attr]
             if not entry.get("relevant", True)
         }
