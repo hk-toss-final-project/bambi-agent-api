@@ -1,6 +1,6 @@
 """WSE-014 온보딩 관심사 시드 문서 합성을 검증한다.
 
-LLM 없이 결정론으로 씨앗 Markdown을 만들고, 같은 선택이면 같은 멱등 키를,
+LLM 없이 결정론으로 시드 Markdown을 만들고, 같은 선택이면 같은 멱등 키를,
 바뀐 선택이면 다른 키를 만드는지 확인한다.
 """
 
@@ -15,7 +15,7 @@ def _run(**kwargs) -> OnboardingSeedDocument | None:
 
 
 def test_wse_014_synthesizes_seed_from_category_and_topics() -> None:
-    """Category와 세부 Topic이 씨앗 본문·라벨에 모두 반영되는지 검증한다."""
+    """Category와 세부 Topic이 시드 본문·라벨에 모두 반영되는지 검증한다."""
     seed = _run(
         signup_interests=[{"category": "인공지능", "topics": ["LLM", "에이전트"]}],
         interest_taxonomy_version="v1",
@@ -33,7 +33,7 @@ def test_wse_014_synthesizes_seed_from_category_and_topics() -> None:
 
 
 def test_wse_014_uses_category_when_no_topics() -> None:
-    """세부 Topic 없이 Category만 골라도 씨앗이 만들어지는지 검증한다."""
+    """세부 Topic 없이 Category만 골라도 시드가 만들어지는지 검증한다."""
     seed = _run(signup_interests=[{"category": "우주", "topics": []}])
 
     assert seed is not None
@@ -68,7 +68,7 @@ def test_wse_014_is_idempotent_for_same_selection() -> None:
 
 
 def test_wse_014_handles_mixed_korean_english_and_multiple_groups() -> None:
-    """한/영 혼용과 다중 관심 묶음을 모두 씨앗에 담는지 검증한다."""
+    """한/영 혼용과 다중 관심 묶음을 모두 시드에 담는지 검증한다."""
     seed = _run(
         signup_interests=[
             {"category": "Tech", "topics": ["반도체", "AI chip"]},

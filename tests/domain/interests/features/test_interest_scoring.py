@@ -89,11 +89,11 @@ def test_int_005_applies_half_life_decay() -> None:
 
 
 def test_int_005_ranks_onboarding_seed_below_real_source() -> None:
-    """다른 조건이 같으면 온보딩 씨앗이 실제 저장 근거보다 낮게 매겨지는지 검증한다."""
+    """다른 조건이 같으면 온보딩 시드가 실제 저장 근거보다 낮게 매겨지는지 검증한다."""
     scored = asyncio.run(
         int_005(
             [
-                _candidate("씨앗 주제", source_types=["onboarding_seed"]),
+                _candidate("시드 주제", source_types=["onboarding_seed"]),
                 _candidate("클리핑 주제", source_types=["web_clipping"]),
             ],
             now=_NOW,
@@ -101,8 +101,8 @@ def test_int_005_ranks_onboarding_seed_below_real_source() -> None:
         )
     )
 
-    assert [candidate.topic for candidate in scored] == ["클리핑 주제", "씨앗 주제"]
-    seed = next(c for c in scored if c.topic == "씨앗 주제")
+    assert [candidate.topic for candidate in scored] == ["클리핑 주제", "시드 주제"]
+    seed = next(c for c in scored if c.topic == "시드 주제")
     real = next(c for c in scored if c.topic == "클리핑 주제")
     assert seed.evidence["behavior_intensity"] < real.evidence["behavior_intensity"]
 

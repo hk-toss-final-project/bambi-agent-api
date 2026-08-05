@@ -125,7 +125,7 @@ def test_int_001_is_deterministic_and_validates_limit() -> None:
 
 
 def test_int_001_drops_seed_only_node_outside_onboarding_labels() -> None:
-    """씨앗이 유일한 근거인 묶음 노드를 관심 후보에서 빼는지 검증한다."""
+    """시드가 유일한 근거인 묶음 노드를 관심 후보에서 빼는지 검증한다."""
     candidates = asyncio.run(
         int_001(
             [
@@ -152,7 +152,7 @@ def test_int_001_drops_seed_only_node_outside_onboarding_labels() -> None:
 
 
 def test_int_001_keeps_seed_node_matching_label_partially() -> None:
-    """Wiki Builder가 라벨을 늘여 쓴 씨앗 노드는 후보로 남기는지 검증한다."""
+    """Wiki Builder가 라벨을 늘여 쓴 시드 노드는 후보로 남기는지 검증한다."""
     candidates = asyncio.run(
         int_001(
             [_node("doc-1", "기준금리", source_types=["onboarding_seed"])],
@@ -205,7 +205,7 @@ def test_int_001_keeps_seed_node_once_real_sources_arrive() -> None:
 
 
 def test_int_001_keeps_seed_nodes_when_labels_unknown() -> None:
-    """라벨을 알 수 없으면 씨앗 노드를 임의로 빼지 않는지 검증한다."""
+    """라벨을 알 수 없으면 시드 노드를 임의로 빼지 않는지 검증한다."""
     candidates = asyncio.run(
         int_001(
             [

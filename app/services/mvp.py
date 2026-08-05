@@ -309,12 +309,12 @@ class AgentApiMvpService:
     async def _seed_onboarding_interests(
         self, stored: StoredUserContextRecord, *, request_id: str
     ) -> None:
-        """온보딩 선택으로 관심사 씨앗 원본·Wiki Build Job을 best-effort로 접수한다.
+        """온보딩 선택으로 관심사 시드 원본·Wiki Build Job을 best-effort로 접수한다.
 
-        신규 사용자의 콜드스타트를 위해 온보딩 Category·Topic(WSE-014)을 씨앗
-        문서로 합성해 접수한다. 씨앗 접수 실패가 컨텍스트 저장(이미 성공)까지
+        신규 사용자의 콜드스타트를 위해 온보딩 Category·Topic(WSE-014)을 시드
+        문서로 합성해 접수한다. 시드 접수 실패가 컨텍스트 저장(이미 성공)까지
         되돌리면 안 되므로 예외를 삼키고 로그만 남긴다. 선택 내용 기반 멱등이라
-        같은 온보딩이 반복 전달돼도 씨앗은 한 번만 만들어진다.
+        같은 온보딩이 반복 전달돼도 시드는 한 번만 만들어진다.
         """
         if not stored.signup_interests:
             return
@@ -336,9 +336,9 @@ class AgentApiMvpService:
                 occurred_at=stored.created_at,
                 request_id=request_id,
             )
-        except Exception:  # noqa: BLE001 - 씨앗 접수는 컨텍스트 저장과 분리된 부가 작업
+        except Exception:  # noqa: BLE001 - 시드 접수는 컨텍스트 저장과 분리된 부가 작업
             _logger.warning(
-                "온보딩 관심사 씨앗 접수 실패 (user_id=%s)", stored.user_id, exc_info=True
+                "온보딩 관심사 시드 접수 실패 (user_id=%s)", stored.user_id, exc_info=True
             )
 
     async def _enqueue_interest_reports(

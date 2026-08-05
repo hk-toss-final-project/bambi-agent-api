@@ -177,7 +177,7 @@ class AgentJobRepository(Protocol):
         occurred_at: datetime | None,
         request_id: str,
     ) -> SubmittedSourceJob:
-        """온보딩 관심사 씨앗 원본과 Personal Wiki Build Job을 저장한다."""
+        """온보딩 관심사 시드 원본과 Personal Wiki Build Job을 저장한다."""
         ...
 
     async def submit_feedback_signals(

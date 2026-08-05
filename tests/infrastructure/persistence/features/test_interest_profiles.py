@@ -121,7 +121,7 @@ def test_load_interest_documents_reads_weighted_relation_and_source_stats() -> N
 
 
 def test_load_interest_documents_collects_onboarding_seed_labels() -> None:
-    """씨앗 Version들의 선택 라벨을 중복 없이 모아 INT-001 입력으로 넘긴다."""
+    """시드 Version들의 선택 라벨을 중복 없이 모아 INT-001 입력으로 넘긴다."""
     connection = _FakeConnection(
         [
             None,  # set_personal_wiki_scope

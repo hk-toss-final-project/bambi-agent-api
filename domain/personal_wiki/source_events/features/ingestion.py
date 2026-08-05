@@ -10,11 +10,11 @@ from shared.contracts import FeatureRequest, FeatureResult
 
 @dataclass(frozen=True, slots=True)
 class OnboardingSeedDocument:
-    """온보딩 선택에서 합성한 개인 Wiki 씨앗 문서.
+    """온보딩 선택에서 합성한 개인 Wiki 시드 문서.
 
     Attributes:
         source_event_id: 선택 내용으로 만든 멱등 이벤트 ID (같은 선택이면 같은 값)
-        title: 씨앗 원본 문서 제목
+        title: 시드 원본 문서 제목
         content: LLM Wiki Build가 읽을 Frontmatter 포함 Markdown 본문
         topics: 합성에 사용한 관심 주제 라벨 목록
         metadata: 안정 ID·taxonomy 버전 등 근거 메타데이터
@@ -104,10 +104,10 @@ async def wse_014(
 ) -> OnboardingSeedDocument | None:
     """[WSE-014] 온보딩 관심사 시드 수신.
 
-    회원가입 온보딩에서 고른 Category·Topic을 개인 Wiki 반영 후보인 씨앗
+    회원가입 온보딩에서 고른 Category·Topic을 개인 Wiki 반영 후보인 시드
     Markdown 문서로 결정론적으로 합성한다. 실제 저장 근거가 아직 없는 신규
-    사용자의 콜드스타트를 위해, 이 씨앗을 기존 Wiki Build 파이프라인에 태워
-    Entity·Concept 노드를 만들고 관심사 프로필(INT-011)이 파생되게 한다. 씨앗은
+    사용자의 콜드스타트를 위해, 이 시드를 기존 Wiki Build 파이프라인에 태워
+    Entity·Concept 노드를 만들고 관심사 프로필(INT-011)이 파생되게 한다. 시드는
     실제 저장 근거보다 낮은 가중치를 받으므로(INT-005) 저장이 쌓이면 자연히 밀린다.
 
     Args:
@@ -117,7 +117,7 @@ async def wse_014(
         selected_topic_ids: 온보딩에서 고른 Topic 안정 ID 목록
 
     Returns:
-        합성한 씨앗 문서. 유효한 선택이 없으면 None.
+        합성한 시드 문서. 유효한 선택이 없으면 None.
     """
     groups: list[tuple[str, tuple[str, ...]]] = []
     labels: list[str] = []
@@ -136,7 +136,7 @@ async def wse_014(
     if not groups:
         return None
 
-    # 선택 내용으로 멱등 키를 만든다 — 같은 선택은 같은 씨앗, 바뀌면 새 씨앗.
+    # 선택 내용으로 멱등 키를 만든다 — 같은 선택은 같은 시드, 바뀌면 새 시드.
     checksum_source = "|".join(
         [
             interest_taxonomy_version or "",

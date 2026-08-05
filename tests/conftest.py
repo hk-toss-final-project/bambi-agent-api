@@ -277,7 +277,7 @@ class InMemoryAgentJobRepository:
         occurred_at: datetime | None,
         request_id: str,
     ) -> SubmittedSourceJob:
-        """온보딩 씨앗을 멱등 접수하고 Wiki Build Job과 원본 ID를 반환한다."""
+        """온보딩 시드를 멱등 접수하고 Wiki Build Job과 원본 ID를 반환한다."""
         record, _created = self._submit_job(
             feature_id="WSE-014",
             job_type="personal_wiki_build",

@@ -352,19 +352,19 @@ async def save_onboarding_seed_and_enqueue(
     occurred_at: datetime | None,
     request_id: str,
 ) -> PersistedSourceSubmission:
-    """온보딩 관심사 씨앗 문서와 Wiki Build Job을 같은 트랜잭션에 멱등 저장한다.
+    """온보딩 관심사 시드 문서와 Wiki Build Job을 같은 트랜잭션에 멱등 저장한다.
 
-    WSE-014가 합성한 씨앗 Markdown을 `onboarding_seed` 원본 Version으로 저장하고
+    WSE-014가 합성한 시드 Markdown을 `onboarding_seed` 원본 Version으로 저장하고
     클리핑과 같은 Personal Wiki Build 파이프라인을 태운다. 실제 저장 근거가 없는
     신규 사용자의 콜드스타트를 위한 경로이며, `(user_id, source_event_id)` 유일
     제약으로 같은 선택의 중복 접수를 막는다(WSE-011).
 
     Args:
         connection: agent-db 커넥션 (호출자가 트랜잭션·scope를 소유)
-        user_id: 씨앗 원본의 소유자
+        user_id: 시드 원본의 소유자
         source_event_id: 선택 내용으로 만든 멱등 이벤트 ID
-        title: 씨앗 원본 문서 제목
-        content: 씨앗 Markdown 본문
+        title: 시드 원본 문서 제목
+        content: 시드 Markdown 본문
         metadata: 안정 ID·taxonomy 버전 등 근거 메타데이터
         occurred_at: 온보딩 발생 시각
         request_id: 요청 추적 ID

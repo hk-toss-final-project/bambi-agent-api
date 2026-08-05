@@ -154,7 +154,7 @@ def test_user_context_upsert_defaults_signup_interests_to_empty(
 def test_onboarding_with_interests_enqueues_seed_job(
     client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
 ) -> None:
-    """signup_interests가 있으면 온보딩 관심사 씨앗(WSE-014) Build Job이 접수되는지 검증한다."""
+    """signup_interests가 있으면 온보딩 관심사 시드(WSE-014) Build Job이 접수되는지 검증한다."""
     response = client.put(
         "/internal/v1/users/seed-user/context",
         json={
@@ -176,7 +176,7 @@ def test_onboarding_with_interests_enqueues_seed_job(
 def test_onboarding_without_interests_skips_seed_job(
     client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
 ) -> None:
-    """signup_interests가 없으면 씨앗 Job을 접수하지 않는지 검증한다."""
+    """signup_interests가 없으면 시드 Job을 접수하지 않는지 검증한다."""
     response = client.put(
         "/internal/v1/users/no-seed-user/context",
         json={"context_version": 1, "plan": "free"},
@@ -189,10 +189,10 @@ def test_onboarding_without_interests_skips_seed_job(
 def test_onboarding_seed_failure_does_not_break_context(
     client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
 ) -> None:
-    """씨앗 접수가 실패해도 컨텍스트 저장(200)은 유지되는지 검증한다."""
+    """시드 접수가 실패해도 컨텍스트 저장(200)은 유지되는지 검증한다."""
 
     async def _raise(**_: object) -> None:
-        raise RuntimeError("씨앗 저장소 장애")
+        raise RuntimeError("시드 저장소 장애")
 
     agent_jobs_fake.submit_onboarding_seed = _raise  # type: ignore[method-assign]
 

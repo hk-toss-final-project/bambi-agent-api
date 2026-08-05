@@ -169,7 +169,7 @@ class PostgresAgentJobRepository:
         occurred_at: datetime | None,
         request_id: str,
     ) -> SubmittedSourceJob:
-        """온보딩 씨앗 원본과 Wiki Build Job을 저장하고 조회 가능한 결과를 반환한다."""
+        """온보딩 시드 원본과 Wiki Build Job을 저장하고 조회 가능한 결과를 반환한다."""
         async with self._pool.connection() as connection:
             async with connection.transaction():
                 await set_personal_wiki_scope(connection, user_id=user_id)
@@ -185,7 +185,7 @@ class PostgresAgentJobRepository:
                 )
                 stored = await get_agent_job(connection, job_id=saved.job_id)
                 if stored is None:
-                    raise RuntimeError(f"저장한 씨앗 Job을 찾을 수 없습니다: {saved.job_id}")
+                    raise RuntimeError(f"저장한 시드 Job을 찾을 수 없습니다: {saved.job_id}")
         return SubmittedSourceJob(
             job=self._to_job_record(stored),
             source_document_id=saved.source_document_id,
