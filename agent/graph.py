@@ -43,7 +43,11 @@ from agent.report_builder.api import (
     select_generation_context,
 )
 from agent.state import ReportGenerationState, PersonalWikiBuildState
-from agent.wiki_builder.api import classify_source_for_wiki, wba_003
+from agent.wiki_builder.api import (
+    classify_source_for_wiki,
+    classify_wiki_source,
+    wba_003,
+)
 from domain.interests.api import int_011
 from domain.personal_wiki.documents.api import pwiki_002
 from domain.personal_wiki.retrieval.api import prag_003, prag_006, prag_007
@@ -112,10 +116,12 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
         }
 
     async def classify(state: PersonalWikiBuildState) -> dict[str, Any]:
-        """Transaction 밖에서 LLM 분류를 실행한다."""
+        """Transaction 밖에서 원본 유형에 맞는 Wiki 분류를 실행한다."""
         source = state["source"]
-        classification = await to_thread(
-            classify_source_for_wiki,
+        classification, classification_model = await to_thread(
+            classify_wiki_source,
+            source_type=source.source_type,
+            source_metadata=source.source_metadata,
             source_title=source.title,
             source_content=source.raw_content,
             source_description=source.description,
@@ -123,8 +129,12 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
             existing_entities=state["existing_entities"],
             existing_concepts=state["existing_concepts"],
             model=state["model"],
+            classifier=classify_source_for_wiki,
         )
-        return {"classification": classification}
+        return {
+            "classification": classification,
+            "classification_model": classification_model,
+        }
 
     async def plan(state: PersonalWikiBuildState) -> dict[str, Any]:
         """분류 결과와 기존 Wiki 상태로 Build 계획을 만든다."""
@@ -139,7 +149,7 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
             existing_entities=state["existing_entities"],
             existing_concepts=state["existing_concepts"],
             generated_at=datetime.now(UTC).isoformat(),
-            model=state["model"],
+            model=state.get("classification_model", state["model"]),
             existing_relations=state["existing_relations"],
         )
         return {"plan": build_plan}

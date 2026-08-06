@@ -1,7 +1,7 @@
 """개인 Wiki 증분 Build 오케스트레이션.
 
-원본·기존 Wiki 조회, LLM 분류, Build 계획, DB 영속화를 WBA-001 한 건의
-실행 경계로 묶는다. LLM 호출 동안은 DB Transaction을 열어 두지 않는다.
+원본·기존 Wiki 조회, 분류, Build 계획, DB 영속화를 WBA-001 한 건의
+실행 경계로 묶는다. 일반 원본의 LLM 호출 동안은 DB Transaction을 열어 두지 않는다.
 """
 
 from asyncio import to_thread
@@ -11,7 +11,10 @@ from typing import Any
 
 from psycopg import AsyncConnection
 
-from agent.wiki_builder.features.classification import classify_source_for_wiki
+from agent.wiki_builder.features.classification import (
+    classify_source_for_wiki,
+    classify_wiki_source,
+)
 from agent.wiki_builder.features.planning import build_wiki_plan
 from agent.wiki_builder.models import WikiBuildPlan, WikiClassification
 from infrastructure.persistence.api import (
@@ -42,8 +45,8 @@ async def build_incremental_wiki(
 ) -> tuple[PersistedWikiBuild, WikiBuildPlan]:
     """저장된 클리핑 Version 하나를 증분 개인 Wiki Build로 처리한다.
 
-    조회 Transaction을 닫은 뒤 LLM을 호출하고, 결과를 별도 Transaction에서
-    문서·Version·출처·관계·Chunk·Snapshot으로 저장한다.
+    조회 Transaction을 닫은 뒤 원본 유형에 맞게 분류하고, 결과를 별도
+    Transaction에서 문서·Version·출처·관계·Chunk·Snapshot으로 저장한다.
     """
     async with connection.transaction():
         await set_personal_wiki_scope(connection, user_id=user_id)
@@ -71,8 +74,10 @@ async def build_incremental_wiki(
             namespace_key=source.namespace_key,
         )
 
-    classification = await to_thread(
-        classifier,
+    classification, classification_model = await to_thread(
+        classify_wiki_source,
+        source_type=source.source_type,
+        source_metadata=source.source_metadata,
         source_title=source.title,
         source_content=source.raw_content,
         source_description=source.description,
@@ -80,6 +85,7 @@ async def build_incremental_wiki(
         existing_entities=existing_entities,
         existing_concepts=existing_concepts,
         model=model,
+        classifier=classifier,
     )
     timestamp = generated_at or datetime.now(UTC).isoformat()
     plan = build_wiki_plan(
@@ -92,7 +98,7 @@ async def build_incremental_wiki(
         existing_entities=existing_entities,
         existing_concepts=existing_concepts,
         generated_at=timestamp,
-        model=model,
+        model=classification_model,
         existing_relations=existing_relations,
     )
     async with connection.transaction():

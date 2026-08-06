@@ -8,7 +8,7 @@ entity와 이론·방법·분야·용어 등의 concept을 추출한다. 여러 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -44,6 +44,9 @@ _CONCEPT_SUBTYPES = {
     "term",
     "other",
 }
+ONBOARDING_CLASSIFIER_MODEL = "deterministic:onboarding-seed-v1"
+
+type WikiClassifier = Callable[..., WikiClassification]
 
 _PROMPT_PATH = Path(__file__).parents[2] / "prompts" / "templates" / "personal_wiki_classifier.md"
 _SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8").strip()
@@ -60,6 +63,31 @@ def _unique(items: Iterable[str]) -> list[str]:
             seen.add(marker)
             result.append(normalized)
     return result
+
+
+def classify_onboarding_seed_for_wiki(
+    source_metadata: Mapping[str, object],
+) -> WikiClassification:
+    """온보딩에서 선택한 관심 주제를 LLM 없이 Concept 후보로 변환한다."""
+    raw_labels = source_metadata.get("labels")
+    if not isinstance(raw_labels, list):
+        raise ValueError("온보딩 시드 metadata.labels가 문자열 목록이어야 합니다.")
+    labels = _unique(item for item in raw_labels if isinstance(item, str))
+    if not labels:
+        raise ValueError("온보딩 시드에 유효한 관심 주제 label이 없습니다.")
+    return WikiClassification(
+        source_summary=(
+            "사용자가 온보딩에서 직접 선택한 관심 주제: " + ", ".join(labels)
+        ),
+        concepts=[
+            ConceptClassification(
+                title=label,
+                subtype="term",
+                definition=f"사용자가 온보딩에서 직접 선택한 관심 주제: {label}",
+            )
+            for label in labels
+        ],
+    )
 
 
 def _as_string_list(value: object) -> list[str]:
@@ -501,3 +529,36 @@ def classify_source_for_wiki(
             )
         classifications.append(classification)
     return merge_wiki_classifications(classifications)
+
+
+def classify_wiki_source(
+    *,
+    source_type: str,
+    source_metadata: Mapping[str, object],
+    source_title: str,
+    source_content: str,
+    existing_entities: Sequence[ExistingWikiEntry],
+    existing_concepts: Sequence[ExistingWikiEntry],
+    source_description: str | None = None,
+    source_tags: Sequence[str] = (),
+    model: str = "gpt-4.1-mini",
+    classifier: WikiClassifier = classify_source_for_wiki,
+) -> tuple[WikiClassification, str]:
+    """원본 유형에 맞는 분류 결과와 Build 기록용 모델 표식을 반환한다."""
+    if source_type == "onboarding_seed":
+        return (
+            classify_onboarding_seed_for_wiki(source_metadata),
+            ONBOARDING_CLASSIFIER_MODEL,
+        )
+    return (
+        classifier(
+            source_title=source_title,
+            source_content=source_content,
+            source_description=source_description,
+            source_tags=source_tags,
+            existing_entities=existing_entities,
+            existing_concepts=existing_concepts,
+            model=model,
+        ),
+        model,
+    )

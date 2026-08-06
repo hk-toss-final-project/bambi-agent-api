@@ -15,6 +15,7 @@ class PersonalWikiBuildState(TypedDict):
     existing_concepts: NotRequired[list[object]]
     existing_relations: NotRequired[list[object]]
     classification: NotRequired[object]
+    classification_model: NotRequired[str]
     plan: NotRequired[object]
     persisted: NotRequired[object]
     result: NotRequired[dict[str, object]]

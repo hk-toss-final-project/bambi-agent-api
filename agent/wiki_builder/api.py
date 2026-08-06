@@ -15,6 +15,7 @@ from .features.events import wba_016
 from .features.safeguards import wba_017
 from .features.classification import (
     classify_source_for_wiki,
+    classify_wiki_source,
     merge_wiki_classifications,
     parse_wiki_classification,
     split_source_content,
