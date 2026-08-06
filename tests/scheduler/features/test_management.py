@@ -14,6 +14,7 @@ import pytest
 import scheduler.features.collection as collection
 import scheduler.features.management as management
 from infrastructure.persistence.api import (
+    CollectionTargetPlan,
     GlobalCollectionRunRecord,
     GlobalCollectionSchedule,
 )
@@ -49,6 +50,7 @@ def _schedule(
     daily_max_runs: int | None = None,
     runs_today: int = 0,
     search_options: dict[str, Any] | None = None,
+    targets: tuple[CollectionTargetPlan, ...] = (),
 ) -> GlobalCollectionSchedule:
     """테스트용 스케줄 설정 하나를 만든다."""
     return GlobalCollectionSchedule(
@@ -65,6 +67,7 @@ def _schedule(
         status=status,
         display_name="Latest naver",
         search_options=search_options or {},
+        targets=targets,
     )
 
 
@@ -447,6 +450,39 @@ def test_manual_run_reports_empty_keywords(
     assert results[0].status == "skipped"
     assert "키워드" in (results[0].reason or "")
     assert calls == []
+
+
+def test_manual_run_collects_interest_topics_without_fixed_keywords(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """고정 키워드가 없어도 관심 Topic이 있으면 수동 실행이 수집한다.
+
+    검색어를 전부 관심 Topic으로 받는 스케줄(interest-taxonomy-google-news)이
+    "키워드가 비어 있다"며 건너뛰던 문제다. 정기 실행은 멀쩡히 돌던 스케줄이라
+    점검하러 이 버튼을 누른 사람이 더 헷갈린다(2026-08-06 실측).
+    """
+    calls = _patch_manual_run(
+        monkeypatch,
+        _schedule(
+            keywords=(),
+            targets=(
+                CollectionTargetPlan(target_key="custom:abc", query="리튬황 배터리"),
+            ),
+        ),
+    )
+
+    _, results = asyncio.run(
+        sch_021(
+            _FakeConnection(),  # type: ignore[arg-type]
+            source_key="latest-naver",
+            database_url="postgresql://fake",
+            credentials=_CREDENTIALS,
+            now=_NOW,
+        )
+    )
+
+    assert [result.status for result in results] == ["completed"]
+    assert [call["keywords"] for call in calls] == [["리튬황 배터리"]]
 
 
 def test_manual_run_reports_unknown_source(

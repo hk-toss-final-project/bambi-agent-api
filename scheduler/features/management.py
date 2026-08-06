@@ -281,7 +281,11 @@ async def sch_021(
             f"(가능: {', '.join(sorted(SCHEDULED_PROVIDERS))})"
         )
     moment = now or datetime.now(UTC)
-    if not schedule.keywords:
+    # 관심 Topic(targets)도 검색어가 된다. 고정 키워드만 보면, 검색어를 전부
+    # 관심 Topic으로 받는 스케줄(interest-taxonomy-google-news)이 "키워드가 비어
+    # 있다"며 건너뛴다 — 정기 실행은 멀쩡히 돌던 스케줄이라 더 헷갈린다. 정기
+    # 실행(collection.should_run_schedule)과 같은 조건을 쓴다.
+    if not schedule.keywords and not schedule.targets:
         return (
             _to_view(schedule),
             [
