@@ -264,6 +264,48 @@ def test_generation_job_result_flow(
     assert completed.json()["result"] == {"content_id": "content-1"}
 
 
+def test_generation_request_forwards_report_type_to_the_repository(
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
+) -> None:
+    """요청의 report_type이 저장소까지 그대로 전달된다.
+
+    Agent는 이 값을 해석하지 않고 발행 Snapshot에 실어 돌려주기만 한다.
+    값의 정의는 Service가 소유한다(2026-08-06 이송우 협의).
+    """
+    _put_context(client, "user-2")
+
+    accepted = client.post(
+        "/internal/v1/users/user-2/generations",
+        json={
+            "idempotency_key": "generation-report-type",
+            "topic": "AI agent trends",
+            "content_type": "interest_news_card",
+            "report_type": "MORNING_BRIEFING",
+        },
+    )
+
+    assert accepted.status_code == 202
+    assert agent_jobs_fake.last_report_type == "MORNING_BRIEFING"
+
+
+def test_generation_request_allows_omitting_report_type(
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
+) -> None:
+    """report_type을 보내지 않던 기존 호출도 그대로 접수된다."""
+    _put_context(client, "user-2")
+
+    accepted = client.post(
+        "/internal/v1/users/user-2/generations",
+        json={
+            "idempotency_key": "generation-no-report-type",
+            "topic": "AI agent trends",
+        },
+    )
+
+    assert accepted.status_code == 202
+    assert agent_jobs_fake.last_report_type == ""
+
+
 def test_content_mark_enqueues_wiki_build_job(
     client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
 ) -> None:

@@ -300,6 +300,7 @@ class InMemoryAgentJobRepository:
         idempotency_key: str,
         topic: str,
         content_type: str,
+        report_type: str = "",
         language: str | None,
         scheduled_at: datetime | None = None,
         request_id: str,
@@ -307,6 +308,8 @@ class InMemoryAgentJobRepository:
         """실제 저장소처럼 컨텍스트를 요구하며 생성 Job을 멱등 접수한다."""
         if user_id not in self._contexts:
             raise UserContextRequiredError(user_id)
+        # 라우트가 요청의 report_type을 저장소까지 전달하는지 확인하기 위해 남긴다.
+        self.last_report_type = report_type
         record, _created = self._submit_job(
             feature_id="SVC-008",
             job_type="report_generation",

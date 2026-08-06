@@ -232,6 +232,7 @@ class AgentApiMvpService:
                     idempotency_key=payload.idempotency_key,
                     topic=payload.topic,
                     content_type=payload.content_type,
+                    report_type=payload.report_type,
                     language=payload.language,
                     scheduled_at=payload.scheduled_at,
                     request_id=request_id,
@@ -375,6 +376,10 @@ class AgentApiMvpService:
                     idempotency_key=f"interest-report:{digest}",
                     topic=topic,
                     content_type="interest_news_card",
+                    # report_type 값의 정의는 Service가 소유한다. 가입 관심사에서
+                    # Agent가 직접 등록하는 이 경로에 쓸 값은 아직 합의된 게 없어
+                    # 임의로 만들지 않고 비워 둔다.
+                    report_type="",
                     language=stored.preferred_language,
                     scheduled_at=None,
                     request_id=request_id,

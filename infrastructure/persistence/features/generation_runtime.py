@@ -191,6 +191,7 @@ async def enqueue_report_generation_job(
     idempotency_key: str,
     topic: str,
     content_type: str,
+    report_type: str = "",
     language: str | None,
     scheduled_at: datetime | None = None,
     request_id: str,
@@ -219,6 +220,7 @@ async def enqueue_report_generation_job(
     job_payload = {
         "topic": topic,
         "content_type": content_type,
+        "report_type": report_type,
         "language": resolved_language,
     }
     job_cursor = await connection.execute(
@@ -283,7 +285,15 @@ async def enqueue_report_generation_job(
             content_type,
             context["plan"],
             resolved_language,
-            Jsonb({"retrieval": "personal-wiki-global-cache-keyword-v2"}),
+            # report_type은 Agent가 해석하지 않고 발행 시 그대로 돌려주기만
+            # 하는 값이라, 전용 컬럼 대신 기존 parameters jsonb에 보관한다
+            # (2026-08-06 이송우 협의: 값 정의는 Service가 소유).
+            Jsonb(
+                {
+                    "retrieval": "personal-wiki-global-cache-keyword-v2",
+                    "report_type": report_type,
+                }
+            ),
         ),
     )
     generation_request = await request_cursor.fetchone()
@@ -592,7 +602,7 @@ async def persist_report_generation(
     """
     request_cursor = await connection.execute(
         """
-        SELECT id, topic
+        SELECT id, topic, parameters
         FROM agent.generation_requests
         WHERE job_id = %s AND user_id = %s
         FOR UPDATE
@@ -758,6 +768,11 @@ async def persist_report_generation(
     # topic 1개로 생성되므로 항상 원소 1개짜리 목록이다. service 워커는 받은
     # 문자열을 그대로 저장·노출하므로 빈 문자열은 빈 태그로 보이게 된다.
     topic = str(generation_request["topic"] or "").strip()
+    # 요청에서 받은 그대로 돌려준다. Service는 요청과 Claim 시점이 떨어져 있어
+    # 이 값이 없으면 카드가 어떤 맥락에서 만들어졌는지 다시 짜맞춰야 한다
+    # (2026-08-06 이송우 협의). Agent는 해석하지 않는다.
+    parameters = generation_request.get("parameters") or {}
+    report_type = str(parameters.get("report_type") or "")
     # 요청 주제와 콘텐츠 태그를 분리해 싣는다(2026-08-05 이송우 협의).
     #
     #   generation_topic  왜 이 리포트가 만들어졌는지 (요청 원본)
@@ -775,6 +790,7 @@ async def persist_report_generation(
         "generation_topic": topic,
         "tags": [topic] if topic else [],
         "content_tags": list(generated.content_tags),
+        "report_type": report_type,
     }
     await connection.execute(
         """

@@ -152,6 +152,35 @@ def test_enqueue_defaults_to_immediate_execution_without_schedule() -> None:
     assert insert_params is not None and insert_params[-1] is None
 
 
+def test_enqueue_stores_report_type_for_the_publish_snapshot() -> None:
+    """요청의 report_type을 Job payload와 요청 parameters에 함께 남긴다.
+
+    Agent는 이 값을 해석하지 않는다. 발행 시점에 그대로 꺼내 돌려주려면
+    요청 행에 남아 있어야 해서 parameters jsonb에 보관한다.
+    """
+    connection = _connection_with_context()
+
+    asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-morning",
+            topic="개인 지식 그래프",
+            content_type="interest_news_card",
+            report_type="MORNING_BRIEFING",
+            language="ko",
+            request_id="request-1",
+        )
+    )
+
+    _, job_params = connection.executed[1]
+    assert job_params is not None
+    assert job_params[2].obj["report_type"] == "MORNING_BRIEFING"
+    _, request_params = connection.executed[2]
+    assert request_params is not None
+    assert request_params[-1].obj["report_type"] == "MORNING_BRIEFING"
+
+
 def test_uuid_or_none_keeps_wiki_ids_and_drops_live_references() -> None:
     """Wiki UUID는 유지하고 실시간 자료 참조(L1 등)·빈 값은 None으로 바꾼다.
 
@@ -166,11 +195,16 @@ def test_uuid_or_none_keeps_wiki_ids_and_drops_live_references() -> None:
     assert _uuid_or_none("") is None
 
 
-def _connection_for_persist(topic: str) -> _FakeConnection:
+def _connection_for_persist(
+    topic: str, parameters: dict[str, Any] | None = None
+) -> _FakeConnection:
     """인용 없는 리포트 저장 경로가 실행할 질의 순서대로 응답을 준비한다."""
+    request_row: dict[str, Any] = {"id": "request-1", "topic": topic}
+    if parameters is not None:
+        request_row["parameters"] = parameters
     return _FakeConnection(
         [
-            [{"id": "request-1", "topic": topic}],  # generation_requests 조회
+            [request_row],  # generation_requests 조회
             [],  # status = running
             [{"id": "run-1"}],  # generation_runs INSERT
             [{"next_version": 1}],  # 다음 content 버전
@@ -234,6 +268,28 @@ def test_publish_payload_omits_blank_topic_tag() -> None:
     _persist(connection)
 
     assert _publish_payload(connection)["tags"] == []
+
+
+def test_publish_payload_returns_the_requested_report_type_unchanged() -> None:
+    """요청에서 받은 report_type을 해석 없이 발행 Snapshot에 그대로 싣는다.
+
+    Service는 요청 시점과 Claim 시점이 떨어져 있어, 이 값이 빠지면 카드가 어떤
+    맥락에서 만들어졌는지 다시 짜맞춰야 한다(2026-08-06 이송우 협의).
+    """
+    connection = _connection_for_persist("코스피", {"report_type": "ON_DEMAND"})
+
+    _persist(connection)
+
+    assert _publish_payload(connection)["report_type"] == "ON_DEMAND"
+
+
+def test_publish_payload_keeps_report_type_empty_for_older_requests() -> None:
+    """report_type이 없던 시절 요청 행도 빈 문자열로 안전하게 읽힌다."""
+    connection = _connection_for_persist("코스피")
+
+    _persist(connection)
+
+    assert _publish_payload(connection)["report_type"] == ""
 
 
 def test_report_context_search_excludes_wiki_schema_documents() -> None:
@@ -358,6 +414,7 @@ def test_snapshot_row_mapping_exposes_every_payload_field_we_write() -> None:
             "generation_topic": "의존성 구조",
             "tags": ["의존성 구조"],
             "content_tags": ["강한 결합", "DDD"],
+            "report_type": "MORNING_BRIEFING",
         },
     }
 
@@ -366,6 +423,7 @@ def test_snapshot_row_mapping_exposes_every_payload_field_we_write() -> None:
     assert snapshot.generation_topic == "의존성 구조"
     assert snapshot.tags == ["의존성 구조"]
     assert snapshot.content_tags == ["강한 결합", "DDD"]
+    assert snapshot.report_type == "MORNING_BRIEFING"
 
 
 def test_snapshot_row_mapping_tolerates_snapshots_saved_before_new_fields() -> None:
@@ -390,6 +448,7 @@ def test_snapshot_row_mapping_tolerates_snapshots_saved_before_new_fields() -> N
     assert snapshot.generation_topic == ""
     assert snapshot.tags == []
     assert snapshot.content_tags == []
+    assert snapshot.report_type == ""
 
 
 def _run_metadata(connection: _FakeConnection) -> dict[str, Any]:

@@ -302,6 +302,15 @@ class GenerationRequest(ImmutableSchema):
         max_length=64,
         description="생성 콘텐츠 유형",
     )
+    report_type: str = Field(
+        default="",
+        max_length=64,
+        description=(
+            "이 리포트가 만들어진 맥락 구분 (예: MORNING_BRIEFING, ON_DEMAND). "
+            "값의 정의는 Service가 소유하며 Agent는 해석하지 않고 그대로 "
+            "Publish Snapshot에 실어 돌려준다."
+        ),
+    )
     language: str | None = Field(
         default=None, min_length=2, max_length=16, description="요청 콘텐츠 언어"
     )
@@ -394,6 +403,15 @@ class PublishSnapshotResponse(ImmutableSchema):
         description=(
             "생성된 리포트 내용에서 뽑은 검색·추천용 태그 (REPORT-010). "
             "요청 주제와 실제 작성된 내용이 다를 수 있어 분리해 보존한다."
+        ),
+    )
+    report_type: str = Field(
+        default="",
+        description=(
+            "생성 요청에서 받은 맥락 구분을 그대로 돌려준다 "
+            "(예: MORNING_BRIEFING, ON_DEMAND). 요청과 결과 수령 시점이 떨어져 "
+            "있어, Service가 Claim 시점에 이 카드가 어떤 맥락에서 만들어졌는지 "
+            "다시 짜맞추지 않도록 함께 싣는다."
         ),
     )
     created_at: datetime = Field(description="Snapshot 생성 시각")

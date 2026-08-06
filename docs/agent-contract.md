@@ -179,6 +179,14 @@
 
 ### 4.2-1 온보딩 관심사 시드 + 웰컴 리포트 (콜드스타트)
 - **시드 (WSE-014, agent 자동):** `signup_interests`가 있으면 context 수신 시 agent가 선택을 시드 Markdown으로 합성해 `onboarding_seed` 원본·Personal Wiki Build Job으로 **자동 접수**한다. Builder는 `source_metadata.labels`를 LLM 없이 결정적으로 Concept로 만들고 기존 Build·Snapshot 저장 경로를 재사용한다. 빌드 완료 후 INT-011 훅이 관심사 프로필을 파생시킨다. 컨텍스트 저장과 분리된 best-effort이고, 선택 내용 기반 멱등(같은 온보딩 반복 전달 → 시드 1개). Service의 추가 호출 불필요.
+- **`report_type` (요청 → Snapshot 그대로 반환, 2026-08-06 이송우 협의):**
+  `POST /generations`에 `report_type`(선택, 기본 `""`)을 실으면, agent가 해석하지 않고
+  발행 Snapshot의 `report_type`에 **받은 문자열 그대로** 담아 Claim 시점에 돌려준다.
+  요청과 Claim 시점이 떨어져 있어 Service가 카드의 생성 맥락을 다시 짜맞추지 않게 하려는 값이다.
+  - 값의 정의·검증은 **Service가 소유**한다. agent는 목록을 두지 않고 저장·반환만 한다(길이 64자 제한).
+  - 현재 쓰는 값: `MORNING_BRIEFING`(스케줄러 아침요약), `ON_DEMAND`(사용자 즉시 생성).
+  - `content_type`과 다른 축이다. `content_type`=콘텐츠 종류(기본 `interest_news_card`), `report_type`=생성 맥락.
+  - 생략하면 `""`. 이전에 저장된 Snapshot도 `""`로 읽힌다.
 - **웰컴 리포트 (Service 트리거):** "가입 즉시 리포트 1개"는 생성 트리거라 MVP 결정(2026-07-20)상 Service 소유다. Service가 온보딩 완료 직후 `POST /generations`를 `topic`=대표 관심사(여러 개면 랜덤), `content_type`=`interest_news_card`, `idempotency_key`=`welcome:{user_id}`로 1회 호출한다(멱등키로 재호출해도 1개만).
 
 ### 4.3 버전 관리 (핵심)
