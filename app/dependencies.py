@@ -18,6 +18,7 @@ from app.services.interests import InterestService
 from app.services.generated_content import GeneratedContentService
 from app.services.development_scenarios import DevelopmentScenarioService
 from app.services.latest_information import LatestInformationService
+from app.services.mcp_api_keys import McpApiKeyService
 from app.services.wiki_graph import WikiGraphService
 from app.services.wiki_documents import WikiDocumentService
 from infrastructure.persistence.postgres_publish_snapshots import (
@@ -27,6 +28,7 @@ from infrastructure.persistence.postgres_wiki_graph import (
     PostgresWikiGraphRepository,
 )
 from infrastructure.persistence.postgres_agent_jobs import PostgresAgentJobRepository
+from infrastructure.persistence.postgres_api_keys import PostgresApiKeyRepository
 from workers.api import worker_001
 
 logger = logging.getLogger("app.dependencies")
@@ -40,6 +42,7 @@ class AppContainer:
     database: PostgresPublishSnapshotRepository | None = None
     wiki_graph_repository: PostgresWikiGraphRepository | None = None
     agent_job_repository: PostgresAgentJobRepository | None = None
+    mcp_api_key_repository: PostgresApiKeyRepository | None = None
     vector_store: object | None = None
     queue: object | None = None
     event_bus: object | None = None
@@ -55,6 +58,7 @@ class AppContainer:
     generated_content_service: GeneratedContentService | None = None
     development_scenario_service: DevelopmentScenarioService | None = None
     collection_schedule_service: CollectionScheduleService | None = None
+    mcp_api_key_service: McpApiKeyService | None = None
     ready: bool = False
     database_error: str | None = None
 
@@ -74,6 +78,7 @@ class AppContainer:
             self.database,
             self.wiki_graph_repository,
             self.agent_job_repository,
+            self.mcp_api_key_repository,
         )
         try:
             for repository in repositories:
@@ -95,6 +100,7 @@ class AppContainer:
             self.database,
             self.wiki_graph_repository,
             self.agent_job_repository,
+            self.mcp_api_key_repository,
         ):
             if repository is None:
                 continue
@@ -115,6 +121,7 @@ class AppContainer:
         self.generated_content_service = None
         self.development_scenario_service = None
         self.collection_schedule_service = None
+        self.mcp_api_key_service = None
 
     async def shutdown(self) -> None:
         """새 요청 처리를 중단하고 PostgreSQL 연결 Pool을 종료한다."""
@@ -125,6 +132,8 @@ class AppContainer:
             await self.wiki_graph_repository.shutdown()
         if self.agent_job_repository is not None:
             await self.agent_job_repository.shutdown()
+        if self.mcp_api_key_repository is not None:
+            await self.mcp_api_key_repository.shutdown()
 
 
 def create_container(settings: Settings) -> AppContainer:
@@ -135,6 +144,7 @@ def create_container(settings: Settings) -> AppContainer:
             settings.agent_database_url
         )
         agent_job_repository = PostgresAgentJobRepository(settings.agent_database_url)
+        mcp_api_key_repository = PostgresApiKeyRepository(settings.agent_database_url)
         interest_service = InterestService(wiki_graph_repository)
         mvp_service = AgentApiMvpService(agent_job_repository)
         publish_snapshot_service = PublishSnapshotService(database)
@@ -150,6 +160,7 @@ def create_container(settings: Settings) -> AppContainer:
             database=database,
             wiki_graph_repository=wiki_graph_repository,
             agent_job_repository=agent_job_repository,
+            mcp_api_key_repository=mcp_api_key_repository,
             mvp_service=mvp_service,
             publish_snapshot_service=publish_snapshot_service,
             wiki_graph_service=WikiGraphService(wiki_graph_repository),
@@ -167,6 +178,7 @@ def create_container(settings: Settings) -> AppContainer:
             collection_schedule_service=CollectionScheduleService(
                 agent_job_repository, settings
             ),
+            mcp_api_key_service=McpApiKeyService(mcp_api_key_repository),
         )
     return AppContainer(
         settings=settings,
@@ -339,3 +351,19 @@ def get_development_scenario_service(
             ),
         )
     return container.development_scenario_service
+
+
+def get_mcp_api_key_service(
+    container: AppContainer = Depends(get_container),
+) -> McpApiKeyService:
+    """MCP API Key 발급·조회·폐기 서비스를 반환한다."""
+    if container.mcp_api_key_service is None:
+        raise AgentApiError(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            ErrorDetail(
+                code="SERVICE_NOT_READY",
+                message="MCP API Key 저장소가 준비되지 않았습니다.",
+                retryable=True,
+            ),
+        )
+    return container.mcp_api_key_service

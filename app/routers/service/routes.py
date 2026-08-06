@@ -1,6 +1,7 @@
 """Service API가 호출하는 FastAPI MVP 내부 라우터."""
 
 from typing import Annotated, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 
@@ -12,6 +13,7 @@ from app.dependencies import (
     get_generated_content_service,
     get_wiki_document_service,
     get_wiki_graph_service,
+    get_mcp_api_key_service,
 )
 from app.schemas.collection_schedules import (
     CollectionScheduleListResponse,
@@ -44,6 +46,12 @@ from app.schemas.mvp import (
     WikiDocumentDeletionResponse,
     WikiSourceDeletionRequest,
 )
+from app.schemas.mcp_api_keys import (
+    McpApiKeyCreateRequest,
+    McpApiKeyCreateResponse,
+    McpApiKeyListResponse,
+    McpApiKeyResponse,
+)
 from app.schemas.wiki import (
     WikiBuildDetailResponse,
     WikiDocumentDetailResponse,
@@ -68,6 +76,7 @@ from app.services.wiki_graph import WikiGraphService
 from app.services.wiki_documents import WikiDocumentService
 from app.services.interests import InterestService
 from app.services.generated_content import GeneratedContentService
+from app.services.mcp_api_keys import McpApiKeyService
 
 router = APIRouter(
     tags=["service-api"],
@@ -79,6 +88,53 @@ UserId = Annotated[str, Path(min_length=1, max_length=128, description="사용�
 def _request_id(request: Request) -> str:
     """추적 미들웨어가 생성한 Request ID를 반환한다."""
     return request.state.request_id
+
+
+@router.post(
+    "/users/{user_id}/mcp-api-keys",
+    response_model=McpApiKeyCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="key_001",
+    summary="MCP Personal Access Token 발급",
+)
+async def create_mcp_api_key(
+    user_id: UserId,
+    payload: McpApiKeyCreateRequest,
+    request: Request,
+    service: McpApiKeyService = Depends(get_mcp_api_key_service),
+) -> McpApiKeyCreateResponse:
+    """[KEY-001] 사용자 Wiki 읽기 전용 MCP API Key를 발급한다."""
+    return await service.create(user_id, payload, request_id=_request_id(request))
+
+
+@router.get(
+    "/users/{user_id}/mcp-api-keys",
+    response_model=McpApiKeyListResponse,
+    operation_id="key_002",
+    summary="MCP Personal Access Token 목록 조회",
+)
+async def list_mcp_api_keys(
+    user_id: UserId,
+    service: McpApiKeyService = Depends(get_mcp_api_key_service),
+) -> McpApiKeyListResponse:
+    """[KEY-002] 원문과 Hash를 제외한 사용자 API Key 목록을 조회한다."""
+    return await service.list(user_id)
+
+
+@router.delete(
+    "/users/{user_id}/mcp-api-keys/{key_id}",
+    response_model=McpApiKeyResponse,
+    operation_id="key_005",
+    summary="MCP Personal Access Token 폐기",
+)
+async def revoke_mcp_api_key(
+    user_id: UserId,
+    key_id: Annotated[UUID, Path(description="MCP API Key UUID")],
+    request: Request,
+    service: McpApiKeyService = Depends(get_mcp_api_key_service),
+) -> McpApiKeyResponse:
+    """[KEY-005] 사용자 소유 MCP API Key를 영구 폐기한다."""
+    return await service.revoke(user_id, str(key_id), request_id=_request_id(request))
 
 
 @router.put(
