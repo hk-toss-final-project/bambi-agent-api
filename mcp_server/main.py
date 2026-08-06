@@ -145,12 +145,20 @@ async def _run() -> None:
             transport_security=_transport_security(settings),
         )
     finally:
-        await container.shutdown()
+        shutdown_task = asyncio.create_task(container.shutdown())
+        try:
+            await asyncio.shield(shutdown_task)
+        except asyncio.CancelledError:
+            await shutdown_task
+            raise
 
 
 def main() -> None:
     """외부 Agent 연결용 MCP 서버를 단독 프로세스로 실행한다."""
-    asyncio.run(_run())
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        return
 
 
 if __name__ == "__main__":

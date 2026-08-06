@@ -7,8 +7,9 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.dependencies import AppContainer
-from app.main import create_app
 from app.security.api_keys.api import key_008
+from mcp_server.main import build_mcp_http_app, build_mcp_server
+from mcp_server import main as mcp_main
 from tests.mcp_server.tools.test_personal_wiki import _FakeWikiReader
 
 
@@ -62,7 +63,7 @@ def _meta() -> dict[str, object]:
 
 
 def _client(raw_key: str) -> TestClient:
-    """MCP 인증·Wiki 대역이 연결된 FastAPI TestClient를 만든다."""
+    """MCP 인증·Wiki 대역이 연결된 전용 MCP TestClient를 만든다."""
     settings = Settings(
         environment="test",
         mcp_server_url="http://testserver/mcp",
@@ -73,7 +74,8 @@ def _client(raw_key: str) -> TestClient:
         mcp_api_key_repository=_FakeMcpApiKeyRepository(raw_key),
         wiki_graph_repository=_FakeMcpWikiRepository(),
     )
-    return TestClient(create_app(settings, container))
+    server = build_mcp_server(settings, container)
+    return TestClient(build_mcp_http_app(server, settings))
 
 
 def _headers(raw_key: str, method: str, *, name: str | None = None) -> dict[str, str]:
@@ -133,3 +135,15 @@ def test_mcp_http_discovers_and_calls_personal_wiki_search() -> None:
     assert "tools" in discovered.json()["result"]["capabilities"]
     assert searched.status_code == 200
     assert searched.json()["result"]["structuredContent"]["results"][0]["id"] == "document-1"
+
+
+def test_main_handles_terminal_interrupt_without_traceback(monkeypatch) -> None:
+    """전용 프로세스가 터미널 인터럽트를 정상 종료로 처리하는지 검증한다."""
+    def interrupt(coroutine: object) -> None:
+        """생성된 Coroutine을 닫고 터미널 인터럽트를 재현한다."""
+        coroutine.close()  # type: ignore[attr-defined]
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(mcp_main.asyncio, "run", interrupt)
+
+    mcp_main.main()

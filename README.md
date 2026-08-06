@@ -1,10 +1,15 @@
 # Report Builder Agent API
 
-이 저장소는 **서버 한 개**로 구성됩니다.
+이 저장소는 같은 이미지에서 역할을 나눈 **서버 프로세스 두 개**를 제공합니다.
 
 | | 파일 | 포트 | 제공 |
 |---|---|---|---|
 | **Agent API** | `app/main.py` | 8000 | API(`/internal/v1/**`) + LLM Wiki Graph UI + 키워드 비서 웹 UI(`/assistant/**`) |
+| **MCP Server** | `mcp_server/main.py` | 8000 | 외부 AI용 읽기 전용 Streamable HTTP(`/mcp`) |
+
+두 프로세스는 동시에 같은 포트를 점유하는 구성이 아닙니다. 배포에서는 컨테이너를
+분리해 각각 8000 포트를 사용하고, Agent API는 내부 네트워크에만 두며 Nginx가
+MCP Server의 `/mcp`만 외부에 공개합니다.
 
 MVP 핵심 파이프라인: 클리핑/URL → LLM Wiki → 관심사 → 외부 수집 → Report Builder 생성 → 발행 Snapshot.
 
@@ -77,7 +82,23 @@ uv run uvicorn app.main:app --port 8000 --reload --loop app.main:selector_event_
   요청에 자동으로 추가됩니다.
   문서가 필요 없는 환경에서는 `DOCS_ENABLED=false`로 비활성화할 수 있습니다.
 
-### 3. LLM Wiki Graph UI
+### 3. MCP Server 전용 프로세스
+
+Agent API와 별도 터미널 또는 컨테이너에서 실행합니다. 이 명령만 공개 MCP
+Endpoint를 등록하며 `uvicorn app.main:app`에는 `/mcp`가 존재하지 않습니다.
+
+```bash
+uv run python -m mcp_server.main
+```
+
+- `MCP_SERVER_URL`에는 외부 Client가 등록할 절대 URL을 지정합니다.
+  운영에서는 공인 인증서가 적용된 `https://<domain>/mcp`를 사용합니다.
+- `MCP_AUTH_ISSUER_URL`은 별도 발급자가 없으면 `MCP_SERVER_URL`과 같은 값으로
+  둡니다.
+- Bearer Key는 `wiki:read` Scope만 가지며 Key 소유자의 Personal Wiki만
+  `search`·`fetch`할 수 있습니다.
+
+### 4. LLM Wiki Graph UI
 
 Agent API 서버(8000)에 내장된 개인 지식 그래프 시각화 페이지입니다.
 
@@ -102,7 +123,7 @@ http://127.0.0.1:8000/wiki-graph?user_id={user_id}
   `localhost`와 `127.0.0.1`은 서로 다른 Origin이므로 두 화면의 호스트를 동일하게
   맞춰야 합니다.
 
-### 4. 키워드 비서 웹 UI
+### 5. 키워드 비서 웹 UI
 
 키워드를 입력하면 관련 YouTube 영상 자막, Reddit 게시글을 LLM으로 요약하고, 최근
 뉴스 기사를 중복 없이 모아 브리핑으로 보여줍니다. 처음 조회하는 키워드는 폭넓게
@@ -120,7 +141,7 @@ http://127.0.0.1:8000/wiki-graph?user_id={user_id}
 SERVICE_NOT_READY`로 응답합니다). 분해 전 구조와 설계 배경은
 [보관된 에이전트 구조 문서](docs/archive/2026-07/agent-structure-and-collection-loop.md)를 참고하세요.
 
-### 5. Worker 실행
+### 6. Worker 실행
 
 등록된 Agent Job(Wiki 빌드, Report Builder 생성)과 외부 수집을 처리하는 CLI입니다.
 Wiki 빌드와 Report Builder 생성은 OpenAI를 실제 호출하므로 비용이 발생합니다.
