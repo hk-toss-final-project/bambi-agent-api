@@ -4,7 +4,13 @@
 """
 
 from .features.lifecycle import mcp_001, mcp_002
-from .features.authentication import mcp_003, mcp_009, mcp_010, mcp_011
+from .features.authentication import (
+    McpApiKeyVerifier,
+    mcp_003,
+    mcp_009,
+    mcp_010,
+    mcp_011,
+)
 from .features.catalog import mcp_004, mcp_005
 from .features.execution import mcp_006, mcp_007
 from .features.logging import mcp_008
@@ -21,4 +27,5 @@ __all__ = [
     "mcp_006",
     "mcp_007",
     "mcp_008",
+    "McpApiKeyVerifier",
 ]

@@ -15,16 +15,30 @@
 
 ## MVP 구현 현황 체크리스트
 
-> 기준: 2026-07-22. 기능 ID 스캐폴드 함수가 아니라 **실제 런타임 경로**(라우터·서비스·Worker·저장소·Agent)가
+> 기준: 2026-08-06. 기능 ID 스캐폴드 함수가 아니라 **실제 런타임 경로**(라우터·서비스·Worker·저장소·Agent)가
 > 동작하는지 기준으로 판정했다. 표기: `[x]` 구현 완료, `[x] ⚠️` 핵심 동작은 되지만 제약 있음,
 > `[ ] ❌` 미구현, `[ ] ➖` Agent API 범위 아님(service-worker 책임).
 >
-> **집계: 완료 52 · 부분 8 · 미구현 11 · 범위 외 2 (총 73)**
+> **집계: 완료 63 · 부분 8 · 미구현 11 · 범위 외 2 (총 84)**
 
 ### 내부 API 인증
 
 - [x] `AUTH-001` Service API 인증 — `Authorization: Bearer`의 opaque 토큰을 검증하고 Swagger 전역 인증에 연결
 - [x] `AUTH-002` Service Worker 인증 — Service API와 같은 배포 Secret을 검증하되 별도 기능 경계로 기록
+
+### MCP Personal Access Token
+
+- [x] `KEY-001` API Key 발급 — `wiki:read` 고정 Scope의 `bmb_mcp_` Key를 만들고 원문은 최초 응답에서만 노출
+- [x] `KEY-002` API Key 조회 — 인증 사용자의 Key 상태·Prefix·사용 시각을 원문과 Hash 없이 조회
+- [x] `KEY-005` API Key 폐기 — 인증 사용자 소유 Key를 멱등하게 영구 폐기
+- [x] `KEY-008` API Key Hash 저장 — SHA-256 Hash와 공개 식별 Prefix만 DB에 저장
+- [x] `KEY-009` API Key Scope 설정 — Personal Wiki 도구는 `wiki:read` Scope만 허용
+- [x] `KEY-014` Personal Wiki 접근 권한 — 검증된 Key의 `principal_id`를 Wiki 사용자 범위로 강제
+- [x] `MCP-003` MCP 인증 — Streamable HTTP 요청의 Bearer API Key를 Agent DB Hash와 검증
+- [x] `MCP-009` MCP Scope 검증 — `wiki:read`가 없는 Key의 Tool 접근 거부
+- [x] `MCP-011` MCP 사용자 권한 검증 — Tool 입력으로 user_id를 받지 않고 인증 주체로 Namespace 결정
+- [x] `MCPTOOL-001` Personal Wiki 검색 — 개인 Namespace의 제목·요약·본문 부분 일치, 무관한 최신 문서 fallback 없음
+- [x] `MCPTOOL-002` Personal Wiki 문서 조회 — search가 반환한 ID의 Markdown·출처를 같은 사용자 범위에서 조회
 
 ### Service API 연동
 
@@ -380,8 +394,8 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 ## MVP 제외 범위
 
 - 내부 호출 주체별 별도 Secret·세부 Scope 권한·요청 서명
-- 자체 API Key와 External Agent API
-- MCP Server
+- External Agent API의 생성·번역·추천 기능
+- MCP Server의 생성·수집 도구와 OAuth 인증
 - 번역 및 이미지 생성
 - 별도의 추천 Agent
 - 고급 관심사 Graph
