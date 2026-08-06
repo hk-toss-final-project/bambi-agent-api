@@ -20,7 +20,22 @@ type DictRow = dict[str, Any]
 
 
 class StaleContextVersionError(RuntimeError):
-    """저장된 사용자 Context보다 오래되거나 같은 Version 요청 오류."""
+    """저장된 사용자 Context보다 오래되거나 같은 Version 요청 오류.
+
+    현재 저장된 버전을 함께 담는다. Service는 자기 카운터로 버전을 매기는데 그
+    카운터가 Agent와 독립이라, 한 번 어긋나면 무엇을 보내도 계속 거절된다.
+    거절만 알려주면 Service가 맞출 방법이 없어 조회 API를 따로 만들거나 버전을
+    임의로 점프시켜야 한다. 거절과 함께 현재 값을 주면 한 번의 왕복으로 수렴한다.
+
+    (2026-08-06 실측: Service가 이 409를 "이미 최신"으로 삼켜, 온보딩 관심사가
+    Agent로 전달되지 않는데도 아무도 알지 못했다.)
+    """
+
+    def __init__(self, user_id: str, *, current_context_version: int) -> None:
+        """거절된 사용자와 현재 저장된 버전을 담는다."""
+        super().__init__(user_id)
+        self.user_id = user_id
+        self.current_context_version = current_context_version
 
 
 class UserContextRequiredError(RuntimeError):
@@ -91,7 +106,9 @@ async def upsert_user_context_snapshot(
     )
     current = await current_cursor.fetchone()
     if current is not None and context_version <= int(current["context_version"]):
-        raise StaleContextVersionError(user_id)
+        raise StaleContextVersionError(
+            user_id, current_context_version=int(current["context_version"])
+        )
     normalized_interests = [
         {
             "category": (

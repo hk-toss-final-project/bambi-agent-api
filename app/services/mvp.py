@@ -279,11 +279,20 @@ class AgentApiMvpService:
                 ],
             )
         except StaleContextVersionError as exc:
+            # 현재 버전을 함께 알려준다. 호출자(Service)는 자기 카운터로 버전을
+            # 매기는데 그 카운터가 Agent와 독립이라, 이 값이 없으면 무엇을 보내야
+            # 통과하는지 알 수 없다. 받은 값 + 1로 재전송하면 한 번에 수렴한다.
             raise AgentApiError(
                 status.HTTP_409_CONFLICT,
                 ErrorDetail(
                     code="STALE_CONTEXT_VERSION",
-                    message="현재 버전보다 새로운 사용자 컨텍스트가 필요합니다.",
+                    message=(
+                        "현재 버전보다 새로운 사용자 컨텍스트가 필요합니다. "
+                        f"현재 저장된 버전은 {exc.current_context_version}입니다."
+                    ),
+                    details=(
+                        {"current_context_version": exc.current_context_version},
+                    ),
                 ),
             ) from exc
         await self._seed_onboarding_interests(stored, request_id=request_id)

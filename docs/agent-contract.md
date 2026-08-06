@@ -184,7 +184,11 @@
 ### 4.3 버전 관리 (핵심)
 - `context_version`은 **사용자별로 단조 증가**해야 한다. 같거나 작은 값 재전송 → `STALE_CONTEXT_VERSION`.
 - **구현:** service-db `users.agent_context_version`을 사용자 행 lock 아래 +1하고, 같은 트랜잭션에 Outbox payload를 적재한다.
-- `STALE_CONTEXT_VERSION(409)`은 **오류가 아니라 "이미 최신"** 신호 → Gateway가 삼키고 성공 처리(§5.4).
+- `STALE_CONTEXT_VERSION(409)`의 `details[0].current_context_version`에 **agent가 지금 저장하고 있는 버전**이 담긴다.
+  → Service는 이 값 + 1로 한 번만 재전송하면 반영된다(왕복 1회로 수렴).
+- 이 409를 **그냥 삼키면 안 된다.** service-db의 `users.agent_context_version`은 agent와 독립 카운터라
+  "이미 최신"이 아니라 "카운터가 어긋남"인 경우가 있고, 이때 삼키면 온보딩 관심사가 조용히 유실된다
+  (2026-08-06 실제 발생). 재전송 후에도 409면 그때 "이미 최신"으로 처리한다.
 
 ### 4.4 순서·실패 정책
 - **순서 불변식:** 특정 사용자의 `generations` 이전에 그 사용자의 `context`가 반드시 한 번 반영돼 있어야 한다.

@@ -1,6 +1,8 @@
 """Report Builder Generation Job 등록의 예약 시각(scheduled_at) 영속화를 검증한다."""
 
 import asyncio
+
+import pytest
 from datetime import UTC, datetime
 from typing import Any
 
@@ -470,3 +472,38 @@ def test_run_metadata_records_what_the_critic_objected_to() -> None:
     metadata = _run_metadata(connection)
     assert metadata["review_outcome"] == "revise_exhausted"
     assert metadata["review_problem"] == "인용한 G2 원문은 코스피 상승에 관한 내용이다."
+
+
+def test_stale_context_error_carries_the_current_version() -> None:
+    """거절 시 현재 저장된 버전을 함께 알려준다.
+
+    Service는 자기 카운터로 버전을 매기는데 그 카운터가 Agent와 독립이라, 한 번
+    어긋나면 무엇을 보내도 계속 거절된다. 현재 값을 주면 받은 값 + 1로 재전송해
+    한 번에 수렴한다(2026-08-06: Service가 이 409를 "이미 최신"으로 삼켜 온보딩
+    관심사가 전달되지 않는데도 아무도 알지 못했다).
+    """
+    from infrastructure.persistence.features.generation_runtime import (
+        StaleContextVersionError,
+    )
+
+    connection = _FakeConnection([[], [{"context_version": 7}]])
+
+    with pytest.raises(StaleContextVersionError) as caught:
+        asyncio.run(
+            upsert_user_context_snapshot(
+                connection,  # type: ignore[arg-type]
+                user_id="user-1",
+                context_version=4,
+                plan="free",
+                preferred_language="ko",
+                personalization_enabled=True,
+                interest_taxonomy_version=None,
+                selected_category_ids=[],
+                selected_topic_ids=[],
+                blocked_interest_ids=[],
+                blocked_source_ids=[],
+            )
+        )
+
+    assert caught.value.current_context_version == 7
+    assert caught.value.user_id == "user-1"

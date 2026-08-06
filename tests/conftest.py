@@ -133,7 +133,9 @@ class InMemoryAgentJobRepository:
         """단조 증가 버전만 허용하며 새 Context Snapshot을 저장한다."""
         current = self._contexts.get(user_id)
         if current is not None and context_version <= current.context_version:
-            raise StaleContextVersionError(user_id)
+            raise StaleContextVersionError(
+                user_id, current_context_version=current.context_version
+            )
         stored = StoredUserContextRecord(
             context_id=uuid4().hex,
             user_id=user_id,
