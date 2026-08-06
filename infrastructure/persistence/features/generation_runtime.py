@@ -190,6 +190,7 @@ async def enqueue_report_generation_job(
     user_id: str,
     idempotency_key: str,
     topic: str,
+    topics: list[str] | None = None,
     content_type: str,
     report_type: str = "",
     language: str | None,
@@ -219,6 +220,8 @@ async def enqueue_report_generation_job(
     resolved_language = language or context["preferred_language"]
     job_payload = {
         "topic": topic,
+        # 여러 주제를 한 장에 묶는 요약 리포트용. 비어 있으면 topic 하나만 다룬다.
+        "topics": list(topics or []),
         "content_type": content_type,
         "report_type": report_type,
         "language": resolved_language,

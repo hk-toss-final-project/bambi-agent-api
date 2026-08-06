@@ -28,6 +28,9 @@ class ReportGenerationState(TypedDict):
     job_id: str
     attempt_number: int
     topic: str
+    # 한 리포트가 함께 다룰 주제 목록. 비어 있으면 topic 하나만 다룬다(기존 동작).
+    # 값이 있으면 topic은 카드 제목·generation_topic 용도로만 남는다.
+    topics: NotRequired[list[str]]
     content_type: str
     language: str
     model: str
@@ -40,6 +43,10 @@ class ReportGenerationState(TypedDict):
     # 돌리지 않게 하는 표식이다(성공 여부가 아니라 시도 여부).
     research_collected_live: NotRequired[bool]
     topic_intent: NotRequired[str]
+    # 주제별 성격 판정과 주제별 조사 결과. 여러 주제를 묶을 때 load_context가
+    # 주제마다 근거 몫을 배정하려면 어느 문서가 어느 주제 것인지 알아야 한다.
+    topic_intents: NotRequired[dict[str, str]]
+    research_documents_by_topic: NotRequired[dict[str, list[object]]]
     contexts: NotRequired[list[object]]
     generated: NotRequired[object]
     # 검토자(critic)가 재작성을 요구하면 채운다. generate 노드가 이 지시를 받아

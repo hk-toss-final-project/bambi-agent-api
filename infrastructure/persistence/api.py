@@ -101,6 +101,7 @@ from .features.interest_taxonomy import (
     InterestTaxonomyConflictError,
     StoredInterestTaxonomy,
     sync_user_interest_subscriptions,
+    sync_wiki_interest_collection_targets,
     upsert_interest_taxonomy_snapshot,
 )
 from .features.events import db_027

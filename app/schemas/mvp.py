@@ -10,6 +10,7 @@ from pydantic import (
     ConfigDict,
     Field,
     HttpUrl,
+    field_validator,
     model_validator,
 )
 
@@ -284,6 +285,12 @@ class WikiDocumentDeletionResponse(ImmutableSchema):
     request_id: str = Field(description="요청 추적 ID")
 
 
+# 한 리포트가 묶을 수 있는 주제 수 상한. 주제마다 조사(검색·수집)를 따로 돌리므로
+# 개수가 곧 생성 시간이다. Worker lease(600초) 안에 끝나야 같은 Job이 죽은 것으로
+# 판정돼 재실행되지 않는다.
+_MAX_REPORT_TOPICS = 5
+
+
 class GenerationRequest(ImmutableSchema):
     """리포트 생성기 개인화 콘텐츠 생성을 요청하는 모델."""
 
@@ -296,6 +303,17 @@ class GenerationRequest(ImmutableSchema):
         ),
     )
     topic: str = Field(min_length=1, max_length=500, description="생성할 콘텐츠 주제")
+    topics: list[str] = Field(
+        default_factory=list,
+        max_length=_MAX_REPORT_TOPICS,
+        description=(
+            "한 리포트가 함께 다룰 주제 목록. 아침 요약처럼 상위 관심사 여러 개를 "
+            "한 장에 묶을 때 사용한다. 비워 두면 topic 하나만 다루는 기존 동작이다. "
+            "주면 topic은 카드 제목·generation_topic으로만 쓰이고, 본문이 다루는 "
+            "주제는 이 목록이 된다. 주제마다 근거를 따로 모으므로 개수에 비례해 "
+            f"생성 시간이 늘어난다(최대 {_MAX_REPORT_TOPICS}개)."
+        ),
+    )
     content_type: str = Field(
         default="interest_news_card",
         min_length=1,
@@ -321,6 +339,30 @@ class GenerationRequest(ImmutableSchema):
             "Job이 Claim되지 않으며, 생략하면 즉시 실행 대상이 된다."
         ),
     )
+
+    @field_validator("topics", mode="after")
+    @classmethod
+    def normalize_topics(cls, value: list[str]) -> list[str]:
+        """공백뿐인 주제를 버리고 중복을 합쳐 조사 횟수를 낭비하지 않게 한다.
+
+        주제 하나가 조사 한 번(검색·수집)이라, 같은 주제가 두 번 들어오면
+        같은 검색을 두 번 돌리고 근거도 중복으로 쌓인다. 대소문자만 다른
+        표기는 같은 주제로 본다.
+        """
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            topic = raw.strip()
+            if not topic:
+                continue
+            if len(topic) > 500:
+                raise ValueError("topics의 각 주제는 500자를 넘을 수 없습니다.")
+            marker = topic.casefold()
+            if marker in seen:
+                continue
+            seen.add(marker)
+            normalized.append(topic)
+        return normalized
 
     @model_validator(mode="after")
     def validate_scheduled_at_timezone(self) -> "GenerationRequest":

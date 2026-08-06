@@ -188,11 +188,14 @@ async def sync_user_interest_subscriptions(
             )
             desired[target_key] = (topic_name, None)
 
+    # 온보딩에서 온 구독만 갈아 끼운다. 개인 Wiki 관심사에서 자동 등록한 구독
+    # (origin='wiki_interest')까지 지우면, 컨텍스트를 저장할 때마다 창고가 따라가던
+    # 주제가 사라진다.
     await connection.execute(
         """
         UPDATE agent.user_interest_subscriptions
         SET active = false
-        WHERE user_id = %s AND active
+        WHERE user_id = %s AND active AND origin = 'onboarding'
         """,
         (user_id,),
     )
@@ -201,8 +204,9 @@ async def sync_user_interest_subscriptions(
             """
             INSERT INTO agent.user_interest_subscriptions (
                 user_id, target_key, context_snapshot_id, topic_name,
-                category_name, active
-            ) VALUES (%s, %s, %s, %s, %s, true)
+                category_name, active, origin
+            ) VALUES (%s, %s, %s, %s, %s, true, 'onboarding')
+            ON CONFLICT (user_id, target_key) WHERE active DO NOTHING
             """,
             (
                 user_id,
@@ -227,3 +231,152 @@ async def sync_user_interest_subscriptions(
           AND target.subscriber_count <> counts.subscriber_count
         """
     )
+
+
+# 개인 Wiki 관심사에서 자동 등록할 수집 대상 상한. 관심사는 Wiki 노드 제목에서
+# 나오므로 사용자가 글을 저장할수록 계속 늘어난다. 상한이 없으면 수집 대상이
+# 사용자 수 × 노드 수로 불어나 외부 API 한도를 먹는다.
+_WIKI_INTEREST_TARGET_LIMIT = 5
+# 점수는 최상위를 1.0으로 재정규화한 값이다. 한 번 저장하고 만 주제까지 창고가
+# 따라가지 않도록 하한을 둔다.
+_WIKI_INTEREST_SCORE_FLOOR = 0.3
+
+
+async def sync_wiki_interest_collection_targets(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    interests: Sequence[dict[str, Any]],
+    limit: int = _WIKI_INTEREST_TARGET_LIMIT,
+    score_floor: float = _WIKI_INTEREST_SCORE_FLOOR,
+) -> list[str]:
+    """개인 Wiki 상위 관심사를 창고 수집 대상으로 등록하고 구독을 갱신한다.
+
+    창고를 채우는 말과 관심사를 뽑는 말이 서로 달라서 생기는 구멍을 메운다.
+    수집 대상은 온보딩에서 고른 taxonomy 라벨("프로야구")인데, 관심사 점수는
+    개인 Wiki 노드 제목("오스틴딘")에서 나온다. 사용자가 글을 저장할수록 세밀한
+    노드가 상위로 올라오고, 그 주제로는 아무도 수집하고 있지 않아 리포트가
+    근거를 못 찾는다. 상위 관심사를 수집 대상에 얹어 창고가 따라가게 한다.
+
+    이미 같은 검색어로 수집 중인 대상이 있으면 새로 만들지 않고 그 대상을
+    구독한다 — 같은 말로 두 번 수집하면 외부 API 호출만 두 배가 된다.
+
+    Args:
+        connection: 이미 열린 agent-db 커넥션
+        user_id: 대상 사용자 ID
+        interests: INT-011이 계산한 관심사 목록(점수 내림차순, topic·score 키 사용)
+        limit: 자동 등록할 최대 주제 수
+        score_floor: 이 점수 미만인 관심사는 등록하지 않는다
+
+    Returns:
+        이번에 구독한 주제 이름 목록(점수 순). 등록할 게 없으면 빈 목록
+    """
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for interest in interests:
+        topic_name = " ".join(str(interest.get("topic") or "").split())
+        if not topic_name:
+            continue
+        try:
+            score = float(interest.get("score") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if score < score_floor:
+            continue
+        marker = topic_name.casefold()
+        if marker in seen:
+            continue
+        seen.add(marker)
+        candidates.append(topic_name)
+        if len(candidates) >= limit:
+            break
+    if not candidates:
+        return []
+
+    # 구독 행은 컨텍스트 Snapshot을 참조한다(NOT NULL). 컨텍스트가 아직 없는
+    # 사용자는 구독을 만들 수 없으므로 조용히 건너뛴다 — 관심사 재계산 자체를
+    # 실패시킬 이유는 없다.
+    context_cursor = await connection.execute(
+        """
+        SELECT id
+        FROM agent.user_context_snapshots
+        WHERE user_id = %s AND deleted_at IS NULL
+        ORDER BY context_version DESC
+        LIMIT 1
+        """,
+        (user_id,),
+    )
+    context = await context_cursor.fetchone()
+    if context is None:
+        return []
+
+    # 같은 검색어로 이미 수집 중인 대상이 있으면 재사용한다.
+    existing_cursor = await connection.execute(
+        """
+        SELECT target_key, lower(btrim(query)) AS normalized_query
+        FROM agent.interest_collection_targets
+        WHERE status = 'active'
+          AND lower(btrim(query)) = ANY(%s)
+        """,
+        ([name.casefold().strip() for name in candidates],),
+    )
+    reusable = {
+        str(row["normalized_query"]): str(row["target_key"])
+        for row in await existing_cursor.fetchall()
+    }
+
+    desired: list[tuple[str, str]] = []
+    for topic_name in candidates:
+        target_key = reusable.get(topic_name.casefold().strip())
+        if target_key is None:
+            target_key = _custom_target_key(topic_name)
+            await connection.execute(
+                """
+                INSERT INTO agent.interest_collection_targets (
+                    target_key, target_type, query, category_name
+                ) VALUES (%s, 'custom', %s, NULL)
+                ON CONFLICT (target_key) DO UPDATE SET
+                    status = 'active',
+                    query = EXCLUDED.query
+                """,
+                (target_key, topic_name),
+            )
+        desired.append((target_key, topic_name))
+
+    await connection.execute(
+        """
+        UPDATE agent.user_interest_subscriptions
+        SET active = false
+        WHERE user_id = %s AND active AND origin = 'wiki_interest'
+        """,
+        (user_id,),
+    )
+    for target_key, topic_name in desired:
+        # 온보딩에서 이미 구독 중인 대상이면 그대로 둔다((user_id, target_key)에
+        # 활성 행이 하나만 있을 수 있고, 어느 쪽이든 수집은 이미 돌고 있다).
+        await connection.execute(
+            """
+            INSERT INTO agent.user_interest_subscriptions (
+                user_id, target_key, context_snapshot_id, topic_name,
+                category_name, active, origin
+            ) VALUES (%s, %s, %s, %s, NULL, true, 'wiki_interest')
+            ON CONFLICT (user_id, target_key) WHERE active DO NOTHING
+            """,
+            (user_id, target_key, context["id"], topic_name),
+        )
+    await connection.execute(
+        """
+        UPDATE agent.interest_collection_targets AS target
+        SET subscriber_count = counts.subscriber_count
+        FROM (
+            SELECT candidate.target_key, count(subscription.id)::integer AS subscriber_count
+            FROM agent.interest_collection_targets AS candidate
+            LEFT JOIN agent.user_interest_subscriptions AS subscription
+              ON subscription.target_key = candidate.target_key AND subscription.active
+            GROUP BY candidate.target_key
+        ) AS counts
+        WHERE counts.target_key = target.target_key
+          AND target.subscriber_count <> counts.subscriber_count
+        """
+    )
+    return [topic_name for _, topic_name in desired]

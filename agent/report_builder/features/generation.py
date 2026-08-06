@@ -119,6 +119,7 @@ def generate_report_content(
     contexts: Sequence[ReportContextDocument],
     model: str = "gpt-4.1-mini",
     correction: str = "",
+    topics: Sequence[str] = (),
 ) -> GeneratedReportContent:
     """개인 Wiki와 최신 Global 근거로 Report Builder 콘텐츠 JSON을 생성한다.
 
@@ -143,9 +144,18 @@ def generate_report_content(
         included_references.append(context.reference)
         current_size += len(block)
     correction_block = f"[재생성 지시] {correction}\n\n" if correction else ""
+    # 주제가 여럿이면(아침 요약) 주제마다 섹션을 두게 한다. 근거는 이미 주제별로
+    # 몫을 나눠 담겨 있지만, 지시가 없으면 LLM이 한 주제로 몰아 쓰고 나머지를 흘린다.
+    covered = [str(item).strip() for item in topics if str(item).strip()]
+    if len(covered) > 1:
+        topic_block = f"주제: {topic}\n" + "다룰 소주제(각각 별도 섹션으로, 순서대로 빠짐없이):\n" + "".join(
+            f"  - {item}\n" for item in covered
+        )
+    else:
+        topic_block = f"주제: {topic}\n"
     user_prompt = (
-        f"주제: {topic}\n"
-        f"콘텐츠 유형: {content_type}\n"
+        topic_block
+        + f"콘텐츠 유형: {content_type}\n"
         f"언어: {language}\n\n"
         + correction_block
         + "아래 근거만 사용해 콘텐츠를 생성하세요.\n\n"
@@ -167,6 +177,7 @@ def generate_report_content_with_quality(
     model: str = "gpt-4.1-mini",
     max_regenerations: int = 1,
     correction: str = "",
+    topics: Sequence[str] = (),
 ) -> GeneratedReportContent:
     """콘텐츠를 생성하고 무료 품질 검사를 거쳐, 필요하면 한 번 재생성한다.
 
@@ -197,6 +208,7 @@ def generate_report_content_with_quality(
                 contexts=contexts,
                 model=model,
                 correction=correction,
+                topics=topics,
             )
         except ValueError as error:
             # 응답이 깨진(파싱 실패) 경우. 상한이 남았으면 교정 지시를 붙여 재생성한다.

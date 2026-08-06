@@ -33,6 +33,11 @@ async def _process_job(
 ) -> dict[str, object]:
     """점유한 Report Builder Job 하나를 그래프로 생성·저장하고 완료 상태로 바꾼다."""
     topic = str(job.payload.get("topic") or "").strip()
+    topics = [
+        str(value).strip()
+        for value in (job.payload.get("topics") or [])
+        if str(value).strip()
+    ]
     content_type = str(job.payload.get("content_type") or "").strip()
     language = str(job.payload.get("language") or "ko").strip()
     if not topic or not content_type:
@@ -49,6 +54,7 @@ async def _process_job(
                     job_id=job.job_id,
                     attempt_number=job.attempt_number,
                     topic=topic,
+                    topics=topics,
                     content_type=content_type,
                     language=language,
                     model=model,

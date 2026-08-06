@@ -195,6 +195,7 @@ class AgentJobRepository(Protocol):
         user_id: str,
         idempotency_key: str,
         topic: str,
+        topics: list[str] | None = None,
         content_type: str,
         report_type: str,
         language: str | None,

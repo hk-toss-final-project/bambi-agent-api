@@ -58,6 +58,7 @@ from infrastructure.persistence.api import (
     list_existing_wiki_relations,
     load_global_document_freshness,
     set_personal_wiki_scope,
+    sync_wiki_interest_collection_targets,
 )
 from agent.assistant.api import resolve_topic_intent
 from shared.contracts import FeatureRequest
@@ -234,6 +235,16 @@ async def _recalculate_interest_profile(
             user_id,
             profile.get("version"),
         )
+        # 상위 관심사를 창고 수집 대상에 얹는다. 관심사는 Wiki 노드 제목에서
+        # 나오는데 창고는 온보딩 taxonomy 라벨로만 채워져서, 이게 없으면 사용자가
+        # 실제로 파고든 주제일수록 리포트가 근거를 못 찾는다.
+        subscribed = await sync_wiki_interest_collection_targets(
+            connection, user_id=user_id, interests=profile.get("interests") or []
+        )
+        if subscribed:
+            logger.info(
+                "관심사 수집 대상 등록 (user=%s): %s", user_id, ", ".join(subscribed)
+            )
     except Exception:  # noqa: BLE001 — 파생물 갱신 실패는 Build 결과에 영향 없음
         logger.warning(
             "관심사 프로필 자동 재계산 실패 — Wiki Build 결과는 유지 (user=%s)",
@@ -269,6 +280,24 @@ async def run_personal_wiki_build(
     return dict(state["result"])
 
 
+# 한 주제에 최소한 이만큼은 근거를 남긴다. 주제 수로 균등 분배만 하면 주제가
+# 늘수록 각 섹션이 근거 1~2건으로 얇아져 요약이 아니라 헤드라인 나열이 된다.
+_MIN_TOPIC_CONTEXT_DOCUMENTS = 3
+
+# 생성 프롬프트에 넣는 근거 문서 상한(REPORT-006 기본값과 같아야 한다).
+_MAX_REPORT_CONTEXTS = 12
+
+
+def _report_topics(state: ReportGenerationState) -> list[str]:
+    """이 리포트가 다룰 주제 목록을 돌려준다.
+
+    topics가 비어 있으면 기존처럼 topic 하나만 다룬다. topics가 있으면 topic은
+    카드 제목·generation_topic 용도로만 남고 본문이 다루는 주제는 이 목록이다.
+    """
+    topics = [str(topic).strip() for topic in (state.get("topics") or [])]
+    return [topic for topic in topics if topic] or [state["topic"]]
+
+
 def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
     """리포트 생성기 콘텐츠 생성 노드와 엣지를 조립해 컴파일된 그래프를 반환한다.
 
@@ -281,36 +310,70 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         LLM이 search_pool·collect_live 중 무엇을 어떤 검색어로 부를지 스스로
         정한다. 실패하거나 한 건도 못 모으면 빈 목록을 돌려주고, load_context가
         기존 고정 경로로 되돌아간다 — 조사가 안 됐다고 생성까지 막지는 않는다.
+
+        주제가 여럿이면(아침 요약처럼 상위 관심사를 묶는 경우) 주제마다 조사를
+        따로 돌린다. 한 번에 합쳐 검색하면 서로 무관한 주제가 섞여 어느 쪽도
+        제대로 못 찾는다(2026-08-05 실측: 무관한 주제는 제목 임베딩 유사도가
+        0.40을 넘지 못해 풀 판정 자체가 갈린다).
         """
-        topic_intent = await to_thread(
-            resolve_topic_intent, state["topic"], state["user_id"]
-        )
-        if not research_agent_enabled():
-            return {"topic_intent": topic_intent, "research_documents": []}
-        try:
-            outcome = await research_context(
-                connection,
-                topic=state["topic"],
-                user_id=state["user_id"],
-                topic_intent=topic_intent,
-                model=state["model"],
+        topics = _report_topics(state)
+        intents: dict[str, str] = {}
+        documents_by_topic: dict[str, list[Any]] = {}
+        notes: list[str] = []
+        calls: list[dict[str, object]] = []
+        collected_live = False
+        for topic in topics:
+            intents[topic] = await to_thread(
+                resolve_topic_intent, topic, state["user_id"]
             )
-        except Exception:
-            logger.exception("조사원 실행에 실패해 기존 수집 경로로 되돌립니다.")
-            return {"topic_intent": topic_intent, "research_documents": []}
-        return {
-            "topic_intent": topic_intent,
-            "research_documents": list(outcome.documents),
-            "research_notes": outcome.notes,
-            "research_collected_live": outcome.collected_live,
-            "research_calls": [
+            documents_by_topic[topic] = []
+            if not research_agent_enabled():
+                continue
+            try:
+                outcome = await research_context(
+                    connection,
+                    topic=topic,
+                    user_id=state["user_id"],
+                    topic_intent=intents[topic],
+                    model=state["model"],
+                )
+            except Exception:
+                # 주제 하나가 실패해도 나머지 주제는 계속 조사한다. 실패한 주제는
+                # load_context가 고정 경로로 다시 시도한다.
+                logger.exception(
+                    "조사원 실행에 실패해 기존 수집 경로로 되돌립니다: topic=%s", topic
+                )
+                continue
+            documents_by_topic[topic] = list(outcome.documents)
+            collected_live = collected_live or outcome.collected_live
+            if outcome.notes:
+                notes.append(
+                    outcome.notes if len(topics) == 1 else f"[{topic}] {outcome.notes}"
+                )
+            calls.extend(
                 {
+                    "topic": topic,
                     "tool": call.name,
                     "arguments": call.arguments,
                     "failed": call.failed,
                 }
                 for call in outcome.calls
-            ],
+            )
+        flattened = [
+            document
+            for topic in topics
+            for document in documents_by_topic.get(topic, [])
+        ]
+        return {
+            # 기존 단일 주제 필드는 대표 주제 값으로 유지한다 — load_context의
+            # 고정 경로와 로그가 그대로 읽는다.
+            "topic_intent": intents.get(state["topic"], next(iter(intents.values()))),
+            "topic_intents": intents,
+            "research_documents": flattened,
+            "research_documents_by_topic": documents_by_topic,
+            "research_notes": "\n".join(notes),
+            "research_collected_live": collected_live,
+            "research_calls": calls,
         }
 
     async def load_context(state: ReportGenerationState) -> dict[str, Any]:
@@ -319,6 +382,9 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         조사원이 자료를 모았으면 그대로 쓰고, 비었으면 기존 고정 경로(개인 Wiki
         조회 → 풀 판정 → 부족하면 실시간 수집)를 그대로 수행한다.
         """
+        topics = _report_topics(state)
+        if len(topics) > 1:
+            return await _load_multi_topic_contexts(state, topics)
         researched = list(state.get("research_documents") or [])
         if researched:
             logger.info(
@@ -455,8 +521,75 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             raise RuntimeError("REPORT 검색 기능이 Context 목록을 반환하지 않았습니다.")
         return {"contexts": contexts}
 
+    async def _topic_documents(state: ReportGenerationState, topic: str) -> list[Any]:
+        """주제 하나가 쓸 근거 문서를 모은다(여러 주제를 묶는 경로 전용).
+
+        조사원이 그 주제로 모은 자료를 우선 쓰고, 빈손이면 저장된 자료만 다시
+        검색한다. 여기서는 실시간 수집을 하지 않는다 — 주제 수만큼 외부 수집을
+        돌리면 Worker lease(600초)를 넘겨 같은 Job이 죽은 것으로 판정되고, 조사원
+        단계에서 이미 수집 기회가 한 번 있었기 때문이다.
+        """
+        researched = list(
+            (state.get("research_documents_by_topic") or {}).get(topic) or []
+        )
+        if researched:
+            return researched
+        async with connection.transaction():
+            await set_personal_wiki_scope(connection, user_id=state["user_id"])
+            hybrid = await prag_003(
+                connection, user_id=state["user_id"], query=topic
+            )
+            pool_freshness = await load_global_document_freshness(
+                connection,
+                [
+                    str(getattr(document, "document_version_id", "") or "")
+                    for document in hybrid
+                ],
+            )
+        intents = state.get("topic_intents") or {}
+        topic_intent = str(intents.get(topic) or "news")
+        # 단일 주제 경로와 같은 하한을 쓴다. 여기에만 하한이 없으면 0점짜리
+        # Wiki 목차 조각이 근거로 들어온다.
+        pool_documents = select_pool_documents(
+            hybrid, published_at=pool_freshness, topic_intent=topic_intent
+        )
+        return [*select_personal_documents(hybrid), *pool_documents]
+
+    async def _load_multi_topic_contexts(
+        state: ReportGenerationState, topics: list[str]
+    ) -> dict[str, Any]:
+        """주제마다 근거 몫을 따로 배정해 한 리포트용 Context로 합친다.
+
+        근거 상한(12건)을 주제 수로 나눠 배분한다. 그냥 이어 붙이면 앞 주제가
+        상한을 다 먹어 뒤 주제는 근거 0건이 되고, 그 섹션은 근거 없이 쓰이거나
+        빠진다.
+        """
+        quota = max(_MIN_TOPIC_CONTEXT_DOCUMENTS, _MAX_REPORT_CONTEXTS // len(topics))
+        merged: list[Any] = []
+        seen: set[str] = set()
+        for topic in topics:
+            documents = await _topic_documents(state, topic)
+            finalized = await _finalize_contexts(state, documents, max_documents=quota)
+            picked = 0
+            for context in finalized.get("contexts", []):
+                key = str(getattr(context, "reference", None) or context)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(context)
+                picked += 1
+            logger.info(
+                "주제별 근거 배정: topic=%s 몫=%d건 확보=%d건", topic, quota, picked
+            )
+        if not merged:
+            raise RuntimeError("여러 주제 리포트에 쓸 근거를 한 건도 모으지 못했습니다.")
+        return {"contexts": merged}
+
     async def _finalize_contexts(
-        state: ReportGenerationState, documents: list[Any]
+        state: ReportGenerationState,
+        documents: list[Any],
+        *,
+        max_documents: int = _MAX_REPORT_CONTEXTS,
     ) -> dict[str, Any]:
         """조사원이 모은 문서를 생성용 Context로 다듬는다.
 
@@ -480,7 +613,9 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 user_id=state["user_id"],
                 payload={
                     "implementation": lambda: select_generation_context(
-                        personal.data.get("result", []), []
+                        personal.data.get("result", []),
+                        [],
+                        max_documents=max_documents,
                     )
                 },
             )
@@ -513,6 +648,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                     "implementation": lambda: to_thread(
                         generate_report_content_with_quality,
                         topic=state["topic"],
+                        topics=_report_topics(state),
                         content_type=state["content_type"],
                         language=state["language"],
                         contexts=state["contexts"],
@@ -681,6 +817,7 @@ async def run_report_generation(
     job_id: str,
     attempt_number: int,
     topic: str,
+    topics: list[str] | None = None,
     content_type: str,
     language: str,
     model: str = "gpt-4.1-mini",
@@ -696,6 +833,7 @@ async def run_report_generation(
             "job_id": job_id,
             "attempt_number": attempt_number,
             "topic": topic,
+            "topics": list(topics or []),
             "content_type": content_type,
             "language": language,
             "model": model,
