@@ -6,6 +6,8 @@
 from .features.lifecycle import mcp_001, mcp_002
 from .features.authentication import (
     McpApiKeyVerifier,
+    McpBearerTokenVerifier,
+    McpOAuthTokenVerifier,
     mcp_003,
     mcp_009,
     mcp_010,
@@ -28,4 +30,6 @@ __all__ = [
     "mcp_007",
     "mcp_008",
     "McpApiKeyVerifier",
+    "McpBearerTokenVerifier",
+    "McpOAuthTokenVerifier",
 ]

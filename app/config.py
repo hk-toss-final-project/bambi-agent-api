@@ -39,8 +39,22 @@ class Settings(BaseModel):
         description="외부 MCP Client가 등록할 공개 Streamable HTTP URL",
     )
     mcp_auth_issuer_url: str = Field(
-        default="http://localhost:8000/mcp",
+        default="http://localhost:8080",
         description="MCP 보호 리소스 Metadata에 표시할 인증 발급자 URL",
+    )
+    service_api_base_url: str = Field(
+        default="http://localhost:8080",
+        description="OAuth access token을 검증할 Service API 내부 주소",
+    )
+    mcp_oauth_introspection_path: str = Field(
+        default="/internal/oauth/introspect",
+        description="Service API OAuth token introspection 내부 경로",
+    )
+    mcp_oauth_timeout_seconds: float = Field(
+        default=3.0,
+        gt=0,
+        le=30,
+        description="OAuth token introspection 제한 시간(초)",
     )
     dev_agent_timeout_seconds: int = Field(
         default=180,
@@ -164,7 +178,14 @@ def load_settings() -> Settings:
         mcp_server_url=os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp"),
         mcp_auth_issuer_url=os.getenv(
             "MCP_AUTH_ISSUER_URL",
-            os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp"),
+            "http://localhost:8080",
+        ),
+        service_api_base_url=os.getenv("SERVICE_API_BASE_URL", "http://localhost:8080"),
+        mcp_oauth_introspection_path=os.getenv(
+            "MCP_OAUTH_INTROSPECTION_PATH", "/internal/oauth/introspect"
+        ),
+        mcp_oauth_timeout_seconds=float(
+            os.getenv("MCP_OAUTH_TIMEOUT_SECONDS", "3.0")
         ),
         dev_agent_timeout_seconds=_integer_env("DEV_AGENT_TIMEOUT_SECONDS", 180),
         agent_database_url=_optional_env("AGENT_DATABASE_URL"),

@@ -67,7 +67,7 @@ def _client(raw_key: str) -> TestClient:
     settings = Settings(
         environment="test",
         mcp_server_url="http://testserver/mcp",
-        mcp_auth_issuer_url="http://testserver/mcp",
+        mcp_auth_issuer_url="http://testserver",
     )
     container = AppContainer(
         settings=settings,
