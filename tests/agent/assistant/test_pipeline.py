@@ -63,7 +63,7 @@ def _make_docs() -> list[dict[str, object]]:
 def _patch_collect(monkeypatch, docs_factory) -> None:
     """수집기를 준비된 문서 팩토리로 대체한다 (호출마다 새 딕셔너리)."""
     monkeypatch.setattr(
-        pipeline, "collect_documents", lambda kw, *, now, window_hours: (docs_factory(), [])
+        pipeline, "collect_documents", lambda queries, *, now, window_hours: (docs_factory(), [])
     )
 
 
@@ -255,8 +255,8 @@ def test_search_query_drives_collection_but_topic_drives_scoring(monkeypatch) ->
     _seed_collect_history()
     captured: dict[str, object] = {}
 
-    def spy_collect(kw, *, now, window_hours):
-        captured["collect_query"] = kw
+    def spy_collect(queries, *, now, window_hours):
+        captured["collect_queries"] = list(queries)
         return _make_docs(), []
 
     def spy_embed(texts, model=None):
@@ -268,7 +268,7 @@ def test_search_query_drives_collection_but_topic_drives_scoring(monkeypatch) ->
 
     result = pipeline.run_daily(_TOPIC, "minji", reference_now=_NOW, search_query="전고체 배터리 양산")
 
-    assert captured["collect_query"] == "전고체 배터리 양산"  # 수집은 재구성 검색어로
+    assert captured["collect_queries"] == ["전고체 배터리 양산"]  # 수집은 재구성 검색어로
     assert captured["embed_target"] == _TOPIC                 # 채점은 토픽으로
     assert result["log"]["search_query"] == "전고체 배터리 양산"
     # 이력은 토픽(_TOPIC) 키 아래에 기록된다(재구성 검색어 아래가 아님).

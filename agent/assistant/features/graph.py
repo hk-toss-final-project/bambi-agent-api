@@ -40,6 +40,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime
+from collections.abc import Sequence
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -108,6 +109,9 @@ class AgentState(TypedDict, total=False):
     reference_now: datetime | None
     max_reformulations: int
     search_query: str
+    # 매 시도에 함께 던지는 보조 검색어(개인 Wiki 이웃). 수집만 넓히고
+    # 채점은 topic 기준을 그대로 쓴다.
+    extra_queries: list[str]
     attempts: list[str]              # 지금까지 수집에 쓴 검색어들(중복 재시도 방지)
     attempt_records: list[dict[str, object]]  # 시도별 {query, outcome, mode, items, errors}
     selection: dict[str, object]     # 가장 최근 run_daily 결과
@@ -183,6 +187,7 @@ def _select(state: AgentState) -> AgentState:
         model=str(state.get("model") or "gpt-4.1-mini"),
         reference_now=state.get("reference_now"),
         search_query=query,
+        extra_queries=list(state.get("extra_queries") or []),
         record_history=bool(state.get("record_history", True)),
     )
     duration_ms = int((time.monotonic() - started) * 1000)
@@ -490,6 +495,7 @@ def run_agent(
     model: str = "gpt-4.1-mini",
     reference_now: datetime | None = None,
     max_reformulations: int | None = None,
+    extra_queries: Sequence[str] = (),
     record_history: bool = True,
     include_report: bool = True,
 ) -> dict[str, object]:
@@ -501,6 +507,8 @@ def run_agent(
         model: 재구성·요약·보고서에 쓸 OpenAI 모델
         reference_now: "지금" 기준 시각(테스트용). 생략하면 실제 현재 시각.
         max_reformulations: 검색어 재구성 최대 횟수. 생략하면 MAX_REFORMULATIONS.
+        extra_queries: 매 시도에 함께 던질 보조 검색어. 수집만 넓히고 채점은
+            topic 기준을 그대로 쓴다.
         record_history: 수집·보고 이력을 기록할지. 리포트 생성처럼 근거만
             가져가는 호출은 False로 두어 브리핑 이력 오염을 막는다.
         include_report: 브리핑 Markdown을 생성할지. 근거만 필요한 호출은
@@ -526,6 +534,9 @@ def run_agent(
         "max_reformulations": (
             MAX_REFORMULATIONS if max_reformulations is None else max_reformulations
         ),
+        "extra_queries": [
+            stripped for extra in extra_queries if (stripped := extra.strip())
+        ],
         "record_history": record_history,
         "include_report": include_report,
     }

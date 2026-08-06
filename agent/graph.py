@@ -31,6 +31,7 @@ from agent.report_builder.api import (
     report_021,
     generate_report_content_with_quality,
     collect_live_context,
+    related_keyword_fetch_limit,
     GLOBAL_NAMESPACE,
     critic_enabled,
     is_pool_relevant,
@@ -56,6 +57,7 @@ from infrastructure.persistence.api import (
     get_user_source_document_version_for_agent,
     list_existing_wiki_entries,
     list_existing_wiki_relations,
+    list_related_wiki_keywords,
     load_global_document_freshness,
     set_personal_wiki_scope,
     sync_wiki_interest_collection_targets,
@@ -376,6 +378,47 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             "research_calls": calls,
         }
 
+    async def load_related_keywords(user_id: str, topic: str) -> list[str]:
+        """개인 Wiki 그래프에서 토픽과 1홉으로 연결된 이웃 키워드를 읽는다.
+
+        관심 키워드 하나로만 수집하면 '코스피' 리포트에 코스닥시장 기사가 걸리지
+        않는데, 그 연결은 Wiki Builder가 이미 저장해 둔 것이다.
+
+        조회 실패는 리포트 생성을 막지 않는다 — 확장은 수집을 넓히는 보조 수단
+        이므로, 실패하면 원 키워드 하나로 진행한다. 개인 Wiki 검색과 Transaction을
+        분리한 것도 같은 이유다(여기서 실패해도 검색 결과를 되돌리지 않는다).
+
+        Args:
+            user_id: 조회 대상 사용자 ID
+            topic: 리포트 주제로 들어온 관심 키워드
+
+        Returns:
+            연결 강도 내림차순 이웃 키워드 제목. 확장이 꺼져 있거나 실패하면 빈 목록.
+        """
+        limit = related_keyword_fetch_limit()
+        if limit <= 0:
+            return []
+        try:
+            async with connection.transaction():
+                await set_personal_wiki_scope(connection, user_id=user_id)
+                related = await list_related_wiki_keywords(
+                    connection, user_id=user_id, topic=topic, limit=limit
+                )
+        except Exception as error:
+            logger.warning(
+                "Wiki 이웃 키워드 조회 실패, 원 키워드로 진행한다 (topic=%s): %s",
+                topic,
+                error,
+            )
+            return []
+        logger.info(
+            "Wiki 이웃 키워드 %d건 (topic=%s, 이웃=%s)",
+            len(related),
+            topic,
+            [item.title for item in related],
+        )
+        return [item.title for item in related]
+
     async def load_context(state: ReportGenerationState) -> dict[str, Any]:
         """조사원이 모은 자료를 생성용 Context로 다듬는다.
 
@@ -471,6 +514,10 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         # 같으므로 대개 또 실패한다.
         already_collected_live = bool(state.get("research_collected_live"))
         skip_live = pool_is_enough or already_collected_live
+        # 수집을 실제로 돌 때만 이웃을 조회한다 — 건너뛸 거면 DB 왕복이 낭비다.
+        related_keywords = (
+            [] if skip_live else await load_related_keywords(state["user_id"], state["topic"])
+        )
         if already_collected_live and not pool_is_enough:
             logger.info(
                 "실시간 수집 생략: topic=%s 조사원이 이미 시도했다.", state["topic"]
@@ -489,6 +536,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                             state["topic"],
                             state["user_id"],
                             model=state["model"],
+                            related_keywords=related_keywords,
                         )
                     )
                 },
