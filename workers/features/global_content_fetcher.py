@@ -39,6 +39,7 @@ from infrastructure.persistence.api import (
     save_fetched_article_content,
     set_system_job_scope,
 )
+from shared.fetch_guard import describe_blocked_fetch
 from infrastructure.sources.connectors.api import (
     JinaReadError,
     JinaReadResult,
@@ -196,6 +197,12 @@ async def _download_one(
             error_code=f"JINA_{error.error_code.upper()}",
             error_message=str(error),
         )
+    # 봇 차단 안내 페이지는 본문이 아니다. 저장하면 검색에 걸리고 리포트 근거로도
+    # 들어간다(2026-08-06 실측: Cloudflare "Just a moment..." 페이지가 정상 본문으로
+    # 저장돼 Wiki 노드까지 만들어졌다). Jina는 200을 주므로 여기서 따로 걸러야 한다.
+    blocked = describe_blocked_fetch(fetched.title, fetched.markdown)
+    if blocked is not None:
+        return _DownloadedBody(error_code="FETCH_BLOCKED", error_message=blocked)
     return _DownloadedBody(
         resolved_url=fetched.resolved_url,
         title=fetched.title,

@@ -101,7 +101,7 @@ def test_content_fetch_saves_body_and_isolates_failure(
             resolved_url="https://a/final",
             title="본문 제목",
             published_time="2026-07-20T00:00:00Z",
-            markdown="# 전체 본문",
+            markdown="# 전체 본문. " + "기사 본문 문장입니다. " * 30,
         )
 
     results = asyncio.run(
@@ -141,7 +141,7 @@ def test_content_fetch_returns_empty_when_no_pending(
                 resolved_url="",
                 title="",
                 published_time=None,
-                markdown="x",
+                markdown="본문 문장입니다. " * 30,
             ),
         )
     )
@@ -223,7 +223,7 @@ def test_youtube_document_without_transcript_is_failed(
                 resolved_url="",
                 title="",
                 published_time=None,
-                markdown="x",
+                markdown="본문 문장입니다. " * 30,
             ),
             transcript_fetcher=lambda _: None,
         )
@@ -266,7 +266,7 @@ def test_youtube_document_with_too_short_transcript_is_failed(
                 resolved_url="",
                 title="",
                 published_time=None,
-                markdown="x",
+                markdown="본문 문장입니다. " * 30,
             ),
             transcript_fetcher=lambda _: "속보입니다",
         )
@@ -309,7 +309,7 @@ def test_bodies_are_downloaded_concurrently(
             resolved_url=url,
             title="제목",
             published_time=None,
-            markdown="# 본문",
+            markdown="# 본문. " + "기사 본문 문장입니다. " * 30,
         )
 
     results = asyncio.run(
@@ -368,7 +368,7 @@ def test_download_failure_does_not_cancel_other_documents(
             resolved_url=url,
             title="제목",
             published_time=None,
-            markdown="# 본문",
+            markdown="# 본문. " + "기사 본문 문장입니다. " * 30,
         )
 
     results = asyncio.run(
