@@ -3,7 +3,13 @@
 구현 모듈의 기능 함수를 안정적인 import 경로로 다시 노출한다.
 """
 
-from .features.personal_wiki import mcptool_001, mcptool_002, mcptool_003
+from .features.personal_wiki import (
+    WikiFetchOutput,
+    WikiSearchOutput,
+    mcptool_001,
+    mcptool_002,
+    mcptool_003,
+)
 from .features.global_source import mcptool_004, mcptool_011
 from .features.content import (
     mcptool_005,
@@ -28,4 +34,6 @@ __all__ = [
     "mcptool_009",
     "mcptool_010",
     "mcptool_012",
+    "WikiFetchOutput",
+    "WikiSearchOutput",
 ]

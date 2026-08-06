@@ -295,6 +295,58 @@ class PostgresWikiGraphRepository:
             ],
         }
 
+    async def search_documents(
+        self, user_id: str, *, query: str, limit: int
+    ) -> Sequence[Mapping[str, object]]:
+        """사용자 Namespace의 공개 Wiki 문서를 제목·요약·본문 부분 일치로 검색한다."""
+        namespace_key = f"user/{user_id}"
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await self._set_user_scope(connection, user_id=user_id)
+                cursor = await connection.execute(
+                    """
+                    SELECT
+                        document.id AS document_id,
+                        document.document_kind,
+                        version.title,
+                        version.summary,
+                        document.updated_at
+                    FROM agent.wiki_documents AS document
+                    JOIN agent.wiki_document_versions AS version
+                      ON version.document_id = document.id
+                     AND version.namespace_key = document.namespace_key
+                     AND version.version = document.current_version
+                    WHERE document.namespace_key = %s
+                      AND document.document_kind IN ('document', 'entity', 'concept')
+                      AND document.status = 'active'
+                      AND document.deleted_at IS NULL
+                      AND position(
+                            lower(%s) IN lower(concat_ws(
+                                ' ', version.title, version.summary,
+                                document.document_key, version.normalized_content
+                            ))
+                          ) > 0
+                    ORDER BY
+                        CASE
+                            WHEN lower(version.title) = lower(%s) THEN 0
+                            WHEN position(lower(%s) IN lower(version.title)) > 0 THEN 1
+                            WHEN position(lower(%s) IN lower(COALESCE(version.summary, ''))) > 0 THEN 2
+                            ELSE 3
+                        END,
+                        document.updated_at DESC
+                    LIMIT %s
+                    """,
+                    (namespace_key, query, query, query, query, limit),
+                )
+                rows = await cursor.fetchall()
+        return [
+            {
+                **dict(row),
+                "document_id": str(row["document_id"]),
+            }
+            for row in rows
+        ]
+
     async def get_document(
         self, user_id: str, document_id: str
     ) -> Mapping[str, object] | None:

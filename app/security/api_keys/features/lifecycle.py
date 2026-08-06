@@ -1,25 +1,87 @@
-"""기능 구현 모듈.
+"""MCP Personal Access Token 발급·조회·폐기 기능."""
 
-KEY-001, KEY-002, KEY-003, KEY-004, KEY-005, KEY-006, KEY-007 기능의 실제 구현 위치를 제공한다.
-"""
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Protocol
 
 from shared.contracts import FeatureRequest, FeatureResult
 
+from .security import GeneratedApiKey, key_008
 
-async def key_001(request: FeatureRequest) -> FeatureResult:
+
+type ApiKeyRecord = Mapping[str, object]
+
+
+class ApiKeyLifecycleRepository(Protocol):
+    """API Key 수명 주기 저장소가 제공해야 하는 최소 계약."""
+
+    async def create_api_key(
+        self,
+        *,
+        principal_id: str,
+        name: str,
+        key_prefix: str,
+        key_hash: str,
+        scopes: Sequence[str],
+        expires_at: datetime | None,
+        request_id: str,
+    ) -> ApiKeyRecord:
+        """Hash 형태의 새 API Key를 저장한다."""
+        ...
+
+    async def list_api_keys(self, principal_id: str) -> Sequence[ApiKeyRecord]:
+        """사용자가 발급한 API Key를 최신순으로 조회한다."""
+        ...
+
+    async def revoke_api_key(
+        self, *, principal_id: str, key_id: str, request_id: str
+    ) -> ApiKeyRecord | None:
+        """사용자 소유 API Key를 영구 폐기한다."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class IssuedApiKey:
+    """발급 직후 한 번만 원문을 포함하는 API Key 결과."""
+
+    raw_key: str
+    record: ApiKeyRecord
+
+
+async def key_001(
+    repository: ApiKeyLifecycleRepository,
+    *,
+    principal_id: str,
+    name: str,
+    expires_at: datetime | None,
+    request_id: str,
+) -> IssuedApiKey:
     """[KEY-001] API Key 발급.
 
-    외부 시스템용 API Key를 생성한다.
+    Personal Wiki 읽기 Scope로 제한된 외부 시스템용 API Key를 생성한다.
     """
-    raise NotImplementedError("[KEY-001] 기능 구현이 필요합니다.")
+    generated: GeneratedApiKey = await key_008()
+    record = await repository.create_api_key(
+        principal_id=principal_id,
+        name=name,
+        key_prefix=generated.key_prefix,
+        key_hash=generated.key_hash,
+        scopes=("wiki:read",),
+        expires_at=expires_at,
+        request_id=request_id,
+    )
+    return IssuedApiKey(raw_key=generated.raw_key, record=record)
 
 
-async def key_002(request: FeatureRequest) -> FeatureResult:
+async def key_002(
+    repository: ApiKeyLifecycleRepository, *, principal_id: str
+) -> Sequence[ApiKeyRecord]:
     """[KEY-002] API Key 조회.
 
     발급된 Key의 상태와 설정을 조회한다.
     """
-    raise NotImplementedError("[KEY-002] 기능 구현이 필요합니다.")
+    return await repository.list_api_keys(principal_id)
 
 
 async def key_003(request: FeatureRequest) -> FeatureResult:
@@ -38,12 +100,22 @@ async def key_004(request: FeatureRequest) -> FeatureResult:
     raise NotImplementedError("[KEY-004] 기능 구현이 필요합니다.")
 
 
-async def key_005(request: FeatureRequest) -> FeatureResult:
+async def key_005(
+    repository: ApiKeyLifecycleRepository,
+    *,
+    principal_id: str,
+    key_id: str,
+    request_id: str,
+) -> ApiKeyRecord | None:
     """[KEY-005] API Key 폐기.
 
     Key를 영구적으로 사용 중지한다.
     """
-    raise NotImplementedError("[KEY-005] 기능 구현이 필요합니다.")
+    return await repository.revoke_api_key(
+        principal_id=principal_id,
+        key_id=key_id,
+        request_id=request_id,
+    )
 
 
 async def key_006(request: FeatureRequest) -> FeatureResult:

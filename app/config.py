@@ -34,6 +34,14 @@ class Settings(BaseModel):
         min_length=32,
         description="Service API와 Service Worker가 내부 API 호출에 사용하는 Bearer 토큰",
     )
+    mcp_server_url: str = Field(
+        default="http://localhost:8000/mcp",
+        description="외부 MCP Client가 등록할 공개 Streamable HTTP URL",
+    )
+    mcp_auth_issuer_url: str = Field(
+        default="http://localhost:8000/mcp",
+        description="MCP 보호 리소스 Metadata에 표시할 인증 발급자 URL",
+    )
     dev_agent_timeout_seconds: int = Field(
         default=180,
         ge=10,
@@ -153,6 +161,11 @@ def load_settings() -> Settings:
         enable_assistant_ui=_boolean_env("ENABLE_ASSISTANT_UI", True),
         enable_dev_agent_api=_boolean_env("ENABLE_DEV_AGENT_API", False),
         internal_api_token=_optional_env("AGENT_INTERNAL_TOKEN"),
+        mcp_server_url=os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp"),
+        mcp_auth_issuer_url=os.getenv(
+            "MCP_AUTH_ISSUER_URL",
+            os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp"),
+        ),
         dev_agent_timeout_seconds=_integer_env("DEV_AGENT_TIMEOUT_SECONDS", 180),
         agent_database_url=_optional_env("AGENT_DATABASE_URL"),
         vector_store_url=_optional_env("VECTOR_STORE_URL"),
