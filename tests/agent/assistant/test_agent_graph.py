@@ -66,6 +66,7 @@ def _patch_run_daily(monkeypatch, handler) -> list[str]:
         model="gpt-4.1-mini",
         reference_now=None,
         search_query=None,
+        extra_queries=(),
         record_history=True,
     ):
         calls.append(search_query)

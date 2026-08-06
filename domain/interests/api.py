@@ -5,6 +5,14 @@
 
 from .features.extraction import int_001
 from .features.classification import int_002
+from .features.expansion import (
+    DEFAULT_EXPANSION_LIMIT,
+    REASON_DISABLED,
+    REASON_EXPANDED,
+    REASON_NO_NEIGHBORS,
+    QueryExpansion,
+    expand_topic_queries,
+)
 from .features.graph import int_003, int_004
 from .features.scoring import int_005, int_006, int_008, int_009
 from .features.evidence import int_007
@@ -16,6 +24,9 @@ from .features.recalculation import (
 )
 
 __all__ = [
+    "DEFAULT_EXPANSION_LIMIT",
+    "QueryExpansion",
+    "expand_topic_queries",
     "int_001",
     "int_002",
     "int_003",

@@ -346,14 +346,28 @@ def test_run_report_generation_chains_search_generate_persist(
         """검색 Context를 변경 없이 반환한다."""
         return contexts
 
-    def fake_collect_live_context(topic: str, user_id: str, *, model: str = "") -> list:
+    def fake_collect_live_context(
+        topic: str,
+        user_id: str,
+        *,
+        model: str = "",
+        related_keywords: Any = (),
+    ) -> list:
         """실시간 수집(뉴스·YouTube·Reddit + LLM)을 대체한다.
 
         대체하지 않으면 이 테스트가 실제 네트워크와 OpenAI를 호출한다.
         """
         order.append("collect_live")
         assert topic == "개인화"
+        # 조회한 Wiki 이웃 키워드가 수집까지 전달되는지 확인한다.
+        assert list(related_keywords) == ["추천 시스템"]
         return []
+
+    async def fake_related_keywords(connection: Any, **kwargs: Any) -> list:
+        """Wiki 그래프 이웃 조회를 고정 결과로 대체한다."""
+        order.append("related_keywords")
+        assert kwargs["topic"] == "개인화"
+        return [SimpleNamespace(title="추천 시스템", weight=2.0)]
 
     def fake_generate(**kwargs: Any) -> str:
         """생성 입력을 검증하고 고정 콘텐츠를 반환한다(품질 루프 래퍼를 대체)."""
@@ -375,6 +389,9 @@ def test_run_report_generation_chains_search_generate_persist(
     monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
     monkeypatch.setattr(agent_graph, "generate_report_content_with_quality", fake_generate)
     monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect_live_context)
+    monkeypatch.setattr(
+        agent_graph, "list_related_wiki_keywords", fake_related_keywords
+    )
     monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
     # 이 테스트는 조사원을 끈 고정 경로를 검증한다. 끄지 않으면 research 노드가
     # 실제 LLM을 호출한다(테스트는 LLM을 부르지 않아야 한다).
@@ -394,10 +411,18 @@ def test_run_report_generation_chains_search_generate_persist(
         )
     )
 
-    # 실시간 수집(REPORT-005)이 개인 Wiki 검색과 생성 사이에 들어간다.
-    assert order == ["load_context", "collect_live", "generate", "persist"]
+    # 실시간 수집(REPORT-005)이 개인 Wiki 검색과 생성 사이에 들어가고, 그 앞에서
+    # 확장에 쓸 Wiki 이웃 키워드를 읽는다.
+    assert order == [
+        "load_context",
+        "related_keywords",
+        "collect_live",
+        "generate",
+        "persist",
+    ]
     assert result == {"content_candidate_id": "candidate-1"}
-    assert connection.transactions == 2
+    # 이웃 조회는 개인 Wiki 검색과 Transaction을 분리한다(실패 격리).
+    assert connection.transactions == 3
 
 
 def _patch_generation_tail(
@@ -509,7 +534,13 @@ def test_research_failure_falls_back_to_fixed_collection_path(
     async def fake_scope(connection: Any, *, user_id: str) -> None:
         """Scope 설정을 생략한다."""
 
-    def fake_collect(topic: str, user_id: str, *, model: str = "") -> list[Any]:
+    def fake_collect(
+        topic: str,
+        user_id: str,
+        *,
+        model: str = "",
+        related_keywords: Any = (),
+    ) -> list[Any]:
         """실시간 수집을 대체한다."""
         order.append("collect_live")
         return []
@@ -720,7 +751,13 @@ def test_legacy_path_skips_live_collection_when_researcher_already_tried(
     async def fake_scope(connection: Any, *, user_id: str) -> None:
         """Scope 설정을 생략한다."""
 
-    def fake_collect(topic: str, user_id: str, *, model: str = "") -> list[Any]:
+    def fake_collect(
+        topic: str,
+        user_id: str,
+        *,
+        model: str = "",
+        related_keywords: Any = (),
+    ) -> list[Any]:
         """호출되면 안 되는 실시간 수집."""
         order.append("collect_live")
         return []
@@ -736,3 +773,129 @@ def test_legacy_path_skips_live_collection_when_researcher_already_tried(
     assert order == ["research", "load_context", "generate", "persist"]
     assert "collect_live" not in order
     assert result == {"content_candidate_id": "candidate-1"}
+
+
+def test_multi_topic_report_gathers_evidence_per_topic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """주제를 여러 개 주면 주제마다 검색을 따로 돌리고 근거를 합쳐 한 번 생성한다.
+
+    한 번에 합쳐 검색하면 서로 무관한 주제가 섞여 어느 쪽도 제대로 못 찾는다.
+    생성은 한 번만 해야 카드도 한 장이 된다.
+    """
+    searched: list[str] = []
+    generated_with: dict[str, Any] = {}
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """DB 사용자 Scope 설정을 생략한다."""
+        return None
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[str]:
+        """검색어를 기록하고 주제마다 다른 Context를 반환한다."""
+        query = kwargs["query"]
+        searched.append(query)
+        return [f"context-{query}"]
+
+    async def fake_prag_006(contexts: list[str]) -> list[str]:
+        """검색 Context를 변경 없이 반환한다."""
+        return contexts
+
+    def fake_generate(**kwargs: Any) -> str:
+        """생성 입력을 붙잡아 두고 고정 콘텐츠를 반환한다."""
+        generated_with.update(kwargs)
+        return "generated"
+
+    async def fake_prag_007(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """저장 호출을 고정 결과로 대체한다."""
+        return {"content_candidate_id": "candidate-1"}
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
+    monkeypatch.setattr(agent_graph, "generate_report_content_with_quality", fake_generate)
+    monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
+    _disable_research(monkeypatch)
+
+    result = asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 관심사 요약",
+            topics=["반도체", "프로야구"],
+            content_type="interest_news_card",
+            language="ko",
+            model="test-model",
+        )
+    )
+
+    # 주제마다 검색이 한 번씩. 카드 제목(topic)으로는 검색하지 않는다.
+    assert searched == ["반도체", "프로야구"]
+    # 생성은 한 번, 주제 목록을 그대로 받는다.
+    assert generated_with["topics"] == ["반도체", "프로야구"]
+    assert generated_with["topic"] == "오늘의 관심사 요약"
+    # 두 주제의 근거가 모두 들어간다.
+    assert generated_with["contexts"] == ["context-반도체", "context-프로야구"]
+    assert result == {"content_candidate_id": "candidate-1"}
+
+
+def test_single_topic_report_keeps_the_existing_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """topics를 주지 않으면 topic 하나로 검색하는 기존 경로 그대로다."""
+    searched: list[str] = []
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """DB 사용자 Scope 설정을 생략한다."""
+        return None
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[str]:
+        """검색어를 기록한다."""
+        searched.append(kwargs["query"])
+        return ["context-1"]
+
+    async def fake_prag_006(contexts: list[str]) -> list[str]:
+        """검색 Context를 변경 없이 반환한다."""
+        return contexts
+
+    def fake_collect_live_context(
+        topic: str,
+        user_id: str,
+        *,
+        model: str = "",
+        related_keywords: Any = (),
+    ) -> list:
+        """실시간 수집을 대체한다."""
+        return []
+
+    def fake_generate(**kwargs: Any) -> str:
+        """고정 콘텐츠를 반환한다."""
+        return "generated"
+
+    async def fake_prag_007(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """저장 호출을 고정 결과로 대체한다."""
+        return {"content_candidate_id": "candidate-1"}
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
+    monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect_live_context)
+    monkeypatch.setattr(agent_graph, "generate_report_content_with_quality", fake_generate)
+    monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
+    _disable_research(monkeypatch)
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="반도체",
+            content_type="interest_news_card",
+            language="ko",
+            model="test-model",
+        )
+    )
+
+    assert searched == ["반도체"]

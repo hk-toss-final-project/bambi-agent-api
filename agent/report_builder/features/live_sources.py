@@ -13,17 +13,58 @@ Report Builder는 그동안 DB에 저장된 개인 Wiki 문서만 근거로 썼�
 - 여기서는 수집·형식 변환만 한다. 스코어링·클러스터링·중복 제거는 비서 쪽
   결정적 파이프라인이 이미 수행했으므로 다시 계산하지 않는다.
 - LLM 판단(검색어 재구성·재시도)도 비서 에이전트가 담당한다.
+- **검색어 확장을 켜는 곳은 여기다.** 관심 키워드 하나로만 수집하면 '코스피'
+  리포트에 코스닥시장 기사가 안 걸린다. 개인 Wiki에서 그 키워드와 연결된 이웃
+  노드를 보조 검색어로 함께 던진다. 아침 보고서(브리핑)는 켜지 않는다 —
+  확장 여부를 비서 파이프라인 안이 아니라 **호출자**가 정하는 이유다.
+- 이웃 **조회는 여기서 하지 않는다.** 이 함수는 DB 연결이 없는 동기 함수라
+  (그래프가 to_thread로 부른다), 조회는 연결을 가진 load_context 노드가 하고
+  결과만 인자로 받는다.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Sequence
 
 from agent.assistant.api import assist_daily_agent
+from domain.interests.api import expand_topic_queries
 from shared.report_models import ReportContextDocument
 
 logger = logging.getLogger("agent.report_builder.live_sources")
+
+# 리포트 생성에 붙일 보조 검색어 상한. 수집은 검색어마다 소스 3개를 호출하므로
+# 소요 시간이 검색어 수에 거의 비례한다(실측: 검색어 1개 41.5초). Worker
+# lease 600초 안에 여유를 두고 2를 기본으로 둔다. 0으로 두면 확장이 완전히 꺼져
+# 이전 동작(검색어 1개)으로 돌아간다 — 같은 데이터에서 A/B 비교를 하기 위한 스위치다.
+_DEFAULT_EXPANSION_LIMIT = 2
+
+# Wiki 이웃을 DB에서 미리 가져올 때 상한에 더할 여유분. 원 토픽과 겹치는 이웃이
+# 걸러지므로, 딱 상한만큼만 가져오면 자리가 비게 된다.
+_RELATED_FETCH_MARGIN = 3
+
+
+def _expansion_limit() -> int:
+    """보조 검색어 상한을 환경변수에서 읽는다. 없거나 형식이 틀리면 기본값."""
+    try:
+        return int(os.environ["REPORT_QUERY_EXPANSION_LIMIT"])
+    except (KeyError, ValueError):
+        return _DEFAULT_EXPANSION_LIMIT
+
+
+def related_keyword_fetch_limit() -> int:
+    """개인 Wiki 그래프에서 조회할 이웃 키워드 수를 반환한다.
+
+    확장이 꺼져 있으면(상한 0 이하) 0을 반환해, 호출자가 DB 조회 자체를 건너뛸
+    수 있게 한다.
+
+    Returns:
+        조회할 이웃 수. 확장이 꺼져 있으면 0.
+    """
+    limit = _expansion_limit()
+    return limit + _RELATED_FETCH_MARGIN if limit > 0 else 0
+
 
 # 생성 프롬프트에 넣을 근거 문서 수 상한. 개인 Wiki와 실시간 자료를 합친 뒤 적용한다.
 _DEFAULT_MAX_DOCUMENTS = 12
@@ -86,6 +127,7 @@ def collect_live_context(
     user_id: str,
     *,
     model: str = "gpt-4.1-mini",
+    related_keywords: Sequence[str] = (),
 ) -> list[ReportContextDocument]:
     """[REPORT-005 구현] 키워드로 실시간 외부 자료를 수집·선별해 근거 문서로 반환한다.
 
@@ -99,10 +141,24 @@ def collect_live_context(
         topic: 콘텐츠 주제(키워드)
         user_id: 사용자 식별자. 비서의 중복 제거·개인화 이력에 쓰인다.
         model: 비서가 요약·판단에 쓸 OpenAI 모델
+        related_keywords: 개인 Wiki 그래프에서 이 토픽과 연결된 이웃 키워드
+            (연결 강도 내림차순). 호출자가 조회해 넘기며, 비면 기존과 똑같이
+            검색어 하나로 수집한다.
 
     Returns:
         점수 내림차순 근거 문서 목록. 수집 실패 시 빈 목록.
     """
+    # 이웃 키워드를 보조 검색어로 만든다. LLM도 DB도 부르지 않는 결정적 계산이라
+    # 실패 경로가 없고, 이웃이 없는 고립 토픽이면 확장이 0개로 나와 기존과
+    # 똑같이 검색어 하나로 동작한다.
+    expansion = expand_topic_queries(
+        topic, related_keywords=related_keywords, limit=_expansion_limit()
+    )
+    if expansion.expanded:
+        logger.info("검색어 확장 %s → %s", topic, list(expansion.expanded))
+    else:
+        logger.info("검색어 확장 없음 (topic=%s, reason=%s)", topic, expansion.reason)
+
     try:
         # 근거(items)만 쓰고 브리핑 Markdown은 버리므로 보고서를 만들지 않는다.
         # 이력도 기록하지 않는다 — 리포트 생성이 사용자의 일간 브리핑에서 같은
@@ -111,6 +167,7 @@ def collect_live_context(
             topic,
             user_id=user_id,
             model=model,
+            extra_queries=expansion.expanded,
             record_history=False,
             include_report=False,
         )

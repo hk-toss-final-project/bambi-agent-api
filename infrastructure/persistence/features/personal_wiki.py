@@ -611,6 +611,141 @@ async def list_existing_wiki_relations(
     ]
 
 
+@dataclass(frozen=True, slots=True)
+class RelatedWikiKeyword:
+    """관심 키워드와 Wiki 그래프에서 1홉으로 연결된 이웃 노드 하나.
+
+    ``weight``는 관계 유형을 가중해 합산한 연결 강도이며, 이웃이 여러 관계로
+    이어져 있으면 그만큼 커진다. 정렬·상한의 기준으로만 쓴다.
+    """
+
+    title: str
+    document_kind: str
+    weight: float
+    relation_types: tuple[str, ...]
+
+
+# 관계 유형별 가중치. load_interest_documents(degree 계산)와 같은 값을 쓴다 —
+# 두 곳이 다른 기준으로 "연결이 강하다"를 판단하면 관심사 순위와 확장 순위가
+# 어긋난다.
+_RELATION_WEIGHT_SQL = """
+                CASE relation.relation_type
+                    WHEN 'entity_relation' THEN 1.0
+                    WHEN 'applies_concept' THEN 1.0
+                    WHEN 'related_concept' THEN 0.5
+                    ELSE 0.0
+                END
+"""
+
+
+async def list_related_wiki_keywords(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    topic: str,
+    limit: int = 5,
+) -> list[RelatedWikiKeyword]:
+    """관심 키워드와 개인 Wiki에서 직접 연결된 이웃 노드 제목을 조회한다.
+
+    관심 키워드는 Wiki Entity·Concept 노드의 제목에서 나오므로(INT-001),
+    제목이 일치하는 노드를 시작점으로 잡고 ``wiki_document_relations``를 양방향
+    으로 한 번(1홉)만 따라간다. 2홉은 주제가 흐려지고 비용이 제곱으로 늘어
+    설계 문서(§4)에서 제외했다.
+
+    **``organization`` subtype 노드는 이웃에서 뺀다.** 기관·언론사 이름을 뉴스
+    검색어로 쓰면 주제가 아니라 그 회사 소식이 걸린다. 2026-08-06 실측:
+    '코스피'의 이웃 6개 중 5개가 organization이었고(코스콤·인포스탁·에프앤가이드
+    ·한국예탁결제원·KG제로인), 그 검색 결과의 증시 관련 비율이 0~40%에 그쳤다.
+    남은 하나인 '코스닥시장'(subtype=other)은 93%였다. 제외 시 수집 45건→30건,
+    주제 적합 60%→97%, 소요 30.6초→23.0초.
+
+    Args:
+        connection: RLS Scope가 설정된 현재 Transaction 연결
+        user_id: 조회 대상 사용자 ID
+        topic: 시작점이 될 관심 키워드(노드 제목 또는 document_key)
+        limit: 반환할 최대 이웃 수. 0 이하면 조회하지 않는다.
+
+    Returns:
+        연결 강도 내림차순으로 정렬된 이웃 목록. 일치하는 노드가 없거나 이웃이
+        없으면 빈 목록.
+    """
+    normalized_topic = topic.strip()
+    if not normalized_topic or limit <= 0:
+        return []
+
+    namespace_key = f"user/{user_id}"
+    cursor = await connection.execute(
+        f"""
+        WITH origin AS (
+            SELECT document.id
+            FROM agent.wiki_documents AS document
+            JOIN agent.wiki_document_versions AS version
+              ON version.document_id = document.id
+             AND version.namespace_key = document.namespace_key
+             AND version.version = document.current_version
+            WHERE document.namespace_key = %s
+              AND document.document_kind IN ('entity', 'concept')
+              AND document.status = 'active'
+              AND document.deleted_at IS NULL
+              AND (
+                    lower(btrim(version.title)) = lower(btrim(%s))
+                 OR document.document_key = %s
+              )
+        )
+        SELECT
+            peer_version.title AS title,
+            peer.document_kind AS document_kind,
+            SUM({_RELATION_WEIGHT_SQL})::float8 AS weight,
+            array_agg(DISTINCT relation.relation_type) AS relation_types
+        FROM agent.wiki_document_relations AS relation
+        JOIN origin
+          ON origin.id IN (
+                 relation.source_document_id,
+                 relation.target_document_id
+             )
+        JOIN agent.wiki_documents AS peer
+          ON peer.id = CASE
+                 WHEN relation.source_document_id = origin.id
+                 THEN relation.target_document_id
+                 ELSE relation.source_document_id
+             END
+         AND peer.namespace_key = relation.namespace_key
+        JOIN agent.wiki_document_versions AS peer_version
+          ON peer_version.document_id = peer.id
+         AND peer_version.namespace_key = peer.namespace_key
+         AND peer_version.version = peer.current_version
+        WHERE relation.namespace_key = %s
+          AND peer.document_kind IN ('entity', 'concept')
+          AND peer.status = 'active'
+          AND peer.deleted_at IS NULL
+          AND COALESCE(peer.domain, '') <> 'organization'
+          AND peer.id NOT IN (SELECT id FROM origin)
+        GROUP BY peer.id, peer_version.title, peer.document_kind
+        HAVING SUM({_RELATION_WEIGHT_SQL}) > 0
+        ORDER BY weight DESC, title ASC
+        LIMIT %s
+        """,
+        (
+            namespace_key,
+            normalized_topic,
+            normalized_topic,
+            namespace_key,
+            limit,
+        ),
+    )
+    rows = await cursor.fetchall()
+    return [
+        RelatedWikiKeyword(
+            title=str(row["title"] or "").strip(),
+            document_kind=str(row["document_kind"] or ""),
+            weight=float(row["weight"] or 0.0),
+            relation_types=tuple(row["relation_types"] or ()),
+        )
+        for row in rows
+        if str(row["title"] or "").strip()
+    ]
+
+
 class _ConnectionWikiChunkRepository:
     """현재 PostgreSQL 연결을 DB-004 Chunk 저장 경계로 노출한다."""
 

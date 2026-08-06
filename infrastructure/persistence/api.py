@@ -9,6 +9,7 @@ from .features.personal_wiki import (
     PersistedWikiBuild,
     PersistedWikiDocument,
     RegisteredUrlSource,
+    RelatedWikiKeyword,
     SavedUserSourceVersion,
     WikiChunkForEmbedding,
     WikiEmbeddingValue,
@@ -22,6 +23,7 @@ from .features.personal_wiki import (
     get_wiki_chunks_for_embedding,
     list_existing_wiki_entries,
     list_existing_wiki_relations,
+    list_related_wiki_keywords,
     mark_url_source_event,
     persist_wiki_build,
     persist_wiki_embeddings,
@@ -109,6 +111,7 @@ from .features.interest_taxonomy import (
     InterestTaxonomyConflictError,
     StoredInterestTaxonomy,
     sync_user_interest_subscriptions,
+    sync_wiki_interest_collection_targets,
     upsert_interest_taxonomy_snapshot,
 )
 from .features.events import db_027

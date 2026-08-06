@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 from agent.assistant.features import (
@@ -171,33 +172,56 @@ SOURCE_COUNT = 3
 
 
 def collect_documents(
-    keyword: str,
+    queries: Sequence[str],
     *,
     now: datetime,
     window_hours: float,
 ) -> tuple[list[dict[str, object]], list[dict[str, str]]]:
-    """세 소스(뉴스·YouTube·Reddit)에서 후보 문서를 모은다.
+    """세 소스(뉴스·YouTube·Reddit)를 검색어마다 호출해 후보 문서를 모은다.
+
+    검색어가 여러 개인 것은 관심 키워드를 개인 Wiki에서 연결된 이웃 키워드로
+    넓힌 결과다(domain.interests.api.expand_topic_queries). 같은 문서가 검색어
+    여러 개에 걸리므로 url_key로 중복을 제거하고, 먼저 만난 검색어의 결과를
+    남긴다 — 첫 검색어가 원 토픽이라 그 결과를 우선 보존하는 것이 맞다.
 
     소스별 실패를 격리해, 한 소스가 실패해도 나머지 문서는 그대로 반환한다.
     실패는 사람이 읽는 문자열이 아니라 {source, error} 구조로 돌려준다 — 호출자가
     "외부 장애인지, 검색어가 나쁜 건지"를 문자열 파싱 없이 판정할 수 있어야
-    재시도 여부를 올바르게 정할 수 있기 때문이다.
+    재시도 여부를 올바르게 정할 수 있기 때문이다. 한 소스가 검색어 여러 개에서
+    실패해도 실패 항목은 소스당 하나로 접는다 — outcomes.classify가 "몇 개 소스가
+    죽었나"를 SOURCE_COUNT(3)와 비교하므로, 검색어 수만큼 부풀면 멀쩡한 실행이
+    PROVIDER_FAILURE로 오판된다.
 
     Returns:
         (문서 목록, 실패 목록[{source, error}])
     """
     docs: list[dict[str, object]] = []
     failures: list[dict[str, str]] = []
-    collectors = (
-        ("뉴스", lambda: _news_documents(keyword, now)),
-        ("YouTube", lambda: _youtube_documents(keyword, now, window_hours)),
-        ("Reddit", lambda: _reddit_documents(keyword, now, window_hours)),
-    )
-    for label, collector in collectors:
-        try:
-            docs.extend(collector())
-        except Exception as error:
-            failures.append({"source": label, "error": f"{type(error).__name__}: {error}"})
+    seen_keys: set[str] = set()
+    failed_sources: set[str] = set()
+    for query in queries:
+        collectors = (
+            ("뉴스", lambda q=query: _news_documents(q, now)),
+            ("YouTube", lambda q=query: _youtube_documents(q, now, window_hours)),
+            ("Reddit", lambda q=query: _reddit_documents(q, now, window_hours)),
+        )
+        for label, collector in collectors:
+            try:
+                collected = collector()
+            except Exception as error:
+                if label not in failed_sources:
+                    failed_sources.add(label)
+                    failures.append(
+                        {"source": label, "error": f"{type(error).__name__}: {error}"}
+                    )
+                continue
+            for doc in collected:
+                key = str(doc.get("url_key") or doc.get("url") or "").strip()
+                if key:
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                docs.append(doc)
     return docs, failures
 
 
@@ -393,6 +417,7 @@ def run_daily(
     model: str = "gpt-4.1-mini",
     reference_now: datetime | None = None,
     search_query: str | None = None,
+    extra_queries: Sequence[str] = (),
     record_history: bool = True,
 ) -> dict[str, object]:
     """일간 파이프라인 전체를 실행하고 보고서 소재를 반환한다.
@@ -410,6 +435,11 @@ def run_daily(
             keyword를 그대로 쓴다. 에이전트가 결과가 빈약할 때 검색어를 재구성해
             넘기더라도, 이력·중복·유사도는 여전히 keyword(토픽) 기준으로 판단해
             개인화·중복 방지 일관성이 유지된다(검색만 넓히고 채점은 토픽 기준).
+        extra_queries: 함께 던질 보조 검색어. 개인 Wiki에서 연결된 이웃 키워드로
+            관심사를 넓힌 결과이며, search_query와 **같은 원칙**을 따른다 —
+            수집만 넓히고 채점은 keyword 기준이다. 비면 기존과 똑같이 검색어
+            하나로 동작한다. 수집은 검색어마다 소스 3개를 호출하므로 소요 시간이
+            검색어 수에 거의 비례한다. 호출자가 상한을 정해 넘긴다.
 
     Returns:
         {
@@ -428,6 +458,13 @@ def run_daily(
         raise ValueError("사용자 식별자가 비어 있습니다.")
     # 수집에 쓸 검색어는 토픽과 다를 수 있다(에이전트 재구성). 비면 토픽으로 되돌린다.
     query = (search_query or "").strip() or normalized
+    # 보조 검색어를 뒤에 붙인다. 원 검색어가 항상 첫 번째여야 중복 제거에서
+    # 원 토픽의 결과가 우선 살아남는다.
+    queries = [query]
+    for extra in extra_queries:
+        candidate = extra.strip()
+        if candidate and candidate.casefold() not in {q.casefold() for q in queries}:
+            queries.append(candidate)
 
     now = reference_now or datetime.now(UTC)
     # 토픽 성격(뉴스형/개념형)을 한 번 판정해 수집 창과 신선도 감쇠에 함께 쓴다.
@@ -438,6 +475,9 @@ def run_daily(
     log: dict[str, object] = {
         "exclusions": [],
         "search_query": query,
+        # 실제로 던진 검색어 전부(원 검색어 + 보조). 확장 효과를 측정하려면
+        # "몇 개로 넓혔는지"가 결과와 같은 자리에 남아 있어야 한다.
+        "search_queries": list(queries),
         "topic_intent": intent,
         "collect_window_hours": window_hours,
     }
@@ -447,7 +487,7 @@ def run_daily(
     log["cold_start"] = cold_start
 
     # 1. 수집 (기존 소스, 최근 N일). 검색은 query로, 채점은 topic(normalized) 기준.
-    docs, source_failures = collect_documents(query, now=now, window_hours=window_hours)
+    docs, source_failures = collect_documents(queries, now=now, window_hours=window_hours)
     # 실패는 구조(log)와 사람이 읽는 문장(errors) 양쪽에 남긴다. 앞의 것은 재시도
     # 판정용, 뒤의 것은 화면 표시용이다.
     errors = [

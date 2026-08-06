@@ -154,3 +154,74 @@ def test_select_generation_context_applies_limit_and_dedup() -> None:
 def test_select_generation_context_tolerates_plain_values() -> None:
     """참조 ID가 없는 형태도 그대로 통과시키되 중복만 거른다."""
     assert live_sources.select_generation_context(["x", "x"], ["y"]) == ["x", "y"]
+
+
+def _capture_assistant_call(monkeypatch) -> dict[str, object]:
+    """비서 호출 인자를 가로채고 빈 결과를 돌려준다."""
+    captured: dict[str, object] = {}
+
+    def fake_assist(topic, user_id, model="gpt-4.1-mini", **kwargs):
+        captured["topic"] = topic
+        captured["extra_queries"] = list(kwargs.get("extra_queries") or [])
+        return {"mode": "daily", "items": []}
+
+    monkeypatch.setattr(live_sources, "assist_daily_agent", fake_assist)
+    return captured
+
+
+def test_wiki_이웃_키워드를_보조_검색어로_함께_던진다(monkeypatch) -> None:
+    """리포트 수집은 관심 키워드 하나가 아니라 연결된 이웃도 함께 검색한다."""
+    captured = _capture_assistant_call(monkeypatch)
+
+    live_sources.collect_live_context(
+        "코스피", "minji", related_keywords=["코스닥시장", "지수선물"]
+    )
+
+    # 원 토픽은 비서가 keyword로 따로 받으므로 보조 검색어에는 들어가지 않는다.
+    assert captured["topic"] == "코스피"
+    assert captured["extra_queries"] == ["코스닥시장", "지수선물"]
+
+
+def test_이웃이_없으면_기존과_같이_검색어_하나로_수집한다(monkeypatch) -> None:
+    """고립 토픽에서 회귀가 없어야 한다."""
+    captured = _capture_assistant_call(monkeypatch)
+
+    live_sources.collect_live_context("코스피", "minji")
+
+    assert captured["extra_queries"] == []
+
+
+def test_확장_상한은_환경변수로_끌_수_있다(monkeypatch) -> None:
+    """A/B 비교를 위해 0으로 두면 이전 동작(검색어 1개)으로 되돌아간다."""
+    monkeypatch.setenv("REPORT_QUERY_EXPANSION_LIMIT", "0")
+    captured = _capture_assistant_call(monkeypatch)
+
+    live_sources.collect_live_context("코스피", "minji", related_keywords=["코스닥시장"])
+
+    assert captured["extra_queries"] == []
+
+
+def test_보조_검색어_총량은_상한을_넘지_않는다(monkeypatch) -> None:
+    """수집 시간이 검색어 수에 비례하므로 총량을 통제한다."""
+    monkeypatch.setenv("REPORT_QUERY_EXPANSION_LIMIT", "2")
+    captured = _capture_assistant_call(monkeypatch)
+
+    live_sources.collect_live_context(
+        "코스피", "minji", related_keywords=["이웃1", "이웃2", "이웃3", "이웃4"]
+    )
+
+    assert captured["extra_queries"] == ["이웃1", "이웃2"]
+
+
+def test_이웃_조회_상한은_확장_상한보다_여유를_둔다(monkeypatch) -> None:
+    """원 토픽과 겹치는 이웃이 걸러질 것을 감안해 상한보다 많이 가져온다."""
+    monkeypatch.setenv("REPORT_QUERY_EXPANSION_LIMIT", "2")
+
+    assert live_sources.related_keyword_fetch_limit() == 5
+
+
+def test_확장이_꺼져_있으면_이웃을_조회하지_않는다(monkeypatch) -> None:
+    """확장 OFF면 호출자가 DB 조회 자체를 건너뛸 수 있어야 한다."""
+    monkeypatch.setenv("REPORT_QUERY_EXPANSION_LIMIT", "0")
+
+    assert live_sources.related_keyword_fetch_limit() == 0

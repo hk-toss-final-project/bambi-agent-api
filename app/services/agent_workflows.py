@@ -101,6 +101,11 @@ class AgentWorkflowService:
             return "wiki_build", result
         if job.job_type == "report_generation":
             topic = str(job.payload.get("topic") or "").strip()
+            topics = [
+                str(value).strip()
+                for value in (job.payload.get("topics") or [])
+                if str(value).strip()
+            ]
             content_type = str(job.payload.get("content_type") or "").strip()
             language = str(job.payload.get("language") or "ko").strip()
             if not topic or not content_type:
@@ -123,6 +128,7 @@ class AgentWorkflowService:
                                 job_id=job.job_id,
                                 attempt_number=job.attempt_number,
                                 topic=topic,
+                                topics=topics,
                                 content_type=content_type,
                                 language=language,
                                 model=self._settings.report_llm_model,

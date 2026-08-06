@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from agent.assistant.features import graph
 
 
@@ -15,6 +17,7 @@ def assist_daily_agent(
     *,
     user_id: str,
     model: str = "gpt-4.1-mini",
+    extra_queries: Sequence[str] = (),
     record_history: bool = True,
     include_report: bool = True,
 ) -> dict[str, object]:
@@ -28,6 +31,10 @@ def assist_daily_agent(
         keyword: 사용자 관심 토픽
         user_id: 사용자 식별자
         model: 재구성·요약·보고서 생성에 쓸 OpenAI 모델
+        extra_queries: 수집에 함께 던질 보조 검색어. **기본은 비어 있다** —
+            브리핑(아침 보고서)은 지금까지처럼 키워드 하나로 수집한다. 개인
+            Wiki 이웃으로 넓히는 것은 리포트 생성 경로만 켠다
+            (report_builder.features.live_sources).
         record_history: 수집·보고 이력을 기록할지. 브리핑은 True(기본),
             리포트 생성처럼 근거만 가져가는 호출은 False로 둔다 — 그래야 리포트
             생성이 사용자의 브리핑에서 같은 소식을 가리지 않는다.
@@ -40,6 +47,7 @@ def assist_daily_agent(
         keyword,
         user_id,
         model=model,
+        extra_queries=extra_queries,
         record_history=record_history,
         include_report=include_report,
     )

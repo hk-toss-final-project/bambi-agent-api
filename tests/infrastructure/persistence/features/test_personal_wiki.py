@@ -18,6 +18,7 @@ from infrastructure.persistence.features.personal_wiki import (
     get_user_source_document_version_for_agent,
     list_existing_wiki_entries,
     list_existing_wiki_relations,
+    list_related_wiki_keywords,
     mark_url_source_event,
     register_user_url_source,
     save_user_url_document_version,
@@ -557,3 +558,91 @@ def test_upsert_wiki_document_skips_version_when_update_duplicates_other_documen
     assert not any(
         "UPDATE agent.wiki_documents" in query for query, _ in connection.executed
     )
+
+
+def test_list_related_wiki_keywords_maps_rows() -> None:
+    """이웃 Row를 연결 강도·관계 유형이 담긴 RelatedWikiKeyword로 변환한다."""
+    connection = _FakeConnection(
+        [
+            {
+                "title": "서킷 브레이커",
+                "document_kind": "concept",
+                "weight": 2.0,
+                "relation_types": ["applies_concept"],
+            },
+            {
+                "title": "  투자자 예탁금  ",
+                "document_kind": "concept",
+                "weight": 1.0,
+                "relation_types": ["applies_concept", "related_concept"],
+            },
+            {"title": "   ", "document_kind": "entity", "weight": 1.0, "relation_types": []},
+        ]
+    )
+
+    related = asyncio.run(
+        list_related_wiki_keywords(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            topic="코스피",
+            limit=3,
+        )
+    )
+
+    # 제목이 빈 Row는 검색어로 쓸 수 없어 버린다.
+    assert [item.title for item in related] == ["서킷 브레이커", "투자자 예탁금"]
+    assert related[0].weight == 2.0
+    assert related[1].relation_types == ("applies_concept", "related_concept")
+
+
+def test_list_related_wiki_keywords_scopes_and_limits_query() -> None:
+    """Namespace·1홉·상한 조건을 SQL과 Parameter에 담아 조회한다."""
+    connection = _FakeConnection([])
+
+    asyncio.run(
+        list_related_wiki_keywords(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            topic="  코스피  ",
+            limit=5,
+        )
+    )
+
+    query, params = connection.executed[0]
+    assert "FROM agent.wiki_document_relations AS relation" in query
+    assert "peer.document_kind IN ('entity', 'concept')" in query
+    # 기관·언론사 이름을 검색어로 쓰면 주제가 아니라 그 회사 소식이 걸린다.
+    assert "COALESCE(peer.domain, '') <> 'organization'" in query
+    assert "peer.id NOT IN (SELECT id FROM origin)" in query
+    assert "ORDER BY weight DESC, title ASC" in query
+    # 토픽은 앞뒤 공백을 제거해 노드 제목·document_key 양쪽과 대조한다.
+    assert params == ("user/user-1", "코스피", "코스피", "user/user-1", 5)
+
+
+def test_list_related_wiki_keywords_skips_query_when_disabled() -> None:
+    """상한이 0 이하거나 토픽이 비면 DB를 조회하지 않는다."""
+    connection = _FakeConnection([])
+
+    assert (
+        asyncio.run(
+            list_related_wiki_keywords(
+                connection,  # type: ignore[arg-type]
+                user_id="user-1",
+                topic="코스피",
+                limit=0,
+            )
+        )
+        == []
+    )
+    assert (
+        asyncio.run(
+            list_related_wiki_keywords(
+                connection,  # type: ignore[arg-type]
+                user_id="user-1",
+                topic="   ",
+                limit=5,
+            )
+        )
+        == []
+    )
+    assert connection.executed == []
