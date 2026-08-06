@@ -434,5 +434,18 @@ uv run python scripts/backfill_search_body.py
 uv run python scripts/backfill_search_body.py --apply
 ```
 
+배포 서버는 컨테이너 이미지라 `uv`가 없습니다. `uv`는 빌드 단계에만 쓰고
+런타임에는 venv가 PATH에 걸려 있으므로 `python`을 바로 부릅니다.
+
+```bash
+docker exec <agent-api> python scripts/backfill_search_body.py --apply
+```
+
 재수집하지 않습니다. 원문이 이미 DB에 있어 읽어서 정제만 하므로 외부 호출도
-LLM 호출도 없고, 중간에 멈춰도 이어서 실행됩니다.
+LLM 호출도 없고, 중간에 멈춰도 이어서 실행됩니다(아직 안 채운 것만 고릅니다).
+
+**원문(`markdown`)은 건드리지 않습니다.** 리포트 인용에 필요하고, 되돌릴 때
+검색 SQL만 원위치하면 되기 때문입니다. 실행 후 원문 보존을 함께 확인하세요.
+
+> 2026-08-05 배포 적용: 1,449건 완료(신규 저장분 508건 포함), 색인 텍스트
+> 1,924만 자 감소(문서당 평균 20,447자), 원문 유실 0건.
