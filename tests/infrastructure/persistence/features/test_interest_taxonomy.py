@@ -43,10 +43,12 @@ class _FakeConnection:
         """실행 순서별 반환 Row 큐와 실행 기록을 초기화한다."""
         self._rows = list(rows)
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
+        self.transactions = 0
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[None]:
-        """Transaction 문맥을 흉내 낸다."""
+        """열린 Transaction 수를 세는 문맥을 제공한다."""
+        self.transactions += 1
         yield
 
     async def execute(self, query: str, params: tuple[Any, ...] = ()) -> _FakeCursor:
@@ -59,6 +61,7 @@ def _connection(*, existing_targets: list[dict[str, Any]] | None = None) -> _Fak
     """컨텍스트 Snapshot 조회와 기존 수집 대상 조회 응답을 준비한다."""
     return _FakeConnection(
         [
+            None,  # SET LOCAL app.access_scope
             [{"id": "context-1"}],  # 최신 컨텍스트 Snapshot
             existing_targets or [],  # 같은 검색어로 이미 도는 수집 대상
         ]
@@ -161,7 +164,7 @@ def test_sync_is_skipped_without_a_user_context() -> None:
     구독 행이 컨텍스트 Snapshot을 참조하므로 만들 수 없다. 관심사 재계산
     자체를 실패시킬 이유는 없다.
     """
-    connection = _FakeConnection([[]])
+    connection = _FakeConnection([None, []])
 
     subscribed = _sync(connection, [{"topic": "오스틴딘", "score": 1.0}])
 
@@ -182,3 +185,34 @@ def test_previous_wiki_interest_subscriptions_are_deactivated() -> None:
     deactivations = _statements(connection, "SET active = false")
     assert len(deactivations) == 1
     assert "origin = 'wiki_interest'" in deactivations[0][0]
+
+
+def test_sync_runs_in_its_own_system_scope_transaction() -> None:
+    """수집 대상 쓰기를 자기 Transaction + system scope 안에서 수행한다.
+
+    수집 대상 쓰기는 RLS가 system scope를 요구하는데, 이 함수는 Wiki Build 직후
+    user scope 커넥션에서 불린다. 감싸지 않으면 INSERT가 RLS에 막히고 커넥션이
+    실패 상태가 되어, 호출자가 이어서 하는 Job 완료 기록까지 막힌다
+    (2026-08-06 실측: 노드는 저장됐는데 Job이 완료로 넘어가지 못해 재실행이 반복).
+    """
+    connection = _connection()
+
+    _sync(connection, [{"topic": "오스틴딘", "score": 1.0}])
+
+    assert connection.transactions == 1
+    scope_statements = _statements(connection, "app.access_scope")
+    assert len(scope_statements) == 1
+    assert "'system'" in scope_statements[0][0]
+    # scope 설정이 DB 접근보다 먼저 와야 한다.
+    assert connection.executed[0][0] == scope_statements[0][0]
+
+
+def test_sync_does_not_touch_the_database_without_candidates() -> None:
+    """등록할 관심사가 없으면 Transaction도 열지 않는다."""
+    connection = _connection()
+
+    subscribed = _sync(connection, [{"topic": "스쳐간 주제", "score": 0.01}])
+
+    assert subscribed == []
+    assert connection.transactions == 0
+    assert connection.executed == []

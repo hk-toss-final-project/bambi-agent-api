@@ -271,6 +271,14 @@ async def sync_wiki_interest_collection_targets(
     Returns:
         이번에 구독한 주제 이름 목록(점수 순). 등록할 게 없으면 빈 목록
     """
+    # 수집 대상 쓰기는 RLS가 system scope를 요구한다(interest_collection_target_write).
+    # 이 함수는 Wiki Build 직후 user scope 커넥션에서 불리므로 여기서 scope를 올린다.
+    #
+    # 자기 트랜잭션을 여는 이유는 두 가지다. SET LOCAL이 트랜잭션 안에서만 살고,
+    # 실패가 이 트랜잭션 안에서 끝나야 하기 때문이다. 감싸지 않으면 SQL 하나가
+    # 실패했을 때 커넥션 전체가 실패 상태가 되고, 호출자가 이어서 하는 Job 완료
+    # 기록까지 막힌다(2026-08-06 실측: 위키 노드는 저장됐는데 Job이 완료로 넘어가지
+    # 못해 lease 만료 → 재실행이 반복됐다).
     candidates: list[str] = []
     seen: set[str] = set()
     for interest in interests:
@@ -293,6 +301,20 @@ async def sync_wiki_interest_collection_targets(
     if not candidates:
         return []
 
+    async with connection.transaction():
+        await connection.execute("SET LOCAL app.access_scope = 'system'")
+        return await _register_wiki_interest_targets(
+            connection, user_id=user_id, candidates=candidates
+        )
+
+
+async def _register_wiki_interest_targets(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    candidates: list[str],
+) -> list[str]:
+    """system scope 트랜잭션 안에서 수집 대상 등록과 구독 갱신을 수행한다."""
     # 구독 행은 컨텍스트 Snapshot을 참조한다(NOT NULL). 컨텍스트가 아직 없는
     # 사용자는 구독을 만들 수 없으므로 조용히 건너뛴다 — 관심사 재계산 자체를
     # 실패시킬 이유는 없다.
