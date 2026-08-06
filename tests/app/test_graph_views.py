@@ -21,13 +21,23 @@ def _dev_client() -> TestClient:
 
 
 def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
-    """세 에이전트 그래프의 Mermaid 정의를 연결 없이 추출한다."""
+    """네 에이전트 그래프의 Mermaid 정의를 연결 없이 추출한다."""
     diagrams = {d.slug: d for d in list_graph_diagrams()}
 
-    assert set(diagrams) == {"personal-wiki", "report-generation", "assistant"}
+    assert set(diagrams) == {
+        "personal-wiki",
+        "report-generation",
+        "assistant",
+        "change-history",
+    }
     assert "load_source" in diagrams["personal-wiki"].mermaid
     assert "load_context" in diagrams["report-generation"].mermaid
+    # 토글이 켜졌을 때 generate를 대체하는 분기가 그래프에 실제로 있어야 한다.
+    assert "change_history" in diagrams["report-generation"].mermaid
     assert "reformulate" in diagrams["assistant"].mermaid
+    for node in ("prepare", "supervisor", "diff", "compose", "impact", "validate",
+                 "assemble", "store"):
+        assert node in diagrams["change-history"].mermaid
     for diagram in diagrams.values():
         assert "-->" in diagram.mermaid  # 엣지가 최소 하나는 있어야 그래프다
 
@@ -59,16 +69,17 @@ def test_get_graph_diagram_returns_none_for_unknown_slug() -> None:
 
 
 def test_graphs_page_renders_all_diagrams() -> None:
-    """/dev/graphs 페이지가 그래프 3개의 Mermaid 블록을 모두 담는다."""
+    """/dev/graphs 페이지가 그래프 4개의 Mermaid 블록을 모두 담는다."""
     with _dev_client() as client:
         response = client.get("/dev/graphs")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     body = response.text
-    assert body.count('<pre class="mermaid">') == 3
+    assert body.count('<pre class="mermaid">') == 4
     assert "Personal Wiki Build" in body
     assert "키워드 비서 리서치 에이전트" in body
+    assert "변경점(Delta) 추적" in body
 
 
 def test_graph_mermaid_raw_endpoint_returns_plain_text() -> None:

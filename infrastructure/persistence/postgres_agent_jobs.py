@@ -368,6 +368,7 @@ class PostgresAgentJobRepository:
         language: str | None,
         scheduled_at: datetime | None = None,
         request_id: str,
+        change_history_enabled: bool = False,
     ) -> SubmittedGenerationJob:
         """Report Builder Generation Job과 요청을 사용자 Context에 연결해 저장한다."""
         async with self._pool.connection() as connection:
@@ -381,6 +382,7 @@ class PostgresAgentJobRepository:
                     content_type=content_type,
                     language=language,
                     scheduled_at=scheduled_at,
+                    change_history_enabled=change_history_enabled,
                     request_id=request_id,
                 )
                 stored = await get_agent_job(connection, job_id=submitted.job_id)

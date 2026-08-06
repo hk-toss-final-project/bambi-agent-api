@@ -164,11 +164,13 @@ def test_every_runtime_feature_has_exactly_one_scaffold() -> None:
     assert actual == expected
 
 
-# 명세 1~43절 기능 영역 facade 43개에, 기능 ID 체계 밖의 기능 영역 facade를 더한 수.
+# 명세 1~43절 기능 영역 facade 43개에, 별도 facade를 갖는 기능 영역을 더한 수.
+#   +1 agent/change_history — 18-1절 변경점 추적(CHG-001~006). 기능 ID 체계 안에
+#      있지만 report_builder와 실행 경로·변경 이유가 달라 별도 영역으로 둔다.
 #   +1 agent/assistant  — 리포트 기능을 한 화면에서 돌려보는 통합 실행/뷰어 경로
 #   +1 agent/selection  — 브리핑과 리포트가 공유하는 선별 공용 라이브러리
-# 둘 다 기능 ID를 부여하지 않지만 "구현은 features/, 공개는 api.py" 규칙은 동일하게 따른다.
-EXPECTED_API_FACADES = 45
+# 뒤의 둘은 기능 ID를 부여하지 않지만 "구현은 features/, 공개는 api.py" 규칙은 동일하다.
+EXPECTED_API_FACADES = 46
 
 
 def test_api_facades_export_every_runtime_feature() -> None:

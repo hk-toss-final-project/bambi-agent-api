@@ -96,6 +96,14 @@ from .features.generation_runtime import (
     persist_report_generation,
     upsert_user_context_snapshot,
 )
+from .features.change_history_facts import (
+    list_change_history_facts,
+    load_change_history_facts_by_ids,
+    load_latest_change_history_run,
+    load_latest_report_snapshot,
+    persist_change_history_run,
+    search_change_history_facts,
+)
 from .features.interest_taxonomy import (
     InterestTaxonomyConflictError,
     StoredInterestTaxonomy,

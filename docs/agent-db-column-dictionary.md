@@ -695,6 +695,54 @@ document_version_id, global_source_document_id, url 중 적어도 하나는 반�
 | metadata | jsonb | 자동, 빈 Object | 폭, 높이, 생성 Model 등 Asset Metadata |
 | created_at | timestamptz | 자동 | Asset 등록 시각 |
 
+### change_history_runs
+
+변경점 추적 실행 한 건의 기준일, 대조 대상 실행과 판정 집계를 기록합니다.
+"직전 보고서"를 날짜가 아니라 이 실행 기록으로 잡아, 매일 돌지 않아도 델타가
+끊기지 않게 합니다.
+
+| 컬럼 | 타입 | 필수·기본값 | 설명 |
+|---|---|---|---|
+| id | uuid | 자동, PK | 변경점 추적 실행 내부 식별자 |
+| user_id | text | 필수 | RLS와 사용자별 조회를 위한 사용자 식별자 |
+| topic | text | 필수 | 보고서 주제. Base 조회는 user_id와 함께 이 값으로 필터링 |
+| job_id | uuid | 선택, FK | 실행을 유발한 agent_jobs 식별자 |
+| generation_run_id | uuid | 선택, FK | 같은 실행에서 저장된 generation_runs 식별자 |
+| base_run_id | uuid | 선택, FK | 대조 대상으로 삼은 직전 실행. 첫 실행이면 비어 있음 |
+| reference_date | date | 필수 | 모호한 날짜 표현을 절대 날짜로 바꿀 때 쓴 기준일 |
+| is_first_run | boolean | 자동, false | 비교 대상이 없던 최초 실행인지 |
+| outcome | text | 자동, delta | delta, no_change, failed |
+| new_fact_count | integer | 자동, 0 | 신규로 판정한 팩트 수 |
+| updated_fact_count | integer | 자동, 0 | 갱신으로 판정한 팩트 수 |
+| duplicate_fact_count | integer | 자동, 0 | 중복으로 판정해 저장하지 않은 팩트 수 |
+| dropped_flags | jsonb | 자동, 빈 배열 | 검증 재작업 후에도 실패해 드롭한 항목과 사유 |
+| created_at | timestamptz | 자동 | 실행 기록 시각 |
+
+### change_history_facts
+
+팩트 하나는 (subject, attribute, fact_value) 세 요소입니다. 중복·갱신 판정은
+(subject, attribute) 매칭으로 하고, fact_value가 다르면 갱신으로 봅니다.
+
+| 컬럼 | 타입 | 필수·기본값 | 설명 |
+|---|---|---|---|
+| id | uuid | 자동, PK | 팩트 식별자. Diff worker가 updates_fact_id로 참조하는 대상 |
+| run_id | uuid | 필수, FK | 이 팩트를 만든 change_history_runs 식별자 |
+| user_id | text | 필수 | RLS와 사용자별 조회를 위한 사용자 식별자 |
+| topic | text | 필수 | 팩트가 속한 보고서 주제 |
+| subject | text | 필수 | 팩트의 주체 엔티티. 예: 특정 기업의 특정 제품 |
+| attribute | text | 필수 | 주체의 속성 또는 사건 유형. 예: 양산 일정, 점유율 |
+| fact_value | text | 자동, 빈 문자열 | 오늘 자료가 말하는 값·상태. before/after 대비의 단위 |
+| statement | text | 필수 | 팩트를 한 문장으로 서술한 내부 구조화 데이터 |
+| verdict | text | 필수 | new 또는 updated |
+| supersedes_fact_id | uuid | 선택, FK | 이 팩트가 갱신한 과거 팩트. before 문구를 읽어오는 링크 |
+| occurred_on | date | 선택 | 기준일로 정규화한 타임라인 절대 날짜 |
+| date_precision | text | 자동, unknown | day, month, quarter, half, year, unknown |
+| source_reference | text | 선택 | 근거의 인용 참조 ID. 예: 개인 Wiki·Global·실시간 참조 |
+| source_url | text | 선택 | 근거 원문 URL |
+| status | text | 자동, active | active 또는 superseded |
+| created_at | timestamptz | 자동 | 팩트 저장 시각 |
+| updated_at | timestamptz | 자동 | 팩트 상태 변경 시각 |
+
 ## 9. 평가와 추천
 
 ### quality_evaluations

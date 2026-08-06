@@ -301,6 +301,7 @@ class InMemoryAgentJobRepository:
         language: str | None,
         scheduled_at: datetime | None = None,
         request_id: str,
+        change_history_enabled: bool = False,
     ) -> SubmittedGenerationJob:
         """실제 저장소처럼 컨텍스트를 요구하며 생성 Job을 멱등 접수한다."""
         if user_id not in self._contexts:

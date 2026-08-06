@@ -17,6 +17,9 @@ def build_api_router(settings: Settings) -> APIRouter:
     router.include_router(service_router, prefix=settings.api_prefix)
     router.include_router(service_worker_router, prefix=settings.api_prefix)
     if settings.dev_agent_api_enabled:
+        from app.routers.development.change_history_views import (
+            router as change_history_views_router,
+        )
         from app.routers.development.design_views import router as design_views_router
         from app.routers.development.graph_views import router as graph_views_router
         from app.routers.development.routes import router as development_router
@@ -28,4 +31,6 @@ def build_api_router(settings: Settings) -> APIRouter:
         # 사람이 브라우저로 여는 시각화 페이지라 내부 API prefix 없이 /dev에 둔다.
         router.include_router(graph_views_router, prefix="/dev")
         router.include_router(design_views_router, prefix="/dev")
+        # 변경점 추적 테스트 화면은 명세가 지정한 /changeHistory 경로를 그대로 쓴다.
+        router.include_router(change_history_views_router)
     return router

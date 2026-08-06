@@ -22,6 +22,9 @@ data/watch_history.json
 # 키워드 비서 로컬 수집 이력·보고 임베딩 이력(사용자 데이터, 커밋하지 않음)
 data/collect_history.json
 data/report_embedding_history.json
+# 상대 경로 계산이 한 단계 밀렸던 시기에 만들어진 같은 이력 파일들
+# (agent/assistant/features/config.py 참고, 사용자 데이터라 커밋하지 않음)
+agent/data/
 
 # 애플리케이션 로그 (로컬 파일 로그, 커밋하지 않음)
 logs/

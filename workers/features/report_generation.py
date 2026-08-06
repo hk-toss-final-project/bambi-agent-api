@@ -37,6 +37,10 @@ async def _process_job(
     language = str(job.payload.get("language") or "ko").strip()
     if not topic or not content_type:
         raise ValueError("Report Builder Job Payload에 topic과 content_type이 필요합니다.")
+    # 변경점 추적 토글. 개발 API(AgentWorkflowService)와 같은 키를 읽어야 요청이
+    # 어느 경로로 실행되든 결과가 같다. 이 키가 없는 기존 Job(플래그 도입 이전
+    # 등록분)은 지금까지와 같은 생성 경로로 실행된다.
+    change_history_enabled = bool(job.payload.get("change_history_enabled") or False)
     feature_result = await report_001(
         FeatureRequest(
             request_id=job.job_id,
@@ -52,6 +56,7 @@ async def _process_job(
                     content_type=content_type,
                     language=language,
                     model=model,
+                    change_history_enabled=change_history_enabled,
                 )
             },
         )

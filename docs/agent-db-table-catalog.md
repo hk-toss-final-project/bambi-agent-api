@@ -68,6 +68,7 @@ user_context_snapshots와 agent_jobs 대신 인메모리 저장소를 사용합�
 | 사용자 관심사 | user_interest_profiles, user_interests, interest_evidence |
 | Global Source·Discovery | global_sources, global_collection_runs, global_source_documents, global_trends, global_trend_documents, discovery_candidates |
 | 콘텐츠 생성 | generation_requests, generation_runs, generated_content_candidates, citations, content_assets |
+| 변경점 추적 | change_history_runs, change_history_facts |
 | 평가·추천 | quality_evaluations, safety_evaluations, recommendation_candidates |
 | 발행 | publish_snapshots, publish_attempts |
 | 이벤트·보안·운영 | event_outbox, event_inbox, api_keys, usage_logs, audit_logs |
@@ -193,6 +194,19 @@ discovery_candidates에는 user_id가 있지만 현재 RLS가 적용되지 않�
 
 generated_content_candidates의 body는 현재 text이며 별도의 content_format 제약은
 없습니다. Markdown 사용 여부는 생성·발행 계약에서 명시해야 합니다.
+
+### 9-1. 변경점(Delta) 추적
+
+| 테이블 | 성격 | 책임 | 핵심 관계·제약 | RLS | 현재 연결 |
+|---|---|---|---|---|---|
+| change_history_runs | History/Operational | 변경점 추적 실행 단위의 기준일·대조 대상·판정 집계 보존 | job_id·generation_run_id FK, base_run_id 자기참조 FK, outcome delta/no_change/failed | 적용 | PostgreSQL 연결 |
+| change_history_facts | History/Derived | (subject, attribute, fact_value) 팩트와 갱신 링크·절대 날짜 보존 | run_id FK Cascade, supersedes_fact_id 자기참조 FK, verdict new/updated | 적용 | PostgreSQL 연결 |
+
+0012 Migration이 추가하는 두 테이블은 **다음 실행의 Base 재료**입니다.
+publish_snapshots는 Markdown 본문만 보존해 팩트 단위 대조에 쓸 수 없으므로,
+변경점 추적은 이 테이블에서 과거 팩트를 조회합니다. 첫 실행(비교 대상 없음)도
+예외 없이 팩트를 저장해 다음 실행의 Base를 만듭니다. before 문구는 항상
+supersedes_fact_id로 DB에서 읽으며 LLM이 다시 쓰지 않습니다.
 
 ## 10. 평가와 추천
 

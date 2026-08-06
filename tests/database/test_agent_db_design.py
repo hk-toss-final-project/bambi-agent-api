@@ -51,6 +51,12 @@ INTEREST_TAXONOMY_MIGRATION_PATH = (
     / "migrations"
     / "0011_interest_taxonomy_pipeline.sql"
 )
+CHANGE_HISTORY_MIGRATION_PATH = (
+    PROJECT_ROOT
+    / "database"
+    / "migrations"
+    / "0012_change_history_delta.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
@@ -60,6 +66,7 @@ MIGRATION_PATHS = (
     REPORT_BUILDER_RENAME_MIGRATION_PATH,
     GLOBAL_SOURCE_CACHE_MIGRATION_PATH,
     USER_CONTEXT_SELECTION_MIGRATION_PATH,
+    CHANGE_HISTORY_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
@@ -226,6 +233,26 @@ def test_interest_taxonomy_migration_adds_snapshots_targets_and_subscriptions() 
     assert "CREATE TABLE agent.global_source_document_topics" in migration
     assert "'interest-taxonomy-google-news'" in migration
     assert "VALUES (11," in migration
+
+
+def test_change_history_migration_adds_delta_facts_without_touching_existing_tables() -> None:
+    """델타 팩트·실행 테이블이 순수 additive로 추가되는지 검증한다.
+
+    기존 테이블을 ALTER하면 토글 OFF 경로에도 영향이 갈 수 있으므로, 이
+    Migration에는 CREATE만 있어야 한다(0번 대전제).
+    """
+    migration = _read(CHANGE_HISTORY_MIGRATION_PATH)
+
+    assert "CREATE TABLE agent.change_history_runs" in migration
+    assert "CREATE TABLE agent.change_history_facts" in migration
+    # 갱신 관계는 자기참조 링크로 남기고, before 문구는 이 링크로 DB에서 읽는다.
+    assert "supersedes_fact_id uuid REFERENCES agent.change_history_facts(id)" in migration
+    assert "change_history_fact_isolation" in migration
+    assert "agent.current_user_id()" in migration
+    assert "VALUES (12," in migration
+    assert "ALTER TABLE" not in migration.replace(
+        "ALTER TABLE agent.change_history_runs ENABLE ROW LEVEL SECURITY", ""
+    ).replace("ALTER TABLE agent.change_history_facts ENABLE ROW LEVEL SECURITY", "")
 
 
 def test_migration_defines_vector_search_and_rls_boundaries() -> None:
