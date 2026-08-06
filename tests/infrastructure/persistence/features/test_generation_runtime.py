@@ -152,6 +152,54 @@ def test_enqueue_defaults_to_immediate_execution_without_schedule() -> None:
     assert insert_params is not None and insert_params[-1] is None
 
 
+def test_enqueue_carries_change_history_toggle_in_the_job_payload() -> None:
+    """변경점 추적 토글은 Job Payload(jsonb)에 실려 실행 시점까지 전달된다.
+
+    서버가 사용자별 켬/끔 상태를 들고 있지 않으므로 컬럼·테이블 변경 없이
+    요청마다 따라오는 값으로 처리한다.
+    """
+    connection = _connection_with_context()
+
+    asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-delta",
+            topic="반도체",
+            content_type="interest_news_card",
+            language="ko",
+            change_history_enabled=True,
+            request_id="request-1",
+        )
+    )
+
+    _, insert_params = connection.executed[1]
+    assert insert_params is not None
+    payload = insert_params[2].obj
+    assert payload["change_history_enabled"] is True
+
+
+def test_enqueue_defaults_change_history_toggle_to_off() -> None:
+    """토글을 지정하지 않으면 꺼진 상태로 등록된다(기존 동작 유지)."""
+    connection = _connection_with_context()
+
+    asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-plain",
+            topic="반도체",
+            content_type="interest_news_card",
+            language="ko",
+            request_id="request-1",
+        )
+    )
+
+    _, insert_params = connection.executed[1]
+    assert insert_params is not None
+    assert insert_params[2].obj["change_history_enabled"] is False
+
+
 def test_enqueue_stores_report_type_for_the_publish_snapshot() -> None:
     """요청의 report_type을 Job payload와 요청 parameters에 함께 남긴다.
 

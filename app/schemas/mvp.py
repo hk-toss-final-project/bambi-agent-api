@@ -339,6 +339,15 @@ class GenerationRequest(ImmutableSchema):
             "Job이 Claim되지 않으며, 생략하면 즉시 실행 대상이 된다."
         ),
     )
+    change_history_enabled: bool = Field(
+        default=False,
+        description=(
+            "변경점(Delta) 추적 사용 여부. 켜면 직전 보고서 이후의 신규·갱신 "
+            "사실을 갈라 정리한 통합 보고서를 만든다(기존 생성 경로를 대체). "
+            "기본값은 꺼짐이며, 꺼진 요청은 지금까지와 동일하게 처리된다. "
+            "응답 스키마와 발행 Payload는 켜든 끄든 같다."
+        ),
+    )
 
     @field_validator("topics", mode="after")
     @classmethod

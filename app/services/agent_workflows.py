@@ -110,6 +110,11 @@ class AgentWorkflowService:
             language = str(job.payload.get("language") or "ko").strip()
             if not topic or not content_type:
                 raise ValueError("Report Builder Job Payload에 topic과 content_type이 필요합니다.")
+            # 변경점 추적 토글. 이 키가 없는 기존 Job(플래그 도입 이전 등록분)은
+            # 지금까지와 같은 생성 경로로 실행된다.
+            change_history_enabled = bool(
+                job.payload.get("change_history_enabled") or False
+            )
             async with self._repository.acquire_connection() as connection:
                 feature_result = await report_001(
                     FeatureRequest(
@@ -127,6 +132,7 @@ class AgentWorkflowService:
                                 content_type=content_type,
                                 language=language,
                                 model=self._settings.report_llm_model,
+                                change_history_enabled=change_history_enabled,
                             )
                         },
                     )

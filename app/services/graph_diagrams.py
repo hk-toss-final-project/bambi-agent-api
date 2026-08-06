@@ -12,6 +12,7 @@ from functools import lru_cache
 from typing import Any
 
 from agent.assistant.api import build_assistant_graph
+from agent.change_history.api import build_change_history_graph
 from agent.graph import build_personal_wiki_graph, build_report_generation_graph
 
 
@@ -32,10 +33,10 @@ def _mermaid_of(compiled: Any) -> str:
 
 @lru_cache(maxsize=1)
 def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
-    """세 에이전트 그래프의 Mermaid 정의를 추출해 반환한다.
+    """네 에이전트 그래프의 Mermaid 정의를 추출해 반환한다.
 
-    Wiki·Report 그래프 빌더는 DB 연결을 인자로 받지만 빌드 시점에는 연결을
-    사용하지 않고 노드 클로저만 구성하므로, 구조 추출에는 None을 넘긴다.
+    Wiki·Report·변경점 추적 그래프 빌더는 DB 연결을 인자로 받지만 빌드 시점에는
+    연결을 사용하지 않고 노드 클로저만 구성하므로, 구조 추출에는 None을 넘긴다.
     이 전제는 tests/app/test_graph_diagrams.py가 회귀를 감지한다.
     """
     return (
@@ -58,9 +59,26 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                 "search_pool)로 인용을 원문과 대조(review) → Citation·Snapshot "
                 "저장(persist). 검토자가 사실관계 문제를 찾으면 generate로 "
                 "되돌려 한 번 다시 쓰게 하고, research가 자료를 못 모으면 "
-                "load_context가 기존 고정 경로로 되돌아간다."
+                "load_context가 기존 고정 경로로 되돌아간다. 변경점 추적 토글이 "
+                "켜진 요청은 generate 대신 change_history 서브그래프가 본문을 "
+                "만들고(꺼져 있으면 기존 경로 그대로), 그쪽이 실패하면 generate로 "
+                "되돌아간다."
             ),
             mermaid=_mermaid_of(build_report_generation_graph(None)),
+        ),
+        GraphDiagram(
+            slug="change-history",
+            title="변경점(Delta) 추적",
+            description=(
+                "Base 조회(prepare) → 판단(supervisor) → 팩트 추출·과거 대조"
+                "(diff, search_base_facts 도구 보유) → 종합·타임라인 생성"
+                "(compose) → 파급효과 추론(impact) → 정합성·날짜 검증(validate, "
+                "코드) → 섹션 조립(assemble, 코드) → 델타 팩트 저장(store). "
+                "워커는 끝나면 항상 supervisor로 돌아가고, supervisor가 첫 실행·"
+                "변화 없음·워커 1회 재작업 세 갈래를 판단한다. 조립 결과는 상위 "
+                "그래프의 review(Critic)로 이어진다."
+            ),
+            mermaid=_mermaid_of(build_change_history_graph(None)),
         ),
         GraphDiagram(
             slug="assistant",

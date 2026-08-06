@@ -236,6 +236,7 @@ class AgentApiMvpService:
                     report_type=payload.report_type,
                     language=payload.language,
                     scheduled_at=payload.scheduled_at,
+                    change_history_enabled=payload.change_history_enabled,
                     request_id=request_id,
                 )
             )

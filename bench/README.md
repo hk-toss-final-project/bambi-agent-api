@@ -43,6 +43,24 @@ uv run python bench/<기능이름>/run.py
 - 실행 전에 케이스 수 × 예상 토큰으로 대략적 비용을 확인합니다.
 - `run.py`는 실행이 끝나면 `results/`에 결과 파일을 남깁니다.
 
+### DB를 쓰는 기능은 실제 DB에 연결합니다
+
+저장소를 읽고 쓰는 기능(예: `change_history`)의 벤치는 **실제 agent-db에
+연결해 SQL을 그대로 실행합니다.** DB 호출을 메모리 대역으로 갈아끼우면 실제
+SQL이 한 번도 실행되지 않아, 조회가 항상 0건을 돌려주는 종류의 버그가 만점으로
+통과합니다(2026-08-06 `change_history`에서 실제로 발생 — 상세는
+`bench/change_history/results/2026-08-06_real-database.md`).
+
+```bash
+docker compose up -d          # 로컬 agent-db
+uv run python bench/change_history/run.py --mode split --confirm-cost
+```
+
+- `AGENT_DATABASE_URL`이 없으면 조용히 대역으로 내려앉지 않고 즉시 실패합니다.
+- 재현성은 **케이스별 전용 사용자**로 확보합니다. 케이스마다 데이터를 초기화하고
+  Base를 심은 뒤 실행하며, 끝나면 지웁니다(`--keep-data`로 남길 수 있습니다).
+- 실제 사용자 데이터와 섞이지 않도록 벤치 전용 ID 접두사를 씁니다.
+
 ## 결과 기록 (results/*.md)
 
 결과 파일에는 다음을 반드시 포함합니다.

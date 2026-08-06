@@ -43,6 +43,7 @@ from agent.report_builder.api import (
     select_pool_documents,
     select_generation_context,
 )
+from agent.change_history.api import change_history_available, chg_001
 from agent.state import ReportGenerationState, PersonalWikiBuildState
 from agent.wiki_builder.api import (
     classify_source_for_wiki,
@@ -744,6 +745,54 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             "latency_ms": int((monotonic() - started) * 1000),
         }
 
+    def route_after_context(state: ReportGenerationState) -> str:
+        """변경점 추적 토글에 따라 기존 생성과 델타 경로 중 하나를 고른다.
+
+        토글이 꺼져 있으면(기본값) 지금까지와 완전히 같은 generate 경로다.
+        요청이 켜도 서버 차단 스위치(CHANGE_HISTORY_ENABLED=0)가 우선한다 —
+        델타 경로에 장애가 나도 리포트 발행 자체는 멈추면 안 되기 때문이다.
+        """
+        if state.get("change_history_enabled") and change_history_available():
+            return "change_history"
+        return "generate"
+
+    async def change_history(state: ReportGenerationState) -> dict[str, Any]:
+        """직전 보고서 이후의 변화를 판별해 델타 보고서를 만든다(generate 대체).
+
+        서브그래프가 조립한 markdown을 기존 review 노드가 읽는 것과 **같은 키**
+        (`generated`)에 넣어, 그대로 Critic 검증과 기존 persist로 이어지게 한다.
+
+        델타 경로가 실패하면 예외를 올리지 않고 기존 generate 경로로 되돌린다 —
+        토글은 보고서를 더 낫게 만들려는 장치지, 켰다고 발행이 막히면 안 된다.
+        """
+        started = monotonic()
+        try:
+            outcome = await chg_001(
+                connection,
+                user_id=state["user_id"],
+                job_id=state["job_id"],
+                topic=state["topic"],
+                contexts=list(state["contexts"]),
+                model=state["model"],
+            )
+        except Exception:
+            logger.exception("변경점 추적에 실패해 기존 생성 경로로 되돌립니다.")
+            return {"change_history": {"failed": True}}
+        summary = {key: value for key, value in outcome.items() if key != "generated"}
+        summary["failed"] = False
+        return {
+            "generated": outcome["generated"],
+            "review_correction": "",
+            "latency_ms": int((monotonic() - started) * 1000),
+            "change_history": summary,
+        }
+
+    def route_after_change_history(state: ReportGenerationState) -> str:
+        """델타 경로가 보고서를 만들었으면 검토로, 실패했으면 기존 생성으로 보낸다."""
+        change = state.get("change_history") or {}
+        failed = bool(change.get("failed")) if isinstance(change, dict) else True
+        return "generate" if failed else "review"
+
     async def review(state: ReportGenerationState) -> dict[str, Any]:
         """검토자 에이전트가 초안의 인용을 근거 원문과 대조한다.
 
@@ -795,7 +844,19 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         }
 
     def route_after_review(state: ReportGenerationState) -> str:
-        """검토 결과에 따라 재작성으로 돌아갈지 저장으로 갈지 정한다."""
+        """검토 결과에 따라 재작성으로 돌아갈지 저장으로 갈지 정한다.
+
+        델타 경로로 만든 보고서는 재작성으로 돌리지 않는다. generate는 정형
+        섹션과 before/after 수치를 모르는 from-scratch 생성이라, 여기로 되돌리면
+        델타 보고서가 통째로 일반 리포트로 바뀐다 — 지적을 반영하는 게 아니라
+        결과물의 성격이 달라지는 것이다. 검토자의 지적은 로그에 남기고 그대로
+        발행한다(검토 재작성 상한에 닿았을 때와 같은 처리).
+        """
+        change = state.get("change_history") or {}
+        from_delta = isinstance(change, dict) and change.get("failed") is False
+        if from_delta and state.get("review_correction"):
+            logger.info("델타 보고서라 재작성 없이 발행합니다(검토 지적은 로그에 남깁니다).")
+            return "persist"
         return "generate" if state.get("review_correction") else "persist"
 
     async def persist(state: ReportGenerationState) -> dict[str, Any]:
@@ -844,11 +905,23 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
     graph.add_node("research", research)
     graph.add_node("load_context", load_context)
     graph.add_node("generate", generate)
+    graph.add_node("change_history", change_history)
     graph.add_node("review", review)
     graph.add_node("persist", persist)
     graph.set_entry_point("research")
     graph.add_edge("research", "load_context")
-    graph.add_edge("load_context", "generate")
+    # 변경점 추적 토글이 켜지면 generate 대신 델타 서브그래프가 본문을 만든다.
+    # 꺼져 있으면(기본값) 지금까지와 같은 load_context → generate 경로다.
+    graph.add_conditional_edges(
+        "load_context",
+        route_after_context,
+        {"generate": "generate", "change_history": "change_history"},
+    )
+    graph.add_conditional_edges(
+        "change_history",
+        route_after_change_history,
+        {"review": "review", "generate": "generate"},
+    )
     graph.add_edge("generate", "review")
     # 검토자가 사실관계 문제를 찾으면 generate로 돌려보낸다(최대 1회).
     graph.add_conditional_edges(
@@ -869,10 +942,15 @@ async def run_report_generation(
     content_type: str,
     language: str,
     model: str = "gpt-4.1-mini",
+    change_history_enabled: bool = False,
 ) -> dict[str, object]:
     """Report Builder Generation 그래프를 실행하고 저장 결과 Payload를 반환한다.
 
     개발 API와 Worker가 공유하는 유일한 생성 실행 진입점이다.
+
+    Args:
+        change_history_enabled: 변경점(Delta) 추적 경로 사용 여부. 기본값은
+            꺼짐이며, 꺼진 실행은 지금까지와 완전히 같은 경로를 탄다.
     """
     graph = build_report_generation_graph(connection)
     state = await graph.ainvoke(
@@ -885,6 +963,7 @@ async def run_report_generation(
             "content_type": content_type,
             "language": language,
             "model": model,
+            "change_history_enabled": change_history_enabled,
         }
     )
     return dict(state["result"])
