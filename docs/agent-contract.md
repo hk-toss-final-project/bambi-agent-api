@@ -178,13 +178,25 @@
 | `signup_interests` | X | 가입 시 고른 관심 카테고리·토픽 | `[{"category","topics":[...]}]`. agent가 `user_context_snapshots.attributes.signup_interests`에 버전과 함께 보존(재계산에 안 지워짐). **있으면 agent가 온보딩 시드(WSE-014)를 자동 접수해 콜드스타트 관심사를 파생** — 아래 참고 |
 
 ### 4.2-1 온보딩 관심사 시드 + 웰컴 리포트 (콜드스타트)
-- **시드 (WSE-014, agent 자동):** `signup_interests`가 있으면 context 수신 시 agent가 선택을 시드 Markdown으로 합성해 `onboarding_seed` 원본·Personal Wiki Build Job으로 **자동 접수**한다. 빌드 완료 후 INT-011 훅이 관심사 프로필을 파생시킨다. 컨텍스트 저장과 분리된 best-effort이고, 선택 내용 기반 멱등(같은 온보딩 반복 전달 → 시드 1개). Service의 추가 호출 불필요.
+- **시드 (WSE-014, agent 자동):** `signup_interests`가 있으면 context 수신 시 agent가 선택을 시드 Markdown으로 합성해 `onboarding_seed` 원본·Personal Wiki Build Job으로 **자동 접수**한다. Builder는 `source_metadata.labels`를 LLM 없이 결정적으로 Concept로 만들고 기존 Build·Snapshot 저장 경로를 재사용한다. 빌드 완료 후 INT-011 훅이 관심사 프로필을 파생시킨다. 컨텍스트 저장과 분리된 best-effort이고, 선택 내용 기반 멱등(같은 온보딩 반복 전달 → 시드 1개). Service의 추가 호출 불필요.
+- **`report_type` (요청 → Snapshot 그대로 반환, 2026-08-06 이송우 협의):**
+  `POST /generations`에 `report_type`(선택, 기본 `""`)을 실으면, agent가 해석하지 않고
+  발행 Snapshot의 `report_type`에 **받은 문자열 그대로** 담아 Claim 시점에 돌려준다.
+  요청과 Claim 시점이 떨어져 있어 Service가 카드의 생성 맥락을 다시 짜맞추지 않게 하려는 값이다.
+  - 값의 정의·검증은 **Service가 소유**한다. agent는 목록을 두지 않고 저장·반환만 한다(길이 64자 제한).
+  - 현재 쓰는 값: `MORNING_BRIEFING`(스케줄러 아침요약), `ON_DEMAND`(사용자 즉시 생성).
+  - `content_type`과 다른 축이다. `content_type`=콘텐츠 종류(기본 `interest_news_card`), `report_type`=생성 맥락.
+  - 생략하면 `""`. 이전에 저장된 Snapshot도 `""`로 읽힌다.
 - **웰컴 리포트 (Service 트리거):** "가입 즉시 리포트 1개"는 생성 트리거라 MVP 결정(2026-07-20)상 Service 소유다. Service가 온보딩 완료 직후 `POST /generations`를 `topic`=대표 관심사(여러 개면 랜덤), `content_type`=`interest_news_card`, `idempotency_key`=`welcome:{user_id}`로 1회 호출한다(멱등키로 재호출해도 1개만).
 
 ### 4.3 버전 관리 (핵심)
 - `context_version`은 **사용자별로 단조 증가**해야 한다. 같거나 작은 값 재전송 → `STALE_CONTEXT_VERSION`.
 - **구현:** service-db `users.agent_context_version`을 사용자 행 lock 아래 +1하고, 같은 트랜잭션에 Outbox payload를 적재한다.
-- `STALE_CONTEXT_VERSION(409)`은 **오류가 아니라 "이미 최신"** 신호 → Gateway가 삼키고 성공 처리(§5.4).
+- `STALE_CONTEXT_VERSION(409)`의 `details[0].current_context_version`에 **agent가 지금 저장하고 있는 버전**이 담긴다.
+  → Service는 이 값 + 1로 한 번만 재전송하면 반영된다(왕복 1회로 수렴).
+- 이 409를 **그냥 삼키면 안 된다.** service-db의 `users.agent_context_version`은 agent와 독립 카운터라
+  "이미 최신"이 아니라 "카운터가 어긋남"인 경우가 있고, 이때 삼키면 온보딩 관심사가 조용히 유실된다
+  (2026-08-06 실제 발생). 재전송 후에도 409면 그때 "이미 최신"으로 처리한다.
 
 ### 4.4 순서·실패 정책
 - **순서 불변식:** 특정 사용자의 `generations` 이전에 그 사용자의 `context`가 반드시 한 번 반영돼 있어야 한다.

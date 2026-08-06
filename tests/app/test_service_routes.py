@@ -68,6 +68,10 @@ def test_user_context_upsert_rejects_stale_version(client: TestClient) -> None:
     assert first.json()["selected_topic_ids"] == ["ai_ml", "startup"]
     assert stale.status_code == 409
     assert stale.json()["code"] == "STALE_CONTEXT_VERSION"
+    # 현재 버전을 함께 알려준다. Service는 자기 카운터로 버전을 매기는데 그
+    # 카운터가 Agent와 독립이라, 이 값이 없으면 무엇을 보내야 통과하는지 알 수
+    # 없다(2026-08-06: 이 409를 삼켜 온보딩 관심사 전달이 조용히 막혔다).
+    assert stale.json()["details"] == [{"current_context_version": 1}]
 
 
 def test_interest_taxonomy_upsert_is_idempotent(client: TestClient) -> None:
@@ -154,7 +158,7 @@ def test_user_context_upsert_defaults_signup_interests_to_empty(
 def test_onboarding_with_interests_enqueues_seed_job(
     client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
 ) -> None:
-    """signup_interests가 있으면 온보딩 관심사 씨앗(WSE-014) Build Job이 접수되는지 검증한다."""
+    """signup_interests가 있으면 온보딩 관심사 시드(WSE-014) Build Job이 접수되는지 검증한다."""
     response = client.put(
         "/internal/v1/users/seed-user/context",
         json={
@@ -176,7 +180,7 @@ def test_onboarding_with_interests_enqueues_seed_job(
 def test_onboarding_without_interests_skips_seed_job(
     client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
 ) -> None:
-    """signup_interests가 없으면 씨앗 Job을 접수하지 않는지 검증한다."""
+    """signup_interests가 없으면 시드 Job을 접수하지 않는지 검증한다."""
     response = client.put(
         "/internal/v1/users/no-seed-user/context",
         json={"context_version": 1, "plan": "free"},
@@ -189,10 +193,10 @@ def test_onboarding_without_interests_skips_seed_job(
 def test_onboarding_seed_failure_does_not_break_context(
     client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
 ) -> None:
-    """씨앗 접수가 실패해도 컨텍스트 저장(200)은 유지되는지 검증한다."""
+    """시드 접수가 실패해도 컨텍스트 저장(200)은 유지되는지 검증한다."""
 
     async def _raise(**_: object) -> None:
-        raise RuntimeError("씨앗 저장소 장애")
+        raise RuntimeError("시드 저장소 장애")
 
     agent_jobs_fake.submit_onboarding_seed = _raise  # type: ignore[method-assign]
 
@@ -258,6 +262,48 @@ def test_generation_job_result_flow(
     assert pending.json()["code"] == "JOB_RESULT_NOT_READY"
     assert completed.status_code == 200
     assert completed.json()["result"] == {"content_id": "content-1"}
+
+
+def test_generation_request_forwards_report_type_to_the_repository(
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
+) -> None:
+    """요청의 report_type이 저장소까지 그대로 전달된다.
+
+    Agent는 이 값을 해석하지 않고 발행 Snapshot에 실어 돌려주기만 한다.
+    값의 정의는 Service가 소유한다(2026-08-06 이송우 협의).
+    """
+    _put_context(client, "user-2")
+
+    accepted = client.post(
+        "/internal/v1/users/user-2/generations",
+        json={
+            "idempotency_key": "generation-report-type",
+            "topic": "AI agent trends",
+            "content_type": "interest_news_card",
+            "report_type": "MORNING_BRIEFING",
+        },
+    )
+
+    assert accepted.status_code == 202
+    assert agent_jobs_fake.last_report_type == "MORNING_BRIEFING"
+
+
+def test_generation_request_allows_omitting_report_type(
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
+) -> None:
+    """report_type을 보내지 않던 기존 호출도 그대로 접수된다."""
+    _put_context(client, "user-2")
+
+    accepted = client.post(
+        "/internal/v1/users/user-2/generations",
+        json={
+            "idempotency_key": "generation-no-report-type",
+            "topic": "AI agent trends",
+        },
+    )
+
+    assert accepted.status_code == 202
+    assert agent_jobs_fake.last_report_type == ""
 
 
 def test_content_mark_enqueues_wiki_build_job(

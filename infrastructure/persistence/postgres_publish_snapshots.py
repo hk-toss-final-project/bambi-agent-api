@@ -88,6 +88,7 @@ class PostgresPublishSnapshotRepository:
                 "generation_topic": payload.get("generation_topic", ""),
                 "tags": payload.get("tags", []),
                 "content_tags": payload.get("content_tags", []),
+                "report_type": payload.get("report_type", ""),
                 "created_at": row["created_at"],
             }
         )

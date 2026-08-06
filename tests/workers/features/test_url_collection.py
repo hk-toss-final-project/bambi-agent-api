@@ -11,6 +11,11 @@ from infrastructure.persistence.api import ClaimedAgentJob
 from infrastructure.sources.connectors.api import JinaReadResult
 from workers.features import url_collection
 
+# 차단 감지기(shared.fetch_guard)가 짧은 본문을 수집 실패로 보므로,
+# 픽스처도 실제 기사 정도의 길이를 갖는다.
+_FETCHED_MARKDOWN = "# 수집 본문. " + "기사 본문 문장입니다. " * 30
+
+
 
 class _FakeConnection:
     """URL Worker가 사용하는 Transaction 경계만 제공하는 연결 대역."""
@@ -86,7 +91,7 @@ def test_process_job_fetches_saves_and_completes(
             resolved_url="https://example.com/final",
             title="수집 제목",
             published_time="2026-08-04T09:30:00Z",
-            markdown="# 수집 본문",
+            markdown=_FETCHED_MARKDOWN,
         )
 
     monkeypatch.setattr(url_collection, "set_personal_wiki_scope", fake_user_scope)
@@ -104,7 +109,7 @@ def test_process_job_fetches_saves_and_completes(
     )
 
     assert result["wiki_build_job_id"] == "wiki-job-1"
-    assert saved_kwargs["markdown"] == "# 수집 본문"
+    assert saved_kwargs["markdown"] == _FETCHED_MARKDOWN
     assert saved_kwargs["resolved_url"] == "https://example.com/final"
     assert saved_kwargs["published_at"] == datetime(2026, 8, 4, 9, 30, tzinfo=UTC)
     assert connection.transactions == 2
@@ -155,3 +160,45 @@ def test_run_url_collection_batch_claims_only_url_jobs(
     assert recorded["job_type"] == "personal_wiki_url"
     assert recorded["error_code_prefix"] == "URL_COLLECTION"
     assert recorded["limit"] == 5
+
+
+def test_blocked_page_is_not_saved_as_wiki_source() -> None:
+    """봇 차단 안내 페이지는 저장하지 않고 Job을 실패시킨다.
+
+    실측(2026-08-06): 사용자가 나무위키 URL을 저장했더니 Cloudflare의
+    "Just a moment..." 페이지가 본문으로 저장돼, LLM이 그것을 읽고
+    "namu.wiki — 악성 봇으로부터 보호하기 위해 보안 서비스를 사용하는 웹사이트"
+    라는 Wiki 노드를 만들었다. 수집도 Wiki 빌드도 성공으로 끝나 아무도 몰랐다.
+    """
+    from shared.fetch_guard import FetchBlockedError
+
+    saved: list[dict[str, Any]] = []
+
+    def blocked_fetcher(url: str) -> JinaReadResult:
+        """Cloudflare 차단 응답을 재현한다. Jina는 200으로 돌려준다."""
+        return JinaReadResult(
+            requested_url=url,
+            resolved_url=url,
+            title="Just a moment...",
+            published_time=None,
+            markdown="Enable JavaScript and cookies to continue",
+        )
+
+    async def fake_save(*args: Any, **kwargs: Any) -> dict[str, object]:
+        """저장이 호출되면 기록한다(호출되면 안 된다)."""
+        saved.append(kwargs)
+        return {}
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(url_collection, "save_fetched_url_and_enqueue", fake_save)
+        with pytest.raises(FetchBlockedError):
+            asyncio.run(
+                url_collection._process_job(
+                    _FakeConnection(),  # type: ignore[arg-type]
+                    job=_url_job(),
+                    worker_id="worker-1",
+                    url_fetcher=blocked_fetcher,
+                )
+            )
+
+    assert saved == []

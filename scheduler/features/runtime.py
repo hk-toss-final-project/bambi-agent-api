@@ -4,6 +4,10 @@
 루프를 제공한다. CLI 진입점(`scheduler/main.py`)과 API 서버 기동
 (`app/main.py`)이 같은 런타임을 공유하도록 진입점에서 분리했다.
 
+tick 하나는 두 단계다. ① 실행 차례가 된 Source를 수집하고(URL만 저장)
+② 아직 본문이 비어 있는 문서를 Jina Reader로 채운다. ②가 없으면 풀에 근거로
+쓸 수 없는 URL만 쌓이므로 같은 시계 안에서 함께 돌린다.
+
 시계는 프로세스 하나만 돌려야 같은 수집이 중복 실행되지 않는다. API 서버를
 여러 인스턴스로 띄우는 배포에서는 서버 내장 Scheduler를
 `ENABLE_COLLECTION_SCHEDULER=false`로 끄고 CLI Scheduler를 한 벌만 띄운다.
@@ -33,6 +37,7 @@ from .collection import (
     sch_003,
     sch_004,
 )
+from workers.api import run_global_content_fetch_batch
 
 type DictRow = dict[str, Any]
 
@@ -55,6 +60,11 @@ PROVIDER_SCHEDULES: dict[str, Callable[..., Any]] = {
 }
 
 
+# 본문 수집 단계를 결과 목록에서 가리키는 이름. Provider 이름이 아니라 "본문을
+# 어떻게 읽었는가"를 나타내므로 수집 Provider와 겹치지 않는 값을 쓴다.
+CONTENT_FETCH_STEP = "content-fetch"
+
+
 @dataclass(frozen=True, slots=True)
 class CollectionScheduler:
     """등록된 수집 스케줄을 주기적으로 판정·실행하는 Scheduler."""
@@ -62,26 +72,29 @@ class CollectionScheduler:
     database_url: str
     credentials: CollectionCredentials
     tick_seconds: int
+    # tick마다 본문을 채울 문서 수. 0이면 본문 수집 단계를 건너뛴다.
+    content_fetch_limit: int = 0
 
     async def run_once(
         self, *, now: datetime | None = None, force: bool = False
     ) -> list[CollectionScheduleResult]:
-        """등록된 모든 Provider의 수집 스케줄을 한 번 판정하고 실행한다.
+        """수집 스케줄을 한 번 판정·실행하고, 이어서 본문을 채운다.
 
         Args:
             now: 판정 기준 시각 (미지정 시 현재 UTC)
             force: True면 Cron 실행 시각 조건을 건너뛴다 (쿼터는 지킨다)
 
         Returns:
-            Provider·Source·키워드별 판정과 실행 결과 목록
+            Provider·Source·키워드별 판정과 실행 결과 목록. 마지막에 본문 수집
+            단계의 결과가 붙는다
         """
         moment = now or datetime.now(UTC)
+        results: list[CollectionScheduleResult] = []
         connection: AsyncConnection[DictRow] = await AsyncConnection.connect(
             self.database_url,
             row_factory=dict_row,
         )
         try:
-            results: list[CollectionScheduleResult] = []
             for provider, schedule_feature in PROVIDER_SCHEDULES.items():
                 # Provider 하나의 실패가 나머지 수집을 막지 않도록 격리한다.
                 try:
@@ -106,9 +119,53 @@ class CollectionScheduler:
                             ),
                         )
                     )
-            return results
         finally:
             await connection.close()
+        results.extend(await self.fetch_pending_content())
+        return results
+
+    async def fetch_pending_content(self) -> list[CollectionScheduleResult]:
+        """본문이 비어 있는 수집 문서를 Batch로 점유해 본문을 채운다.
+
+        수집 단계는 URL만 저장하고 본문은 `content_status='pending'`으로 남긴다.
+        본문을 채우는 쪽이 아무도 돌지 않으면 근거로 쓸 수 없는 문서만 풀에
+        쌓인다 — 실제로 로컬 DB에는 마지막 본문 수집(2026-07-29) 이후 pending
+        194건이 본문 없이 남아 있었다. `global-content` Worker를 사람이 직접
+        실행해야만 채워졌기 때문이다. tick마다 조금씩 비워 그 구멍을 막는다.
+
+        여러 Scheduler·Worker가 동시에 돌아도 안전하다. 대상 점유가
+        `FOR UPDATE SKIP LOCKED`(claim_global_articles_for_fetch)라 같은 문서를
+        두 번 읽지 않는다.
+
+        Returns:
+            처리한 문서가 있으면 결과 한 건, 없으면 빈 목록
+        """
+        if self.content_fetch_limit <= 0:
+            return []
+        try:
+            fetched = await run_global_content_fetch_batch(
+                database_url=self.database_url,
+                limit=self.content_fetch_limit,
+            )
+        except Exception as error:  # noqa: BLE001 - 다음 tick에서 다시 시도한다
+            return [
+                CollectionScheduleResult(
+                    provider=CONTENT_FETCH_STEP,
+                    source_key=None,
+                    status="skipped",
+                    reason=f"본문 수집 실패: {error}",
+                )
+            ]
+        if not fetched:
+            return []
+        return [
+            CollectionScheduleResult(
+                provider=CONTENT_FETCH_STEP,
+                source_key=None,
+                status="completed",
+                results=fetched,
+            )
+        ]
 
 
 def build_collection_credentials(settings: Settings) -> CollectionCredentials:
@@ -161,6 +218,7 @@ def build_scheduler(settings: Settings | None = None) -> CollectionScheduler:
         database_url=resolved.agent_database_url,
         credentials=build_collection_credentials(resolved),
         tick_seconds=resolved.collection_scheduler_tick_seconds,
+        content_fetch_limit=resolved.collection_content_fetch_limit,
     )
 
 

@@ -232,6 +232,7 @@ class AgentApiMvpService:
                     idempotency_key=payload.idempotency_key,
                     topic=payload.topic,
                     content_type=payload.content_type,
+                    report_type=payload.report_type,
                     language=payload.language,
                     scheduled_at=payload.scheduled_at,
                     change_history_enabled=payload.change_history_enabled,
@@ -280,11 +281,20 @@ class AgentApiMvpService:
                 ],
             )
         except StaleContextVersionError as exc:
+            # 현재 버전을 함께 알려준다. 호출자(Service)는 자기 카운터로 버전을
+            # 매기는데 그 카운터가 Agent와 독립이라, 이 값이 없으면 무엇을 보내야
+            # 통과하는지 알 수 없다. 받은 값 + 1로 재전송하면 한 번에 수렴한다.
             raise AgentApiError(
                 status.HTTP_409_CONFLICT,
                 ErrorDetail(
                     code="STALE_CONTEXT_VERSION",
-                    message="현재 버전보다 새로운 사용자 컨텍스트가 필요합니다.",
+                    message=(
+                        "현재 버전보다 새로운 사용자 컨텍스트가 필요합니다. "
+                        f"현재 저장된 버전은 {exc.current_context_version}입니다."
+                    ),
+                    details=(
+                        {"current_context_version": exc.current_context_version},
+                    ),
                 ),
             ) from exc
         await self._seed_onboarding_interests(stored, request_id=request_id)
@@ -310,12 +320,12 @@ class AgentApiMvpService:
     async def _seed_onboarding_interests(
         self, stored: StoredUserContextRecord, *, request_id: str
     ) -> None:
-        """온보딩 선택으로 관심사 씨앗 원본·Wiki Build Job을 best-effort로 접수한다.
+        """온보딩 선택으로 관심사 시드 원본·Wiki Build Job을 best-effort로 접수한다.
 
-        신규 사용자의 콜드스타트를 위해 온보딩 Category·Topic(WSE-014)을 씨앗
-        문서로 합성해 접수한다. 씨앗 접수 실패가 컨텍스트 저장(이미 성공)까지
+        신규 사용자의 콜드스타트를 위해 온보딩 Category·Topic(WSE-014)을 시드
+        문서로 합성해 접수한다. 시드 접수 실패가 컨텍스트 저장(이미 성공)까지
         되돌리면 안 되므로 예외를 삼키고 로그만 남긴다. 선택 내용 기반 멱등이라
-        같은 온보딩이 반복 전달돼도 씨앗은 한 번만 만들어진다.
+        같은 온보딩이 반복 전달돼도 시드는 한 번만 만들어진다.
         """
         if not stored.signup_interests:
             return
@@ -337,9 +347,9 @@ class AgentApiMvpService:
                 occurred_at=stored.created_at,
                 request_id=request_id,
             )
-        except Exception:  # noqa: BLE001 - 씨앗 접수는 컨텍스트 저장과 분리된 부가 작업
+        except Exception:  # noqa: BLE001 - 시드 접수는 컨텍스트 저장과 분리된 부가 작업
             _logger.warning(
-                "온보딩 관심사 씨앗 접수 실패 (user_id=%s)", stored.user_id, exc_info=True
+                "온보딩 관심사 시드 접수 실패 (user_id=%s)", stored.user_id, exc_info=True
             )
 
     async def _enqueue_interest_reports(
@@ -367,6 +377,10 @@ class AgentApiMvpService:
                     idempotency_key=f"interest-report:{digest}",
                     topic=topic,
                     content_type="interest_news_card",
+                    # report_type 값의 정의는 Service가 소유한다. 가입 관심사에서
+                    # Agent가 직접 등록하는 이 경로에 쓸 값은 아직 합의된 게 없어
+                    # 임의로 만들지 않고 비워 둔다.
+                    report_type="",
                     language=stored.preferred_language,
                     scheduled_at=None,
                     request_id=request_id,

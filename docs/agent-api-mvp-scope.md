@@ -39,7 +39,7 @@
 - [x] `WSE-001` 웹 클리핑 이벤트 수신 — `wiki_source_events` + Frontmatter 필드 저장
 - [x] `WSE-011` 이벤트 중복 처리 방지 — `user_id + source_event_id` 식별 및 DB Unique·Upsert 적용
 - [x] `WSE-013` 이벤트 처리 상태 관리 — Claim·완료·실패 시 Source Event 상태 동기화
-- [x] `WSE-014` 온보딩 관심사 시드 수신 — 온보딩 컨텍스트 수신 시 선택 Category·Topic을 시드 Markdown으로 합성해 `onboarding_seed` 원본·Wiki Build Job으로 접수(콜드스타트 관심사 파생). 선택 내용 기반 멱등, best-effort(컨텍스트 저장과 분리)
+- [x] `WSE-014` 온보딩 관심사 시드 수신 — 온보딩 컨텍스트 수신 시 선택 Category·Topic을 시드 Markdown으로 합성해 `onboarding_seed` 원본·Wiki Build Job으로 접수한다. Builder는 `source_metadata.labels`를 LLM 없이 결정적으로 Concept로 만든 뒤 기존 Build·Snapshot·INT-011 경로를 재사용한다. 선택 내용 기반 멱등, best-effort(컨텍스트 저장과 분리)
 - [x] `PWIKI-006` 개인 Wiki 문서 버전 관리 — 원본 Version·Wiki Version·Build Snapshot 분리 보존
 - [x] `PWIKI-007` Wiki 문서 출처 추적 — `wiki_document_sources` 연결
 - [ ] `PWIKI-011` Wiki 문서 정규화 — ❌ 독립 정규화 기능 미구현. Frontmatter 저장은 `WSE-001/DB-002`, Wiki 구조 변환은 `WBA-003`이 담당하며 기존 항등 위임 함수는 스텁으로 복원

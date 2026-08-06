@@ -1,6 +1,8 @@
 """Report Builder Generation Job 등록의 예약 시각(scheduled_at) 영속화를 검증한다."""
 
 import asyncio
+
+import pytest
 from datetime import UTC, datetime
 from typing import Any
 
@@ -198,6 +200,35 @@ def test_enqueue_defaults_change_history_toggle_to_off() -> None:
     assert insert_params[2].obj["change_history_enabled"] is False
 
 
+def test_enqueue_stores_report_type_for_the_publish_snapshot() -> None:
+    """요청의 report_type을 Job payload와 요청 parameters에 함께 남긴다.
+
+    Agent는 이 값을 해석하지 않는다. 발행 시점에 그대로 꺼내 돌려주려면
+    요청 행에 남아 있어야 해서 parameters jsonb에 보관한다.
+    """
+    connection = _connection_with_context()
+
+    asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-morning",
+            topic="개인 지식 그래프",
+            content_type="interest_news_card",
+            report_type="MORNING_BRIEFING",
+            language="ko",
+            request_id="request-1",
+        )
+    )
+
+    _, job_params = connection.executed[1]
+    assert job_params is not None
+    assert job_params[2].obj["report_type"] == "MORNING_BRIEFING"
+    _, request_params = connection.executed[2]
+    assert request_params is not None
+    assert request_params[-1].obj["report_type"] == "MORNING_BRIEFING"
+
+
 def test_uuid_or_none_keeps_wiki_ids_and_drops_live_references() -> None:
     """Wiki UUID는 유지하고 실시간 자료 참조(L1 등)·빈 값은 None으로 바꾼다.
 
@@ -212,11 +243,16 @@ def test_uuid_or_none_keeps_wiki_ids_and_drops_live_references() -> None:
     assert _uuid_or_none("") is None
 
 
-def _connection_for_persist(topic: str) -> _FakeConnection:
+def _connection_for_persist(
+    topic: str, parameters: dict[str, Any] | None = None
+) -> _FakeConnection:
     """인용 없는 리포트 저장 경로가 실행할 질의 순서대로 응답을 준비한다."""
+    request_row: dict[str, Any] = {"id": "request-1", "topic": topic}
+    if parameters is not None:
+        request_row["parameters"] = parameters
     return _FakeConnection(
         [
-            [{"id": "request-1", "topic": topic}],  # generation_requests 조회
+            [request_row],  # generation_requests 조회
             [],  # status = running
             [{"id": "run-1"}],  # generation_runs INSERT
             [{"next_version": 1}],  # 다음 content 버전
@@ -282,6 +318,28 @@ def test_publish_payload_omits_blank_topic_tag() -> None:
     assert _publish_payload(connection)["tags"] == []
 
 
+def test_publish_payload_returns_the_requested_report_type_unchanged() -> None:
+    """요청에서 받은 report_type을 해석 없이 발행 Snapshot에 그대로 싣는다.
+
+    Service는 요청 시점과 Claim 시점이 떨어져 있어, 이 값이 빠지면 카드가 어떤
+    맥락에서 만들어졌는지 다시 짜맞춰야 한다(2026-08-06 이송우 협의).
+    """
+    connection = _connection_for_persist("코스피", {"report_type": "ON_DEMAND"})
+
+    _persist(connection)
+
+    assert _publish_payload(connection)["report_type"] == "ON_DEMAND"
+
+
+def test_publish_payload_keeps_report_type_empty_for_older_requests() -> None:
+    """report_type이 없던 시절 요청 행도 빈 문자열로 안전하게 읽힌다."""
+    connection = _connection_for_persist("코스피")
+
+    _persist(connection)
+
+    assert _publish_payload(connection)["report_type"] == ""
+
+
 def test_report_context_search_excludes_wiki_schema_documents() -> None:
     """Wiki 목차(schema) 문서는 본 검색과 폴백 검색 모두에서 제외한다.
 
@@ -307,6 +365,41 @@ def test_report_context_search_excludes_wiki_schema_documents() -> None:
     assert len(connection.executed) == 2
     for sql, _ in connection.executed:
         assert "document.document_kind <> 'schema'" in sql
+
+
+def test_report_context_gives_topic_bonus_through_collection_target() -> None:
+    """토픽 가산점을 검색어 글자가 아니라 수집 대상(Topic)으로도 판정한다.
+
+    사용자는 '우주·천문' 같은 라벨을 고르는데 수집은 '스페이스X' 같은 확장
+    검색어로 돌린다. 글자만 대조하면 확장 검색어로 모은 자료가 전부 가산점을
+    잃어, 주제에 맞는 기사가 잡음과 같은 점수대에 묻힌다.
+    """
+    from infrastructure.persistence.features.generation_runtime import (
+        load_report_context,
+    )
+
+    connection = _FakeConnection([[], []])
+
+    asyncio.run(
+        load_report_context(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            query="우주·천문",
+        )
+    )
+
+    main_sql, main_params = connection.executed[0]
+    # ① 이 검색어로 직접 수집한 문서
+    assert "lower(btrim(mapped.search_query)) = lower(btrim(%s))" in main_sql
+    # ② 같은 수집 대상에 묶인 문서 — 라벨과 확장 검색어를 잇는 갈래
+    assert "agent.interest_collection_targets AS target" in main_sql
+    assert "lower(btrim(target.query)) = lower(btrim(%s))" in main_sql
+    # 두 갈래는 OR이어야 한다. AND면 확장 검색어 자료가 오히려 전부 탈락한다.
+    assert "OR lower(btrim(target.query))" in main_sql
+    # 토픽 판정 갈래가 하나 늘었으므로 검색어 파라미터도 9개에서 10개가 된다.
+    # SQL의 %s 개수와 어긋나면 psycopg가 실행 시점에 터지므로 함께 센다.
+    assert main_params.count("우주·천문") == 10
+    assert main_sql.count("%s") == len(main_params)
 
 
 def test_publish_payload_separates_generation_topic_from_content_tags() -> None:
@@ -369,6 +462,7 @@ def test_snapshot_row_mapping_exposes_every_payload_field_we_write() -> None:
             "generation_topic": "의존성 구조",
             "tags": ["의존성 구조"],
             "content_tags": ["강한 결합", "DDD"],
+            "report_type": "MORNING_BRIEFING",
         },
     }
 
@@ -377,6 +471,7 @@ def test_snapshot_row_mapping_exposes_every_payload_field_we_write() -> None:
     assert snapshot.generation_topic == "의존성 구조"
     assert snapshot.tags == ["의존성 구조"]
     assert snapshot.content_tags == ["강한 결합", "DDD"]
+    assert snapshot.report_type == "MORNING_BRIEFING"
 
 
 def test_snapshot_row_mapping_tolerates_snapshots_saved_before_new_fields() -> None:
@@ -401,6 +496,7 @@ def test_snapshot_row_mapping_tolerates_snapshots_saved_before_new_fields() -> N
     assert snapshot.generation_topic == ""
     assert snapshot.tags == []
     assert snapshot.content_tags == []
+    assert snapshot.report_type == ""
 
 
 def _run_metadata(connection: _FakeConnection) -> dict[str, Any]:
@@ -450,3 +546,71 @@ def test_run_metadata_keeps_review_outcome_empty_when_not_given() -> None:
     _persist(connection)
 
     assert _run_metadata(connection)["review_outcome"] == ""
+
+
+def test_run_metadata_records_what_the_critic_objected_to() -> None:
+    """검토자 지적 문장도 함께 남긴다.
+
+    결과 코드(revise_exhausted)만으로는 "무엇을 끝내 고치지 못했는지"를 알 수
+    없어 로그를 뒤져야 했다(2026-08-05 실측: 같은 진단에 반나절이 들었다).
+    """
+    connection = _connection_for_persist("프로야구")
+
+    asyncio.run(
+        persist_report_generation(
+            connection,  # type: ignore[arg-type]
+            job_id="job-1",
+            user_id="user-1",
+            attempt_number=1,
+            content_type="interest_news_card",
+            generated=GeneratedReportContent(
+                title="제목",
+                summary="요약",
+                body="본문",
+                citation_references=(),
+            ),
+            contexts=[],
+            latency_ms=100,
+            review_outcome="revise_exhausted",
+            review_problem="인용한 G2 원문은 코스피 상승에 관한 내용이다.",
+        )
+    )
+
+    metadata = _run_metadata(connection)
+    assert metadata["review_outcome"] == "revise_exhausted"
+    assert metadata["review_problem"] == "인용한 G2 원문은 코스피 상승에 관한 내용이다."
+
+
+def test_stale_context_error_carries_the_current_version() -> None:
+    """거절 시 현재 저장된 버전을 함께 알려준다.
+
+    Service는 자기 카운터로 버전을 매기는데 그 카운터가 Agent와 독립이라, 한 번
+    어긋나면 무엇을 보내도 계속 거절된다. 현재 값을 주면 받은 값 + 1로 재전송해
+    한 번에 수렴한다(2026-08-06: Service가 이 409를 "이미 최신"으로 삼켜 온보딩
+    관심사가 전달되지 않는데도 아무도 알지 못했다).
+    """
+    from infrastructure.persistence.features.generation_runtime import (
+        StaleContextVersionError,
+    )
+
+    connection = _FakeConnection([[], [{"context_version": 7}]])
+
+    with pytest.raises(StaleContextVersionError) as caught:
+        asyncio.run(
+            upsert_user_context_snapshot(
+                connection,  # type: ignore[arg-type]
+                user_id="user-1",
+                context_version=4,
+                plan="free",
+                preferred_language="ko",
+                personalization_enabled=True,
+                interest_taxonomy_version=None,
+                selected_category_ids=[],
+                selected_topic_ids=[],
+                blocked_interest_ids=[],
+                blocked_source_ids=[],
+            )
+        )
+
+    assert caught.value.current_context_version == 7
+    assert caught.value.user_id == "user-1"

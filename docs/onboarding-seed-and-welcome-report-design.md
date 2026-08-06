@@ -1,11 +1,11 @@
 # 온보딩 콜드스타트 설계 — 관심사 시드 + 웰컴 리포트
 
-> 상태: **제안 — 팀 협의 전** · 작성일 2026-08-04
+> 상태: **Part B 구현 완료 — S1 개선 반영** · 작성일 2026-08-04 · 갱신일 2026-08-05
 > 목적: 가입 직후 "관심사 0개 · 리포트 0개"인 콜드스타트를 해소한다.
 > (1) 온보딩에서 고른 Category·Topic을 **관심사 시드 입력원**으로 정식 편입해 프로필을
 > 채우고, (2) 가입 즉시 **웰컴 리포트 1개**를 생성해 첫 화면을 비지 않게 한다.
 > 상위 설계: [wiki-interest-subscription-design.md](wiki-interest-subscription-design.md)
-> (입력원 → LLM Wiki → 관심사 프로필 → 구독의 단방향 파생 원칙).
+> (입력원 → Wiki → 관심사 프로필 → 구독의 단방향 파생 원칙).
 > "확인됨"은 코드·스키마로 검증한 사실, "결정 필요"는 팀이 정해야 하는 항목이다.
 > 용어: 영어 `seed`의 한국어 표기는 **시드**로 통일한다.
 
@@ -28,14 +28,14 @@
 | 관심사 재계산 `int_011` | **활성 Wiki Build가 없으면 `ActiveWikiRequiredError`로 하드 실패.** ([recalculation.py:68-73](../domain/interests/features/recalculation.py)) |
 | 행동-전용 후보 경로 | `int_005`는 Wiki에 없어도 양의 신호가 쌓인 Topic을 후보로 추가할 수 있음([scoring.py:221-250](../domain/interests/features/scoring.py)) — 하지만 `int_011`이 그 앞에서 활성 Wiki를 요구하므로 **가입 직후엔 도달 불가.** |
 | 리포트 생성 워커 | `report_generation` Job payload에 `topic`+`content_type` **필수**([report_generation.py:35-39](../workers/features/report_generation.py)). 가입 시 자동 발행 트리거 없음. |
-| Wiki 편입 파이프라인 | `wiki_source_events` → wiki build 그래프(LLM `classify_source_for_wiki`가 **원문 텍스트**를 읽어 Entity·Concept 노드 생성). 입력원 이벤트 타입은 `web_clipping`/`url`/`content_mark` 등([ingestion.py](../domain/personal_wiki/source_events/features/ingestion.py)). |
+| Wiki 편입 파이프라인 | `wiki_source_events` → wiki build 그래프. 일반 원본은 LLM `classify_source_for_wiki`가 원문을 읽고, `onboarding_seed`는 `source_metadata.labels`를 결정적으로 Concept로 분류한다. 이후 Build 계획·저장·Snapshot·INT-011은 같은 경로를 재사용한다. |
 
 **결론**: 온보딩 시드가 프로필로 이어지려면 반드시 **활성 Wiki Build를 만드는 경로**여야 한다. "신호만" 넣는 방식(좋아요 경로)은 `int_011`의 활성 Wiki 요구 때문에 콜드스타트에서 작동하지 않는다. → 유연님이 고른 **"온보딩 시드 입력원"** 방향이 현재 계약과 정합하는 유일한 선택.
 
 ## 3. 핵심 제약 3개
 
 1. **`int_011`은 활성 Wiki Build를 요구한다** → 시드는 Wiki 노드 + Build 스냅샷을 남겨야 한다.
-2. **정상 Wiki 노드는 원문 텍스트에서 LLM이 만든다** → Category/Topic ID에는 원문이 없다. 시드 노드 생성 방식을 따로 정해야 한다(§4.2, 결정 S1).
+2. **일반 Wiki 노드는 원문 텍스트에서 LLM이 만든다** → 온보딩 시드는 지식 원문이 아니라 명시적 선택이므로 라벨을 결정적으로 Concept로 만들어야 한다(§4.2, 결정 S1).
 3. **Agent는 안정 ID만 받고 라벨 taxonomy는 없다** — 단, `signup_interests`가 이미 사람이 읽는 라벨을 함께 보낸다. 라벨은 `signup_interests`에서, 정체성·dedup은 `selected_*_ids`에서 취한다.
 
 ## 4. Part B — 온보딩 시드 입력원
@@ -55,14 +55,19 @@ graph LR
 
 ### 4.2 시드 Wiki 노드 생성 방식 — **결정 S1**
 
-`int_011`이 읽을 활성 Wiki Build를 만들어야 하는데, 방법이 두 가지다:
+`int_011`이 읽을 활성 Wiki Build는 필요하지만, 합성 문서를 일반 LLM 분류에 넣을
+필요는 없다. 최종 방식은 두 접근의 장점을 합친 **결정적 분류 + 기존 Build 파이프라인**이다.
 
-- **(a) 결정적 시드 빌드 (권장 초안)**: LLM 없이 온보딩 라벨을 Entity/Concept 노드로 직접 물질화하고 최소 Build 스냅샷을 만든다. 노드 이름 = `topics`(없으면 `category`), 근거 원문 = 없음(`source_types=["onboarding_seed"]`). 장점: 비용 0·결정적·테스트 가능. 단점: 이벤트→build 그래프 밖의 새 쓰기 경로가 생김(초기 생성이라 원칙 4 "편집 직접 UPDATE 금지"와는 별개지만 신설 경로라 합의 필요).
-- **(b) 합성 문서 → 기존 build 그래프**: "사용자가 관심사로 X를 선택함" 같은 짧은 합성 원문을 만들어 정상 wiki build 그래프에 태운다. 장점: 파이프라인 재사용. 단점: 가입마다 LLM 호출(비용·지연), 얇은 원문에서 나온 저품질 노드, 결정성 낮음.
+- `onboarding_seed` 원본과 합성 Markdown은 멱등·감사·출처 추적을 위해 그대로 저장한다.
+- Wiki Builder는 이 원본만 LLM을 건너뛰고 `source_metadata.labels`를 순서 보존·중복 제거해
+  **Concept 노드**로 만든다. 노드 이름은 `topics`, 토픽이 없으면 수신부가 넣은 `category`다.
+- 이후 `build_wiki_plan` → 문서/Version/출처/Chunk/Snapshot 저장 → INT-011 재계산은
+  일반 원본과 동일한 경로를 재사용한다. 별도 DB 쓰기 경로를 만들지 않는다.
+- 유효한 `labels`가 없으면 조용히 빈 Wiki를 만들지 않고 Build를 실패시켜 손상된 입력을 드러낸다.
 
-권장은 **(a)** — 시드는 "지식"이 아니라 "출발점"이므로 LLM으로 지어낼 근거가 없다. 다만 새 쓰기 경로라 팀 합의 대상.
+따라서 가입 시 Wiki 분류 LLM 비용과 비결정성을 없애면서도 기존 저장 계약은 유지한다.
 
-#### (b) 채택 후 확인된 부작용 — 묶음 노드 (2026-08-04 E2E 검증)
+#### 기존 LLM 방식에서 확인된 부작용과 해소 (2026-08-04 E2E 검증)
 
 (b)로 실제 파이프라인을 돌려 보니, Wiki Builder가 고른 주제 노드와 함께
 **시드 문서 자체를 가리키는 상위 개념 노드**("온보딩 관심 주제")를 만들었다.
@@ -73,10 +78,12 @@ graph LR
 | 1 | 온보딩 관심 주제 | 1.000 |
 | 2~4 | 금리 / 반도체 / 생성형 AI | 0.710 |
 
-사용자가 선언한 관심사가 아니므로 INT-001에서 걸러낸다. 규칙은
+사용자가 선언한 관심사가 아니므로 기존에는 INT-001에서 걸러냈다. 규칙은
 **"시드가 유일한 근거인 노드는 온보딩 라벨과 맞을 때만 관심 후보로 인정한다"** —
 라벨은 시드 Version의 `source_metadata.labels`에서 읽는다. 실제 저장이 같은
 노드에 쌓이면 근거 종류가 늘어 이 판정에서 빠지므로 그때는 후보로 되살아난다.
+결정적 분류 적용 후에는 애초에 합성 문서 제목인 `온보딩`·`온보딩 관심 주제 시드`가
+노드 후보가 되지 않으며, 이 필터는 과거 Build와 방어적 검증을 위해 유지한다.
 
 ### 4.3 점수 가중치 — 결정 S2
 
@@ -134,15 +141,15 @@ B(시드)가 A(리포트)보다 먼저 반영되면 웰컴 리포트가 시드 �
 
 | ID | 결정 | 결과 |
 |---|---|---|
-| S1 | 시드 Wiki 노드 생성 방식 | **(b) 합성 문서 + 기존 LLM Wiki Build** — 시드 Markdown을 `run_personal_wiki_build`에 태워 노드 생성 |
-| S2 | `onboarding_seed` 가중치·최신성 취급 | **0.15**(클리핑 0.2보다 낮게)·중립 최신성 — `bench/onboarding_seed`로 노드 생성 품질 검증 |
+| S1 | 시드 Wiki 노드 생성 방식 | **결정적 분류 + 기존 Wiki Build** — `source_metadata.labels`를 Concept로 만들고 LLM은 건너뛰되 계획·저장·Snapshot·INT-011은 재사용(2026-08-05 개선) |
+| S2 | `onboarding_seed` 가중치·최신성 취급 | **0.15**(클리핑 0.2보다 낮게)·중립 최신성 — 결정적 회귀 테스트와 로컬 E2E로 검증 |
 | S3 | 시드 명시 삭제 UI 필요 여부 | **자연 하락만** — 실제 저장이 쌓이면 재계산 시 밀려남(별도 삭제 UI 없음) |
 | A1 | 웰컴 리포트 `content_type` | **`interest_news_card`**(카드형, 이미 기본값) |
 | A2 | 다중 선택 시 topic 선정 | **랜덤 1개** — 트리거 소유자인 Service가 선택 |
 | 트리거 | 웰컴 리포트 발행 주체 | **Service**(`POST /generations`, MVP 2026-07-20 결정 준수). Agent는 시드(Part B)만 담당 |
 | A3 | 웰컴 리포트 게이팅 | 미결 — 봇·대량 가입 비용은 Service 트리거와 함께 별도 논의 |
 
-구현 현황: Part B(시드)는 `agent-api`에 구현 완료(WSE-014). Part A(웰컴 리포트)는 계약 문서로
+구현 현황: Part B(시드)는 `agent-api`에 구현 완료(WSE-014, 결정적 분류 포함). Part A(웰컴 리포트)는 계약 문서로
 Service에 위임([service-integration-guide.md](service-integration-guide.md) §3.1,
 [agent-contract.md](agent-contract.md) §4.2-1).
 
@@ -158,6 +165,6 @@ Service에 위임([service-integration-guide.md](service-integration-guide.md) �
 - 시드 노드/Build 물질화(S1 결정 반영) + `_SOURCE_TYPE_WEIGHTS` 항목 추가.
 - `upsert_user_context` 첫 스냅샷 시 시드 이벤트 + 웰컴 리포트 Job enqueue(실패 격리·멱등).
 - 새 그래프 노드가 생기면 `/dev/graphs` 레지스트리·가드 테스트 갱신(AGENTS.md 규칙 10).
-- 결정적 경로는 `tests/`, LLM 경로(S1-b·웰컴 리포트 품질)는 `bench/` 신설(규칙 8).
+- 결정적 시드 경로는 `tests/`, 웰컴 리포트 LLM 품질은 `bench/`에서 검증(규칙 8).
 - `agent-contract.md`·`service-integration-guide.md`에 온보딩→시드/리포트 트리거 계약 반영.
 ```

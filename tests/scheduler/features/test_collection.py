@@ -5,20 +5,27 @@
 """
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
 import scheduler.features.collection as collection
-from infrastructure.persistence.api import GlobalCollectionSchedule
+from infrastructure.persistence.api import (
+    CollectionTargetPlan,
+    GlobalCollectionSchedule,
+)
 from scheduler.api import (
     CollectionCredentials,
     next_collection_run_at,
+    plan_schedule_queries,
+    plan_target_queries,
     sch_001,
     sch_002,
     sch_003,
     sch_004,
+    split_collection_budget,
 )
 
 _NOW = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
@@ -49,6 +56,7 @@ def _schedule(
     daily_max_runs: int | None = None,
     runs_today: int = 0,
     limit_per_provider: int = 10,
+    targets: tuple[CollectionTargetPlan, ...] = (),
 ) -> GlobalCollectionSchedule:
     """테스트용 수집 스케줄 설정 하나를 만든다."""
     return GlobalCollectionSchedule(
@@ -62,6 +70,7 @@ def _schedule(
         daily_max_runs=daily_max_runs,
         last_started_at=last_started_at,
         runs_today=runs_today,
+        targets=targets,
     )
 
 
@@ -84,6 +93,137 @@ def _patch(
     monkeypatch.setattr(collection, "load_collection_schedules", fake_load)
     monkeypatch.setattr(collection, "worker_001", fake_worker)
     return calls
+
+
+def test_budget_split_keeps_total_and_reserves_label_share() -> None:
+    """수집 예산을 라벨과 확장 검색어에 나누되 총량을 늘리지 않는지 검증한다.
+
+    본문 수집 처리량이 병목이라 총량이 늘면 본문 없는 문서만 쌓인다.
+    """
+    # 기본 설정: 10건 예산에 큐레이션 키워드 6개 → 라벨 4 + 키워드 6×1 = 10
+    assert split_collection_budget(10, 6) == (4, 1)
+    # 예산이 늘면 키워드 몫이 먼저 는다.
+    assert split_collection_budget(20, 6) == (8, 2)
+    # 키워드가 없으면 예전처럼 라벨이 전부 가져간다.
+    assert split_collection_budget(10, 0) == (10, 0)
+    # 예산이 0이면 아무 검색도 돌리지 않는다.
+    assert split_collection_budget(0, 6) == (0, 0)
+
+
+def test_target_plan_puts_label_first_and_tags_every_query_with_topic() -> None:
+    """라벨 검색을 먼저 돌리고, 모든 검색 결과를 같은 Topic에 귀속시킨다.
+
+    확장 검색어로 모은 문서도 같은 target_key를 달아야, 사용자가 고른 라벨로
+    리포트를 만들 때 그 자료를 찾을 수 있다.
+    """
+    target = CollectionTargetPlan(
+        target_key="taxonomy:v1:space",
+        query="우주·천문",
+        keywords=("우주", "천문", "위성", "화성", "NASA", "스페이스X"),
+    )
+
+    queries = plan_target_queries(target, limit=10)
+
+    assert queries[0].query == "우주·천문"
+    assert queries[0].limit == 4
+    assert [q.query for q in queries[1:]] == [
+        "우주",
+        "천문",
+        "위성",
+        "화성",
+        "NASA",
+        "스페이스X",
+    ]
+    assert all(q.limit == 1 for q in queries[1:])
+    # 어느 검색어로 모았든 같은 Topic에 묶인다.
+    assert {q.target_key for q in queries} == {"taxonomy:v1:space"}
+    # 총 수집량은 예산 그대로다.
+    assert sum(q.limit for q in queries) == 10
+
+
+def test_target_plan_skips_keyword_identical_to_label() -> None:
+    """라벨과 글자가 같은 키워드는 같은 검색을 두 번 돌리므로 건너뛴다."""
+    target = CollectionTargetPlan(
+        target_key="taxonomy:v1:game",
+        query="게임",
+        keywords=("게임", "e스포츠"),
+    )
+
+    queries = plan_target_queries(target, limit=10)
+
+    assert [q.query for q in queries] == ["게임", "e스포츠"]
+
+
+def test_target_without_keywords_falls_back_to_label_only() -> None:
+    """큐레이션 키워드가 없는 Topic(custom 등)은 예전처럼 라벨만 검색한다."""
+    target = CollectionTargetPlan(target_key="custom:abc", query="사내 위키")
+
+    queries = plan_target_queries(target, limit=10)
+
+    assert len(queries) == 1
+    assert queries[0].query == "사내 위키"
+    assert queries[0].limit == 10
+    assert queries[0].target_key == "custom:abc"
+
+
+def test_source_keywords_have_no_topic_and_keep_full_limit() -> None:
+    """Source 고정 키워드는 Topic 귀속이 없고 예산도 나누지 않는다."""
+    schedule = _schedule(
+        keywords=("Cloudflare", "코스피"),
+        targets=(
+            CollectionTargetPlan(
+                target_key="taxonomy:v1:ai",
+                query="AI·머신러닝",
+                keywords=("LLM", "OpenAI"),
+            ),
+        ),
+    )
+
+    queries = plan_schedule_queries(schedule)
+
+    fixed = [q for q in queries if q.target_key is None]
+    assert [q.query for q in fixed] == ["Cloudflare", "코스피"]
+    assert all(q.limit == 10 for q in fixed)
+
+    topical = [q for q in queries if q.target_key == "taxonomy:v1:ai"]
+    assert [q.query for q in topical] == ["AI·머신러닝", "LLM", "OpenAI"]
+    assert sum(q.limit for q in topical) == 10
+
+
+def test_topic_collection_passes_target_key_and_split_limit_to_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Topic 수집이 Worker에 target_key와 나눈 예산을 전달하는지 검증한다."""
+    schedule = _schedule(
+        provider="google_news",
+        keywords=(),
+        targets=(
+            CollectionTargetPlan(
+                target_key="taxonomy:v1:space",
+                query="우주·천문",
+                keywords=("스페이스X",),
+            ),
+        ),
+    )
+    calls = _patch(monkeypatch, [schedule])
+
+    asyncio.run(
+        sch_001(
+            _FakeConnection(),
+            database_url="postgresql://fake",
+            credentials=_CREDENTIALS,
+            now=_NOW,
+        )
+    )
+
+    assert [call["keywords"] for call in calls] == [["우주·천문"], ["스페이스X"]]
+    assert [call["target_key"] for call in calls] == [
+        "taxonomy:v1:space",
+        "taxonomy:v1:space",
+    ]
+    # 키워드가 적으면 그만큼 몫이 커진다 — 라벨 7 + 키워드 3 = 10으로 총량 유지.
+    assert [call["limit_per_provider"] for call in calls] == [7, 3]
+    assert sum(call["limit_per_provider"] for call in calls) == 10
 
 
 def test_next_collection_run_at_follows_cron() -> None:
@@ -115,6 +255,30 @@ def test_first_run_collects_without_waiting_for_cron(
     assert calls[0]["providers"] == ["naver"]
     assert calls[0]["language"] == "ko"
     assert calls[0]["naver_client_id"] == "id"
+
+
+def test_collection_records_run_under_the_requesting_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """수집 실행을 지시한 Source의 Key를 Worker로 넘기는지 검증한다.
+
+    Provider 이름으로 되돌리면 실행 이력이 `latest-{provider}`에만 쌓여,
+    Cron 주기·일일 한도 판정이 쓰는 마지막 실행 시각이 영영 비어 있게 된다.
+    """
+    schedule = _schedule(last_started_at=None)
+    schedule = replace(schedule, source_key="interest-taxonomy-google-news")
+    calls = _patch(monkeypatch, [schedule])
+
+    asyncio.run(
+        sch_002(
+            _FakeConnection(),  # type: ignore[arg-type]
+            database_url="postgresql://fake",
+            credentials=_CREDENTIALS,
+            now=_NOW,
+        )
+    )
+
+    assert calls[0]["source_key"] == "interest-taxonomy-google-news"
 
 
 def test_each_keyword_is_collected_as_its_own_query(

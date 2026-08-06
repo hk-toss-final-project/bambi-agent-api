@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import threading
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 from typing import Any
@@ -100,7 +101,7 @@ def test_content_fetch_saves_body_and_isolates_failure(
             resolved_url="https://a/final",
             title="본문 제목",
             published_time="2026-07-20T00:00:00Z",
-            markdown="# 전체 본문",
+            markdown="# 전체 본문. " + "기사 본문 문장입니다. " * 30,
         )
 
     results = asyncio.run(
@@ -140,7 +141,7 @@ def test_content_fetch_returns_empty_when_no_pending(
                 resolved_url="",
                 title="",
                 published_time=None,
-                markdown="x",
+                markdown="본문 문장입니다. " * 30,
             ),
         )
     )
@@ -222,7 +223,7 @@ def test_youtube_document_without_transcript_is_failed(
                 resolved_url="",
                 title="",
                 published_time=None,
-                markdown="x",
+                markdown="본문 문장입니다. " * 30,
             ),
             transcript_fetcher=lambda _: None,
         )
@@ -265,7 +266,7 @@ def test_youtube_document_with_too_short_transcript_is_failed(
                 resolved_url="",
                 title="",
                 published_time=None,
-                markdown="x",
+                markdown="본문 문장입니다. " * 30,
             ),
             transcript_fetcher=lambda _: "속보입니다",
         )
@@ -273,6 +274,114 @@ def test_youtube_document_with_too_short_transcript_is_failed(
 
     assert results[0]["status"] == "failed"
     assert results[0]["error_code"] == "YOUTUBE_TRANSCRIPT_TOO_SHORT"
+
+
+def test_bodies_are_downloaded_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """본문 내려받기가 순차가 아니라 동시에 일어나는지 검증한다.
+
+    수집기가 호출되면 곧바로 반환하지 않고 전원이 모일 때까지 기다리게 한다.
+    순차 실행이면 첫 번째가 영원히 기다려 Timeout이 나고, 동시 실행이면 통과한다.
+    """
+    document_count = 4
+    monkeypatch.setenv("GLOBAL_CONTENT_FETCH_CONCURRENCY", str(document_count))
+    connection = _FakeConnection(
+        [
+            [],  # set_system_job_scope (claim)
+            [
+                {"id": f"d{index}", "canonical_url": f"https://a/{index}"}
+                for index in range(document_count)
+            ],  # claim
+        ]
+        # 문서마다 set_system_job_scope + 저장 UPDATE 한 쌍
+        + [[], [{"id": "saved"}]] * document_count
+    )
+    _patch_connection(monkeypatch, connection)
+
+    barrier = threading.Barrier(document_count, timeout=5)
+
+    def blocking_fetcher(url: str) -> JinaReadResult:
+        """모든 문서가 동시에 도착해야만 통과하는 수집기."""
+        barrier.wait()
+        return JinaReadResult(
+            requested_url=url,
+            resolved_url=url,
+            title="제목",
+            published_time=None,
+            markdown="# 본문. " + "기사 본문 문장입니다. " * 30,
+        )
+
+    results = asyncio.run(
+        fetcher.run_global_content_fetch_batch(
+            database_url="postgresql://fake",
+            limit=document_count,
+            url_fetcher=blocking_fetcher,
+        )
+    )
+
+    assert len(results) == document_count
+    assert all(result["status"] == "completed" for result in results)
+
+
+def test_fetch_concurrency_is_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """동시 내려받기 수는 환경변수로 조정하고, 값이 잘못되면 기본값을 쓴다."""
+    monkeypatch.setenv("GLOBAL_CONTENT_FETCH_CONCURRENCY", "12")
+    assert fetcher._fetch_concurrency() == 12
+
+    monkeypatch.setenv("GLOBAL_CONTENT_FETCH_CONCURRENCY", "숫자아님")
+    assert fetcher._fetch_concurrency() == fetcher.DEFAULT_FETCH_CONCURRENCY
+
+    # 0이나 음수는 아무것도 내려받지 못하므로 최소 1로 올린다.
+    monkeypatch.setenv("GLOBAL_CONTENT_FETCH_CONCURRENCY", "0")
+    assert fetcher._fetch_concurrency() == 1
+
+    monkeypatch.delenv("GLOBAL_CONTENT_FETCH_CONCURRENCY")
+    assert fetcher._fetch_concurrency() == fetcher.DEFAULT_FETCH_CONCURRENCY
+
+
+def test_download_failure_does_not_cancel_other_documents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """한 문서의 내려받기 실패가 같은 Batch의 다른 문서를 취소하지 않는지 검증한다."""
+    connection = _FakeConnection(
+        [
+            [],  # set_system_job_scope (claim)
+            [
+                {"id": "d1", "canonical_url": "https://fail"},
+                {"id": "d2", "canonical_url": "https://ok"},
+            ],  # claim
+            [],  # set_system_job_scope (d1 실패 표시)
+            [],  # mark_failed UPDATE
+            [],  # set_system_job_scope (d2 저장)
+            [{"id": "d2"}],  # 저장 UPDATE
+        ]
+    )
+    _patch_connection(monkeypatch, connection)
+
+    def fetch_with_failure(url: str) -> JinaReadResult:
+        """첫 URL만 실패시킨다."""
+        if url == "https://fail":
+            raise JinaReadError("http_500", "server error")
+        return JinaReadResult(
+            requested_url=url,
+            resolved_url=url,
+            title="제목",
+            published_time=None,
+            markdown="# 본문. " + "기사 본문 문장입니다. " * 30,
+        )
+
+    results = asyncio.run(
+        fetcher.run_global_content_fetch_batch(
+            database_url="postgresql://fake",
+            limit=2,
+            url_fetcher=fetch_with_failure,
+        )
+    )
+
+    assert results[0]["status"] == "failed"
+    assert results[0]["error_code"] == "JINA_HTTP_500"
+    assert results[1]["status"] == "completed"
 
 
 def test_youtube_minimum_transcript_length_is_configurable(

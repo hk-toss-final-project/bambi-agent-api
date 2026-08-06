@@ -17,6 +17,15 @@ Worker(WORKER-001)로 넘긴다. 즉 이 모듈은 "무엇을 언제 돌릴지"�
 (global-collection-scheduling-proposal.md §4.3 실측). 따라서 Source의
 `keywords` 배열은 "한 질의"가 아니라 "각각 따로 돌릴 주제 목록"으로 다룬다.
 `quota_policy.daily_max_runs`도 이 실행 단위(= 외부 API 호출 수)를 센다.
+
+**관심 Topic은 라벨과 확장 검색어를 함께 돌린다.** 라벨 하나로만 검색하면 한
+사건·한 기관이 수집 예산을 독식한다(2026-08-05 실측: '경제·금융' 10건 중 4건이
+같은 세미나 기사, '우주·천문' 10건 중 8건이 지역 과학관 홍보). 검색어를 나누면
+질의마다 상위권만 모이므로 같은 예산으로 다루는 사건 수가 는다.
+
+라벨을 버리지 않고 함께 두는 이유는 **큐레이션 키워드가 부실한 Topic이 있기**
+때문이다(같은 실측: '우주·천문'의 `화성`이 경기도 화성시 교통사고를, `NASA`가
+한국어 기사 0건을 끌어왔다). 라벨 검색이 그런 Topic의 안전망 역할을 한다.
 """
 
 from dataclasses import dataclass, field
@@ -27,6 +36,7 @@ from croniter import CroniterBadCronError, croniter
 from psycopg import AsyncConnection
 
 from infrastructure.persistence.api import (
+    CollectionTargetPlan,
     GlobalCollectionSchedule,
     load_collection_schedules,
 )
@@ -61,6 +71,97 @@ class CollectionCredentials:
     naver_client_secret: str | None = None
     gdelt_base_url: str | None = None
     news_api_key: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CollectionQuery:
+    """수집 실행 단위 하나 — 검색어와 그 결과를 귀속할 Topic, 가져올 건수."""
+
+    query: str
+    limit: int
+    target_key: str | None = None
+
+
+def split_collection_budget(limit: int, keyword_count: int) -> tuple[int, int]:
+    """Topic 하나의 수집 예산을 라벨 검색과 확장 검색어에 나눈다.
+
+    총량은 늘리지 않는다. 본문 수집 처리량이 병목이라(Jina Reader 호출) 수집
+    건수를 늘리면 본문 없는 문서만 쌓인다. 그래서 "더 모으기"가 아니라 "같은
+    예산을 여러 질의에 나눠 쓰기"로 다룬다.
+
+    Args:
+        limit: 이 Topic에 배정된 총 수집 건수
+        keyword_count: 함께 돌릴 확장 검색어 수
+
+    Returns:
+        (라벨 검색으로 가져올 건수, 확장 검색어 하나당 가져올 건수).
+        확장 검색어가 없으면 두 번째 값이 0이다.
+    """
+    if limit <= 0:
+        return 0, 0
+    if keyword_count <= 0:
+        return limit, 0
+    # 라벨은 큐레이션 키워드가 부실한 Topic의 안전망이라 최소 1건은 남긴다.
+    usable = min(keyword_count, max(1, limit - 1))
+    # +2는 라벨 몫을 키워드 두 개 분량쯤 확보하려는 것이다. limit 10·키워드 6이면
+    # 키워드당 1건, 라벨 4건이 되어 합이 정확히 10이 된다.
+    per_keyword = max(1, limit // (usable + 2))
+    label = max(1, limit - per_keyword * usable)
+    return label, per_keyword
+
+
+def plan_target_queries(
+    target: CollectionTargetPlan, *, limit: int
+) -> list[CollectionQuery]:
+    """관심 Topic 하나를 라벨 검색과 확장 검색어 검색으로 펼친다.
+
+    어느 검색어로 모았든 결과는 같은 `target_key`에 귀속시킨다. 그래야 사용자가
+    고른 라벨로 리포트를 만들 때 확장 검색어로 모은 자료까지 찾을 수 있다
+    (generation_runtime.load_report_context의 토픽 가산점 참고).
+
+    Args:
+        target: 수집할 차례가 된 Topic과 큐레이션 검색어
+        limit: 이 Topic에 배정된 총 수집 건수
+
+    Returns:
+        실행할 검색 목록. 라벨 검색이 항상 맨 앞에 온다
+    """
+    label_limit, per_keyword = split_collection_budget(limit, len(target.keywords))
+    queries = [
+        CollectionQuery(
+            query=target.query, limit=label_limit, target_key=target.target_key
+        )
+    ]
+    if per_keyword <= 0:
+        return queries
+    usable = min(len(target.keywords), max(1, limit - 1))
+    for keyword in target.keywords[:usable]:
+        # 라벨과 글자가 같은 키워드는 같은 검색을 두 번 돌리는 셈이라 건너뛴다.
+        if keyword.casefold() == target.query.casefold():
+            continue
+        queries.append(
+            CollectionQuery(
+                query=keyword, limit=per_keyword, target_key=target.target_key
+            )
+        )
+    return queries
+
+
+def plan_schedule_queries(schedule: GlobalCollectionSchedule) -> list[CollectionQuery]:
+    """Source 스케줄 하나가 이번에 실행할 검색 목록을 만든다.
+
+    Source 고정 키워드(`keywords`)는 Topic 귀속이 없으므로 예전처럼 하나씩
+    그대로 돌린다. 관심 Topic(`targets`)만 라벨·확장 검색어로 펼친다.
+    """
+    queries = [
+        CollectionQuery(query=keyword, limit=schedule.limit_per_provider)
+        for keyword in schedule.keywords
+    ]
+    for target in schedule.targets:
+        queries.extend(
+            plan_target_queries(target, limit=schedule.limit_per_provider)
+        )
+    return queries
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +235,7 @@ def _evaluate_schedule(
             )
         if not force and next_run_at > _as_aware(now):
             return "다음 실행 시각 전입니다.", next_run_at
-    if not schedule.keywords:
+    if not schedule.keywords and not schedule.targets:
         return "수집 키워드가 비어 있습니다.", next_run_at
     if (
         schedule.daily_max_runs is not None
@@ -186,14 +287,14 @@ async def collect_schedule_keywords(
         else schedule.daily_max_runs - schedule.runs_today
     )
     results: list[CollectionScheduleResult] = []
-    for keyword in schedule.keywords:
+    for planned in plan_schedule_queries(schedule):
         if remaining is not None and remaining <= 0:
             results.append(
                 CollectionScheduleResult(
                     provider=schedule.provider,
                     source_key=schedule.source_key,
                     status="skipped",
-                    keyword=keyword,
+                    keyword=planned.query,
                     reason=(
                         f"오늘 실행 한도 {schedule.daily_max_runs}회를 채웠습니다."
                     ),
@@ -204,15 +305,23 @@ async def collect_schedule_keywords(
         # 키워드를 하나씩 넘겨야 주제가 섞인 단일 질의가 되지 않는다.
         collected = await worker_001(
             database_url=database_url,
-            keywords=[keyword],
+            keywords=[planned.query],
             providers=[schedule.provider],
-            limit_per_provider=schedule.limit_per_provider,
+            limit_per_provider=planned.limit,
             language=schedule.language,
             naver_client_id=credentials.naver_client_id,
             naver_client_secret=credentials.naver_client_secret,
             gdelt_base_url=credentials.gdelt_base_url,
             news_api_key=credentials.news_api_key,
             search_options=dict(schedule.search_options),
+            # 실행 이력을 이 수집을 지시한 Source에 남긴다. Provider 이름으로
+            # 되돌리면 Cron 주기·일일 한도 판정이 쓰는 "마지막 실행 시각"이
+            # 엉뚱한 Source에 쌓인다(persist_collected_articles 주석 참고).
+            source_key=schedule.source_key,
+            # 확장 검색어로 모은 문서도 원래 Topic에 연결한다. 이게 없으면
+            # 검색어 글자가 달라 연결이 끊기고, 그 Topic의 next_collection_at도
+            # 갱신되지 않아 매 tick 재검색된다.
+            target_key=planned.target_key,
         )
         if remaining is not None:
             remaining -= 1
@@ -221,7 +330,7 @@ async def collect_schedule_keywords(
                 provider=schedule.provider,
                 source_key=schedule.source_key,
                 status="completed",
-                keyword=keyword,
+                keyword=planned.query,
                 next_run_at=following_run_at,
                 results=collected,
             )

@@ -22,6 +22,7 @@ from infrastructure.persistence.api import (
     set_system_job_scope,
 )
 from infrastructure.sources.connectors.api import JinaReadResult, fetch_url_via_jina
+from shared.fetch_guard import ensure_fetch_is_readable
 from workers.features.batch_runner import run_job_batch
 
 type DictRow = dict[str, Any]
@@ -57,6 +58,14 @@ async def _process_job(
         raise ValueError("URL 수집 Job Payload에 원본 식별자가 없습니다.")
 
     fetched = await asyncio.to_thread(url_fetcher, url)
+    # 차단 안내 페이지를 본문으로 저장하지 않는다. 저장하면 LLM이 그 안내문을
+    # 읽고 엉뚱한 Wiki 노드를 만든다(2026-08-06 실측: 나무위키 URL이
+    # "namu.wiki — 악성 봇으로부터 보호하기 위해 보안 서비스를 사용하는 웹사이트"
+    # 노드를 만들었다. 원문은 Cloudflare의 "Just a moment..." 페이지였다).
+    #
+    # 여기서 예외를 올리면 Job이 실패로 기록돼 사용자가 원인을 볼 수 있다.
+    # 조용히 성공시키는 것보다 낫다.
+    ensure_fetch_is_readable(fetched.title, fetched.markdown)
     async with connection.transaction():
         await set_personal_wiki_scope(connection, user_id=job.user_id)
         result = await save_fetched_url_and_enqueue(

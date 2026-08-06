@@ -27,6 +27,7 @@ from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
 from shared.hashing import compute_content_hash
+from shared.search_text import build_search_body
 from infrastructure.sources.connectors.api import LatestArticle
 from shared.contracts import FeatureRequest, FeatureResult
 
@@ -70,6 +71,24 @@ class GlobalCollectionSchedule:
     # SNS Provider(youtube·reddit)의 검색 범위·정렬 설정. Worker의 기본값을
     # Source별로 덮어쓴다. connector_config.search_options에서 읽는다.
     search_options: dict[str, Any] = field(default_factory=dict)
+    # 이번에 수집할 차례가 된 관심 Topic 목록. taxonomy 수집 Source에서만 채워진다.
+    # `keywords`(Source 고정 검색어)와 달리 Topic·확장 검색어 정보를 함께 들고 있어,
+    # 수집한 문서를 원래 Topic에 연결할 수 있다.
+    targets: tuple[CollectionTargetPlan, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CollectionTargetPlan:
+    """수집할 차례가 된 관심 Topic 하나와 그 Topic의 확장 검색어.
+
+    `query`는 사용자가 고른 Topic 라벨이고 `keywords`는 taxonomy에 큐레이션된
+    보조 검색어다. 둘을 함께 돌려 한 사건·한 기관이 수집 예산을 독식하지 않게
+    한다(2026-08-05 실측: '경제·금융' 10건 중 4건이 같은 세미나 기사였다).
+    """
+
+    target_key: str
+    query: str
+    keywords: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,16 +124,48 @@ def _positive_int(value: object, default: int | None) -> int | None:
     return value if value > 0 else default
 
 
+def _clean_keywords(values: object) -> tuple[str, ...]:
+    """검색어 목록에서 빈 값·공백을 걷어내고 순서를 유지한 채 정규화한다."""
+    if not isinstance(values, (list, tuple)):
+        return ()
+    return tuple(
+        value.strip()
+        for value in values
+        if isinstance(value, str) and value.strip()
+    )
+
+
+def _to_targets(values: object) -> tuple[CollectionTargetPlan, ...]:
+    """due_targets JSON 배열을 수집 대상 값 객체로 변환한다.
+
+    target_key나 query가 비어 있는 항목은 수집할 수 없으므로 버린다.
+    """
+    if not isinstance(values, list):
+        return ()
+    targets: list[CollectionTargetPlan] = []
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        target_key = str(value.get("target_key") or "").strip()
+        query = str(value.get("query") or "").strip()
+        if not target_key or not query:
+            continue
+        targets.append(
+            CollectionTargetPlan(
+                target_key=target_key,
+                query=query,
+                keywords=_clean_keywords(value.get("keywords")),
+            )
+        )
+    return tuple(targets)
+
+
 def _to_schedule(row: DictRow) -> GlobalCollectionSchedule:
     """global_sources 조회 Row를 스케줄 설정 값 객체로 변환한다."""
     connector_config = row.get("connector_config") or {}
     quota_policy = row.get("quota_policy") or {}
     languages = row.get("languages") or []
-    keywords = tuple(
-        keyword.strip()
-        for keyword in (row.get("keywords") or [])
-        if keyword and keyword.strip()
-    )
+    keywords = _clean_keywords(row.get("keywords"))
     return GlobalCollectionSchedule(
         source_id=str(row["id"]),
         source_key=row["source_key"],
@@ -132,6 +183,7 @@ def _to_schedule(row: DictRow) -> GlobalCollectionSchedule:
         status=row.get("status") or "active",
         display_name=row.get("display_name") or "",
         search_options=dict(connector_config.get("search_options") or {}),
+        targets=_to_targets(row.get("targets")),
     )
 
 
@@ -144,11 +196,8 @@ _SCHEDULE_SELECT = """
             source.display_name,
             source.status,
             source.schedule_cron,
-            CASE
-                WHEN source.source_key = 'interest-taxonomy-google-news'
-                    THEN source.keywords || COALESCE(due_targets.keywords, '{}')
-                ELSE source.keywords
-            END AS keywords,
+            source.keywords,
+            COALESCE(due_targets.targets, '[]'::jsonb) AS targets,
             source.languages,
             source.quota_policy,
             source.connector_config,
@@ -169,18 +218,28 @@ _SCHEDULE_SELECT = """
               AND run.started_at >= date_trunc('day', clock_timestamp())
         ) AS today ON true
         LEFT JOIN LATERAL (
-            SELECT array_agg(
-                target.query
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'target_key', target.target_key,
+                    'query', target.query,
+                    'keywords', target.keywords
+                )
                 ORDER BY target.subscriber_count DESC, target.priority, target.target_key
-            )
-                AS keywords
+            ) AS targets
             FROM (
                 SELECT
                     collection_target.target_key,
                     collection_target.query,
                     collection_target.subscriber_count,
-                    collection_target.next_collection_at AS priority
+                    collection_target.next_collection_at AS priority,
+                    -- taxonomy Topic에 사람이 큐레이션해 둔 보조 검색어. custom
+                    -- Topic은 taxonomy 연결이 없어 빈 배열이 되고, 그때는 라벨
+                    -- 검색만 돈다(예전과 같은 동작).
+                    COALESCE(topic.keywords, '[]'::jsonb) AS keywords
                 FROM agent.interest_collection_targets AS collection_target
+                LEFT JOIN agent.interest_taxonomy_topics AS topic
+                  ON topic.taxonomy_version = collection_target.taxonomy_version
+                 AND topic.topic_id = collection_target.topic_id
                 WHERE collection_target.status = 'active'
                   AND collection_target.preferred_provider = source.connector_type
                   AND collection_target.next_collection_at <= clock_timestamp()
@@ -482,6 +541,8 @@ async def persist_collected_articles(
     query: str,
     articles: list[LatestArticle],
     content_status: str = "pending",
+    source_key: str | None = None,
+    target_key: str | None = None,
 ) -> dict[str, object]:
     """수집한 뉴스 기사 URL을 Global 수집 캐시에 중복 없이 저장한다.
 
@@ -495,10 +556,26 @@ async def persist_collected_articles(
         query: 이번 수집에 사용한 검색 키워드 문자열
         articles: Provider가 정규화한 최신 기사 목록
         content_status: 새로 저장한 문서의 초기 본문 상태 (기본 pending)
+        source_key: 실행 이력을 귀속할 Source Key. 정기 수집은 실행을 지시한
+            Source의 Key를 넘긴다. 생략하면 Provider 기본 Source에 기록한다
+        target_key: 이 수집을 지시한 수집 대상(Topic)의 Key. 넘기면 검색어
+            글자와 무관하게 이 Topic에 연결한다. 생략하면 검색어가 곧 Topic
+            질의라고 보고 글자로 대조한다(아래 주석 참고)
 
     Returns:
         source_id, run_id와 수집·생성·중복 건수, 저장된 문서 항목 목록
     """
+    # 실행 이력은 "이 수집을 지시한 Source"에 남아야 한다. 예전에는 무조건
+    # `latest-{provider}`에 기록해서, taxonomy 수집이 아무리 돌아도
+    # `interest-taxonomy-google-news`의 마지막 실행 시각이 영영 비어 있었다.
+    # 그러면 Scheduler는 그 Source를 "한 번도 안 돈 Source"로 보고 Cron 주기를
+    # 건너뛰며(collection._evaluate_schedule), 일일 실행 한도도 0으로 세어
+    # 아무 때도 걸리지 않는다. 즉 주기·쿼터 설정이 통째로 무력화된다.
+    #
+    # 이미 있는 Source는 updated_at만 건드린다. 표시명·주기·중지 여부는 Service가
+    # 스케줄 API(SCH-017~020)로 정하는 값이라, 수집이 돌 때마다 덮어쓰면 중지해 둔
+    # Source가 수동 실행 한 번에 되살아난다.
+    resolved_source_key = source_key or f"latest-{provider}"
     source_cursor = await connection.execute(
         """
         INSERT INTO agent.global_sources (
@@ -509,14 +586,11 @@ async def persist_collected_articles(
             connector_config
         ) VALUES (%s, %s, %s, 'active', %s)
         ON CONFLICT (source_key) DO UPDATE SET
-            connector_type = EXCLUDED.connector_type,
-            display_name = EXCLUDED.display_name,
-            status = 'active',
             updated_at = clock_timestamp()
         RETURNING id
         """,
         (
-            f"latest-{provider}",
+            resolved_source_key,
             provider,
             f"Latest {provider}",
             Jsonb({"managed_by": "global-source-collector"}),
@@ -596,6 +670,15 @@ async def persist_collected_articles(
             }
         )
 
+    # 문서를 어느 Topic에 묶을지는 **검색어 글자가 아니라 target_key**로 정한다.
+    #
+    # 글자로 대조하면 확장 검색어를 쓰는 순간 연결이 통째로 끊긴다. `우주·천문`
+    # Topic이 `스페이스X`로 수집하면 어느 Topic의 query와도 같지 않아 ① 문서가
+    # 어떤 Topic에도 연결되지 않고(리포트에서 토픽 가산점을 못 받아 잡음에 묻힌다)
+    # ② 아래 next_collection_at도 갱신되지 않아 그 Topic이 매 tick 재검색된다.
+    #
+    # target_key를 넘기지 않는 호출(수동 수집·Latest API 등)은 예전처럼 글자로
+    # 대조한다. 그 경로에는 확장 검색어가 없어 검색어가 곧 Topic 질의다.
     urls = [article.url.strip() for article in articles if article.url.strip()]
     if urls:
         await connection.execute(
@@ -606,25 +689,37 @@ async def persist_collected_articles(
             SELECT document.id, target.target_key, %s
             FROM agent.global_source_documents AS document
             JOIN agent.interest_collection_targets AS target
-              ON lower(btrim(target.query)) = lower(btrim(%s))
+              ON CASE
+                    WHEN %s IS NOT NULL THEN target.target_key = %s
+                    ELSE lower(btrim(target.query)) = lower(btrim(%s))
+                 END
              AND target.status = 'active'
             WHERE document.canonical_url = ANY(%s)
             ON CONFLICT (global_source_document_id, target_key) DO NOTHING
             """,
-            (query, query, urls),
+            (query, target_key, target_key, query, urls),
         )
-        await connection.execute(
-            """
-            UPDATE agent.interest_collection_targets
-            SET
-                last_collected_at = clock_timestamp(),
-                next_collection_at = clock_timestamp()
-                    + make_interval(mins => refresh_interval_minutes)
-            WHERE status = 'active'
-              AND lower(btrim(query)) = lower(btrim(%s))
-            """,
-            (query,),
-        )
+
+    # 다음 수집 시각은 결과가 0건이어도 미룬다. 예전에는 URL이 하나라도 있을
+    # 때만 갱신해서, 검색 결과가 없는 Topic은 next_collection_at이 과거에 멈춘 채
+    # 계속 "수집할 차례"로 남았다. Scheduler tick(기본 60초)마다 같은 Topic을
+    # 다시 검색하게 되어, 아무것도 못 찾는 주제일수록 외부 API를 가장 많이
+    # 태우는 거꾸로 된 동작이 된다.
+    await connection.execute(
+        """
+        UPDATE agent.interest_collection_targets
+        SET
+            last_collected_at = clock_timestamp(),
+            next_collection_at = clock_timestamp()
+                + make_interval(mins => refresh_interval_minutes)
+        WHERE status = 'active'
+          AND CASE
+                WHEN %s IS NOT NULL THEN target_key = %s
+                ELSE lower(btrim(query)) = lower(btrim(%s))
+              END
+        """,
+        (target_key, target_key, query),
+    )
 
     await connection.execute(
         """
@@ -730,6 +825,10 @@ async def save_fetched_article_content(
         저장한 캐시 문서 ID와 전환된 상태
     """
     content_hash = compute_content_hash(markdown)
+    # 검색 색인은 페이지 통짜가 아니라 기사 본문만 본다(마이그레이션 0012).
+    # 제목을 함께 넘겨 메뉴 구간을 건너뛴다 — 앞에서부터 자르면 메뉴가 긴 매체는
+    # 본문에 닿기 전에 잘린다(실측: 평균 6,255자가 메뉴였다).
+    search_body = build_search_body(markdown, title=title or "")
     cursor = await connection.execute(
         """
         UPDATE agent.global_source_documents
@@ -738,6 +837,7 @@ async def save_fetched_article_content(
             -- 제목을 그대로 둔다.
             title = COALESCE(%s, title),
             markdown = %s,
+            search_body = %s,
             content_hash = %s,
             resolved_url = %s,
             published_at = COALESCE(%s, published_at),
@@ -746,7 +846,15 @@ async def save_fetched_article_content(
         WHERE id = %s
         RETURNING id
         """,
-        (title, markdown, content_hash, resolved_url, published_at, document_id),
+        (
+            title,
+            markdown,
+            search_body,
+            content_hash,
+            resolved_url,
+            published_at,
+            document_id,
+        ),
     )
     updated = await cursor.fetchone()
     if updated is None:

@@ -1,8 +1,8 @@
-"""온보딩 관심사 씨앗의 Wiki 노드 생성 품질 벤치마크 실행기.
+"""온보딩 관심사 시드의 Wiki 노드 생성 품질 벤치마크 실행기.
 
-WSE-014가 합성한 씨앗 Markdown을 실제 Wiki 분류기(classify_source_for_wiki)에
+WSE-014가 합성한 시드 Markdown을 실제 Wiki 분류기(classify_source_for_wiki)에
 태워, 온보딩에서 고른 관심 주제가 Entity·Concept 노드로 추출되는지 채점한다.
-씨앗이 관심사 프로필(INT-011)로 파생되려면 이 노드 생성이 전제이기 때문이다.
+시드가 관심사 프로필(INT-011)로 파생되려면 이 노드 생성이 전제이기 때문이다.
 
 실제 OpenAI API를 호출하며 케이스별 성공·실패, 지연시간, 토큰 사용량, 사용자가
 전달한 백만 토큰당 단가 기준 예상 비용을 results/에 기록한다. 결과를 선별하지
@@ -65,7 +65,7 @@ def _load_cases() -> list[dict[str, Any]]:
 
 
 def _score(result: object, expected: dict[str, Any]) -> tuple[bool, list[str]]:
-    """씨앗에서 나온 노드가 관심 주제를 담았는지 채점한다."""
+    """시드에서 나온 노드가 관심 주제를 담았는지 채점한다."""
     errors: list[str] = []
     names = {
         str(getattr(item, "name", "") or getattr(item, "title", "")).casefold()
@@ -120,7 +120,7 @@ def main() -> None:
                     )
                 )
                 if seed is None:
-                    raise ValueError("씨앗이 합성되지 않았습니다(빈 선택).")
+                    raise ValueError("시드가 합성되지 않았습니다(빈 선택).")
                 result = classification.classify_source_for_wiki(
                     source_title=seed.title,
                     source_content=seed.content,

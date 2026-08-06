@@ -30,6 +30,7 @@ from .features.personal_wiki import (
     set_personal_wiki_scope,
 )
 from .features.global_source import (
+    CollectionTargetPlan,
     GlobalArticleToFetch,
     GlobalCollectionRunRecord,
     GlobalCollectionSchedule,

@@ -170,6 +170,127 @@ def test_persist_counts_conflict_insert_as_duplicate() -> None:
     assert result["items"] == []
 
 
+def test_persist_records_run_under_the_given_source_key() -> None:
+    """실행 이력을 호출자가 지정한 Source에 기록하는지 검증한다.
+
+    수집을 지시한 Source가 아니라 `latest-{provider}`에 기록하면, Scheduler가
+    보는 마지막 실행 시각이 비어 있어 Cron 주기·일일 한도가 무력화된다.
+    """
+    connection = _FakeConnection([[{"id": "source-1"}], [{"id": "run-1"}], []])
+
+    asyncio.run(
+        persist_collected_articles(
+            connection,  # type: ignore[arg-type]
+            provider="google_news",
+            query="반도체",
+            articles=[],
+            source_key="interest-taxonomy-google-news",
+        )
+    )
+
+    source_sql, source_params = connection.executed[0]
+    assert "INSERT INTO agent.global_sources" in source_sql
+    assert source_params is not None
+    assert source_params[0] == "interest-taxonomy-google-news"
+    # 이미 있는 Source의 표시명·중지 여부는 Service가 정하므로 덮어쓰지 않는다.
+    assert "display_name = EXCLUDED.display_name" not in source_sql
+    assert "status = 'active'," not in source_sql
+
+
+def test_persist_defaults_source_key_to_provider() -> None:
+    """source_key를 생략하면 Provider 기본 Source에 기록하는지 검증한다."""
+    connection = _FakeConnection([[{"id": "source-1"}], [{"id": "run-1"}]])
+
+    asyncio.run(
+        persist_collected_articles(
+            connection,  # type: ignore[arg-type]
+            provider="naver",
+            query="키워드",
+            articles=[],
+        )
+    )
+
+    _sql, source_params = connection.executed[0]
+    assert source_params is not None
+    assert source_params[0] == "latest-naver"
+
+
+def test_persist_advances_next_collection_even_with_no_results() -> None:
+    """검색 결과가 0건이어도 다음 수집 시각을 미루는지 검증한다.
+
+    미루지 않으면 결과가 없는 Topic이 계속 "수집할 차례"로 남아, tick마다 같은
+    검색을 반복하며 외부 API를 태운다.
+    """
+    connection = _FakeConnection([[{"id": "source-1"}], [{"id": "run-1"}]])
+
+    asyncio.run(
+        persist_collected_articles(
+            connection,  # type: ignore[arg-type]
+            provider="google_news",
+            query="아무도 안 쓰는 주제",
+            articles=[],
+        )
+    )
+
+    target_updates = [
+        params
+        for query, params in connection.executed
+        if "UPDATE agent.interest_collection_targets" in query
+    ]
+    # target_key를 넘기지 않았으므로 예전처럼 검색어 글자로 Topic을 찾는다.
+    assert target_updates == [(None, None, "아무도 안 쓰는 주제")]
+    # 저장할 문서가 없으므로 Topic 연결은 만들지 않는다.
+    assert not any(
+        "INSERT INTO agent.global_source_document_topics" in query
+        for query, _params in connection.executed
+    )
+
+
+def test_persist_links_documents_by_target_key_when_given() -> None:
+    """target_key를 넘기면 검색어 글자와 무관하게 그 Topic에 연결하는지 검증한다.
+
+    확장 검색어의 전제 조건이다. '우주·천문' Topic이 '스페이스X'로 수집할 때
+    글자로 대조하면 어느 Topic과도 맞지 않아 연결이 끊기고, 그 Topic의 다음
+    수집 시각도 갱신되지 않아 매 tick 재검색된다.
+    """
+    connection = _FakeConnection(
+        [
+            [{"id": "source-1"}],  # global_sources upsert
+            [{"id": "run-1"}],  # collection run
+            [{"id": "doc-1"}],  # 문서 저장
+        ]
+    )
+
+    asyncio.run(
+        persist_collected_articles(
+            connection,  # type: ignore[arg-type]
+            provider="google_news",
+            query="스페이스X",
+            articles=[
+                _article("https://news.example/spacex", title="스페이스X 매출 92% 증가")
+            ],
+            target_key="taxonomy:v1:space",
+        )
+    )
+
+    link_sql, link_params = next(
+        (sql, params)
+        for sql, params in connection.executed
+        if "INSERT INTO agent.global_source_document_topics" in sql
+    )
+    # 검색어는 이력으로 남기되, 어느 Topic에 묶을지는 target_key가 정한다.
+    assert link_params[0] == "스페이스X"
+    assert link_params[1] == "taxonomy:v1:space"
+    assert "target.target_key = %s" in link_sql
+
+    target_updates = [
+        params
+        for sql, params in connection.executed
+        if "UPDATE agent.interest_collection_targets" in sql
+    ]
+    assert target_updates == [("taxonomy:v1:space", "taxonomy:v1:space", "스페이스X")]
+
+
 def test_claim_returns_pending_articles() -> None:
     """pending 캐시 문서를 점유해 문서 ID·URL로 반환하는지 검증한다."""
     connection = _FakeConnection(
@@ -233,7 +354,10 @@ def test_save_fetched_content_fills_cache_document() -> None:
     assert update_params is not None
     assert update_params[0] == "본문 제목"
     assert update_params[1] == "# 전체 본문\n\n내용"
-    assert update_params[3] == "https://example.com/final"
+    # 원문 다음에 검색 색인용 정제본이 들어간다(마이그레이션 0012).
+    assert "search_body = %s" in update_sql
+    assert update_params[2]
+    assert update_params[4] == "https://example.com/final"
 
 
 def test_save_fetched_content_raises_for_missing_document() -> None:

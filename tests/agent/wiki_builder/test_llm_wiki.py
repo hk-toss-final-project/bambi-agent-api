@@ -25,6 +25,33 @@ def _fake_response(
     )
 
 
+def test_classify_onboarding_seed_materializes_unique_labels_as_concepts() -> None:
+    """온보딩 라벨을 순서대로 중복 없이 Concept 후보로 변환한다."""
+    result = llm_wiki.classify_onboarding_seed_for_wiki(
+        {"labels": ["AI·머신러닝", "반도체", "AI·머신러닝", " "]}
+    )
+
+    assert result.entities == []
+    assert [concept.title for concept in result.concepts] == [
+        "AI·머신러닝",
+        "반도체",
+    ]
+    assert [concept.definition for concept in result.concepts] == [
+        "사용자가 온보딩에서 직접 선택한 관심 주제: AI·머신러닝",
+        "사용자가 온보딩에서 직접 선택한 관심 주제: 반도체",
+    ]
+    assert all(concept.subtype == "term" for concept in result.concepts)
+
+
+@pytest.mark.parametrize("metadata", [{}, {"labels": []}, {"labels": [" "]}])
+def test_classify_onboarding_seed_rejects_missing_labels(
+    metadata: dict[str, object],
+) -> None:
+    """유효 라벨이 없는 손상된 온보딩 시드는 명시적으로 거절한다."""
+    with pytest.raises(ValueError, match="온보딩 시드"):
+        llm_wiki.classify_onboarding_seed_for_wiki(metadata)
+
+
 def test_parse_wiki_classification_maps_personal_knowledge_fields() -> None:
     """개인 지식 entity·concept 필드를 데이터 객체로 변환한다."""
     raw = _fake_response(

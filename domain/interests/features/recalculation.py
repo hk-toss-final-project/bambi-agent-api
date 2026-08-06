@@ -73,7 +73,7 @@ async def int_011(
         )
     documents = source.get("documents")
     document_rows = documents if isinstance(documents, list) else []
-    # 씨앗이 유일한 근거인 노드를 걸러내려면 온보딩에서 고른 라벨이 필요하다.
+    # 시드가 유일한 근거인 노드를 걸러내려면 온보딩에서 고른 라벨이 필요하다.
     seed_labels = source.get("onboarding_seed_labels")
     label_rows = seed_labels if isinstance(seed_labels, (list, tuple)) else ()
     candidate_pool = min(_MAX_CANDIDATE_POOL, limit * _CANDIDATE_POOL_MULTIPLIER)

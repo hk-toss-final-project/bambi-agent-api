@@ -58,7 +58,9 @@ flowchart LR
   `agent.user_context_snapshots.attributes`에 함께 보존한다.
 - **콜드스타트 관심사 시드 (WSE-014, 자동)**: `signup_interests`가 있으면 이 컨텍스트
   수신 시 Agent가 온보딩 선택을 시드 Markdown으로 합성해 `onboarding_seed` 원본과
-  Personal Wiki Build Job으로 **자동 접수**한다. 빌드가 끝나면 기존 INT-011 훅이
+  Personal Wiki Build Job으로 **자동 접수**한다. Builder는 저장된 `labels`를 LLM 없이
+  결정적으로 Concept로 만들고, 이후 기존 Build·Snapshot·INT-011 경로를 재사용한다.
+  따라서 합성 문서 제목은 Wiki 노드가 되지 않는다. 빌드가 끝나면 기존 INT-011 훅이
   관심사 프로필을 파생시켜, 아무것도 저장하지 않은 신규 사용자도 관심사가 비지 않는다.
   Service의 추가 호출은 필요 없다. 이 접수는 컨텍스트 저장과 분리된 best-effort이며,
   선택 내용 기반 멱등이라 같은 온보딩이 반복 전달돼도 시드는 한 번만 만들어진다.

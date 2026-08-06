@@ -21,7 +21,7 @@ class _FakeRepository:
         seed_labels: Sequence[str] = (),
         seed_nodes: Sequence[Mapping[str, object]] = (),
     ) -> None:
-        """활성 Wiki Version 존재 여부와 노드 수·행동 신호·씨앗 노드를 구성한다."""
+        """활성 Wiki Version 존재 여부와 노드 수·행동 신호·시드 노드를 구성한다."""
         self._wiki_version_id = wiki_version_id
         self._node_count = node_count
         self._signals = list(signals)
@@ -103,7 +103,7 @@ def test_int_011_saves_at_most_the_requested_limit() -> None:
 
 
 def test_int_011_filters_seed_container_node_with_onboarding_labels() -> None:
-    """저장소가 준 온보딩 라벨로 씨앗 묶음 노드를 걸러내는지 검증한다."""
+    """저장소가 준 온보딩 라벨로 시드 묶음 노드를 걸러내는지 검증한다."""
     seed_node = {
         "document_kind": "concept",
         "document_key": "온보딩-관심-주제",

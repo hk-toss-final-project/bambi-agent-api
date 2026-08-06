@@ -174,6 +174,8 @@ async def run_global_source_collection_batch(
     gdelt_base_url: str | None = None,
     news_api_key: str | None = None,
     search_options: dict[str, object] | None = None,
+    source_key: str | None = None,
+    target_key: str | None = None,
 ) -> list[dict[str, object]]:
     """키워드로 뉴스·SNS Provider를 검색해 Global 수집 캐시에 저장한다.
 
@@ -191,6 +193,10 @@ async def run_global_source_collection_batch(
         gdelt_base_url: GDELT API 기본 URL
         news_api_key: NewsAPI Key
         search_options: SNS Provider의 검색 범위·정렬 설정 (기본값을 덮어쓴다)
+        source_key: 실행 이력을 귀속할 Source Key. 정기 수집은 실행을 지시한
+            Source의 Key를 넘긴다. 생략하면 Provider 기본 Source에 기록한다
+        target_key: 이 수집을 지시한 수집 대상(Topic)의 Key. 넘기면 검색어가
+            Topic 이름과 달라도 그 Topic에 연결한다(확장 검색어용)
 
     Returns:
         Provider별 수집·저장 결과 또는 실패 정보 목록
@@ -235,6 +241,8 @@ async def run_global_source_collection_batch(
                             provider=provider_name,
                             query=query,
                             articles=articles,
+                            source_key=source_key,
+                            target_key=target_key,
                         )
 
                 saved = await persist_articles()
@@ -274,6 +282,8 @@ async def worker_001(
     gdelt_base_url: str | None = None,
     news_api_key: str | None = None,
     search_options: dict[str, object] | None = None,
+    source_key: str | None = None,
+    target_key: str | None = None,
 ) -> list[dict[str, object]]:
     """[WORKER-001] Global Source Collector Worker.
 
@@ -300,4 +310,6 @@ async def worker_001(
         gdelt_base_url=gdelt_base_url,
         news_api_key=news_api_key,
         search_options=search_options,
+        source_key=source_key,
+        target_key=target_key,
     )

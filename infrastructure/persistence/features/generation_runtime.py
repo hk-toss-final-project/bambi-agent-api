@@ -20,7 +20,22 @@ type DictRow = dict[str, Any]
 
 
 class StaleContextVersionError(RuntimeError):
-    """저장된 사용자 Context보다 오래되거나 같은 Version 요청 오류."""
+    """저장된 사용자 Context보다 오래되거나 같은 Version 요청 오류.
+
+    현재 저장된 버전을 함께 담는다. Service는 자기 카운터로 버전을 매기는데 그
+    카운터가 Agent와 독립이라, 한 번 어긋나면 무엇을 보내도 계속 거절된다.
+    거절만 알려주면 Service가 맞출 방법이 없어 조회 API를 따로 만들거나 버전을
+    임의로 점프시켜야 한다. 거절과 함께 현재 값을 주면 한 번의 왕복으로 수렴한다.
+
+    (2026-08-06 실측: Service가 이 409를 "이미 최신"으로 삼켜, 온보딩 관심사가
+    Agent로 전달되지 않는데도 아무도 알지 못했다.)
+    """
+
+    def __init__(self, user_id: str, *, current_context_version: int) -> None:
+        """거절된 사용자와 현재 저장된 버전을 담는다."""
+        super().__init__(user_id)
+        self.user_id = user_id
+        self.current_context_version = current_context_version
 
 
 class UserContextRequiredError(RuntimeError):
@@ -91,7 +106,9 @@ async def upsert_user_context_snapshot(
     )
     current = await current_cursor.fetchone()
     if current is not None and context_version <= int(current["context_version"]):
-        raise StaleContextVersionError(user_id)
+        raise StaleContextVersionError(
+            user_id, current_context_version=int(current["context_version"])
+        )
     normalized_interests = [
         {
             "category": (
@@ -174,6 +191,7 @@ async def enqueue_report_generation_job(
     idempotency_key: str,
     topic: str,
     content_type: str,
+    report_type: str = "",
     language: str | None,
     scheduled_at: datetime | None = None,
     request_id: str,
@@ -207,6 +225,7 @@ async def enqueue_report_generation_job(
     job_payload = {
         "topic": topic,
         "content_type": content_type,
+        "report_type": report_type,
         "language": resolved_language,
         "change_history_enabled": change_history_enabled,
     }
@@ -272,7 +291,15 @@ async def enqueue_report_generation_job(
             content_type,
             context["plan"],
             resolved_language,
-            Jsonb({"retrieval": "personal-wiki-global-cache-keyword-v2"}),
+            # report_type은 Agent가 해석하지 않고 발행 시 그대로 돌려주기만
+            # 하는 값이라, 전용 컬럼 대신 기존 parameters jsonb에 보관한다
+            # (2026-08-06 이송우 협의: 값 정의는 Service가 소유).
+            Jsonb(
+                {
+                    "retrieval": "personal-wiki-global-cache-keyword-v2",
+                    "report_type": report_type,
+                }
+            ),
         ),
     )
     generation_request = await request_cursor.fetchone()
@@ -312,6 +339,23 @@ async def load_report_context(
     본 검색이 한 건도 못 찾으면 최근 문서를 0점으로 채워 주는 폴백 질의가 있다.
     폴백에도 같은 제외 조건이 필요하다 — 오히려 목차 파일이 이 경로로 더 자주
     들어온다.
+
+    **토픽 가산점(+1.0)은 검색어 글자가 아니라 수집 대상(Topic)으로 판정한다.**
+    텍스트 점수만으로는 관련 문서와 잡음이 갈리지 않기 때문에(실측: 간격 0.01
+    미만, retrieval-noise-measurement-2026-08-05.md) 이 가산점이 사실상 유일하게
+    작동하는 관련성 신호다.
+
+    그런데 사용자는 `우주·천문` 같은 **라벨**을 고르고, 수집은 `스페이스X`·`화성
+    탐사` 같은 **확장 검색어**로 돌린다. 글자만 대조하면 확장 검색어로 모은 자료가
+    전부 가산점을 못 받아, 정작 주제에 맞는 기사가 잡음과 같은 0.09 구간에 묻힌다.
+
+    그래서 두 갈래로 본다.
+
+      ① 이 검색어로 **직접** 수집한 문서        (`search_query` 일치)
+      ② 같은 **수집 대상**에 묶인 문서          (`interest_collection_targets.query` 일치)
+
+    ②가 라벨과 확장 검색어를 이어 준다. 수집이 어떤 검색어를 썼든 같은 Topic에
+    연결돼 있으면 사용자가 고른 라벨로 찾을 수 있다.
     """
     if not 1 <= top_k_per_scope <= 20:
         raise ValueError("Report Builder 검색 top_k는 1에서 20 사이여야 합니다.")
@@ -356,7 +400,7 @@ async def load_report_context(
                 COALESCE(cache.resolved_url, cache.canonical_url) AS url,
                 CASE WHEN topic_match.exact THEN 1.0 ELSE 0.0 END +
                 GREATEST(
-                    similarity(cache.markdown, %s),
+                    similarity(COALESCE(cache.search_body, cache.markdown), %s),
                     ts_rank(cache.search_vector, plainto_tsquery('simple', %s))
                 ) AS score
             FROM agent.global_source_documents AS cache
@@ -364,15 +408,20 @@ async def load_report_context(
                 SELECT EXISTS (
                     SELECT 1
                     FROM agent.global_source_document_topics AS mapped
+                    LEFT JOIN agent.interest_collection_targets AS target
+                      ON target.target_key = mapped.target_key
                     WHERE mapped.global_source_document_id = cache.id
-                      AND lower(btrim(mapped.search_query)) = lower(btrim(%s))
+                      AND (
+                            lower(btrim(mapped.search_query)) = lower(btrim(%s))
+                            OR lower(btrim(target.query)) = lower(btrim(%s))
+                      )
                 ) AS exact
             ) AS topic_match
             WHERE cache.content_status = 'fetched'
               AND cache.markdown IS NOT NULL
               AND (
                     topic_match.exact
-                    OR similarity(cache.markdown, %s) > 0.05
+                    OR similarity(COALESCE(cache.search_body, cache.markdown), %s) > 0.05
                     OR cache.search_vector @@ plainto_tsquery('simple', %s)
               )
         ), scored AS (
@@ -392,16 +441,17 @@ async def load_report_context(
         ORDER BY (namespace_key = 'global'), score DESC
         """,
         (
-            query,
-            query,
+            query,  # 개인 Wiki trigram
+            query,  # 개인 Wiki ts_rank
             namespace_key,
-            query,
-            query,
-            query,
-            query,
-            query,
-            query,
-            query,
+            query,  # 개인 Wiki WHERE trigram
+            query,  # 개인 Wiki WHERE ts_query
+            query,  # 풀 trigram
+            query,  # 풀 ts_rank
+            query,  # 토픽 일치 — 이 검색어로 직접 수집한 문서
+            query,  # 토픽 일치 — 같은 수집 대상(Topic)에 묶인 문서
+            query,  # 풀 WHERE trigram
+            query,  # 풀 WHERE ts_query
             top_k_per_scope,
         ),
     )
@@ -546,6 +596,7 @@ async def persist_report_generation(
     contexts: Sequence[ReportContextDocument],
     latency_ms: int,
     review_outcome: str = "",
+    review_problem: str = "",
 ) -> dict[str, object]:
     """생성 Run·후보·Citation·Publish Snapshot·Outbox를 한 트랜잭션에 저장한다.
 
@@ -557,7 +608,7 @@ async def persist_report_generation(
     """
     request_cursor = await connection.execute(
         """
-        SELECT id, topic
+        SELECT id, topic, parameters
         FROM agent.generation_requests
         WHERE job_id = %s AND user_id = %s
         FOR UPDATE
@@ -595,6 +646,7 @@ async def persist_report_generation(
                         context.reference: context.score for context in contexts
                     },
                     "review_outcome": review_outcome,
+                    "review_problem": review_problem,
                 }
             ),
         ),
@@ -722,6 +774,11 @@ async def persist_report_generation(
     # topic 1개로 생성되므로 항상 원소 1개짜리 목록이다. service 워커는 받은
     # 문자열을 그대로 저장·노출하므로 빈 문자열은 빈 태그로 보이게 된다.
     topic = str(generation_request["topic"] or "").strip()
+    # 요청에서 받은 그대로 돌려준다. Service는 요청과 Claim 시점이 떨어져 있어
+    # 이 값이 없으면 카드가 어떤 맥락에서 만들어졌는지 다시 짜맞춰야 한다
+    # (2026-08-06 이송우 협의). Agent는 해석하지 않는다.
+    parameters = generation_request.get("parameters") or {}
+    report_type = str(parameters.get("report_type") or "")
     # 요청 주제와 콘텐츠 태그를 분리해 싣는다(2026-08-05 이송우 협의).
     #
     #   generation_topic  왜 이 리포트가 만들어졌는지 (요청 원본)
@@ -739,6 +796,7 @@ async def persist_report_generation(
         "generation_topic": topic,
         "tags": [topic] if topic else [],
         "content_tags": list(generated.content_tags),
+        "report_type": report_type,
     }
     await connection.execute(
         """

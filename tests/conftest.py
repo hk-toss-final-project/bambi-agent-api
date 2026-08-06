@@ -133,7 +133,9 @@ class InMemoryAgentJobRepository:
         """단조 증가 버전만 허용하며 새 Context Snapshot을 저장한다."""
         current = self._contexts.get(user_id)
         if current is not None and context_version <= current.context_version:
-            raise StaleContextVersionError(user_id)
+            raise StaleContextVersionError(
+                user_id, current_context_version=current.context_version
+            )
         stored = StoredUserContextRecord(
             context_id=uuid4().hex,
             user_id=user_id,
@@ -277,7 +279,7 @@ class InMemoryAgentJobRepository:
         occurred_at: datetime | None,
         request_id: str,
     ) -> SubmittedSourceJob:
-        """온보딩 씨앗을 멱등 접수하고 Wiki Build Job과 원본 ID를 반환한다."""
+        """온보딩 시드를 멱등 접수하고 Wiki Build Job과 원본 ID를 반환한다."""
         record, _created = self._submit_job(
             feature_id="WSE-014",
             job_type="personal_wiki_build",
@@ -298,6 +300,7 @@ class InMemoryAgentJobRepository:
         idempotency_key: str,
         topic: str,
         content_type: str,
+        report_type: str = "",
         language: str | None,
         scheduled_at: datetime | None = None,
         request_id: str,
@@ -306,6 +309,8 @@ class InMemoryAgentJobRepository:
         """실제 저장소처럼 컨텍스트를 요구하며 생성 Job을 멱등 접수한다."""
         if user_id not in self._contexts:
             raise UserContextRequiredError(user_id)
+        # 라우트가 요청의 report_type을 저장소까지 전달하는지 확인하기 위해 남긴다.
+        self.last_report_type = report_type
         record, _created = self._submit_job(
             feature_id="SVC-008",
             job_type="report_generation",

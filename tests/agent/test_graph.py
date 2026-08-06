@@ -32,6 +32,8 @@ def _fake_source() -> SimpleNamespace:
         source_document_id="source-1",
         source_document_version_id="source-version-1",
         namespace_key="user/user-1",
+        source_type="web_clipping",
+        source_metadata={},
         title="원본 제목",
         raw_content="# 본문",
         description="설명",
@@ -39,6 +41,16 @@ def _fake_source() -> SimpleNamespace:
         canonical_url="https://example.com",
         content_hash="hash",
     )
+
+
+def _fake_onboarding_source() -> SimpleNamespace:
+    """온보딩 선택 라벨을 담은 합성 원본 Version 레코드 대역."""
+    source = _fake_source()
+    source.source_type = "onboarding_seed"
+    source.source_metadata = {"labels": ["AI·머신러닝", "반도체", "AI·머신러닝"]}
+    source.title = "온보딩 관심 주제 시드"
+    source.raw_content = "# 온보딩 관심 주제 시드\n\nAI·머신러닝, 반도체"
+    return source
 
 
 def _fake_persisted() -> SimpleNamespace:
@@ -155,6 +167,82 @@ def test_run_personal_wiki_build_assembles_result(
     assert "embedding_count" not in result
     assert result["affected_documents"][0]["document_key"] == "entity-key"
     assert result["artifacts"]["index"] == "index"
+
+
+def test_run_personal_wiki_build_materializes_onboarding_labels_without_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """실제 Worker 그래프도 온보딩 라벨을 결정적으로 Concept로 만든다."""
+    captured: dict[str, Any] = {}
+    plan = SimpleNamespace(
+        index=SimpleNamespace(content="index"),
+        source_manifest=SimpleNamespace(content="manifest"),
+        log_entry=SimpleNamespace(content="log"),
+        extracted_relation_count=0,
+        isolated_node_count=2,
+        relation_warnings=[],
+    )
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """테스트에서 DB 사용자 Scope 설정을 생략한다."""
+        return None
+
+    async def fake_get_source(connection: Any, **kwargs: Any) -> SimpleNamespace:
+        """온보딩 합성 원본을 반환한다."""
+        return _fake_onboarding_source()
+
+    async def fake_listing(connection: Any, **kwargs: Any) -> list[object]:
+        """기존 Wiki 상태가 비어 있는 것으로 반환한다."""
+        return []
+
+    def fail_if_llm_is_called(**kwargs: Any) -> str:
+        """온보딩 시드에서 일반 LLM 분류가 실행되면 실패시킨다."""
+        raise AssertionError("온보딩 시드는 LLM 분류기를 호출하면 안 됩니다.")
+
+    async def fake_wba_003(**kwargs: Any) -> SimpleNamespace:
+        """결정적 분류 결과와 모델 표식을 기록한다."""
+        captured["classification"] = kwargs["classification"]
+        captured["model"] = kwargs["model"]
+        return plan
+
+    async def fake_pwiki_002(connection: Any, **kwargs: Any) -> SimpleNamespace:
+        """고정 저장 결과를 반환한다."""
+        return _fake_persisted()
+
+    async def fake_int_011(
+        repository: Any, user_id: str, *, limit: int = 20
+    ) -> dict[str, Any]:
+        """고정 관심사 재계산 결과를 반환한다."""
+        return {"version": 1}
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(
+        agent_graph, "get_user_source_document_version_for_agent", fake_get_source
+    )
+    monkeypatch.setattr(agent_graph, "list_existing_wiki_entries", fake_listing)
+    monkeypatch.setattr(agent_graph, "list_existing_wiki_relations", fake_listing)
+    monkeypatch.setattr(agent_graph, "classify_source_for_wiki", fail_if_llm_is_called)
+    monkeypatch.setattr(agent_graph, "wba_003", fake_wba_003)
+    monkeypatch.setattr(agent_graph, "pwiki_002", fake_pwiki_002)
+    monkeypatch.setattr(agent_graph, "int_011", fake_int_011)
+
+    result = asyncio.run(
+        agent_graph.run_personal_wiki_build(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            source_document_version_id="source-version-1",
+            job_id="job-1",
+            model="test-model",
+        )
+    )
+
+    classification = captured["classification"]
+    assert [concept.title for concept in classification.concepts] == [
+        "AI·머신러닝",
+        "반도체",
+    ]
+    assert captured["model"] == "deterministic:onboarding-seed-v1"
+    assert result["wiki_version_id"] == "wiki-version-1"
 
 
 def test_run_personal_wiki_build_survives_interest_recalc_failure(

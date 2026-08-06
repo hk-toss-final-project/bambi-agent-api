@@ -20,10 +20,10 @@ type DictRow = dict[str, Any]
 
 
 def _onboarding_seed_labels(rows: Sequence[DictRow]) -> list[str]:
-    """온보딩 씨앗 Version들이 담아 둔 선택 라벨을 중복 없이 모은다.
+    """온보딩 시드 Version들이 담아 둔 선택 라벨을 중복 없이 모은다.
 
-    선택이 바뀌면 새 씨앗 Version이 생기고 이전 씨앗에서 나온 Wiki 노드도 남아
-    있으므로, 특정 Version만 보지 않고 모든 씨앗의 라벨을 합집합으로 쓴다.
+    선택이 바뀌면 새 시드 Version이 생기고 이전 시드에서 나온 Wiki 노드도 남아
+    있으므로, 특정 Version만 보지 않고 모든 시드의 라벨을 합집합으로 쓴다.
     """
     labels: list[str] = []
     seen: set[str] = set()
@@ -53,7 +53,7 @@ async def load_interest_documents_for_user(
         user_id: 관심사를 계산할 사용자 ID
 
     Returns:
-        활성 Wiki Version 정보, 현재 문서 Row 목록과 온보딩 씨앗 선택 라벨
+        활성 Wiki Version 정보, 현재 문서 Row 목록과 온보딩 시드 선택 라벨
     """
     namespace_key = f"user/{user_id}"
     async with connection.transaction():
@@ -148,7 +148,7 @@ async def load_interest_documents_for_user(
             (namespace_key,),
         )
         documents = await document_cursor.fetchall()
-        # 온보딩 씨앗(WSE-014)이 담아 둔 선택 라벨. 씨앗에서만 나온 묶음 노드를
+        # 온보딩 시드(WSE-014)가 담아 둔 선택 라벨. 시드에서만 나온 묶음 노드를
         # 관심 후보에서 걸러내는 기준으로 INT-001에 넘긴다.
         label_cursor = await connection.execute(
             """

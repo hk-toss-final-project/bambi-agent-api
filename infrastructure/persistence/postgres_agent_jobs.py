@@ -169,7 +169,7 @@ class PostgresAgentJobRepository:
         occurred_at: datetime | None,
         request_id: str,
     ) -> SubmittedSourceJob:
-        """온보딩 씨앗 원본과 Wiki Build Job을 저장하고 조회 가능한 결과를 반환한다."""
+        """온보딩 시드 원본과 Wiki Build Job을 저장하고 조회 가능한 결과를 반환한다."""
         async with self._pool.connection() as connection:
             async with connection.transaction():
                 await set_personal_wiki_scope(connection, user_id=user_id)
@@ -185,7 +185,7 @@ class PostgresAgentJobRepository:
                 )
                 stored = await get_agent_job(connection, job_id=saved.job_id)
                 if stored is None:
-                    raise RuntimeError(f"저장한 씨앗 Job을 찾을 수 없습니다: {saved.job_id}")
+                    raise RuntimeError(f"저장한 시드 Job을 찾을 수 없습니다: {saved.job_id}")
         return SubmittedSourceJob(
             job=self._to_job_record(stored),
             source_document_id=saved.source_document_id,
@@ -365,6 +365,7 @@ class PostgresAgentJobRepository:
         idempotency_key: str,
         topic: str,
         content_type: str,
+        report_type: str = "",
         language: str | None,
         scheduled_at: datetime | None = None,
         request_id: str,
@@ -380,6 +381,7 @@ class PostgresAgentJobRepository:
                     idempotency_key=idempotency_key,
                     topic=topic,
                     content_type=content_type,
+                    report_type=report_type,
                     language=language,
                     scheduled_at=scheduled_at,
                     change_history_enabled=change_history_enabled,
@@ -622,6 +624,7 @@ class PostgresAgentJobRepository:
             # 검토자 판정을 응답으로 꺼낸다. 발행된 결과물만 봐서는 "검토를
             # 통과했다"와 "검토가 실패해 그냥 나갔다"를 구분할 수 없다.
             "review_outcome": str(run_metadata.get("review_outcome") or ""),
+            "review_problem": str(run_metadata.get("review_problem") or ""),
             "citations": [
                 {
                     **dict(citation),
