@@ -84,8 +84,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     )
     application.state.collection_scheduler_task = scheduler_task
     try:
-        async with application.state.mcp_server.session_manager.run():
-            yield
+        yield
     finally:
         await _stop_collection_scheduler(scheduler_task)
         application.state.collection_scheduler_task = None
@@ -138,19 +137,11 @@ def create_app(
         swagger_ui_parameters=SWAGGER_UI_PARAMETERS,
     )
     application.state.container = container or create_container(resolved_settings)
-    from mcp_server.main import build_mcp_http_app, build_mcp_server
-
-    mcp_server = build_mcp_server(resolved_settings, application.state.container)
-    mcp_http_app = build_mcp_http_app(mcp_server, resolved_settings)
-    application.state.mcp_server = mcp_server
     application.add_middleware(RequestTracingMiddleware)
     register_exception_handlers(application)
     register_routers(application, resolved_settings)
     if resolved_settings.docs_enabled:
         register_swagger_ui(application)
-    # 기존 FastAPI 경로를 먼저 평가하고 나머지를 MCP ASGI 앱으로 전달한다.
-    # MCP 앱 내부 경로가 /mcp이므로 공개 Endpoint도 정확히 /mcp이다.
-    application.mount("/", mcp_http_app, name="mcp")
     return application
 
 

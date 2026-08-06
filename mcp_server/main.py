@@ -14,7 +14,11 @@ from starlette.applications import Starlette
 
 from app.config import Settings, load_settings
 from app.dependencies import AppContainer, create_container
-from mcp_server.server.api import McpApiKeyVerifier
+from mcp_server.server.api import (
+    McpApiKeyVerifier,
+    McpBearerTokenVerifier,
+    McpOAuthTokenVerifier,
+)
 from mcp_server.tools.api import (
     WikiFetchOutput,
     WikiSearchOutput,
@@ -25,10 +29,21 @@ from mcp_server.tools.api import (
 
 def build_mcp_server(settings: Settings, container: AppContainer) -> MCPServer:
     """API Key 인증과 Personal Wiki `search`·`fetch` 도구를 등록한다."""
-    if container.mcp_api_key_repository is None:
-        verifier = _UnavailableApiKeyVerifier()
-    else:
-        verifier = McpApiKeyVerifier(container.mcp_api_key_repository)
+    api_key_verifier = (
+        McpApiKeyVerifier(container.mcp_api_key_repository)
+        if container.mcp_api_key_repository is not None
+        else None
+    )
+    oauth_verifier = None
+    if settings.internal_api_token is not None:
+        oauth_verifier = McpOAuthTokenVerifier(
+            service_api_base_url=settings.service_api_base_url,
+            introspection_path=settings.mcp_oauth_introspection_path,
+            internal_token=settings.internal_api_token.get_secret_value(),
+            resource_url=settings.mcp_server_url,
+            timeout_seconds=settings.mcp_oauth_timeout_seconds,
+        )
+    verifier = McpBearerTokenVerifier(api_key_verifier, oauth_verifier)
     server = MCPServer(
         name="bambi-personal-wiki",
         title="Bambi LLM Wiki",
@@ -121,14 +136,6 @@ def _wiki_reader(container: AppContainer) -> object:
     return container.wiki_graph_repository
 
 
-class _UnavailableApiKeyVerifier:
-    """DB가 없는 실행에서 모든 MCP Bearer Key를 안전하게 거부한다."""
-
-    async def verify_token(self, token: str) -> None:
-        """저장소가 없으므로 어떤 토큰도 인증하지 않는다."""
-        return None
-
-
 async def _run() -> None:
     """MCP 서버만 단독으로 실행하고 Agent DB 수명 주기를 관리한다."""
     settings = load_settings()
@@ -145,12 +152,20 @@ async def _run() -> None:
             transport_security=_transport_security(settings),
         )
     finally:
-        await container.shutdown()
+        shutdown_task = asyncio.create_task(container.shutdown())
+        try:
+            await asyncio.shield(shutdown_task)
+        except asyncio.CancelledError:
+            await shutdown_task
+            raise
 
 
 def main() -> None:
     """외부 Agent 연결용 MCP 서버를 단독 프로세스로 실행한다."""
-    asyncio.run(_run())
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        return
 
 
 if __name__ == "__main__":

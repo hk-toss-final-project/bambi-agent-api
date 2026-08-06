@@ -49,6 +49,13 @@ def test_create_app_can_disable_openapi_documents() -> None:
     assert application.openapi_url is None
 
 
+def test_agent_api_does_not_mount_public_mcp_endpoint(client: TestClient) -> None:
+    """내부 Agent API 프로세스가 외부 MCP 경로를 함께 노출하지 않는지 검증한다."""
+    response = client.post("/mcp")
+
+    assert response.status_code == 404
+
+
 def test_swagger_ui_is_available(client: TestClient) -> None:
     """Swagger UI가 활성화된 문서 경로에서 OpenAPI Schema를 참조하는지 검증한다."""
     response = client.get("/docs")
