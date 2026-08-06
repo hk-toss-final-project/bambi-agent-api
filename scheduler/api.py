@@ -6,8 +6,11 @@
 from .features.collection import (
     SCHEDULED_PROVIDERS,
     CollectionCredentials,
+    CollectionQuery,
     CollectionScheduleResult,
     next_collection_run_at,
+    plan_schedule_queries,
+    plan_target_queries,
     sch_001,
     sch_002,
     sch_003,
@@ -16,6 +19,7 @@ from .features.collection import (
     sch_006,
     sch_007,
     sch_008,
+    split_collection_budget,
 )
 from .features.wiki import WikiScheduleResult, sch_009, sch_010
 from .features.runtime import (
@@ -47,6 +51,7 @@ __all__ = [
     "PROVIDER_SCHEDULES",
     "SCHEDULED_PROVIDERS",
     "CollectionCredentials",
+    "CollectionQuery",
     "CollectionScheduleResult",
     "CollectionScheduleView",
     "CollectionScheduler",
@@ -55,6 +60,8 @@ __all__ = [
     "build_collection_credentials",
     "build_scheduler",
     "next_collection_run_at",
+    "plan_schedule_queries",
+    "plan_target_queries",
     "run_collection_scheduler_loop",
     "sch_001",
     "sch_002",
@@ -78,4 +85,5 @@ __all__ = [
     "sch_021",
     "sch_022",
     "sch_023",
+    "split_collection_budget",
 ]

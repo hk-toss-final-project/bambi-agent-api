@@ -237,12 +237,58 @@ def test_persist_advances_next_collection_even_with_no_results() -> None:
         for query, params in connection.executed
         if "UPDATE agent.interest_collection_targets" in query
     ]
-    assert target_updates == [("아무도 안 쓰는 주제",)]
+    # target_key를 넘기지 않았으므로 예전처럼 검색어 글자로 Topic을 찾는다.
+    assert target_updates == [(None, None, "아무도 안 쓰는 주제")]
     # 저장할 문서가 없으므로 Topic 연결은 만들지 않는다.
     assert not any(
         "INSERT INTO agent.global_source_document_topics" in query
         for query, _params in connection.executed
     )
+
+
+def test_persist_links_documents_by_target_key_when_given() -> None:
+    """target_key를 넘기면 검색어 글자와 무관하게 그 Topic에 연결하는지 검증한다.
+
+    확장 검색어의 전제 조건이다. '우주·천문' Topic이 '스페이스X'로 수집할 때
+    글자로 대조하면 어느 Topic과도 맞지 않아 연결이 끊기고, 그 Topic의 다음
+    수집 시각도 갱신되지 않아 매 tick 재검색된다.
+    """
+    connection = _FakeConnection(
+        [
+            [{"id": "source-1"}],  # global_sources upsert
+            [{"id": "run-1"}],  # collection run
+            [{"id": "doc-1"}],  # 문서 저장
+        ]
+    )
+
+    asyncio.run(
+        persist_collected_articles(
+            connection,  # type: ignore[arg-type]
+            provider="google_news",
+            query="스페이스X",
+            articles=[
+                _article("https://news.example/spacex", title="스페이스X 매출 92% 증가")
+            ],
+            target_key="taxonomy:v1:space",
+        )
+    )
+
+    link_sql, link_params = next(
+        (sql, params)
+        for sql, params in connection.executed
+        if "INSERT INTO agent.global_source_document_topics" in sql
+    )
+    # 검색어는 이력으로 남기되, 어느 Topic에 묶을지는 target_key가 정한다.
+    assert link_params[0] == "스페이스X"
+    assert link_params[1] == "taxonomy:v1:space"
+    assert "target.target_key = %s" in link_sql
+
+    target_updates = [
+        params
+        for sql, params in connection.executed
+        if "UPDATE agent.interest_collection_targets" in sql
+    ]
+    assert target_updates == [("taxonomy:v1:space", "taxonomy:v1:space", "스페이스X")]
 
 
 def test_claim_returns_pending_articles() -> None:

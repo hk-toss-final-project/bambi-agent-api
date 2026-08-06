@@ -306,6 +306,23 @@ async def load_report_context(
     본 검색이 한 건도 못 찾으면 최근 문서를 0점으로 채워 주는 폴백 질의가 있다.
     폴백에도 같은 제외 조건이 필요하다 — 오히려 목차 파일이 이 경로로 더 자주
     들어온다.
+
+    **토픽 가산점(+1.0)은 검색어 글자가 아니라 수집 대상(Topic)으로 판정한다.**
+    텍스트 점수만으로는 관련 문서와 잡음이 갈리지 않기 때문에(실측: 간격 0.01
+    미만, retrieval-noise-measurement-2026-08-05.md) 이 가산점이 사실상 유일하게
+    작동하는 관련성 신호다.
+
+    그런데 사용자는 `우주·천문` 같은 **라벨**을 고르고, 수집은 `스페이스X`·`화성
+    탐사` 같은 **확장 검색어**로 돌린다. 글자만 대조하면 확장 검색어로 모은 자료가
+    전부 가산점을 못 받아, 정작 주제에 맞는 기사가 잡음과 같은 0.09 구간에 묻힌다.
+
+    그래서 두 갈래로 본다.
+
+      ① 이 검색어로 **직접** 수집한 문서        (`search_query` 일치)
+      ② 같은 **수집 대상**에 묶인 문서          (`interest_collection_targets.query` 일치)
+
+    ②가 라벨과 확장 검색어를 이어 준다. 수집이 어떤 검색어를 썼든 같은 Topic에
+    연결돼 있으면 사용자가 고른 라벨로 찾을 수 있다.
     """
     if not 1 <= top_k_per_scope <= 20:
         raise ValueError("Report Builder 검색 top_k는 1에서 20 사이여야 합니다.")
@@ -358,8 +375,13 @@ async def load_report_context(
                 SELECT EXISTS (
                     SELECT 1
                     FROM agent.global_source_document_topics AS mapped
+                    LEFT JOIN agent.interest_collection_targets AS target
+                      ON target.target_key = mapped.target_key
                     WHERE mapped.global_source_document_id = cache.id
-                      AND lower(btrim(mapped.search_query)) = lower(btrim(%s))
+                      AND (
+                            lower(btrim(mapped.search_query)) = lower(btrim(%s))
+                            OR lower(btrim(target.query)) = lower(btrim(%s))
+                      )
                 ) AS exact
             ) AS topic_match
             WHERE cache.content_status = 'fetched'
@@ -386,16 +408,17 @@ async def load_report_context(
         ORDER BY (namespace_key = 'global'), score DESC
         """,
         (
-            query,
-            query,
+            query,  # 개인 Wiki trigram
+            query,  # 개인 Wiki ts_rank
             namespace_key,
-            query,
-            query,
-            query,
-            query,
-            query,
-            query,
-            query,
+            query,  # 개인 Wiki WHERE trigram
+            query,  # 개인 Wiki WHERE ts_query
+            query,  # 풀 trigram
+            query,  # 풀 ts_rank
+            query,  # 토픽 일치 — 이 검색어로 직접 수집한 문서
+            query,  # 토픽 일치 — 같은 수집 대상(Topic)에 묶인 문서
+            query,  # 풀 WHERE trigram
+            query,  # 풀 WHERE ts_query
             top_k_per_scope,
         ),
     )

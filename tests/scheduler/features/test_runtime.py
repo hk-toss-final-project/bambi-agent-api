@@ -77,6 +77,9 @@ def _settings(**overrides: Any) -> Settings:
         "news_api_key": SecretStr("news-key"),
         "gdelt_base_url": "https://gdelt.example",
         "collection_scheduler_tick_seconds": 120,
+        # 기본값과 다른 값을 명시해, 이 테스트가 "설정이 Scheduler로 전달되는가"를
+        # 보게 한다. 기본값을 그대로 쓰면 기본값이 바뀔 때마다 테스트가 깨진다.
+        "collection_content_fetch_limit": 7,
     }
     values.update(overrides)
     return Settings(**values)
@@ -104,7 +107,7 @@ def test_build_scheduler_reads_credentials_from_settings() -> None:
 
     assert scheduler.database_url == "postgresql://fake"
     assert scheduler.tick_seconds == 120
-    assert scheduler.content_fetch_limit == 5
+    assert scheduler.content_fetch_limit == 7
     assert scheduler.credentials == CollectionCredentials(
         naver_client_id="id",
         naver_client_secret="secret",
@@ -222,7 +225,7 @@ def test_run_once_fetches_pending_content_after_collection(
 
     results = asyncio.run(build_scheduler(_settings()).run_once(now=_NOW))
 
-    assert calls == [{"database_url": "postgresql://fake", "limit": 5}]
+    assert calls == [{"database_url": "postgresql://fake", "limit": 7}]
     content = results[-1]
     assert content.provider == runtime.CONTENT_FETCH_STEP
     assert content.status == "completed"

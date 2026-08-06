@@ -261,6 +261,41 @@ def test_report_context_search_excludes_wiki_schema_documents() -> None:
         assert "document.document_kind <> 'schema'" in sql
 
 
+def test_report_context_gives_topic_bonus_through_collection_target() -> None:
+    """토픽 가산점을 검색어 글자가 아니라 수집 대상(Topic)으로도 판정한다.
+
+    사용자는 '우주·천문' 같은 라벨을 고르는데 수집은 '스페이스X' 같은 확장
+    검색어로 돌린다. 글자만 대조하면 확장 검색어로 모은 자료가 전부 가산점을
+    잃어, 주제에 맞는 기사가 잡음과 같은 점수대에 묻힌다.
+    """
+    from infrastructure.persistence.features.generation_runtime import (
+        load_report_context,
+    )
+
+    connection = _FakeConnection([[], []])
+
+    asyncio.run(
+        load_report_context(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            query="우주·천문",
+        )
+    )
+
+    main_sql, main_params = connection.executed[0]
+    # ① 이 검색어로 직접 수집한 문서
+    assert "lower(btrim(mapped.search_query)) = lower(btrim(%s))" in main_sql
+    # ② 같은 수집 대상에 묶인 문서 — 라벨과 확장 검색어를 잇는 갈래
+    assert "agent.interest_collection_targets AS target" in main_sql
+    assert "lower(btrim(target.query)) = lower(btrim(%s))" in main_sql
+    # 두 갈래는 OR이어야 한다. AND면 확장 검색어 자료가 오히려 전부 탈락한다.
+    assert "OR lower(btrim(target.query))" in main_sql
+    # 토픽 판정 갈래가 하나 늘었으므로 검색어 파라미터도 9개에서 10개가 된다.
+    # SQL의 %s 개수와 어긋나면 psycopg가 실행 시점에 터지므로 함께 센다.
+    assert main_params.count("우주·천문") == 10
+    assert main_sql.count("%s") == len(main_params)
+
+
 def test_publish_payload_separates_generation_topic_from_content_tags() -> None:
     """요청 주제와 콘텐츠 태그를 분리해 싣는다.
 

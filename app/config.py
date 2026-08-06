@@ -103,12 +103,13 @@ class Settings(BaseModel):
         ),
     )
     collection_content_fetch_limit: int = Field(
-        default=5,
+        default=20,
         ge=0,
         le=100,
         description=(
             "Scheduler tick마다 Jina Reader로 본문을 채울 문서 수 (0이면 끔). "
-            "수집은 URL만 저장하므로 이 값이 0이면 본문 없는 문서만 쌓인다"
+            "수집은 URL만 저장하므로 이 값이 0이면 본문 없는 문서만 쌓인다. "
+            "동시 내려받기 수는 GLOBAL_CONTENT_FETCH_CONCURRENCY가 따로 정한다"
         ),
     )
 
