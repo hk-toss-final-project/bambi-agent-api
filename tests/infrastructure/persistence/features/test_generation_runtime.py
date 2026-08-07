@@ -399,6 +399,29 @@ def test_publish_payload_keeps_report_type_empty_for_older_requests() -> None:
     assert _publish_payload(connection)["report_type"] == ""
 
 
+def test_publish_payload_exposes_interest_bundle_origin() -> None:
+    """발행 Snapshot이 범주 리포트의 관심사·Profile·검색 키워드를 추적한다."""
+    connection = _connection_for_persist(
+        "생성형 AI",
+        {
+            "generation_scope": "INTEREST_BUNDLE",
+            "interest_id": "interest-1",
+            "interest_bundle": {
+                "profile_id": "profile-1",
+                "keywords": ["생성형 AI", "AI 에이전트", "RAG"],
+            },
+        },
+    )
+
+    _persist(connection)
+
+    payload = _publish_payload(connection)
+    assert payload["generation_scope"] == "INTEREST_BUNDLE"
+    assert payload["source_interest_id"] == "interest-1"
+    assert payload["interest_profile_id"] == "profile-1"
+    assert payload["bundle_keywords"] == ["생성형 AI", "AI 에이전트", "RAG"]
+
+
 def test_report_context_search_excludes_wiki_schema_documents() -> None:
     """Wiki 목차(schema) 문서는 본 검색과 폴백 검색 모두에서 제외한다.
 
@@ -522,6 +545,10 @@ def test_snapshot_row_mapping_exposes_every_payload_field_we_write() -> None:
             "tags": ["의존성 구조"],
             "content_tags": ["강한 결합", "DDD"],
             "report_type": "MORNING_BRIEFING",
+            "generation_scope": "INTEREST_BUNDLE",
+            "source_interest_id": "interest-1",
+            "interest_profile_id": "profile-1",
+            "bundle_keywords": ["의존성 구조", "DDD"],
         },
     }
 
@@ -531,6 +558,10 @@ def test_snapshot_row_mapping_exposes_every_payload_field_we_write() -> None:
     assert snapshot.tags == ["의존성 구조"]
     assert snapshot.content_tags == ["강한 결합", "DDD"]
     assert snapshot.report_type == "MORNING_BRIEFING"
+    assert snapshot.generation_scope == "INTEREST_BUNDLE"
+    assert snapshot.source_interest_id == "interest-1"
+    assert snapshot.interest_profile_id == "profile-1"
+    assert snapshot.bundle_keywords == ["의존성 구조", "DDD"]
 
 
 def test_snapshot_row_mapping_tolerates_snapshots_saved_before_new_fields() -> None:
@@ -556,6 +587,40 @@ def test_snapshot_row_mapping_tolerates_snapshots_saved_before_new_fields() -> N
     assert snapshot.tags == []
     assert snapshot.content_tags == []
     assert snapshot.report_type == ""
+    assert snapshot.generation_scope == "SINGLE_TOPIC"
+    assert snapshot.source_interest_id == ""
+    assert snapshot.interest_profile_id == ""
+    assert snapshot.bundle_keywords == []
+
+
+def test_snapshot_save_payload_preserves_interest_bundle_fields() -> None:
+    """개발 Seed 저장 경로도 범주 메타데이터를 JSON Payload에서 누락하지 않는다."""
+    from app.schemas.mvp import PublishSnapshotResponse
+    from infrastructure.persistence.postgres_publish_snapshots import (
+        PostgresPublishSnapshotRepository,
+    )
+
+    snapshot = PublishSnapshotResponse(
+        content_id="content-1",
+        user_id="user-1",
+        version=1,
+        snapshot_hash="h" * 64,
+        title="제목",
+        summary="요약",
+        body="본문",
+        generation_scope="INTEREST_BUNDLE",
+        source_interest_id="interest-1",
+        interest_profile_id="profile-1",
+        bundle_keywords=["생성형 AI", "RAG"],
+        created_at=datetime(2026, 8, 7, tzinfo=UTC),
+    )
+
+    payload = PostgresPublishSnapshotRepository._payload_from_snapshot(snapshot)
+
+    assert payload["generation_scope"] == "INTEREST_BUNDLE"
+    assert payload["source_interest_id"] == "interest-1"
+    assert payload["interest_profile_id"] == "profile-1"
+    assert payload["bundle_keywords"] == ["생성형 AI", "RAG"]
 
 
 def _run_metadata(connection: _FakeConnection) -> dict[str, Any]:

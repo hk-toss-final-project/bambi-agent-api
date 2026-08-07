@@ -8,6 +8,9 @@
 > - 검색어 합성 `domain/interests/features/expansion.py` `expand_topic_queries`
 > - 호출 `agent/graph.py` `load_context` → `agent/report_builder/features/live_sources.py`
 > - 스위치 `REPORT_QUERY_EXPANSION_LIMIT` (0이면 이전 동작으로 복귀)
+> - 특정 관심분야 리포트는 `INT-012`가 접수 시 활성 관심사 근거 문서의 1홉
+>   이웃을 Job에 스냅샷하고, Worker는 현재 그래프를 재조회하지 않고 그 묶음을
+>   저장 검색·단일 실시간 보강에 사용한다.
 >
 > 남은 선행 조건 3.2(고립 노드)는 미해결이다. 이웃이 없는 토픽은 기존과 똑같이
 > 검색어 하나로 동작하므로 회귀는 없고, 혜택만 받지 못한다.

@@ -811,6 +811,18 @@ async def persist_report_generation(
     # (2026-08-06 이송우 협의). Agent는 해석하지 않는다.
     parameters = generation_request.get("parameters") or {}
     report_type = str(parameters.get("report_type") or "")
+    generation_scope = str(parameters.get("generation_scope") or "SINGLE_TOPIC")
+    source_interest_id = str(parameters.get("interest_id") or "")
+    raw_interest_bundle = parameters.get("interest_bundle")
+    interest_bundle = (
+        raw_interest_bundle if isinstance(raw_interest_bundle, dict) else {}
+    )
+    interest_profile_id = str(interest_bundle.get("profile_id") or "")
+    bundle_keywords = [
+        str(keyword).strip()
+        for keyword in (interest_bundle.get("keywords") or [])
+        if str(keyword).strip()
+    ]
     # 요청 주제와 콘텐츠 태그를 분리해 싣는다(2026-08-05 이송우 협의).
     #
     #   generation_topic  왜 이 리포트가 만들어졌는지 (요청 원본)
@@ -829,6 +841,10 @@ async def persist_report_generation(
         "tags": [topic] if topic else [],
         "content_tags": list(generated.content_tags),
         "report_type": report_type,
+        "generation_scope": generation_scope,
+        "source_interest_id": source_interest_id,
+        "interest_profile_id": interest_profile_id,
+        "bundle_keywords": bundle_keywords,
     }
     await connection.execute(
         """

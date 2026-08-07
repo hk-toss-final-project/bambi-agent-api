@@ -505,6 +505,22 @@ class PublishSnapshotResponse(ImmutableSchema):
             "다시 짜맞추지 않도록 함께 싣는다."
         ),
     )
+    generation_scope: GenerationScope = Field(
+        default=GenerationScope.SINGLE_TOPIC,
+        description="리포트가 단일 주제 또는 활성 관심사 범주로 생성됐는지",
+    )
+    source_interest_id: str = Field(
+        default="",
+        description="INTEREST_BUNDLE 생성의 원천이 된 활성 관심사 UUID",
+    )
+    interest_profile_id: str = Field(
+        default="",
+        description="관심사 묶음을 확정한 활성 Profile UUID",
+    )
+    bundle_keywords: list[str] = Field(
+        default_factory=list,
+        description="루트 관심사부터 시작하는 범주 검색 키워드 스냅샷",
+    )
     created_at: datetime = Field(description="Snapshot 생성 시각")
 
 
