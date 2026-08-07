@@ -55,7 +55,7 @@ CHANGE_HISTORY_MIGRATION_PATH = (
     PROJECT_ROOT
     / "database"
     / "migrations"
-    / "0012_change_history_delta.sql"
+    / "0015_change_history_delta.sql"
 )
 MIGRATION_PATHS = (
     MIGRATION_PATH,
@@ -249,7 +249,8 @@ def test_change_history_migration_adds_delta_facts_without_touching_existing_tab
     assert "supersedes_fact_id uuid REFERENCES agent.change_history_facts(id)" in migration
     assert "change_history_fact_isolation" in migration
     assert "agent.current_user_id()" in migration
-    assert "VALUES (12," in migration
+    # 0012_global_source_search_body.sql과 번호가 겹쳐 0015로 옮겼다.
+    assert "VALUES (15," in migration
     assert "ALTER TABLE" not in migration.replace(
         "ALTER TABLE agent.change_history_runs ENABLE ROW LEVEL SECURITY", ""
     ).replace("ALTER TABLE agent.change_history_facts ENABLE ROW LEVEL SECURITY", "")
@@ -405,6 +406,56 @@ def test_migration_runner_applies_only_pending_versioned_files() -> None:
     assert 'if [ "$MODE" = "--check" ]' in runner
     assert 'DATABASE_URL="${AGENT_DATABASE_URL:-}"' in runner
     assert 'pg_isready -q -d "$DATABASE_URL"' in runner
+
+
+def _migration_files() -> list[Path]:
+    """실행 대상이 되는 Migration 파일을 Runner와 같은 이름 규칙으로 모은다."""
+    directory = PROJECT_ROOT / "database" / "migrations"
+    return sorted(path for path in directory.glob("[0-9][0-9][0-9][0-9]_*.sql"))
+
+
+def test_migration_file_numbers_are_unique() -> None:
+    """Migration 번호가 겹치지 않는지 검증한다.
+
+    Runner는 파일 이름의 숫자로만 적용 여부를 판단하고 schema_migrations.version은
+    Primary Key라, 같은 번호가 둘이면 뒤엣것이 "이미 적용됨"으로 조용히 건너뛰어져
+    운영 DB에 영영 반영되지 않는다(2026-08-07에 0012가 둘이라 실제로 발생).
+    """
+    numbers = [path.name.split("_")[0] for path in _migration_files()]
+    duplicates = sorted({number for number in numbers if numbers.count(number) > 1})
+
+    assert duplicates == [], f"Migration 번호가 겹칩니다: {duplicates}"
+
+
+def test_every_migration_records_its_own_version() -> None:
+    """모든 Migration이 파일 이름과 같은 version을 트랜잭션 안에서 기록하는지 검증한다.
+
+    Runner는 파일을 적용한 뒤 그 version이 schema_migrations에 남았는지 확인하고,
+    없으면 예외로 멈춘다. 기록을 빠뜨리면 DB 초기화 전체가 실패한다.
+    """
+    missing: list[str] = []
+    mismatched: list[str] = []
+    not_transactional: list[str] = []
+
+    for path in _migration_files():
+        expected = int(path.name.split("_")[0])
+        body = _read(path)
+        recorded = re.search(
+            r"INSERT INTO agent\.schema_migrations\s*\(version, description\)\s*"
+            r"VALUES\s*\((\d+)",
+            body,
+        )
+        if recorded is None:
+            missing.append(path.name)
+            continue
+        if int(recorded.group(1)) != expected:
+            mismatched.append(f"{path.name} -> {recorded.group(1)}")
+        if "BEGIN;" not in body or "COMMIT;" not in body:
+            not_transactional.append(path.name)
+
+    assert missing == [], f"schema_migrations 기록이 없습니다: {missing}"
+    assert mismatched == [], f"파일 이름과 기록된 version이 다릅니다: {mismatched}"
+    assert not_transactional == [], f"트랜잭션이 없습니다: {not_transactional}"
 
 
 def test_database_initializer_runs_migrations_before_dev_seeds() -> None:

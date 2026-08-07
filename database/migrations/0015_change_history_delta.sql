@@ -2,6 +2,11 @@
 -- 이 테이블은 "출력"이 아니라 다음 실행의 Base 재료다. publish_snapshots는
 -- Markdown 본문뿐이라 팩트 단위 대조에 쓸 수 없어서 별도 저장소를 둔다.
 -- 기존 테이블은 변경하지 않는 순수 additive Migration이다.
+--
+-- 원래 0012였으나 0012_global_source_search_body.sql과 번호가 겹쳐 0015로 옮겼다.
+-- Runner는 파일 이름의 숫자로 적용 여부를 판단해서, 같은 번호가 둘이면 뒤엣것을
+-- 조용히 건너뛴다(적용된 것으로 착각한다). 먼저 배포돼 실제 DB에 version 12로
+-- 기록된 쪽이 search_body라, 그쪽이 12를 유지하고 이 파일이 뒤로 물러났다.
 
 \set ON_ERROR_STOP on
 
@@ -89,6 +94,6 @@ CREATE TRIGGER set_change_history_facts_updated_at
     FOR EACH ROW EXECUTE FUNCTION agent.set_updated_at();
 
 INSERT INTO agent.schema_migrations (version, description)
-VALUES (12, 'Store change history delta facts and per-run delta metadata');
+VALUES (15, 'Store change history delta facts and per-run delta metadata');
 
 COMMIT;
