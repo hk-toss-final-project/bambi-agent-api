@@ -5,11 +5,11 @@
 | | 파일 | 포트 | 제공 |
 |---|---|---|---|
 | **Agent API** | `app/main.py` | 8000 | API(`/internal/v1/**`) + LLM Wiki Graph UI + 키워드 비서 웹 UI(`/assistant/**`) |
-| **MCP Server** | `mcp_server/main.py` | 8000 | 외부 AI용 읽기 전용 Streamable HTTP(`/mcp`) |
+| **MCP Server** | `mcp_server/main.py` | 8100 | 외부 AI용 읽기 전용 Streamable HTTP(`/mcp`) |
 
-두 프로세스는 동시에 같은 포트를 점유하는 구성이 아닙니다. 배포에서는 컨테이너를
-분리해 각각 8000 포트를 사용하고, Agent API는 내부 네트워크에만 두며 Nginx가
-MCP Server의 `/mcp`만 외부에 공개합니다.
+배포에서는 두 프로세스를 컨테이너로 분리하고 Agent API는 8000, MCP Server는
+8100 포트를 사용합니다. Agent API는 내부 네트워크에만 두며 Nginx가 MCP Server의
+`/mcp`만 외부에 공개합니다.
 
 MVP 핵심 파이프라인: 클리핑/URL → LLM Wiki → 관심사 → 외부 수집 → Report Builder 생성 → 발행 Snapshot.
 
@@ -93,8 +93,8 @@ uv run python -m mcp_server.main
 
 - `MCP_SERVER_URL`에는 외부 Client가 등록할 절대 URL을 지정합니다.
   운영에서는 공인 인증서가 적용된 `https://<domain>/mcp`를 사용합니다.
-- `MCP_AUTH_ISSUER_URL`은 별도 발급자가 없으면 `MCP_SERVER_URL`과 같은 값으로
-  둡니다.
+- `MCP_SERVER_PORT`는 MCP 전용 프로세스의 수신 포트이며 기본값은 `8100`입니다.
+- `MCP_AUTH_ISSUER_URL`에는 OAuth를 제공하는 Service API의 공개 Origin을 둡니다.
 - Bearer Key는 `wiki:read` Scope만 가지며 Key 소유자의 Personal Wiki만
   `search`·`fetch`할 수 있습니다.
 

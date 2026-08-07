@@ -137,6 +137,35 @@ def test_mcp_http_discovers_and_calls_personal_wiki_search() -> None:
     assert searched.json()["result"]["structuredContent"]["results"][0]["id"] == "document-1"
 
 
+def test_run_uses_configured_mcp_port(monkeypatch) -> None:
+    """전용 프로세스가 설정된 MCP 수신 포트로 서버를 기동한다."""
+    lifecycle: list[str] = []
+    run_options: dict[str, object] = {}
+
+    class FakeContainer:
+        async def startup(self) -> None:
+            lifecycle.append("startup")
+
+        async def shutdown(self) -> None:
+            lifecycle.append("shutdown")
+
+    class FakeServer:
+        async def run_streamable_http_async(self, **options: object) -> None:
+            run_options.update(options)
+
+    settings = Settings(mcp_server_port=8101)
+    container = FakeContainer()
+    server = FakeServer()
+    monkeypatch.setattr(mcp_main, "load_settings", lambda: settings)
+    monkeypatch.setattr(mcp_main, "create_container", lambda _: container)
+    monkeypatch.setattr(mcp_main, "build_mcp_server", lambda *_: server)
+
+    asyncio.run(mcp_main._run())
+
+    assert run_options["port"] == 8101
+    assert lifecycle == ["startup", "shutdown"]
+
+
 def test_main_handles_terminal_interrupt_without_traceback(monkeypatch) -> None:
     """전용 프로세스가 터미널 인터럽트를 정상 종료로 처리하는지 검증한다."""
     def interrupt(coroutine: object) -> None:
