@@ -143,7 +143,10 @@ def generate_report_content(
             f"내용:\n{context.content.strip()}"
         )
         if context_blocks and current_size + len(block) > _MAX_CONTEXT_CHARS:
-            break
+            # 이 근거 하나가 안 들어갈 뿐, 뒤에 더 작은 근거가 남아있을 수
+            # 있다(여러 주제 리포트에서 앞 주제 문서가 커도 뒤 주제가 통째로
+            # 유실되지 않도록). break가 아니라 continue로 계속 시도한다.
+            continue
         context_blocks.append(block)
         included_references.append(context.reference)
         current_size += len(block)
@@ -174,7 +177,8 @@ def generate_report_content(
     elif len(covered) > 1:
         topic_block = (
             f"주제: {topic}\n"
-            "다룰 소주제(각각 별도 섹션으로, 순서대로 빠짐없이):\n"
+            "다룰 소주제(각각 별도 섹션으로, 순서대로 빠짐없이. 소주제 제목이 길어도 "
+            "요약하지 말고 반드시 '### 소주제명' 형식의 Markdown 제목을 앞에 붙일 것):\n"
             + "".join(f"  - {item}\n" for item in covered)
         )
     else:
