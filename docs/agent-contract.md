@@ -206,9 +206,22 @@
   고정한다. `topic`·`topics`를 Service가 조립하지 않는다. 발행 Snapshot은
   `generation_scope`·`source_interest_id`·`interest_profile_id`·
   `bundle_keywords`로 실제 생성 범위를 돌려준다.
-  - ⚠️ **Service 쪽 호출부는 아직 없다.** agent 준비는 끝났지만, Service 최종 스코프(2026-08-06)에서
-    "리포트 3방식(범주/전체)"이 제외돼 트리거를 만들지 않았다. 쓰기로 정해지면 이 경로에 붙일
-    `report_type` 값도 그때 Service가 정해 여기 추가한다.
+  - **`generation_scope` 와 `report_type` 은 별개 축이다** (2026-08-07 정우석 확정).
+    `report_type`=생성 유형(누가 왜 걸었나), `generation_scope`=**검색 범위**(얼마나 넓게 찾나).
+    아침 브리핑을 `INTEREST_BUNDLE`로 넓혀도 **`report_type` 은 `MORNING_BRIEFING` 그대로**다 —
+    리포트 개수가 늘어나는 게 아니라, 지금 "위키 태그 1등 하나만 검색"하던 것을 연결 키워드까지
+    보게 해 **여전히 1건**을 만드는 구조이기 때문이다. 새 `report_type` 값을 만들지 않는다.
+  - **`interest_id` = Service `GET /api/wiki/tags` 응답의 `tagId`** — 별도 조회 API가 필요 없다.
+    Service 는 이미 이 값을 받고 있다. 2026-07-29 명명 결정으로 agent 필드 `interest_id`·`topic` 을
+    `tagId`·`tag` 로 리네임해 내려주고 있어 이름만 달라 보일 뿐 같은 값이다
+    (`WikiTag.tagId` = `@JsonAlias("interest_id")`).
+
+    | agent 필드 | Service 노출 이름 | 비고 |
+    |---|---|---|
+    | `interest_id` | `tagId` | `INTEREST_BUNDLE` 의 `interest_id` 로 그대로 넣으면 된다 |
+    | `topic` | `tag` | 온보딩에서 사용자가 고르는 "topic"과는 다른 개념이라 리네임했다 |
+
+    ⚠️ 온보딩 `selected_category_ids`·`selected_topic_ids` 와는 **다른 ID 공간**이다(위 본문 참고).
 - **온보딩 첫 리포트 = agent 자체 경로 (`ONBOARDING`)**
   - 위 시드(WSE-014)가 끝나면 **agent가 스스로** 첫 리포트 생성을 건다. **Service 트리거가 아니다** — `POST /generations` 호출이 없다.
   - 그래서 이 경로의 Snapshot은 `report_type`을 **agent가 `ONBOARDING`으로 채운다**(Service가 실어 보낼 값이 없으므로).
