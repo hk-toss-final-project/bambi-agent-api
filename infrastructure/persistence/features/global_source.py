@@ -689,8 +689,10 @@ async def persist_collected_articles(
             SELECT document.id, target.target_key, %s
             FROM agent.global_source_documents AS document
             JOIN agent.interest_collection_targets AS target
+              -- ::text 캐스트가 필요하다. 맨 파라미터를 IS NOT NULL에 그대로 쓰면
+              -- PostgreSQL이 타입을 정하지 못해 IndeterminateDatatype으로 실패한다.
               ON CASE
-                    WHEN %s IS NOT NULL THEN target.target_key = %s
+                    WHEN %s::text IS NOT NULL THEN target.target_key = %s::text
                     ELSE lower(btrim(target.query)) = lower(btrim(%s))
                  END
              AND target.status = 'active'
@@ -713,8 +715,9 @@ async def persist_collected_articles(
             next_collection_at = clock_timestamp()
                 + make_interval(mins => refresh_interval_minutes)
         WHERE status = 'active'
+          -- ::text 캐스트가 필요한 이유는 위 INSERT의 주석과 같다.
           AND CASE
-                WHEN %s IS NOT NULL THEN target_key = %s
+                WHEN %s::text IS NOT NULL THEN target_key = %s::text
                 ELSE lower(btrim(query)) = lower(btrim(%s))
               END
         """,
