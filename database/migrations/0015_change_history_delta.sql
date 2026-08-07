@@ -7,6 +7,8 @@
 -- Runner는 파일 이름의 숫자로 적용 여부를 판단해서, 같은 번호가 둘이면 뒤엣것을
 -- 조용히 건너뛴다(적용된 것으로 착각한다). 먼저 배포돼 실제 DB에 version 12로
 -- 기록된 쪽이 search_body라, 그쪽이 12를 유지하고 이 파일이 뒤로 물러났다.
+-- 새 DB에서는 파일명 정렬상 change_history 쪽이 version 12를 선점했을 수도 있다.
+-- 그 DB도 데이터를 지우지 않고 업그레이드할 수 있도록 모든 객체 생성을 멱등화한다.
 
 \set ON_ERROR_STOP on
 
@@ -14,7 +16,7 @@ BEGIN;
 
 -- 한 번의 변경점 추적 실행. "직전 보고서 시점"을 날짜가 아니라 이 실행 기록으로
 -- 잡는다(매일 돌지 않아도 델타가 끊기지 않게 한다).
-CREATE TABLE agent.change_history_runs (
+CREATE TABLE IF NOT EXISTS agent.change_history_runs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id text NOT NULL,
     topic text NOT NULL,
@@ -35,12 +37,12 @@ CREATE TABLE agent.change_history_runs (
     created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
-CREATE INDEX ix_change_history_runs_latest
+CREATE INDEX IF NOT EXISTS ix_change_history_runs_latest
     ON agent.change_history_runs (user_id, topic, created_at DESC);
 
 -- 팩트 하나 = (subject, attribute, fact_value) 세 요소. 중복·갱신 판정은
 -- (subject, attribute) 매칭으로 하고, fact_value가 다르면 갱신으로 본다.
-CREATE TABLE agent.change_history_facts (
+CREATE TABLE IF NOT EXISTS agent.change_history_facts (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     run_id uuid NOT NULL REFERENCES agent.change_history_runs(id) ON DELETE CASCADE,
     user_id text NOT NULL,
@@ -68,13 +70,13 @@ CREATE TABLE agent.change_history_facts (
 
 -- search_base_facts 도구와 Base 조회는 항상 (user_id, topic) 소속의 active
 -- 팩트만 본다. 다른 사용자·다른 토픽 팩트를 가리킨 오매칭은 조회에서 걸러진다.
-CREATE INDEX ix_change_history_facts_scope
+CREATE INDEX IF NOT EXISTS ix_change_history_facts_scope
     ON agent.change_history_facts (user_id, topic, status, created_at DESC);
-CREATE INDEX ix_change_history_facts_subject
+CREATE INDEX IF NOT EXISTS ix_change_history_facts_subject
     ON agent.change_history_facts (user_id, topic, subject, attribute);
 -- 도구의 query 검색은 subject·attribute·statement를 trigram으로 훑는다
 -- (임베딩·벡터스토어는 이 규모에 과설계라 쓰지 않는다).
-CREATE INDEX ix_change_history_facts_search
+CREATE INDEX IF NOT EXISTS ix_change_history_facts_search
     ON agent.change_history_facts USING gin (
         (subject || ' ' || attribute || ' ' || statement) gin_trgm_ops
     );
@@ -82,13 +84,17 @@ CREATE INDEX ix_change_history_facts_search
 ALTER TABLE agent.change_history_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE agent.change_history_facts ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS change_history_run_isolation ON agent.change_history_runs;
 CREATE POLICY change_history_run_isolation ON agent.change_history_runs
     USING (agent.has_system_scope() OR user_id = agent.current_user_id())
     WITH CHECK (agent.has_system_scope() OR user_id = agent.current_user_id());
+DROP POLICY IF EXISTS change_history_fact_isolation ON agent.change_history_facts;
 CREATE POLICY change_history_fact_isolation ON agent.change_history_facts
     USING (agent.has_system_scope() OR user_id = agent.current_user_id())
     WITH CHECK (agent.has_system_scope() OR user_id = agent.current_user_id());
 
+DROP TRIGGER IF EXISTS set_change_history_facts_updated_at
+    ON agent.change_history_facts;
 CREATE TRIGGER set_change_history_facts_updated_at
     BEFORE UPDATE ON agent.change_history_facts
     FOR EACH ROW EXECUTE FUNCTION agent.set_updated_at();

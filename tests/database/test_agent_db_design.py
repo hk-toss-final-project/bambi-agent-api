@@ -57,6 +57,12 @@ CHANGE_HISTORY_MIGRATION_PATH = (
     / "migrations"
     / "0015_change_history_delta.sql"
 )
+DUPLICATED_VERSION_REPAIR_MIGRATION_PATH = (
+    PROJECT_ROOT
+    / "database"
+    / "migrations"
+    / "0016_reconcile_duplicated_version_12.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
@@ -67,6 +73,7 @@ MIGRATION_PATHS = (
     GLOBAL_SOURCE_CACHE_MIGRATION_PATH,
     USER_CONTEXT_SELECTION_MIGRATION_PATH,
     CHANGE_HISTORY_MIGRATION_PATH,
+    DUPLICATED_VERSION_REPAIR_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
@@ -165,7 +172,9 @@ fi
 def test_migration_contains_all_agent_db_feature_tables() -> None:
     """DB-001부터 DB-030까지 담당할 핵심 Table이 Migration에 존재하는지 검증한다."""
     migration = "\n".join(_read(path) for path in MIGRATION_PATHS)
-    table_names = set(re.findall(r"CREATE TABLE agent\.([a-z_]+)", migration))
+    table_names = set(
+        re.findall(r"CREATE TABLE (?:IF NOT EXISTS )?agent\.([a-z_]+)", migration)
+    )
     required_tables = {
         "user_context_snapshots",
         "wiki_source_events",
@@ -235,16 +244,22 @@ def test_interest_taxonomy_migration_adds_snapshots_targets_and_subscriptions() 
     assert "VALUES (11," in migration
 
 
-def test_change_history_migration_adds_delta_facts_without_touching_existing_tables() -> None:
-    """델타 팩트·실행 테이블이 순수 additive로 추가되는지 검증한다.
+def test_change_history_migration_adds_delta_facts_idempotently() -> None:
+    """델타 팩트·실행 테이블을 기존 데이터 손실 없이 멱등 추가하는지 검증한다.
 
-    기존 테이블을 ALTER하면 토글 OFF 경로에도 영향이 갈 수 있으므로, 이
-    Migration에는 CREATE만 있어야 한다(0번 대전제).
+    중복된 version 12 중 change_history 쪽이 먼저 실행된 DB에서는 테이블·색인·
+    정책·Trigger가 이미 존재한다. 0015는 그 상태에서도 안전하게 version 15를
+    기록해야 하며 다른 기능 영역의 테이블은 변경하지 않는다.
     """
     migration = _read(CHANGE_HISTORY_MIGRATION_PATH)
 
-    assert "CREATE TABLE agent.change_history_runs" in migration
-    assert "CREATE TABLE agent.change_history_facts" in migration
+    assert "CREATE TABLE IF NOT EXISTS agent.change_history_runs" in migration
+    assert "CREATE TABLE IF NOT EXISTS agent.change_history_facts" in migration
+    assert "CREATE INDEX IF NOT EXISTS ix_change_history_runs_latest" in migration
+    assert "CREATE INDEX IF NOT EXISTS ix_change_history_facts_scope" in migration
+    assert "DROP POLICY IF EXISTS change_history_run_isolation" in migration
+    assert "DROP POLICY IF EXISTS change_history_fact_isolation" in migration
+    assert "DROP TRIGGER IF EXISTS set_change_history_facts_updated_at" in migration
     # 갱신 관계는 자기참조 링크로 남기고, before 문구는 이 링크로 DB에서 읽는다.
     assert "supersedes_fact_id uuid REFERENCES agent.change_history_facts(id)" in migration
     assert "change_history_fact_isolation" in migration
@@ -254,6 +269,20 @@ def test_change_history_migration_adds_delta_facts_without_touching_existing_tab
     assert "ALTER TABLE" not in migration.replace(
         "ALTER TABLE agent.change_history_runs ENABLE ROW LEVEL SECURITY", ""
     ).replace("ALTER TABLE agent.change_history_facts ENABLE ROW LEVEL SECURITY", "")
+
+
+def test_duplicated_version_repair_restores_skipped_search_body_schema() -> None:
+    """version 12를 delta가 선점한 DB의 누락된 검색 본문 Schema를 복구한다."""
+    migration = _read(DUPLICATED_VERSION_REPAIR_MIGRATION_PATH)
+
+    assert "information_schema.columns" in migration
+    assert "AS should_repair_search_body" in migration
+    assert r"\if :should_repair_search_body" in migration
+    assert "ADD COLUMN IF NOT EXISTS search_body text" in migration
+    assert "DROP COLUMN IF EXISTS search_vector" in migration
+    assert "coalesce(search_body, markdown, '')" in migration
+    assert "ix_global_source_documents_search_body_trgm" in migration
+    assert "VALUES (16," in migration
 
 
 def test_migration_defines_vector_search_and_rls_boundaries() -> None:
@@ -276,7 +305,9 @@ def test_migration_does_not_create_service_owned_tables() -> None:
     """Agent DB가 Service 계층 소유 Table을 생성하지 않는지 검증한다."""
     migration = _read(MIGRATION_PATH)
     service_owned_tables = {"users", "bookmarks", "cards", "feed_items", "likes"}
-    created_tables = set(re.findall(r"CREATE TABLE agent\.([a-z_]+)", migration))
+    created_tables = set(
+        re.findall(r"CREATE TABLE (?:IF NOT EXISTS )?agent\.([a-z_]+)", migration)
+    )
 
     assert created_tables.isdisjoint(service_owned_tables)
 
@@ -308,7 +339,9 @@ def test_table_catalog_documents_every_migration_table() -> None:
     """테이블 카탈로그가 Migration의 모든 Table을 정확히 한 번씩 문서화하는지 검증한다."""
     migration = "\n".join(_read(path) for path in MIGRATION_PATHS)
     catalog = _read(TABLE_CATALOG_PATH)
-    created_tables = set(re.findall(r"CREATE TABLE agent\.([a-z_]+)", migration))
+    created_tables = set(
+        re.findall(r"CREATE TABLE (?:IF NOT EXISTS )?agent\.([a-z_]+)", migration)
+    )
     catalog_rows = re.findall(r"^\| ([a-z][a-z_]*) \|", catalog, re.MULTILINE)
 
     assert len(catalog_rows) == len(set(catalog_rows))
@@ -322,7 +355,7 @@ def test_column_dictionary_documents_every_migration_column() -> None:
     for migration_path in MIGRATION_PATHS:
         migration = _read(migration_path)
         for match in re.finditer(
-            r"CREATE TABLE agent\.([a-z_]+) \((.*?)\n\);",
+            r"CREATE TABLE (?:IF NOT EXISTS )?agent\.([a-z_]+) \((.*?)\n\);",
             migration,
             re.DOTALL,
         ):
