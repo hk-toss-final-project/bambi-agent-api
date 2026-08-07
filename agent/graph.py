@@ -36,6 +36,7 @@ from agent.report_builder.api import (
     critic_enabled,
     is_pool_relevant,
     is_pool_sufficient,
+    merge_context_documents,
     research_agent_enabled,
     research_context,
     review_report,
@@ -301,6 +302,25 @@ def _report_topics(state: ReportGenerationState) -> list[str]:
     return [topic for topic in topics if topic] or [state["topic"]]
 
 
+def _interest_bundle_keywords(state: ReportGenerationState) -> list[str]:
+    """Job에 고정된 관심사 범주 검색 키워드를 루트 우선으로 반환한다."""
+    if state.get("generation_scope") != "INTEREST_BUNDLE":
+        return []
+    bundle = state.get("interest_bundle") or {}
+    raw_keywords = bundle.get("keywords") if isinstance(bundle, dict) else None
+    candidates = [state["topic"], *(raw_keywords or [])]
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for raw_keyword in candidates:
+        keyword = str(raw_keyword).strip()
+        marker = keyword.casefold()
+        if not keyword or marker in seen:
+            continue
+        seen.add(marker)
+        keywords.append(keyword)
+    return keywords
+
+
 def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
     """리포트 생성기 콘텐츠 생성 노드와 엣지를 조립해 컴파일된 그래프를 반환한다.
 
@@ -325,6 +345,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         notes: list[str] = []
         calls: list[dict[str, object]] = []
         collected_live = False
+        bundle_keywords = _interest_bundle_keywords(state)
         for topic in topics:
             intents[topic] = await to_thread(
                 resolve_topic_intent, topic, state["user_id"]
@@ -333,13 +354,15 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             if not research_agent_enabled():
                 continue
             try:
-                outcome = await research_context(
-                    connection,
-                    topic=topic,
-                    user_id=state["user_id"],
-                    topic_intent=intents[topic],
-                    model=state["model"],
-                )
+                research_kwargs: dict[str, Any] = {
+                    "topic": topic,
+                    "user_id": state["user_id"],
+                    "topic_intent": intents[topic],
+                    "model": state["model"],
+                }
+                if bundle_keywords and topic == state["topic"]:
+                    research_kwargs["planned_queries"] = bundle_keywords[1:]
+                outcome = await research_context(connection, **research_kwargs)
             except Exception:
                 # 주제 하나가 실패해도 나머지 주제는 계속 조사한다. 실패한 주제는
                 # load_context가 고정 경로로 다시 시도한다.
@@ -438,12 +461,22 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 len(state.get("research_calls") or []),
             )
             return await _finalize_contexts(state, researched)
+        bundle_keywords = _interest_bundle_keywords(state)
+        search_queries = bundle_keywords or [state["topic"]]
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=state["user_id"])
-            hybrid = await prag_003(
-                connection,
-                user_id=state["user_id"],
-                query=state["topic"],
+            search_groups = [
+                await prag_003(
+                    connection,
+                    user_id=state["user_id"],
+                    query=query,
+                )
+                for query in search_queries
+            ]
+            hybrid = (
+                merge_context_documents(*search_groups)
+                if len(search_groups) > 1
+                else list(search_groups[0])
             )
             # 풀 문서의 신선도는 같은 조회 Transaction에서 함께 읽는다 — Scope가
             # 이미 설정돼 있고, 왕복을 늘리지 않는다.
@@ -516,9 +549,13 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         already_collected_live = bool(state.get("research_collected_live"))
         skip_live = pool_is_enough or already_collected_live
         # 수집을 실제로 돌 때만 이웃을 조회한다 — 건너뛸 거면 DB 왕복이 낭비다.
-        related_keywords = (
-            [] if skip_live else await load_related_keywords(state["user_id"], state["topic"])
-        )
+        related_keywords = []
+        if not skip_live:
+            related_keywords = (
+                bundle_keywords[1:]
+                if state.get("generation_scope") == "INTEREST_BUNDLE"
+                else await load_related_keywords(state["user_id"], state["topic"])
+            )
         if already_collected_live and not pool_is_enough:
             logger.info(
                 "실시간 수집 생략: topic=%s 조사원이 이미 시도했다.", state["topic"]
@@ -685,6 +722,17 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
     async def generate(state: ReportGenerationState) -> dict[str, Any]:
         """Transaction 밖에서 LLM 생성을 실행하고 지연 시간을 기록한다."""
         started = monotonic()
+        generation_kwargs: dict[str, Any] = {
+            "topic": state["topic"],
+            "topics": _report_topics(state),
+            "content_type": state["content_type"],
+            "language": state["language"],
+            "contexts": state["contexts"],
+            "model": state["model"],
+            "correction": str(state.get("review_correction") or ""),
+        }
+        if state.get("generation_scope") == "INTEREST_BUNDLE":
+            generation_kwargs["interest_bundle"] = state.get("interest_bundle")
         summary = await report_008(
             FeatureRequest(
                 request_id=state["job_id"],
@@ -696,14 +744,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                     # 위키 검색 흐름은 건드리지 않고 생성 단계 안에서만 동작한다.
                     "implementation": lambda: to_thread(
                         generate_report_content_with_quality,
-                        topic=state["topic"],
-                        topics=_report_topics(state),
-                        content_type=state["content_type"],
-                        language=state["language"],
-                        contexts=state["contexts"],
-                        model=state["model"],
-                        # 검토자가 지적해 다시 들어온 경우 그 지시를 반영해 쓴다.
-                        correction=str(state.get("review_correction") or ""),
+                        **generation_kwargs,
                     )
                 },
             )
@@ -943,6 +984,8 @@ async def run_report_generation(
     language: str,
     model: str = "gpt-4.1-mini",
     change_history_enabled: bool = False,
+    generation_scope: str = "SINGLE_TOPIC",
+    interest_bundle: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Report Builder Generation 그래프를 실행하고 저장 결과 Payload를 반환한다.
 
@@ -960,6 +1003,8 @@ async def run_report_generation(
             "attempt_number": attempt_number,
             "topic": topic,
             "topics": list(topics or []),
+            "generation_scope": generation_scope,
+            "interest_bundle": dict(interest_bundle or {}),
             "content_type": content_type,
             "language": language,
             "model": model,

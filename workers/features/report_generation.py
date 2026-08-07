@@ -46,6 +46,13 @@ async def _process_job(
     # 어느 경로로 실행되든 결과가 같다. 이 키가 없는 기존 Job(플래그 도입 이전
     # 등록분)은 지금까지와 같은 생성 경로로 실행된다.
     change_history_enabled = bool(job.payload.get("change_history_enabled") or False)
+    generation_scope = str(job.payload.get("generation_scope") or "SINGLE_TOPIC")
+    raw_interest_bundle = job.payload.get("interest_bundle")
+    interest_bundle = (
+        dict(raw_interest_bundle) if isinstance(raw_interest_bundle, dict) else None
+    )
+    if generation_scope == "INTEREST_BUNDLE" and interest_bundle is None:
+        raise ValueError("INTEREST_BUNDLE Job Payload에 interest_bundle이 필요합니다.")
     feature_result = await report_001(
         FeatureRequest(
             request_id=job.job_id,
@@ -63,6 +70,8 @@ async def _process_job(
                     language=language,
                     model=model,
                     change_history_enabled=change_history_enabled,
+                    generation_scope=generation_scope,
+                    interest_bundle=interest_bundle,
                 )
             },
         )

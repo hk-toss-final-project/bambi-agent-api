@@ -7,7 +7,7 @@
 import json
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from agent.llm.api import complete, strip_json_fence
@@ -120,12 +120,16 @@ def generate_report_content(
     model: str = "gpt-4.1-mini",
     correction: str = "",
     topics: Sequence[str] = (),
+    interest_bundle: Mapping[str, object] | None = None,
 ) -> GeneratedReportContent:
     """개인 Wiki와 최신 Global 근거로 Report Builder 콘텐츠 JSON을 생성한다.
 
     correction이 주어지면(품질 재생성 시) 이전 생성의 문제를 교정하는 지시를
     프롬프트 앞부분에 넣는다. 같은 근거·프롬프트로 다시 생성하면 결과가 같으므로,
     무엇이 문제였는지 알려줘야 재생성이 실제로 나아진다.
+
+    interest_bundle이 있으면 연결 키워드를 독립 주제로 나누지 않고 루트 관심사를
+    설명하는 보조 관점으로만 사용한다.
     """
     if not contexts:
         raise ValueError("Report Builder 콘텐츠 생성에 사용할 검색 Context가 없습니다.")
@@ -147,9 +151,31 @@ def generate_report_content(
     # 주제가 여럿이면(아침 요약) 주제마다 섹션을 두게 한다. 근거는 이미 주제별로
     # 몫을 나눠 담겨 있지만, 지시가 없으면 LLM이 한 주제로 몰아 쓰고 나머지를 흘린다.
     covered = [str(item).strip() for item in topics if str(item).strip()]
-    if len(covered) > 1:
-        topic_block = f"주제: {topic}\n" + "다룰 소주제(각각 별도 섹션으로, 순서대로 빠짐없이):\n" + "".join(
-            f"  - {item}\n" for item in covered
+    if interest_bundle:
+        root = interest_bundle.get("root")
+        root_keyword = (
+            str(root.get("keyword") or topic).strip()
+            if isinstance(root, Mapping)
+            else topic
+        )
+        neighbors = [
+            str(item.get("keyword") or "").strip()
+            for item in (interest_bundle.get("neighbors") or [])
+            if isinstance(item, Mapping) and str(item.get("keyword") or "").strip()
+        ]
+        perspectives = ", ".join(neighbors) if neighbors else "없음"
+        topic_block = (
+            f"주제: {root_keyword}\n"
+            f"연결 관점: {perspectives}\n"
+            "작성 방식: 루트 관심사를 중심으로 하나의 통합 리포트를 쓰고, "
+            "연결 관점은 근거가 있을 때 설명을 넓히는 데만 사용한다. "
+            "연결 키워드별 독립 리포트나 나열식 섹션으로 만들지 않는다.\n"
+        )
+    elif len(covered) > 1:
+        topic_block = (
+            f"주제: {topic}\n"
+            "다룰 소주제(각각 별도 섹션으로, 순서대로 빠짐없이):\n"
+            + "".join(f"  - {item}\n" for item in covered)
         )
     else:
         topic_block = f"주제: {topic}\n"
@@ -178,6 +204,7 @@ def generate_report_content_with_quality(
     max_regenerations: int = 1,
     correction: str = "",
     topics: Sequence[str] = (),
+    interest_bundle: Mapping[str, object] | None = None,
 ) -> GeneratedReportContent:
     """콘텐츠를 생성하고 무료 품질 검사를 거쳐, 필요하면 한 번 재생성한다.
 
@@ -194,6 +221,7 @@ def generate_report_content_with_quality(
         max_regenerations: 재생성 최대 횟수 (기본 1회)
         correction: 첫 생성부터 반영할 교정 지시. 검토자(critic)가 재작성을
             요구해 다시 들어올 때 그 지적을 넘겨받는 통로다.
+        interest_bundle: 루트 중심 범주 리포트 작성 지시를 만들 관심사 묶음
 
     Returns:
         (가능하면 품질을 통과한) 생성 콘텐츠
@@ -209,6 +237,7 @@ def generate_report_content_with_quality(
                 model=model,
                 correction=correction,
                 topics=topics,
+                interest_bundle=interest_bundle,
             )
         except ValueError as error:
             # 응답이 깨진(파싱 실패) 경우. 상한이 남았으면 교정 지시를 붙여 재생성한다.

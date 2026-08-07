@@ -187,6 +187,14 @@
   - 현재 쓰는 값: `MORNING_BRIEFING`(스케줄러 아침요약), `ON_DEMAND`(사용자 즉시 생성).
   - `content_type`과 다른 축이다. `content_type`=콘텐츠 종류(기본 `interest_news_card`), `report_type`=생성 맥락.
   - 생략하면 `""`. 이전에 저장된 Snapshot도 `""`로 읽힌다.
+- **특정 관심분야 리포트 (`INTEREST_BUNDLE`, 2026-08-07):**
+  `POST /generations`에 `generation_scope="INTEREST_BUNDLE"`과 현재 활성
+  `user_interests.id` UUID인 `interest_id`를 보낸다. 온보딩
+  `selected_category_ids`·`selected_topic_ids`와 다른 ID 공간이다. Agent는 활성·
+  비차단 상태를 검증하고 관심사 루트와 Wiki 1홉 노드 최대 2개를 접수 시점 Job에
+  고정한다. `topic`·`topics`를 Service가 조립하지 않는다. 발행 Snapshot은
+  `generation_scope`·`source_interest_id`·`interest_profile_id`·
+  `bundle_keywords`로 실제 생성 범위를 돌려준다.
 - **웰컴 리포트 (Service 트리거):** "가입 즉시 리포트 1개"는 생성 트리거라 MVP 결정(2026-07-20)상 Service 소유다. Service가 온보딩 완료 직후 `POST /generations`를 `topic`=대표 관심사(여러 개면 랜덤), `content_type`=`interest_news_card`, `idempotency_key`=`welcome:{user_id}`로 1회 호출한다(멱등키로 재호출해도 1개만).
 
 ### 4.3 버전 관리 (핵심)

@@ -28,6 +28,7 @@
 | [Wiki 그래프 기반 검색어 확장](wiki-graph-query-expansion.md) | 선행 조건이 남은 설계 초안 |
 | [지식 파이프라인·관심사·구독](wiki-interest-subscription-design.md) | 팀 결정이 남은 데이터 흐름 설계 |
 | [비서 UI 제거 안내](assistant-ui-removal.md) | 제거 시점이 남은 정리 계획 |
+| [관심사 범주 묶음 리포트](interest-bundle-report-design.md) | 구현 승인된 활성 관심사·Wiki 1홉 기반 리포트 설계 |
 
 ## 정리 기준
 

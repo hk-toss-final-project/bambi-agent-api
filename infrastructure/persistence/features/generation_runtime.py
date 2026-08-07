@@ -14,6 +14,10 @@ from uuid import UUID
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
+from domain.interests.api import int_012
+from infrastructure.persistence.features.interest_bundles import (
+    ConnectionInterestBundleRepository,
+)
 from shared.report_models import ReportContextDocument, GeneratedReportContent
 
 type DictRow = dict[str, Any]
@@ -189,8 +193,10 @@ async def enqueue_report_generation_job(
     *,
     user_id: str,
     idempotency_key: str,
-    topic: str,
+    topic: str | None,
     topics: list[str] | None = None,
+    generation_scope: str = "SINGLE_TOPIC",
+    interest_id: str | None = None,
     content_type: str,
     report_type: str = "",
     language: str | None,
@@ -223,10 +229,52 @@ async def enqueue_report_generation_job(
     if context is None:
         raise UserContextRequiredError(user_id)
     resolved_language = language or context["preferred_language"]
+    interest_bundle: dict[str, object] | None = None
+    resolved_topic = (topic or "").strip()
+    resolved_topics = list(topics or [])
+    if generation_scope == "INTEREST_BUNDLE":
+        existing_bundle_cursor = await connection.execute(
+            """
+            SELECT
+                job.id,
+                generation_request.id AS generation_request_id
+            FROM agent.agent_jobs AS job
+            JOIN agent.generation_requests AS generation_request
+              ON generation_request.job_id = job.id
+            WHERE job.feature_id = 'SVC-008'
+              AND COALESCE(job.user_id, '') = %s
+              AND job.idempotency_key = %s
+            """,
+            (user_id, idempotency_key),
+        )
+        existing_bundle = await existing_bundle_cursor.fetchone()
+        if existing_bundle is not None:
+            return PersistedGenerationSubmission(
+                job_id=str(existing_bundle["id"]),
+                generation_request_id=str(
+                    existing_bundle["generation_request_id"]
+                ),
+            )
+        bundle = await int_012(
+            ConnectionInterestBundleRepository(connection),
+            user_id,
+            interest_id=interest_id or "",
+            neighbor_limit=2,
+        )
+        interest_bundle = bundle.to_payload()
+        resolved_topic = bundle.root_keyword
+        resolved_topics = []
+    elif generation_scope != "SINGLE_TOPIC":
+        raise ValueError(f"지원하지 않는 generation_scope입니다: {generation_scope}")
+    if not resolved_topic:
+        raise ValueError("Report Builder 생성에는 topic이 필요합니다.")
     job_payload = {
-        "topic": topic,
+        "topic": resolved_topic,
         # 여러 주제를 한 장에 묶는 요약 리포트용. 비어 있으면 topic 하나만 다룬다.
-        "topics": list(topics or []),
+        "topics": resolved_topics,
+        "generation_scope": generation_scope,
+        "interest_id": interest_id,
+        "interest_bundle": interest_bundle,
         "content_type": content_type,
         "report_type": report_type,
         "language": resolved_language,
@@ -290,7 +338,7 @@ async def enqueue_report_generation_job(
             job["id"],
             user_id,
             context["id"],
-            topic,
+            resolved_topic,
             content_type,
             context["plan"],
             resolved_language,
@@ -301,6 +349,9 @@ async def enqueue_report_generation_job(
                 {
                     "retrieval": "personal-wiki-global-cache-keyword-v2",
                     "report_type": report_type,
+                    "generation_scope": generation_scope,
+                    "interest_id": interest_id,
+                    "interest_bundle": interest_bundle,
                 }
             ),
         ),
@@ -782,6 +833,18 @@ async def persist_report_generation(
     # (2026-08-06 이송우 협의). Agent는 해석하지 않는다.
     parameters = generation_request.get("parameters") or {}
     report_type = str(parameters.get("report_type") or "")
+    generation_scope = str(parameters.get("generation_scope") or "SINGLE_TOPIC")
+    source_interest_id = str(parameters.get("interest_id") or "")
+    raw_interest_bundle = parameters.get("interest_bundle")
+    interest_bundle = (
+        raw_interest_bundle if isinstance(raw_interest_bundle, dict) else {}
+    )
+    interest_profile_id = str(interest_bundle.get("profile_id") or "")
+    bundle_keywords = [
+        str(keyword).strip()
+        for keyword in (interest_bundle.get("keywords") or [])
+        if str(keyword).strip()
+    ]
     # 요청 주제와 콘텐츠 태그를 분리해 싣는다(2026-08-05 이송우 협의).
     #
     #   generation_topic  왜 이 리포트가 만들어졌는지 (요청 원본)
@@ -800,6 +863,10 @@ async def persist_report_generation(
         "tags": [topic] if topic else [],
         "content_tags": list(generated.content_tags),
         "report_type": report_type,
+        "generation_scope": generation_scope,
+        "source_interest_id": source_interest_id,
+        "interest_profile_id": interest_profile_id,
+        "bundle_keywords": bundle_keywords,
     }
     await connection.execute(
         """

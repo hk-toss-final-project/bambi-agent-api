@@ -31,6 +31,10 @@ class ReportGenerationState(TypedDict):
     # 한 리포트가 함께 다룰 주제 목록. 비어 있으면 topic 하나만 다룬다(기존 동작).
     # 값이 있으면 topic은 카드 제목·generation_topic 용도로만 남는다.
     topics: NotRequired[list[str]]
+    # INTEREST_BUNDLE 요청은 접수 당시 활성 Profile과 Wiki 1홉 키워드를 고정해
+    # 둔다. 실행 중 현재 Profile을 다시 조회하지 않아 같은 Job의 재시도가 같다.
+    generation_scope: NotRequired[str]
+    interest_bundle: NotRequired[dict[str, object]]
     content_type: str
     language: str
     model: str

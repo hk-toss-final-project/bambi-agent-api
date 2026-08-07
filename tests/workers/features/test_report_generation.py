@@ -131,3 +131,27 @@ def test_worker_defaults_the_toggle_off_for_jobs_without_the_flag(
     )
 
     assert captured["change_history_enabled"] is False
+
+
+def test_worker_passes_interest_bundle_snapshot_to_the_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """운영 Worker는 접수 시 고정한 관심사 묶음을 현재 Wiki 재조회 없이 전달한다."""
+    bundle = {
+        "root": {"keyword": "생성형 AI"},
+        "neighbors": [{"keyword": "AI 에이전트"}],
+        "keywords": ["생성형 AI", "AI 에이전트"],
+    }
+    captured = _run_worker_job(
+        monkeypatch,
+        {
+            "topic": "생성형 AI",
+            "content_type": "interest_news_card",
+            "language": "ko",
+            "generation_scope": "INTEREST_BUNDLE",
+            "interest_bundle": bundle,
+        },
+    )
+
+    assert captured["generation_scope"] == "INTEREST_BUNDLE"
+    assert captured["interest_bundle"] == bundle

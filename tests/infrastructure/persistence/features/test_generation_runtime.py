@@ -229,6 +229,95 @@ def test_enqueue_stores_report_type_for_the_publish_snapshot() -> None:
     assert request_params[-1].obj["report_type"] == "MORNING_BRIEFING"
 
 
+def test_enqueue_snapshots_active_interest_bundle() -> None:
+    """활성 관심사와 1홉 Wiki 노드를 접수 시점 Job·요청 Payload에 고정한다."""
+    connection = _FakeConnection(
+        [
+            [{"id": "context-1", "plan": "free", "preferred_language": "ko"}],
+            [],
+            [
+                {
+                    "profile_id": "profile-1",
+                    "profile_version": 7,
+                    "topic": "생성형 AI",
+                    "score": 0.91,
+                    "document_ids": ["11111111-1111-4111-8111-111111111111"],
+                }
+            ],
+            [
+                {
+                    "document_id": "22222222-2222-4222-8222-222222222222",
+                    "keyword": "AI 에이전트",
+                    "document_kind": "concept",
+                    "weight": 1.0,
+                    "relation_types": ["applies_concept"],
+                    "shared_source_count": 2,
+                    "degree": 3.0,
+                }
+            ],
+            [{"id": "job-1"}],
+            [{"id": "request-1"}],
+        ]
+    )
+
+    submission = asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-bundle",
+            topic=None,
+            generation_scope="INTEREST_BUNDLE",
+            interest_id="33333333-3333-4333-8333-333333333333",
+            content_type="interest_news_card",
+            language="ko",
+            request_id="request-1",
+        )
+    )
+
+    assert submission.job_id == "job-1"
+    _, job_params = connection.executed[4]
+    assert job_params is not None
+    payload = job_params[2].obj
+    assert payload["topic"] == "생성형 AI"
+    assert payload["topics"] == []
+    assert payload["generation_scope"] == "INTEREST_BUNDLE"
+    assert payload["interest_bundle"]["profile_version"] == 7
+    assert payload["interest_bundle"]["keywords"] == ["생성형 AI", "AI 에이전트"]
+    _, request_params = connection.executed[5]
+    assert request_params is not None
+    assert request_params[3] == "생성형 AI"
+    assert request_params[-1].obj["interest_bundle"] == payload["interest_bundle"]
+
+
+def test_enqueue_bundle_retry_returns_snapshot_without_revalidating_interest() -> None:
+    """멱등 재시도는 Profile이 바뀌어도 최초 Job과 묶음 스냅샷을 그대로 재사용한다."""
+    connection = _FakeConnection(
+        [
+            [{"id": "context-1", "plan": "free", "preferred_language": "ko"}],
+            [{"id": "job-1", "generation_request_id": "request-1"}],
+        ]
+    )
+
+    submission = asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-bundle",
+            topic=None,
+            generation_scope="INTEREST_BUNDLE",
+            interest_id="33333333-3333-4333-8333-333333333333",
+            content_type="interest_news_card",
+            language="ko",
+            request_id="request-retry",
+        )
+    )
+
+    assert submission.job_id == "job-1"
+    assert submission.generation_request_id == "request-1"
+    assert len(connection.executed) == 2
+    assert "user_interests" not in connection.executed[1][0]
+
+
 def test_uuid_or_none_keeps_wiki_ids_and_drops_live_references() -> None:
     """Wiki UUID는 유지하고 실시간 자료 참조(L1 등)·빈 값은 None으로 바꾼다.
 
@@ -338,6 +427,29 @@ def test_publish_payload_keeps_report_type_empty_for_older_requests() -> None:
     _persist(connection)
 
     assert _publish_payload(connection)["report_type"] == ""
+
+
+def test_publish_payload_exposes_interest_bundle_origin() -> None:
+    """발행 Snapshot이 범주 리포트의 관심사·Profile·검색 키워드를 추적한다."""
+    connection = _connection_for_persist(
+        "생성형 AI",
+        {
+            "generation_scope": "INTEREST_BUNDLE",
+            "interest_id": "interest-1",
+            "interest_bundle": {
+                "profile_id": "profile-1",
+                "keywords": ["생성형 AI", "AI 에이전트", "RAG"],
+            },
+        },
+    )
+
+    _persist(connection)
+
+    payload = _publish_payload(connection)
+    assert payload["generation_scope"] == "INTEREST_BUNDLE"
+    assert payload["source_interest_id"] == "interest-1"
+    assert payload["interest_profile_id"] == "profile-1"
+    assert payload["bundle_keywords"] == ["생성형 AI", "AI 에이전트", "RAG"]
 
 
 def test_report_context_search_excludes_wiki_schema_documents() -> None:
@@ -463,6 +575,10 @@ def test_snapshot_row_mapping_exposes_every_payload_field_we_write() -> None:
             "tags": ["의존성 구조"],
             "content_tags": ["강한 결합", "DDD"],
             "report_type": "MORNING_BRIEFING",
+            "generation_scope": "INTEREST_BUNDLE",
+            "source_interest_id": "interest-1",
+            "interest_profile_id": "profile-1",
+            "bundle_keywords": ["의존성 구조", "DDD"],
         },
     }
 
@@ -472,6 +588,10 @@ def test_snapshot_row_mapping_exposes_every_payload_field_we_write() -> None:
     assert snapshot.tags == ["의존성 구조"]
     assert snapshot.content_tags == ["강한 결합", "DDD"]
     assert snapshot.report_type == "MORNING_BRIEFING"
+    assert snapshot.generation_scope == "INTEREST_BUNDLE"
+    assert snapshot.source_interest_id == "interest-1"
+    assert snapshot.interest_profile_id == "profile-1"
+    assert snapshot.bundle_keywords == ["의존성 구조", "DDD"]
 
 
 def test_snapshot_row_mapping_tolerates_snapshots_saved_before_new_fields() -> None:
@@ -497,6 +617,40 @@ def test_snapshot_row_mapping_tolerates_snapshots_saved_before_new_fields() -> N
     assert snapshot.tags == []
     assert snapshot.content_tags == []
     assert snapshot.report_type == ""
+    assert snapshot.generation_scope == "SINGLE_TOPIC"
+    assert snapshot.source_interest_id == ""
+    assert snapshot.interest_profile_id == ""
+    assert snapshot.bundle_keywords == []
+
+
+def test_snapshot_save_payload_preserves_interest_bundle_fields() -> None:
+    """개발 Seed 저장 경로도 범주 메타데이터를 JSON Payload에서 누락하지 않는다."""
+    from app.schemas.mvp import PublishSnapshotResponse
+    from infrastructure.persistence.postgres_publish_snapshots import (
+        PostgresPublishSnapshotRepository,
+    )
+
+    snapshot = PublishSnapshotResponse(
+        content_id="content-1",
+        user_id="user-1",
+        version=1,
+        snapshot_hash="h" * 64,
+        title="제목",
+        summary="요약",
+        body="본문",
+        generation_scope="INTEREST_BUNDLE",
+        source_interest_id="interest-1",
+        interest_profile_id="profile-1",
+        bundle_keywords=["생성형 AI", "RAG"],
+        created_at=datetime(2026, 8, 7, tzinfo=UTC),
+    )
+
+    payload = PostgresPublishSnapshotRepository._payload_from_snapshot(snapshot)
+
+    assert payload["generation_scope"] == "INTEREST_BUNDLE"
+    assert payload["source_interest_id"] == "interest-1"
+    assert payload["interest_profile_id"] == "profile-1"
+    assert payload["bundle_keywords"] == ["생성형 AI", "RAG"]
 
 
 def _run_metadata(connection: _FakeConnection) -> dict[str, Any]:

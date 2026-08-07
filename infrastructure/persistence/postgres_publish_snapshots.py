@@ -80,7 +80,7 @@ class PostgresPublishSnapshotRepository:
                 "summary": payload["summary"],
                 "body": payload["body"],
                 "citations": payload.get("citations", []),
-                # 아래 셋은 나중에 추가된 필드라, 그 전에 저장된 Snapshot에는 없다.
+                # 아래 필드들은 나중에 추가돼, 그 전에 저장된 Snapshot에는 없다.
                 # 쓰는 쪽(generation_runtime.persist_report_generation)에 필드를
                 # 추가할 때 이 매핑도 함께 고쳐야 한다 — 여기서 키를 명시적으로
                 # 고르므로 payload에만 넣으면 응답에 나오지 않는다
@@ -89,9 +89,33 @@ class PostgresPublishSnapshotRepository:
                 "tags": payload.get("tags", []),
                 "content_tags": payload.get("content_tags", []),
                 "report_type": payload.get("report_type", ""),
+                "generation_scope": payload.get("generation_scope", "SINGLE_TOPIC"),
+                "source_interest_id": payload.get("source_interest_id", ""),
+                "interest_profile_id": payload.get("interest_profile_id", ""),
+                "bundle_keywords": payload.get("bundle_keywords", []),
                 "created_at": row["created_at"],
             }
         )
+
+    @staticmethod
+    def _payload_from_snapshot(snapshot: PublishSnapshotResponse) -> dict[str, object]:
+        """Publish Snapshot 모델을 PostgreSQL JSON Payload로 빠짐없이 변환한다."""
+        return {
+            "title": snapshot.title,
+            "summary": snapshot.summary,
+            "body": snapshot.body,
+            "citations": [
+                citation.model_dump(mode="json") for citation in snapshot.citations
+            ],
+            "generation_topic": snapshot.generation_topic,
+            "tags": list(snapshot.tags),
+            "content_tags": list(snapshot.content_tags),
+            "report_type": snapshot.report_type,
+            "generation_scope": snapshot.generation_scope.value,
+            "source_interest_id": snapshot.source_interest_id,
+            "interest_profile_id": snapshot.interest_profile_id,
+            "bundle_keywords": list(snapshot.bundle_keywords),
+        }
 
     async def save(self, snapshot: PublishSnapshotResponse) -> None:
         """생성 후보와 연결된 새로운 Publish Snapshot 버전을 저장한다."""
@@ -133,15 +157,7 @@ class PostgresPublishSnapshotRepository:
                 ):
                     raise PublishSnapshotMismatchError(snapshot.content_id)
 
-                content_payload = {
-                    "title": snapshot.title,
-                    "summary": snapshot.summary,
-                    "body": snapshot.body,
-                    "citations": [
-                        citation.model_dump(mode="json")
-                        for citation in snapshot.citations
-                    ],
-                }
+                content_payload = self._payload_from_snapshot(snapshot)
                 await connection.execute(
                     """
                     INSERT INTO agent.publish_snapshots (

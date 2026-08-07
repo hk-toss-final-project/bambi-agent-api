@@ -117,10 +117,30 @@ flowchart LR
 | 필드 | 필수 | 설명 |
 |---|---|---|
 | `idempotency_key` | O | **`{schedule window}-{user_id}-{content_type}` 규칙 권장** (예: `2026-07-21-user-1-interest_news_card`). 스케줄러 재시도·중복 실행에도 Job이 한 번만 생김 |
-| `topic` | O | 생성 주제 (1~500자) |
+| `generation_scope` | X | 기본 `SINGLE_TOPIC`. 특정 활성 LLM Wiki 관심사와 연결 노드를 묶을 때 `INTEREST_BUNDLE` |
+| `topic` | 조건부 | `SINGLE_TOPIC`에서 필수(1~500자). `INTEREST_BUNDLE`에서는 생략하며 Agent가 활성 관심사 루트로 확정 |
+| `interest_id` | 조건부 | `INTEREST_BUNDLE`에서 필수. **온보딩 taxonomy ID가 아니라 현재 활성 `user_interests.id` UUID** |
+| `topics` | X | 서로 독립된 여러 주제를 한 장에 묶는 기존 아침요약 입력. `INTEREST_BUNDLE`과 함께 사용 불가 |
 | `content_type` | X | 기본 `interest_news_card` |
+| `report_type` | X | Service 소유 생성 맥락. Agent가 해석하지 않고 Snapshot에 반환 |
 | `language` | X | 생략 시 컨텍스트의 선호 언어 사용 |
 | `scheduled_at` | X | 실행 예약 시각. **시간대 필수** (`2026-07-21T07:00:00+09:00`). 시간대 없으면 `422`. 생략 시 즉시 실행 대상 |
+
+특정 관심분야 리포트 요청 예시:
+
+```json
+{
+  "idempotency_key": "interest-bundle:2026-08-07:user-1:33333333-3333-4333-8333-333333333333",
+  "generation_scope": "INTEREST_BUNDLE",
+  "interest_id": "33333333-3333-4333-8333-333333333333",
+  "content_type": "interest_news_card",
+  "report_type": "ON_DEMAND"
+}
+```
+
+Agent는 접수 시 관심사가 현재 활성 Profile에 속하고 차단되지 않았는지 검증한 뒤,
+루트와 최대 2개의 Wiki 1홉 노드를 Job에 고정합니다. 비활성·차단 관심사는
+`409 ACTIVE_INTEREST_REQUIRED`입니다.
 
 **사용자 지정 시간 스케줄은 service 쪽 책임입니다** (2026-07-20 결정 —
 사용자 설정의 원천이 service-db이기 때문). 구현 방식은 둘 중 선택:
@@ -207,7 +227,8 @@ loop (10~30초):
 ### Claim 응답
 
 `batch_id`, `lease_expires_at`과 함께 각 item에 **전체 Payload**(content_id,
-user_id, version, snapshot_hash, title, summary, body, citations, tags)가 포함되므로
+user_id, version, snapshot_hash, title, summary, body, citations, tags와 생성 범주
+메타데이터)가 포함되므로
 추가 조회 없이 바로 Upsert할 수 있습니다. 처리할 것이 없으면 `items=[]`.
 
 **`tags`(2026-07-30 추가)** — 카드에 노출할 관심사 태그 목록입니다.
@@ -221,6 +242,17 @@ user_id, version, snapshot_hash, title, summary, body, citations, tags)가 포�
 - service 워커는 이 문자열을 `card_interest_tags`에 그대로 저장·노출합니다.
   `/interests`의 topic과 일치시킬 필요는 없습니다(2026-07-30 송우 확인).
 - 이 필드가 붙기 전에 저장된 Snapshot에는 없어서 `[]`로 내려갑니다.
+
+**범주 생성 추적 필드(2026-08-07 추가)**
+
+- `generation_scope`: `SINGLE_TOPIC` 또는 `INTEREST_BUNDLE`
+- `source_interest_id`: 범주 생성의 원천 활성 관심사 UUID. 단일 주제는 `""`
+- `interest_profile_id`: 묶음을 확정한 활성 Profile UUID. 단일 주제는 `""`
+- `bundle_keywords`: 루트부터 시작하는 실제 검색 키워드 스냅샷. 단일 주제는 `[]`
+
+Service는 이 필드로 어떤 LLM Wiki 관심사와 연결 노드가 카드 생성에 쓰였는지
+추적할 수 있습니다. `tags`의 기존 의미는 바뀌지 않으며 여전히 루트 주제 문자열
+하나입니다.
 
 **`citations`는 `{citation_id, title, url}` 세 필드뿐입니다.**
 

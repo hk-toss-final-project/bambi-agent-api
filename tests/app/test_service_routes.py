@@ -306,6 +306,56 @@ def test_generation_request_allows_omitting_report_type(
     assert agent_jobs_fake.last_report_type == ""
 
 
+def test_generation_request_forwards_interest_bundle_scope(
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
+) -> None:
+    """범주 리포트는 topic 없이 활성 관심사 ID를 저장소까지 전달한다."""
+    _put_context(client, "user-bundle")
+
+    accepted = client.post(
+        "/internal/v1/users/user-bundle/generations",
+        json={
+            "idempotency_key": "generation-interest-bundle",
+            "generation_scope": "INTEREST_BUNDLE",
+            "interest_id": "33333333-3333-4333-8333-333333333333",
+        },
+    )
+
+    assert accepted.status_code == 202
+    assert agent_jobs_fake.last_generation_scope == "INTEREST_BUNDLE"
+    assert agent_jobs_fake.last_interest_id == "33333333-3333-4333-8333-333333333333"
+
+
+def test_generation_request_requires_interest_id_for_bundle(client: TestClient) -> None:
+    """범주 리포트에 활성 관심사 ID가 없으면 요청 검증 단계에서 거부한다."""
+    rejected = client.post(
+        "/internal/v1/users/user-bundle/generations",
+        json={
+            "idempotency_key": "generation-interest-bundle-no-interest",
+            "generation_scope": "INTEREST_BUNDLE",
+        },
+    )
+
+    assert rejected.status_code == 422
+    assert rejected.json()["code"] == "REQUEST_VALIDATION_ERROR"
+
+
+def test_generation_request_rejects_topics_mixed_with_bundle(client: TestClient) -> None:
+    """Wiki 연결 노드 묶음과 호출자가 지정한 topics를 한 요청에서 섞지 않는다."""
+    rejected = client.post(
+        "/internal/v1/users/user-bundle/generations",
+        json={
+            "idempotency_key": "generation-interest-bundle-mixed",
+            "generation_scope": "INTEREST_BUNDLE",
+            "interest_id": "33333333-3333-4333-8333-333333333333",
+            "topics": ["호출자 지정 키워드"],
+        },
+    )
+
+    assert rejected.status_code == 422
+    assert rejected.json()["code"] == "REQUEST_VALIDATION_ERROR"
+
+
 def test_content_mark_enqueues_wiki_build_job(
     client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
 ) -> None:
