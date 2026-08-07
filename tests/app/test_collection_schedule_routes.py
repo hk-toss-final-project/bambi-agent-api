@@ -14,12 +14,10 @@ from app.dependencies import get_collection_schedule_service
 from app.main import create_app
 from tests.conftest import TEST_AUTHORIZATION_HEADER, TEST_INTERNAL_TOKEN
 from app.schemas.collection_schedules import (
-    CollectionKeywordRunResponse,
-    CollectionProviderRunResponse,
     CollectionScheduleListResponse,
     CollectionScheduleRegisterRequest,
     CollectionScheduleResponse,
-    CollectionScheduleRunResponse,
+    CollectionScheduleRunAcceptedResponse,
     CollectionScheduleUpdateRequest,
 )
 
@@ -84,35 +82,16 @@ class _FakeScheduleService:
         self.calls.append(("resume", source_key))
         return _response(source_key=source_key, status="active")
 
-    async def run_now(self, source_key: str) -> CollectionScheduleRunResponse:
-        """즉시 실행 요청을 기록하고 수집 결과 하나를 돌려준다."""
-        self.calls.append(("run_now", source_key))
-        return CollectionScheduleRunResponse(
+    async def run_now(
+        self, source_key: str, *, request_id: str
+    ) -> CollectionScheduleRunAcceptedResponse:
+        """즉시 실행 요청을 기록하고 예약된 Job 정보를 돌려준다."""
+        self.calls.append(("run_now", (source_key, request_id)))
+        return CollectionScheduleRunAcceptedResponse(
+            job_id="job-1",
             source_key=source_key,
             provider="naver",
-            status="completed",
-            fetched_count=10,
-            created_count=7,
-            duplicate_count=3,
-            keywords=[
-                CollectionKeywordRunResponse(
-                    keyword="코스피",
-                    status="completed",
-                    reason=None,
-                    providers=[
-                        CollectionProviderRunResponse(
-                            provider="naver",
-                            status="completed",
-                            query="코스피",
-                            run_id="run-1",
-                            fetched_count=10,
-                            created_count=7,
-                            duplicate_count=3,
-                        )
-                    ],
-                )
-            ],
-            schedule=_response(source_key=source_key),
+            status="queued",
         )
 
 
@@ -220,19 +199,22 @@ def test_update_passes_only_given_fields(
     assert payload.keywords is None
 
 
-def test_run_now_returns_collection_summary(
+def test_run_now_accepts_and_enqueues_job(
     schedule_client: TestClient, schedule_service: _FakeScheduleService
 ) -> None:
-    """즉시 실행 라우트가 수집 합계와 키워드별 결과를 돌려주는지 검증한다."""
+    """즉시 실행 라우트가 202로 예약하고 job_id를 돌려주는지 검증한다."""
     response = schedule_client.post(f"{_PREFIX}/latest-naver/run")
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     body = response.json()
-    assert body["status"] == "completed"
-    assert body["created_count"] == 7
-    assert body["keywords"][0]["providers"][0]["run_id"] == "run-1"
-    assert body["schedule"]["source_key"] == "latest-naver"
-    assert schedule_service.calls[0] == ("run_now", "latest-naver")
+    assert body["status"] == "queued"
+    assert body["job_id"] == "job-1"
+    assert body["source_key"] == "latest-naver"
+    action, (source_key, request_id) = schedule_service.calls[0]
+    assert action == "run_now"
+    assert source_key == "latest-naver"
+    # 라우트가 추적 미들웨어의 Request ID를 서비스로 넘긴다.
+    assert request_id
 
 
 def test_pause_and_resume(

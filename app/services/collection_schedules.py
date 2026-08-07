@@ -15,26 +15,27 @@ from psycopg import AsyncConnection
 from app.config import Settings
 from app.exceptions import AgentApiError, ErrorDetail
 from app.schemas.collection_schedules import (
-    CollectionKeywordRunResponse,
-    CollectionProviderRunResponse,
     CollectionRunResponse,
     CollectionScheduleListResponse,
     CollectionScheduleRegisterRequest,
     CollectionScheduleResponse,
-    CollectionScheduleRunResponse,
+    CollectionScheduleRunAcceptedResponse,
     CollectionScheduleUpdateRequest,
 )
-from infrastructure.persistence.api import GlobalCollectionRunRecord
+from infrastructure.persistence.api import (
+    GlobalCollectionRunRecord,
+    enqueue_global_collection_run_job,
+    load_collection_schedule,
+    set_system_job_scope,
+)
 from scheduler.api import (
-    CollectionScheduleResult,
+    SCHEDULED_PROVIDERS,
     CollectionScheduleView,
     UnknownCollectionScheduleError,
-    build_collection_credentials,
     sch_017,
     sch_018,
     sch_019,
     sch_020,
-    sch_021,
     sch_022,
 )
 
@@ -84,73 +85,6 @@ def _to_run_response(record: GlobalCollectionRunRecord) -> CollectionRunResponse
         error_code=record.error_code,
         started_at=record.started_at,
         completed_at=record.completed_at,
-    )
-
-
-def _text(value: object) -> str | None:
-    """수집 결과 dict의 값을 문자열 필드로 옮긴다. 없으면 None."""
-    return None if value is None else str(value)
-
-
-def _count(value: object) -> int:
-    """수집 결과 dict의 건수 값을 정수로 옮긴다. 없거나 형식이 다르면 0."""
-    return value if isinstance(value, int) and not isinstance(value, bool) else 0
-
-
-def _to_provider_run(result: dict[str, object]) -> CollectionProviderRunResponse:
-    """수집 Worker가 돌려준 Provider 결과 하나를 응답 모델로 옮긴다."""
-    return CollectionProviderRunResponse(
-        provider=str(result.get("provider", "")),
-        status=str(result.get("status", "")),
-        query=_text(result.get("query")),
-        run_id=_text(result.get("run_id")),
-        fetched_count=_count(result.get("fetched_count")),
-        created_count=_count(result.get("created_count")),
-        duplicate_count=_count(result.get("duplicate_count")),
-        error_code=_text(result.get("error_code")),
-        error_message=_text(result.get("error_message")),
-    )
-
-
-def _to_run_summary(
-    view: CollectionScheduleView, results: list[CollectionScheduleResult]
-) -> CollectionScheduleRunResponse:
-    """키워드별 수집 결과를 합계와 함께 실행 응답으로 옮긴다.
-
-    전체 상태는 Provider 결과를 기준으로 정한다. 실행한 키워드가 하나도 없으면
-    skipped, Provider 결과가 모두 실패면 failed, 일부만 실패면 partial이다.
-    """
-    keywords: list[CollectionKeywordRunResponse] = []
-    providers: list[CollectionProviderRunResponse] = []
-    for result in results:
-        keyword_providers = [_to_provider_run(item) for item in result.results]
-        providers.extend(keyword_providers)
-        keywords.append(
-            CollectionKeywordRunResponse(
-                keyword=result.keyword,
-                status=result.status,
-                reason=result.reason,
-                providers=keyword_providers,
-            )
-        )
-    failed = [item for item in providers if item.status == "failed"]
-    if not providers:
-        status_value = "skipped"
-    elif len(failed) == len(providers):
-        status_value = "failed"
-    elif failed:
-        status_value = "partial"
-    else:
-        status_value = "completed"
-    return CollectionScheduleRunResponse(
-        source_key=view.source_key,
-        provider=view.provider,
-        status=status_value,
-        fetched_count=sum(item.fetched_count for item in providers),
-        created_count=sum(item.created_count for item in providers),
-        duplicate_count=sum(item.duplicate_count for item in providers),
-        keywords=keywords,
-        schedule=_to_response(view),
     )
 
 
@@ -249,35 +183,43 @@ class CollectionScheduleService:
                 raise _invalid(str(error)) from error
         return _to_response(view)
 
-    async def run_now(self, source_key: str) -> CollectionScheduleRunResponse:
-        """[SCH-021] 등록된 수집 스케줄을 주기와 무관하게 지금 한 번 실행한다.
+    async def run_now(
+        self, source_key: str, *, request_id: str
+    ) -> CollectionScheduleRunAcceptedResponse:
+        """[SCH-021] 등록된 수집 스케줄을 주기와 무관하게 지금 실행하도록 예약한다.
 
-        수집이 끝날 때까지 응답하지 않는다. 키워드 하나씩 외부 API를 호출하므로
-        키워드 수에 비례해 오래 걸린다.
+        수집을 직접 돌리지 않고 백그라운드 Job으로 큐에 넣은 뒤 바로 응답한다.
+        관심 Topic이 많은 taxonomy Source는 수집이 수 분 걸려 동기로 돌리면 HTTP
+        응답이 타임아웃되므로, 정기 수집과 같은 경로를 Scheduler가 대신 돌리게
+        한다. 부르는 쪽은 돌려받은 job_id로 `GET /jobs/{job_id}`에서 결과를 본다.
+
+        없는 source_key나 정기 수집을 지원하지 않는 Provider는 큐에 넣기 전에
+        그 자리에서 거절한다(404·422).
         """
-        if not self._settings.agent_database_url:
-            raise AgentApiError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                ErrorDetail(
-                    code="SERVICE_NOT_READY",
-                    message="AGENT_DATABASE_URL이 설정되지 않아 수집을 실행할 수 없습니다.",
-                    retryable=True,
-                ),
-            )
-        credentials = build_collection_credentials(self._settings)
         async with self._connection() as connection:
-            try:
-                view, results = await sch_021(
+            async with connection.transaction():
+                await set_system_job_scope(connection)
+                schedule = await load_collection_schedule(
+                    connection, source_key=source_key
+                )
+                if schedule is None:
+                    raise _not_found(source_key)
+                if schedule.provider not in SCHEDULED_PROVIDERS:
+                    raise _invalid(
+                        f"정기 수집을 지원하지 않는 Provider입니다: {schedule.provider} "
+                        f"(가능: {', '.join(sorted(SCHEDULED_PROVIDERS))})"
+                    )
+                enqueued = await enqueue_global_collection_run_job(
                     connection,
                     source_key=source_key,
-                    database_url=self._settings.agent_database_url,
-                    credentials=credentials,
+                    request_id=request_id,
                 )
-            except UnknownCollectionScheduleError as error:
-                raise _not_found(error.source_key) from error
-            except ValueError as error:
-                raise _invalid(str(error)) from error
-        return _to_run_summary(view, results)
+        return CollectionScheduleRunAcceptedResponse(
+            job_id=enqueued.job_id,
+            source_key=source_key,
+            provider=schedule.provider,
+            status="queued",
+        )
 
     async def pause(self, source_key: str) -> CollectionScheduleResponse:
         """[SCH-019] 수집 스케줄 실행을 일시 중지한다."""

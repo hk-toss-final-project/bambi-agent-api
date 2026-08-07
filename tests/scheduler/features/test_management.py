@@ -485,6 +485,68 @@ def test_manual_run_collects_interest_topics_without_fixed_keywords(
     assert [call["keywords"] for call in calls] == [["리튬황 배터리"]]
 
 
+def test_manual_run_collects_topics_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """수동 실행이 관심 Topic 검색을 동시에 수집하는지 검증한다.
+
+    관심 Topic이 많은 taxonomy Source는 검색이 수십 개로 불어나, 순차로 돌면
+    응답이 분 단위로 늦어진다(2026-08-07 실측: google_news RSS 74회 이상, 5분
+    초과). 검색을 동시에 수집하되 동시 실행 수는 상한을 넘지 않아야 한다.
+    """
+    targets = tuple(
+        CollectionTargetPlan(target_key=f"topic-{index}", query=f"주제{index}")
+        for index in range(10)
+    )
+    schedule = _schedule(
+        source_key="interest-taxonomy-google-news",
+        provider="google_news",
+        keywords=(),
+        targets=targets,
+    )
+
+    inflight = 0
+    max_inflight = 0
+
+    async def fake_load(
+        _connection: Any, *, source_key: str
+    ) -> GlobalCollectionSchedule:
+        """등록된 taxonomy 스케줄을 그대로 돌려준다."""
+        return schedule
+
+    async def fake_worker(**kwargs: Any) -> list[dict[str, object]]:
+        """동시에 진행 중인 검색 수를 관찰하며 완료 결과를 돌려준다."""
+        nonlocal inflight, max_inflight
+        inflight += 1
+        max_inflight = max(max_inflight, inflight)
+        # 다른 검색이 동시에 진입할 틈을 준다. 순차라면 항상 1을 넘지 못한다.
+        await asyncio.sleep(0)
+        inflight -= 1
+        return [{"provider": kwargs["providers"][0], "status": "completed"}]
+
+    monkeypatch.setattr(management, "load_collection_schedule", fake_load)
+    monkeypatch.setattr(collection, "worker_001", fake_worker)
+
+    _, results = asyncio.run(
+        sch_021(
+            _FakeConnection(),  # type: ignore[arg-type]
+            source_key="interest-taxonomy-google-news",
+            database_url="postgresql://fake",
+            credentials=_CREDENTIALS,
+            now=_NOW,
+        )
+    )
+
+    # 모든 Topic이 수집되고, 결과 순서는 계획 순서와 같다(gather는 순서 보존).
+    assert [result.keyword for result in results] == [
+        f"주제{index}" for index in range(10)
+    ]
+    assert all(result.status == "completed" for result in results)
+    # 동시에 여러 검색이 진행되지만 상한을 넘지 않는다.
+    assert max_inflight > 1
+    assert max_inflight <= collection.MANUAL_RUN_CONCURRENCY
+
+
 def test_manual_run_reports_unknown_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

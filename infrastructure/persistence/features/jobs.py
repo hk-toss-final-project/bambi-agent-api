@@ -11,7 +11,7 @@ from typing import Any
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
-from domain.jobs.api import job_001, job_006
+from domain.jobs.api import job_001, job_006, job_010
 from domain.personal_wiki.source_events.api import wse_013
 
 type DictRow = dict[str, Any]
@@ -713,6 +713,81 @@ async def enqueue_url_collection_job(
         (job_id, source_event_row_id),
     )
     return EnqueuedWikiBuildJob(job_id=job_id, created=created)
+
+
+@dataclass(frozen=True, slots=True)
+class EnqueuedCollectionRunJob:
+    """수동 실행이 큐에 넣은 수집 실행 Job 하나."""
+
+    job_id: str
+    created: bool
+
+
+async def enqueue_global_collection_run_job(
+    connection: AsyncConnection[DictRow],
+    *,
+    source_key: str,
+    request_id: str,
+) -> EnqueuedCollectionRunJob:
+    """수집 소스 하나를 백그라운드로 즉시 수집할 Job을 큐에 등록한다.
+
+    수동 실행(SCH-021)은 이 Job만 큐에 넣고 바로 응답한다. 실제 수집은 수집
+    Scheduler가 tick마다 이 Job을 집어(claim) 정기 수집과 같은 경로로 처리하므로,
+    관심 Topic이 많아 오래 걸리는 소스도 HTTP 응답을 붙잡지 않는다.
+
+    사용자 소속이 없는 시스템 Job이라 user_id는 NULL로 저장한다(그래서 user_id를
+    필수로 요구하는 JOB-001 대신 멱등 Key(JOB-010)만 쓰고 직접 INSERT한다).
+    request_id를 멱등 Key에 넣어 매 호출을 새 Job으로 남긴다 — 같은 소스를 다시
+    눌렀을 때(이전 수집이 끝난 뒤에도) 새로 수집하도록 하기 위함이다.
+
+    Args:
+        connection: 시스템 Scope가 설정된 DB 연결
+        source_key: 즉시 수집할 Source 식별 Key
+        request_id: 이 요청을 추적하는 Request ID (멱등 Key로도 쓴다)
+
+    Returns:
+        Job ID와 이번 호출에서 새로 생성됐는지 여부
+    """
+    idempotency_key = await job_010([source_key, request_id])
+    cursor = await connection.execute(
+        """
+        INSERT INTO agent.agent_jobs (
+            feature_id,
+            job_type,
+            user_id,
+            idempotency_key,
+            status,
+            progress,
+            payload,
+            retryable,
+            request_id
+        ) VALUES ('SCH-021', 'global_collection_run', NULL, %s, 'queued', 0, %s, false, %s)
+        ON CONFLICT (feature_id, COALESCE(user_id, ''), idempotency_key)
+        DO NOTHING
+        RETURNING id
+        """,
+        (idempotency_key, Jsonb({"source_key": source_key}), request_id),
+    )
+    row = await cursor.fetchone()
+    created = row is not None
+    if row is None:
+        cursor = await connection.execute(
+            """
+            SELECT id
+            FROM agent.agent_jobs
+            WHERE feature_id = 'SCH-021'
+              AND COALESCE(user_id, '') = ''
+              AND idempotency_key = %s
+            """,
+            (idempotency_key,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise RuntimeError(
+                "멱등 충돌한 수집 실행 Job을 찾을 수 없습니다: "
+                f"{idempotency_key}"
+            )
+    return EnqueuedCollectionRunJob(job_id=str(row["id"]), created=created)
 
 
 async def defer_user_wiki_build_jobs(

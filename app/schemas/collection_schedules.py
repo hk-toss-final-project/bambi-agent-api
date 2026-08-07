@@ -164,6 +164,23 @@ class CollectionScheduleRunResponse(BaseModel):
     )
 
 
+class CollectionScheduleRunAcceptedResponse(BaseModel):
+    """수집 스케줄 즉시 실행 접수 결과 (SCH-021).
+
+    수동 실행은 수집을 직접 돌리지 않고 백그라운드 Job으로 예약한 뒤 바로
+    응답한다. 부르는 쪽은 `job_id`로 `GET /jobs/{job_id}`에서 진행 상태와 결과
+    요약(수집·저장 건수)을 확인한다.
+    """
+
+    job_id: str = Field(description="수집을 처리할 백그라운드 Job ID")
+    source_key: str = Field(description="실행을 예약한 Source 식별 Key")
+    provider: str = Field(description="수집 Provider")
+    status: str = Field(
+        description="접수 직후 Job 상태. 큐에 들어갔으면 queued",
+        examples=["queued"],
+    )
+
+
 class CollectionScheduleListResponse(BaseModel):
     """수집 스케줄 목록과 최근 실행 이력 (SCH-022)."""
 
