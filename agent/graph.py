@@ -49,6 +49,9 @@ from agent.state import ReportGenerationState, PersonalWikiBuildState
 from agent.wiki_builder.api import (
     classify_source_for_wiki,
     classify_wiki_source,
+    prepare_wiki_identity_resolution,
+    resolve_wiki_identity_conflicts,
+    validate_wiki_identity_quality,
     wba_003,
 )
 from domain.interests.api import int_011
@@ -79,8 +82,9 @@ REVIEW_MAX_REVISIONS = 1
 def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
     """Personal Wiki Build 노드와 엣지를 조립해 컴파일된 그래프를 반환한다.
 
-    load_source → classify → plan → persist → finalize 순서로 원본
-    조회부터 문서·Chunk 저장, Job 결과 조립까지를 한 실행 경계로 묶는다.
+    load_source → classify → prepare_identity → (필요 시 resolve_identity) →
+    quality_gate → plan → persist → finalize 순서로 원본 조회부터 canonical
+    identity 판정, 문서·Chunk 저장, Job 결과 조립까지를 한 실행 경계로 묶는다.
     Embedding 생성은 2026-07-20 결정으로 실행 경로에서 제외했으며(활용처인
     Vector 검색 미도입), 재도입 시 persist 뒤에 embed 노드를 추가한다.
     """
@@ -141,9 +145,66 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
             "classification_model": classification_model,
         }
 
+    async def prepare_identity(state: PersonalWikiBuildState) -> dict[str, Any]:
+        """표기 정규화로 확정 가능한 노드를 병합하고 의미 충돌만 추린다."""
+        draft = prepare_wiki_identity_resolution(
+            classification=state["classification"],
+            existing_entities=state["existing_entities"],
+            existing_concepts=state["existing_concepts"],
+        )
+        return {"resolution_draft": draft}
+
+    def route_identity_resolution(state: PersonalWikiBuildState) -> str:
+        """의미 충돌이 있을 때만 LLM identity 판정 노드로 보낸다."""
+        return "resolve" if state["resolution_draft"].conflicts else "quality"
+
+    async def resolve_identity(state: PersonalWikiBuildState) -> dict[str, Any]:
+        """모호한 후보군 전체를 Transaction 밖의 한 LLM 호출로 판정한다."""
+        result = await to_thread(
+            resolve_wiki_identity_conflicts,
+            draft=state["resolution_draft"],
+            source_title=state["source"].title,
+            model=state["model"],
+        )
+        return {"identity_resolution": result}
+
+    async def quality_gate(state: PersonalWikiBuildState) -> dict[str, Any]:
+        """canonical 중복과 잘못된 기존 key가 저장 단계로 넘어가지 않게 막는다."""
+        resolution = state.get("identity_resolution")
+        draft = state["resolution_draft"]
+        classification = (
+            resolution.classification if resolution is not None else draft.classification
+        )
+        validate_wiki_identity_quality(
+            classification=classification,
+            existing_entities=state["existing_entities"],
+            existing_concepts=state["existing_concepts"],
+        )
+        return {
+            "classification": classification,
+            "identity_resolution_model": (
+                resolution.model
+                if resolution is not None
+                else "deterministic:wiki-surface-v1"
+            ),
+            "identity_conflict_count": (
+                resolution.resolved_conflict_count if resolution is not None else 0
+            ),
+            "identity_input_tokens": (
+                resolution.input_tokens if resolution is not None else 0
+            ),
+            "identity_output_tokens": (
+                resolution.output_tokens if resolution is not None else 0
+            ),
+        }
+
     async def plan(state: PersonalWikiBuildState) -> dict[str, Any]:
         """분류 결과와 기존 Wiki 상태로 Build 계획을 만든다."""
         source = state["source"]
+        model_trace = (
+            f"{state.get('classification_model', state['model'])};"
+            f"identity={state['identity_resolution_model']}"
+        )
         build_plan = await wba_003(
             source_title=source.title,
             source_url=source.canonical_url,
@@ -154,7 +215,7 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
             existing_entities=state["existing_entities"],
             existing_concepts=state["existing_concepts"],
             generated_at=datetime.now(UTC).isoformat(),
-            model=state.get("classification_model", state["model"]),
+            model=model_trace,
             existing_relations=state["existing_relations"],
         )
         return {"plan": build_plan}
@@ -187,6 +248,12 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
                 "stored_relation_count": persisted.stored_relation_count,
                 "isolated_node_count": build_plan.isolated_node_count,
                 "relation_warnings": build_plan.relation_warnings,
+                "identity_resolution": {
+                    "model": state["identity_resolution_model"],
+                    "resolved_conflict_count": state["identity_conflict_count"],
+                    "input_tokens": state["identity_input_tokens"],
+                    "output_tokens": state["identity_output_tokens"],
+                },
                 "affected_documents": [
                     {
                         "document_id": document.document_id,
@@ -210,12 +277,22 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
     graph = StateGraph(PersonalWikiBuildState)
     graph.add_node("load_source", load_source)
     graph.add_node("classify", classify)
+    graph.add_node("prepare_identity", prepare_identity)
+    graph.add_node("resolve_identity", resolve_identity)
+    graph.add_node("quality_gate", quality_gate)
     graph.add_node("plan", plan)
     graph.add_node("persist", persist)
     graph.add_node("finalize", finalize)
     graph.set_entry_point("load_source")
     graph.add_edge("load_source", "classify")
-    graph.add_edge("classify", "plan")
+    graph.add_edge("classify", "prepare_identity")
+    graph.add_conditional_edges(
+        "prepare_identity",
+        route_identity_resolution,
+        {"resolve": "resolve_identity", "quality": "quality_gate"},
+    )
+    graph.add_edge("resolve_identity", "quality_gate")
+    graph.add_edge("quality_gate", "plan")
     graph.add_edge("plan", "persist")
     graph.add_edge("persist", "finalize")
     graph.add_edge("finalize", END)

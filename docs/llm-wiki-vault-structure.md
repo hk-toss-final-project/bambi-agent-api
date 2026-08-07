@@ -193,6 +193,33 @@ Concept은 이론·방법·분야·현상·표준·용어를 표현한다.
 원본 tag 상속, verbatim 인용 검증, 별칭·출처 append-only 병합을
 이 문서와 동일한 방향으로 생성한다.
 
+### Canonical identity 해소 파이프라인
+
+한 Wiki 안에서 `머신 러닝`, `머신러닝`, `Machine Learning`처럼 같은 의미가
+표기 차이로 분리되지 않도록 Build 그래프가 저장 전에 다음 순서로 처리한다.
+
+1. `prepare_identity`: Unicode NFKC와 casefold를 적용하고 공백·구두점을 제거한
+   비교 표면형으로 이번 분류 후보와 기존 문서의 title·aliases를 묶는다.
+2. 같은 kind의 기존 후보가 하나뿐이면 LLM 없이 기존 `document_key`에 연결한다.
+   같은 Build에 나온 동일 kind 표기 변형도 하나로 병합하고 나머지는 aliases로
+   보존한다.
+3. entity/concept namespace가 충돌하거나 기존 후보가 여러 개일 때만
+   `resolve_identity`가 모든 충돌을 한 번의 LLM 호출로 판정한다. LLM은 입력으로
+   제공된 기존 key에 match하거나 incoming label 중 하나로 새 identity를 만드는
+   두 동작만 할 수 있다. 응답 누락·허구 key·새 이름 생성은 코드가 거절한다.
+4. `quality_gate`는 canonical 표면형 중복, 존재하지 않는 matched key, 같은 key의
+   복수 갱신과 자기 관계를 차단한 뒤에만 문서 계획·저장 단계로 보낸다.
+
+온보딩 복합 라벨은 저장 전 원자 주제로 분해한다. 예를 들어
+`AI·머신러닝`은 `AI`, `머신러닝` Concept 후보가 된다. 이후 클리핑에서
+`머신 러닝`이 들어오면 표면형 비교로 같은 Concept를 갱신한다. 한글·영문
+교차 매칭은 분류기가 번역명·영문명·약어를 aliases에 포함하고 위 후보 탐색이
+이를 비교하는 방식이다.
+
+이 파이프라인은 새 Build부터 중복 생성을 막고 기존 canonical 문서를 재사용한다.
+이미 DB에 entity·concept로 동시에 저장된 과거 중복을 삭제·이관하는 소급 정리는
+출처와 관계를 함께 옮겨야 하므로 별도 maintenance migration 범위다.
+
 DB MVP 계약에서 `schema/schema.md`는 Graph Snapshot으로 자동 생성하고,
 DB 무결성 Hash는 SHA-256 64자를 유지한다. source/index/log는 현재
 Build Artifact로 반환하며 실제 Vault 파일 Export는 별도 Adapter 범위다.

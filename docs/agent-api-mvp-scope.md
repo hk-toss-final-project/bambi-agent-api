@@ -53,7 +53,7 @@
 - [x] `WSE-001` 웹 클리핑 이벤트 수신 — `wiki_source_events` + Frontmatter 필드 저장
 - [x] `WSE-011` 이벤트 중복 처리 방지 — `user_id + source_event_id` 식별 및 DB Unique·Upsert 적용
 - [x] `WSE-013` 이벤트 처리 상태 관리 — Claim·완료·실패 시 Source Event 상태 동기화
-- [x] `WSE-014` 온보딩 관심사 시드 수신 — 온보딩 컨텍스트 수신 시 선택 Category·Topic을 시드 Markdown으로 합성해 `onboarding_seed` 원본·Wiki Build Job으로 접수한다. Builder는 `source_metadata.labels`를 LLM 없이 결정적으로 Concept로 만든 뒤 기존 Build·Snapshot·INT-011 경로를 재사용한다. 선택 내용 기반 멱등, best-effort(컨텍스트 저장과 분리)
+- [x] `WSE-014` 온보딩 관심사 시드 수신 — 온보딩 컨텍스트 수신 시 선택 Category·Topic을 시드 Markdown으로 합성해 `onboarding_seed` 원본·Wiki Build Job으로 접수한다. Builder는 `source_metadata.labels`를 LLM 없이 원자 Concept로 만든다(`AI·머신러닝` → `AI`, `머신러닝`). 이후 기존 Build·Snapshot·INT-011 경로를 재사용한다. 선택 내용 기반 멱등, best-effort(컨텍스트 저장과 분리)
 - [x] `PWIKI-006` 개인 Wiki 문서 버전 관리 — 원본 Version·Wiki Version·Build Snapshot 분리 보존
 - [x] `PWIKI-007` Wiki 문서 출처 추적 — `wiki_document_sources` 연결
 - [ ] `PWIKI-011` Wiki 문서 정규화 — ❌ 독립 정규화 기능 미구현. Frontmatter 저장은 `WSE-001/DB-002`, Wiki 구조 변환은 `WBA-003`이 담당하며 기존 항등 위임 함수는 스텁으로 복원
@@ -65,7 +65,7 @@
 - [x] `PWIKI-002` 개인 Wiki 문서 생성 — Entity·Concept·Schema 증분 생성
 - [x] `PWIKI-003` 개인 Wiki 문서 조회 — 목록·상세·Build·Graph·연결 상위 Node(top-nodes)
 - [x] `PWIKI-005` 개인 Wiki 문서 삭제 — soft-delete + Chunk 검색 제외 (동기·멱등). 삭제 정책은 Service 소유, `pwiki_005` facade는 영속화 계층 `delete_wiki_document_and_record_event`에 위임 (WBA-015와 동일 실행 경로 공유). D1 잠정: 재등장 시 기본 부활, tombstone 없음
-- [x] `PWIKI-008` Wiki 문서 중복 제거 — ⚠️ 같은 `document_key` Upsert·병합은 구현, 유사 문서 의미 판단은 LLM 프롬프트에 위임
+- [x] `PWIKI-008` Wiki 문서 중복 제거 — 같은 `document_key` Upsert에 더해 Unicode NFKC·대소문자·공백·구두점 제거 표면형으로 기존 title·aliases를 비교한다. 동일 kind 단일 후보는 코드로 병합하고, namespace 충돌·복수 후보만 별도 LLM identity 판정기에 한 번에 전달한다. 판정 응답은 제공된 기존 key와 incoming label만 허용하며 저장 전 canonical 중복 품질 게이트를 통과해야 한다.
 - [x] `PWE-001` 개인 Wiki 문서 Chunking
 - [x] `PWE-002` Chunk 저장 — `wiki_chunks` 멱등 Upsert
 - [ ] `PWE-004` Embedding 생성 — ❌ 보류(2026-07-20 결정). 활용처(Vector 검색)가 없어 실행 경로에서 제외했으며 생성 유틸(`generate_wiki_embeddings`)은 재도입 대비로 유지

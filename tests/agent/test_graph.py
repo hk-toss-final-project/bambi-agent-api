@@ -77,7 +77,7 @@ def _fake_persisted() -> SimpleNamespace:
 def test_run_personal_wiki_build_assembles_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Wiki 그래프가 조회→분류→계획→저장→임베딩 순서로 결과를 조립한다."""
+    """Wiki 그래프가 분류→identity 판정→품질 검증→저장 순서로 결과를 조립한다."""
     order: list[str] = []
     plan = SimpleNamespace(
         index=SimpleNamespace(content="index"),
@@ -112,10 +112,35 @@ def test_run_personal_wiki_build_assembles_result(
         assert kwargs["model"] == "test-model"
         return "classification"
 
+    def fake_prepare_identity(**kwargs: Any) -> SimpleNamespace:
+        """LLM 판정이 필요한 identity 충돌 한 건을 반환한다."""
+        order.append("prepare_identity")
+        assert kwargs["classification"] == "classification"
+        return SimpleNamespace(classification="classification", conflicts=("conflict",))
+
+    def fake_resolve_identity(**kwargs: Any) -> SimpleNamespace:
+        """identity 충돌을 해결한 고정 분류 결과를 반환한다."""
+        order.append("resolve_identity")
+        assert kwargs["source_title"] == "원본 제목"
+        return SimpleNamespace(
+            classification="resolved-classification",
+            model="test-resolver",
+            resolved_conflict_count=1,
+            input_tokens=120,
+            output_tokens=30,
+        )
+
+    def fake_quality_gate(**kwargs: Any) -> str:
+        """저장 전 품질 검증 호출을 기록하고 분류 결과를 통과시킨다."""
+        order.append("quality_gate")
+        assert kwargs["classification"] == "resolved-classification"
+        return kwargs["classification"]
+
     async def fake_wba_003(**kwargs: Any) -> SimpleNamespace:
         """WBA-003 계획 함수 호출을 기록하고 고정 계획을 반환한다."""
         order.append("plan")
-        assert kwargs["classification"] == "classification"
+        assert kwargs["classification"] == "resolved-classification"
+        assert kwargs["model"] == "test-model;identity=test-resolver"
         return plan
 
     async def fake_pwiki_002(
@@ -142,6 +167,13 @@ def test_run_personal_wiki_build_assembles_result(
     monkeypatch.setattr(agent_graph, "list_existing_wiki_entries", fake_entries)
     monkeypatch.setattr(agent_graph, "list_existing_wiki_relations", fake_relations)
     monkeypatch.setattr(agent_graph, "classify_source_for_wiki", fake_classify)
+    monkeypatch.setattr(
+        agent_graph, "prepare_wiki_identity_resolution", fake_prepare_identity
+    )
+    monkeypatch.setattr(
+        agent_graph, "resolve_wiki_identity_conflicts", fake_resolve_identity
+    )
+    monkeypatch.setattr(agent_graph, "validate_wiki_identity_quality", fake_quality_gate)
     monkeypatch.setattr(agent_graph, "wba_003", fake_wba_003)
     monkeypatch.setattr(agent_graph, "pwiki_002", fake_pwiki_002)
     monkeypatch.setattr(agent_graph, "int_011", fake_int_011)
@@ -157,7 +189,16 @@ def test_run_personal_wiki_build_assembles_result(
         )
     )
 
-    assert order == ["load_source", "classify", "plan", "persist", "recalculate"]
+    assert order == [
+        "load_source",
+        "classify",
+        "prepare_identity",
+        "resolve_identity",
+        "quality_gate",
+        "plan",
+        "persist",
+        "recalculate",
+    ]
     assert result["source_document_id"] == "source-1"
     assert result["wiki_version_id"] == "wiki-version-1"
     assert result["chunk_count"] == 2
@@ -165,6 +206,12 @@ def test_run_personal_wiki_build_assembles_result(
     assert result["stored_relation_count"] == 4
     assert result["isolated_node_count"] == 1
     assert result["relation_warnings"] == ["관계 경고"]
+    assert result["identity_resolution"] == {
+        "model": "test-resolver",
+        "resolved_conflict_count": 1,
+        "input_tokens": 120,
+        "output_tokens": 30,
+    }
     assert "embedding_count" not in result
     assert result["affected_documents"][0]["document_key"] == "entity-key"
     assert result["artifacts"]["index"] == "index"
@@ -200,6 +247,10 @@ def test_run_personal_wiki_build_materializes_onboarding_labels_without_llm(
         """온보딩 시드에서 일반 LLM 분류가 실행되면 실패시킨다."""
         raise AssertionError("온보딩 시드는 LLM 분류기를 호출하면 안 됩니다.")
 
+    def fail_if_identity_llm_is_called(**kwargs: Any) -> object:
+        """표면형 충돌이 없는 온보딩에서 identity LLM 실행을 금지한다."""
+        raise AssertionError("온보딩 원자 주제는 identity LLM을 호출하면 안 됩니다.")
+
     async def fake_wba_003(**kwargs: Any) -> SimpleNamespace:
         """결정적 분류 결과와 모델 표식을 기록한다."""
         captured["classification"] = kwargs["classification"]
@@ -223,6 +274,9 @@ def test_run_personal_wiki_build_materializes_onboarding_labels_without_llm(
     monkeypatch.setattr(agent_graph, "list_existing_wiki_entries", fake_listing)
     monkeypatch.setattr(agent_graph, "list_existing_wiki_relations", fake_listing)
     monkeypatch.setattr(agent_graph, "classify_source_for_wiki", fail_if_llm_is_called)
+    monkeypatch.setattr(
+        agent_graph, "resolve_wiki_identity_conflicts", fail_if_identity_llm_is_called
+    )
     monkeypatch.setattr(agent_graph, "wba_003", fake_wba_003)
     monkeypatch.setattr(agent_graph, "pwiki_002", fake_pwiki_002)
     monkeypatch.setattr(agent_graph, "int_011", fake_int_011)
@@ -239,10 +293,14 @@ def test_run_personal_wiki_build_materializes_onboarding_labels_without_llm(
 
     classification = captured["classification"]
     assert [concept.title for concept in classification.concepts] == [
-        "AI·머신러닝",
+        "AI",
+        "머신러닝",
         "반도체",
     ]
-    assert captured["model"] == "deterministic:onboarding-seed-v1"
+    assert captured["model"] == (
+        "deterministic:onboarding-seed-v1;identity=deterministic:wiki-surface-v1"
+    )
+    assert result["identity_resolution"]["resolved_conflict_count"] == 0
     assert result["wiki_version_id"] == "wiki-version-1"
 
 
@@ -275,6 +333,14 @@ def test_run_personal_wiki_build_survives_interest_recalc_failure(
         """고정 Build 계획을 반환한다."""
         return plan
 
+    def fake_prepare_identity(**kwargs: Any) -> SimpleNamespace:
+        """충돌이 없는 고정 identity 초안을 반환한다."""
+        return SimpleNamespace(classification="classification", conflicts=())
+
+    def fake_quality_gate(**kwargs: Any) -> str:
+        """고정 분류 결과를 저장 전 검증에서 통과시킨다."""
+        return kwargs["classification"]
+
     async def fake_pwiki_002(connection: Any, **kwargs: Any) -> SimpleNamespace:
         """고정 저장 결과를 반환한다."""
         return _fake_persisted()
@@ -294,6 +360,10 @@ def test_run_personal_wiki_build_survives_interest_recalc_failure(
     monkeypatch.setattr(
         agent_graph, "classify_source_for_wiki", lambda **kwargs: "classification"
     )
+    monkeypatch.setattr(
+        agent_graph, "prepare_wiki_identity_resolution", fake_prepare_identity
+    )
+    monkeypatch.setattr(agent_graph, "validate_wiki_identity_quality", fake_quality_gate)
     monkeypatch.setattr(agent_graph, "wba_003", fake_wba_003)
     monkeypatch.setattr(agent_graph, "pwiki_002", fake_pwiki_002)
     monkeypatch.setattr(agent_graph, "int_011", failing_int_011)

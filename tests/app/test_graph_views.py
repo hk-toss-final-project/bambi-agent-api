@@ -30,7 +30,17 @@ def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
         "assistant",
         "change-history",
     }
-    assert "load_source" in diagrams["personal-wiki"].mermaid
+    for node in (
+        "load_source",
+        "classify",
+        "prepare_identity",
+        "resolve_identity",
+        "quality_gate",
+        "plan",
+        "persist",
+        "finalize",
+    ):
+        assert node in diagrams["personal-wiki"].mermaid
     assert "load_context" in diagrams["report-generation"].mermaid
     # 토글이 켜졌을 때 generate를 대체하는 분기가 그래프에 실제로 있어야 한다.
     assert "change_history" in diagrams["report-generation"].mermaid
