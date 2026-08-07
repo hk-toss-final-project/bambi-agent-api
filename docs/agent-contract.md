@@ -198,30 +198,57 @@
 
   - `content_type`과 다른 축이다. `content_type`=콘텐츠 종류(기본 `interest_news_card`), `report_type`=생성 맥락.
   - 생략하면 `""`. 이전에 저장된 Snapshot도 `""`로 읽힌다.
-- **특정 관심분야 리포트 (`INTEREST_BUNDLE`, 2026-08-07):**
-  `POST /generations`에 `generation_scope="INTEREST_BUNDLE"`과 현재 활성
-  `user_interests.id` UUID인 `interest_id`를 보낸다. 온보딩
-  `selected_category_ids`·`selected_topic_ids`와 다른 ID 공간이다. Agent는 활성·
-  비차단 상태를 검증하고 관심사 루트와 Wiki 1홉 노드 최대 2개를 접수 시점 Job에
-  고정한다. `topic`·`topics`를 Service가 조립하지 않는다. 발행 Snapshot은
-  `generation_scope`·`source_interest_id`·`interest_profile_id`·
-  `bundle_keywords`로 실제 생성 범위를 돌려준다.
-  - **`generation_scope` 와 `report_type` 은 별개 축이다** (2026-08-07 정우석 확정).
-    `report_type`=생성 유형(누가 왜 걸었나), `generation_scope`=**검색 범위**(얼마나 넓게 찾나).
-    아침 브리핑을 `INTEREST_BUNDLE`로 넓혀도 **`report_type` 은 `MORNING_BRIEFING` 그대로**다 —
-    리포트 개수가 늘어나는 게 아니라, 지금 "위키 태그 1등 하나만 검색"하던 것을 연결 키워드까지
-    보게 해 **여전히 1건**을 만드는 구조이기 때문이다. 새 `report_type` 값을 만들지 않는다.
-  - **`interest_id` = Service `GET /api/wiki/tags` 응답의 `tagId`** — 별도 조회 API가 필요 없다.
-    Service 는 이미 이 값을 받고 있다. 2026-07-29 명명 결정으로 agent 필드 `interest_id`·`topic` 을
-    `tagId`·`tag` 로 리네임해 내려주고 있어 이름만 달라 보일 뿐 같은 값이다
-    (`WikiTag.tagId` = `@JsonAlias("interest_id")`).
+- **⭐ 한 리포트가 여러 주제를 묶을 때 = `topics[]` (2026-08-07 정우석 확정)**
 
-    | agent 필드 | Service 노출 이름 | 비고 |
-    |---|---|---|
-    | `interest_id` | `tagId` | `INTEREST_BUNDLE` 의 `interest_id` 로 그대로 넣으면 된다 |
-    | `topic` | `tag` | 온보딩에서 사용자가 고르는 "topic"과는 다른 개념이라 리네임했다 |
+  `generation_scope`는 `SINGLE_TOPIC`(기본) 그대로 두고 `topics` 배열만 채운다.
 
-    ⚠️ 온보딩 `selected_category_ids`·`selected_topic_ids` 와는 **다른 ID 공간**이다(위 본문 참고).
+  | 경로 | 보내는 것 |
+  |---|---|
+  | 아침 브리핑 | `topic="오늘의 관심사 브리핑"` + `topics=[위키 태그 점수 상위 3개]` |
+  | 온디맨드 | `topic`=사용자가 고른 관심사 1개, `topics` 안 보냄 |
+
+  - **⚠️ `topics`를 채우면 `topic` 의 의미가 바뀐다.** 평소 `topic` 은 agent 의 **실제 검색어**지만
+    (2026-08-05 항목 참고), `topics` 가 있으면 `topic` 은 **카드 제목·`generation_topic` 표시용**이 되고
+    본문이 다루는 주제는 `topics` 목록이 결정한다. 두 규칙이 정반대라 헷갈리기 쉬우니 여기 못 박는다.
+    그래서 아침 브리핑은 고정 문구를 `topic` 에 넣어도 된다 — 그 문구로 검색하지 않는다.
+  - `topics` 는 **최대 5개**, 각 항목 500자 이하. **순서가 곧 리포트 안 섹션 순서**다.
+  - 비우거나 안 보내면 기존과 똑같이 `topic` 하나짜리 단일 주제 리포트다(회귀 없음).
+  - 주제마다 조사를 따로 돌리므로 **개수에 비례해 생성 시간이 늘어난다.** Worker lease(600초) 안에
+    끝나야 하고, 사람 수 × 주제 수만큼 워커 처리량이 필요하다(3주제 전환 시 워커 증설 = 우석 몫).
+  - `report_type` 은 **`MORNING_BRIEFING` 그대로**다. 주제를 여러 개 묶어도 리포트는 **여전히 1건**이라
+    생성 유형이 달라지지 않는다. 새 `report_type` 값을 만들지 않는다.
+
+- **특정 관심분야 리포트 (`INTEREST_BUNDLE`) — 채택하지 않음 (2026-08-07)**
+
+  agent 에는 구현돼 있다. `generation_scope="INTEREST_BUNDLE"` + 활성 `user_interests.id` UUID인
+  `interest_id`를 보내면, agent 가 관심사 루트와 Wiki 1홉 노드 최대 2개를 접수 시점 Job에 고정하고
+  발행 Snapshot에 `source_interest_id`·`interest_profile_id`·`bundle_keywords`로 실제 범위를 돌려준다.
+
+  - **Service 는 쓰지 않는다.** 아침 브리핑은 위 `topics[]` 로 간다. 08-07 13:34에 `INTEREST_BUNDLE`
+    채택으로 정했다가 14:34에 철회했다.
+  - **둘은 동시에 못 보낸다** — agent 스키마가 `INTEREST_BUNDLE에서는 topics를 함께 보낼 수 없습니다`
+    로 거부한다(`app/schemas/mvp.py` `model_validator`). 그래서 택일이었다.
+  - **방향이 다르다.** `topics[]` 는 관심사 **여러 개를 한 장에** 묶고, `INTEREST_BUNDLE` 은 관심사
+    **하나를 연결 키워드까지 깊게** 판다. 아침 브리핑 제품 정의("밤사이 쌓인 소식을 아침 5분에")가
+    전자라서 `topics[]` 를 골랐다.
+  - **결과 통제권도 다르다.** `INTEREST_BUNDLE` 의 이웃 키워드는 사용자가 고르는 게 아니라 위키
+    관계(LLM이 추출해 둔 것)에서 자동으로 딸려오고, 프롬프트가 이웃을 독립 섹션으로 나누지 않아
+    본문에 녹아든다 → 무관한 주제가 섞여도 눈에 잘 안 띈다. 사용자가 결과를 검토하지 않고 그냥
+    받는 자동 리포트에서는 이 예측 불가능성이 더 위험하다(2026-08-07 김기용 분석).
+  - 프리즈 이후 재논의 대상으로 남긴다. 그때 필요한 `interest_id` 는 아래 대응표를 보면 된다.
+
+- **`interest_id` = Service `GET /api/wiki/tags` 응답의 `tagId`** — 별도 조회 API가 필요 없다.
+  Service 는 이미 이 값을 받고 있다. 2026-07-29 명명 결정으로 agent 필드 `interest_id`·`topic` 을
+  `tagId`·`tag` 로 리네임해 내려주고 있어 이름만 달라 보일 뿐 같은 값이다
+  (`WikiTag.tagId` = `@JsonAlias("interest_id")`).
+
+  | agent 필드 | Service 노출 이름 | 비고 |
+  |---|---|---|
+  | `interest_id` | `tagId` | `INTEREST_BUNDLE` 을 쓰게 되면 이 값을 그대로 넣으면 된다 |
+  | `topic` | `tag` | 온보딩에서 사용자가 고르는 "topic"과는 다른 개념이라 리네임했다 |
+
+  ⚠️ 온보딩 `selected_category_ids`·`selected_topic_ids` 와는 **다른 ID 공간**이다.
+  아침 브리핑 `topics[]` 에 넣는 값은 이 id 가 아니라 **태그 이름(`tag`)** 이다.
 - **온보딩 첫 리포트 = agent 자체 경로 (`ONBOARDING`)**
   - 위 시드(WSE-014)가 끝나면 **agent가 스스로** 첫 리포트 생성을 건다. **Service 트리거가 아니다** — `POST /generations` 호출이 없다.
   - 그래서 이 경로의 Snapshot은 `report_type`을 **agent가 `ONBOARDING`으로 채운다**(Service가 실어 보낼 값이 없으므로).
