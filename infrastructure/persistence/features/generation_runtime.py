@@ -233,6 +233,28 @@ async def enqueue_report_generation_job(
     resolved_topic = (topic or "").strip()
     resolved_topics = list(topics or [])
     if generation_scope == "INTEREST_BUNDLE":
+        existing_bundle_cursor = await connection.execute(
+            """
+            SELECT
+                job.id,
+                generation_request.id AS generation_request_id
+            FROM agent.agent_jobs AS job
+            JOIN agent.generation_requests AS generation_request
+              ON generation_request.job_id = job.id
+            WHERE job.feature_id = 'SVC-008'
+              AND COALESCE(job.user_id, '') = %s
+              AND job.idempotency_key = %s
+            """,
+            (user_id, idempotency_key),
+        )
+        existing_bundle = await existing_bundle_cursor.fetchone()
+        if existing_bundle is not None:
+            return PersistedGenerationSubmission(
+                job_id=str(existing_bundle["id"]),
+                generation_request_id=str(
+                    existing_bundle["generation_request_id"]
+                ),
+            )
         bundle = await int_012(
             ConnectionInterestBundleRepository(connection),
             user_id,

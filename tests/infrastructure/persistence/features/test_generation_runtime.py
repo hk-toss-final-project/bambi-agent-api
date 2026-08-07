@@ -234,6 +234,7 @@ def test_enqueue_snapshots_active_interest_bundle() -> None:
     connection = _FakeConnection(
         [
             [{"id": "context-1", "plan": "free", "preferred_language": "ko"}],
+            [],
             [
                 {
                     "profile_id": "profile-1",
@@ -274,7 +275,7 @@ def test_enqueue_snapshots_active_interest_bundle() -> None:
     )
 
     assert submission.job_id == "job-1"
-    _, job_params = connection.executed[3]
+    _, job_params = connection.executed[4]
     assert job_params is not None
     payload = job_params[2].obj
     assert payload["topic"] == "생성형 AI"
@@ -282,10 +283,39 @@ def test_enqueue_snapshots_active_interest_bundle() -> None:
     assert payload["generation_scope"] == "INTEREST_BUNDLE"
     assert payload["interest_bundle"]["profile_version"] == 7
     assert payload["interest_bundle"]["keywords"] == ["생성형 AI", "AI 에이전트"]
-    _, request_params = connection.executed[4]
+    _, request_params = connection.executed[5]
     assert request_params is not None
     assert request_params[3] == "생성형 AI"
     assert request_params[-1].obj["interest_bundle"] == payload["interest_bundle"]
+
+
+def test_enqueue_bundle_retry_returns_snapshot_without_revalidating_interest() -> None:
+    """멱등 재시도는 Profile이 바뀌어도 최초 Job과 묶음 스냅샷을 그대로 재사용한다."""
+    connection = _FakeConnection(
+        [
+            [{"id": "context-1", "plan": "free", "preferred_language": "ko"}],
+            [{"id": "job-1", "generation_request_id": "request-1"}],
+        ]
+    )
+
+    submission = asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-bundle",
+            topic=None,
+            generation_scope="INTEREST_BUNDLE",
+            interest_id="33333333-3333-4333-8333-333333333333",
+            content_type="interest_news_card",
+            language="ko",
+            request_id="request-retry",
+        )
+    )
+
+    assert submission.job_id == "job-1"
+    assert submission.generation_request_id == "request-1"
+    assert len(connection.executed) == 2
+    assert "user_interests" not in connection.executed[1][0]
 
 
 def test_uuid_or_none_keeps_wiki_ids_and_drops_live_references() -> None:
