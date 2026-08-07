@@ -179,12 +179,23 @@
 
 ### 4.2-1 온보딩 관심사 시드 + 웰컴 리포트 (콜드스타트)
 - **시드 (WSE-014, agent 자동):** `signup_interests`가 있으면 context 수신 시 agent가 선택을 시드 Markdown으로 합성해 `onboarding_seed` 원본·Personal Wiki Build Job으로 **자동 접수**한다. Builder는 `source_metadata.labels`를 LLM 없이 결정적으로 Concept로 만들고 기존 Build·Snapshot 저장 경로를 재사용한다. 빌드 완료 후 INT-011 훅이 관심사 프로필을 파생시킨다. 컨텍스트 저장과 분리된 best-effort이고, 선택 내용 기반 멱등(같은 온보딩 반복 전달 → 시드 1개). Service의 추가 호출 불필요.
+- **⚠️ `topic` 은 표시용 라벨이 아니라 agent 의 실제 검색어다 (2026-08-05 확인, 실사고 있었음).**
+  Service 가 `"오늘의 관심사 뉴스"` 같은 **고정 문구**를 넣었더니 agent 가 그 문구로 검색해
+  관심사와 무관한 기사를 물어왔다. 지금은 **사용자의 실제 관심 주제 문자열**(예: `"SK하이닉스"`)을 넣는다.
+  화면에 보여줄 문구가 필요하면 Service 응답에서 따로 만들고, 이 필드에는 넣지 않는다.
 - **`report_type` (요청 → Snapshot 그대로 반환, 2026-08-06 이송우 협의):**
   `POST /generations`에 `report_type`(선택, 기본 `""`)을 실으면, agent가 해석하지 않고
   발행 Snapshot의 `report_type`에 **받은 문자열 그대로** 담아 Claim 시점에 돌려준다.
   요청과 Claim 시점이 떨어져 있어 Service가 카드의 생성 맥락을 다시 짜맞추지 않게 하려는 값이다.
   - 값의 정의·검증은 **Service가 소유**한다. agent는 목록을 두지 않고 저장·반환만 한다(길이 64자 제한).
-  - 현재 쓰는 값: `MORNING_BRIEFING`(스케줄러 아침요약), `ON_DEMAND`(사용자 즉시 생성).
+  - **현재 쓰는 값 3개** (2026-08-06 확정, 값 추가 시 Service가 공지):
+
+    | 값 | 트리거 | 누가 보내나 |
+    |---|---|---|
+    | `MORNING_BRIEFING` | 매일 아침 스케줄러 | Service |
+    | `ON_DEMAND` | 사용자가 "지금 생성" | Service |
+    | `ONBOARDING` | 온보딩 관심사 저장 직후 첫 리포트 | **agent 자신** (아래 참고) |
+
   - `content_type`과 다른 축이다. `content_type`=콘텐츠 종류(기본 `interest_news_card`), `report_type`=생성 맥락.
   - 생략하면 `""`. 이전에 저장된 Snapshot도 `""`로 읽힌다.
 - **특정 관심분야 리포트 (`INTEREST_BUNDLE`, 2026-08-07):**
@@ -195,7 +206,14 @@
   고정한다. `topic`·`topics`를 Service가 조립하지 않는다. 발행 Snapshot은
   `generation_scope`·`source_interest_id`·`interest_profile_id`·
   `bundle_keywords`로 실제 생성 범위를 돌려준다.
-- **웰컴 리포트 (Service 트리거):** "가입 즉시 리포트 1개"는 생성 트리거라 MVP 결정(2026-07-20)상 Service 소유다. Service가 온보딩 완료 직후 `POST /generations`를 `topic`=대표 관심사(여러 개면 랜덤), `content_type`=`interest_news_card`, `idempotency_key`=`welcome:{user_id}`로 1회 호출한다(멱등키로 재호출해도 1개만).
+  - ⚠️ **Service 쪽 호출부는 아직 없다.** agent 준비는 끝났지만, Service 최종 스코프(2026-08-06)에서
+    "리포트 3방식(범주/전체)"이 제외돼 트리거를 만들지 않았다. 쓰기로 정해지면 이 경로에 붙일
+    `report_type` 값도 그때 Service가 정해 여기 추가한다.
+- **온보딩 첫 리포트 = agent 자체 경로 (`ONBOARDING`)**
+  - 위 시드(WSE-014)가 끝나면 **agent가 스스로** 첫 리포트 생성을 건다. **Service 트리거가 아니다** — `POST /generations` 호출이 없다.
+  - 그래서 이 경로의 Snapshot은 `report_type`을 **agent가 `ONBOARDING`으로 채운다**(Service가 실어 보낼 값이 없으므로).
+  - 값 이름은 Service가 정했다(2026-08-06). agent는 이 문자열을 하드코딩해 넣기만 한다.
+  - ⚠️ **2026-07-20 MVP 문서에 있던 "웰컴 리포트 = Service가 `idempotency_key=welcome:{user_id}`로 1회 호출"은 폐기됐다.** Service에 그 호출은 구현되지 않았고, 같은 자리를 위 agent 자체 경로가 채운다. 옛 문서를 보고 Service 쪽에서 중복 트리거를 만들지 않도록 여기 남긴다.
 
 ### 4.3 버전 관리 (핵심)
 - `context_version`은 **사용자별로 단조 증가**해야 한다. 같거나 작은 값 재전송 → `STALE_CONTEXT_VERSION`.
