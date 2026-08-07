@@ -8,10 +8,14 @@
 
 from __future__ import annotations
 
+import json
 import unicodedata
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
+
+from agent.llm.api import LlmCompletion, complete_with_usage, strip_json_fence
 
 from shared.wiki_models import (
     ConceptClassification,
@@ -29,6 +33,8 @@ class WikiIdentityOption:
     document_key: str
     title: str
     aliases: tuple[str, ...]
+    domain: str | None
+    summary: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +57,28 @@ class WikiResolutionDraft:
 
 
 @dataclass(frozen=True, slots=True)
+class WikiIdentityResolutionResult:
+    """identity 충돌 판정이 끝난 분류 결과와 LLM 사용량."""
+
+    classification: WikiClassification
+    model: str
+    resolved_conflict_count: int
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolutionDecision:
+    """검증을 마친 conflict별 canonical identity 선택."""
+
+    conflict_id: str
+    action: str
+    target_kind: str
+    target_key: str | None
+    canonical_label: str
+
+
+@dataclass(frozen=True, slots=True)
 class _IncomingNode:
     """분류 후보를 표면형 비교에 사용할 내부 노드로 표현한다."""
 
@@ -59,6 +87,18 @@ class _IncomingNode:
     label: str
     aliases: tuple[str, ...]
     value: EntityClassification | ConceptClassification
+
+
+_PROMPT_PATH = (
+    Path(__file__).parents[2]
+    / "prompts"
+    / "templates"
+    / "personal_wiki_identity_resolver.md"
+)
+_SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8").strip()
+_DETERMINISTIC_RESOLVER_MODEL = "deterministic:wiki-surface-v1"
+
+type IdentityResolverCompletion = Callable[..., LlmCompletion]
 
 
 def normalize_wiki_surface(value: str) -> str:
@@ -146,7 +186,15 @@ def _merge_entities(
             current,
             description=_merge_text(current.description, incoming.description),
             aliases=_unique(
-                [*current.aliases, incoming.name, *incoming.aliases]
+                [
+                    *current.aliases,
+                    *(
+                        [incoming.name]
+                        if incoming.name.casefold() != current.name.casefold()
+                        else []
+                    ),
+                    *incoming.aliases,
+                ]
             ),
             related_entity_names=_unique(
                 [*current.related_entity_names, *incoming.related_entity_names]
@@ -194,7 +242,15 @@ def _merge_concepts(
                 [*current.related_concepts, *incoming.related_concepts]
             ),
             aliases=_unique(
-                [*current.aliases, incoming.title, *incoming.aliases]
+                [
+                    *current.aliases,
+                    *(
+                        [incoming.title]
+                        if incoming.title.casefold() != current.title.casefold()
+                        else []
+                    ),
+                    *incoming.aliases,
+                ]
             ),
             mentions=_unique([*current.mentions, *incoming.mentions]),
             overlaps_existing=current.overlaps_existing or incoming.overlaps_existing,
@@ -314,6 +370,8 @@ def prepare_wiki_identity_resolution(
                         document_key=option.document_key,
                         title=option.title,
                         aliases=_metadata_aliases(option),
+                        domain=option.domain,
+                        summary=option.summary,
                     )
                     for option in options
                 ),
@@ -337,4 +395,417 @@ def prepare_wiki_identity_resolution(
             concepts=[item for item in concepts if isinstance(item, ConceptClassification)],
         ),
         conflicts=tuple(conflicts),
+    )
+
+
+def _conflict_payload(
+    conflict: WikiIdentityConflict, classification: WikiClassification
+) -> dict[str, object]:
+    """한 충돌의 후보 정보와 분류 근거를 LLM 입력 객체로 만든다."""
+    incoming_details: list[dict[str, object]] = []
+    wanted = list(zip(conflict.incoming_kinds, conflict.incoming_labels, strict=True))
+    for kind, label in wanted:
+        if kind == "entity":
+            match = next(
+                (
+                    entity
+                    for entity in classification.entities
+                    if normalize_wiki_surface(entity.name)
+                    == normalize_wiki_surface(label)
+                ),
+                None,
+            )
+            if match is not None:
+                incoming_details.append(
+                    {
+                        "kind": "entity",
+                        "label": match.name,
+                        "subtype": match.subtype,
+                        "description": match.description,
+                        "aliases": match.aliases,
+                        "mentions": match.mentions,
+                    }
+                )
+        else:
+            match = next(
+                (
+                    concept
+                    for concept in classification.concepts
+                    if normalize_wiki_surface(concept.title)
+                    == normalize_wiki_surface(label)
+                ),
+                None,
+            )
+            if match is not None:
+                incoming_details.append(
+                    {
+                        "kind": "concept",
+                        "label": match.title,
+                        "subtype": match.subtype,
+                        "definition": match.definition,
+                        "aliases": match.aliases,
+                        "mentions": match.mentions,
+                    }
+                )
+    return {
+        "conflict_id": conflict.conflict_id,
+        "incoming": incoming_details,
+        "existing_options": [
+            {
+                "kind": option.document_kind,
+                "key": option.document_key,
+                "title": option.title,
+                "aliases": list(option.aliases),
+                "domain": option.domain,
+                "summary": option.summary,
+            }
+            for option in conflict.options
+        ],
+    }
+
+
+def _parse_resolution_decisions(
+    raw_response: str, draft: WikiResolutionDraft
+) -> list[_ResolutionDecision]:
+    """LLM JSON을 허용된 conflict·기존 key만 가리키는 판정 목록으로 검증한다."""
+    try:
+        payload = json.loads(strip_json_fence(raw_response))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Wiki identity 판정 응답이 JSON 형식이 아닙니다: {error}") from error
+    if not isinstance(payload, dict) or not isinstance(payload.get("resolutions"), list):
+        raise ValueError("Wiki identity 판정 응답에 resolutions 배열이 없습니다.")
+
+    conflicts = {conflict.conflict_id: conflict for conflict in draft.conflicts}
+    decisions: dict[str, _ResolutionDecision] = {}
+    for raw in payload["resolutions"]:
+        if not isinstance(raw, dict):
+            raise ValueError("Wiki identity 판정 항목이 JSON 객체가 아닙니다.")
+        conflict_id = str(raw.get("conflict_id") or "").strip()
+        if conflict_id not in conflicts:
+            raise ValueError(f"알 수 없는 Wiki identity conflict입니다: {conflict_id}")
+        if conflict_id in decisions:
+            raise ValueError(f"Wiki identity conflict 판정이 중복되었습니다: {conflict_id}")
+        conflict = conflicts[conflict_id]
+        action = str(raw.get("action") or "").strip().lower()
+        target_kind = str(raw.get("target_kind") or "").strip().lower()
+        if target_kind not in {"entity", "concept"}:
+            raise ValueError(f"허용되지 않은 canonical kind입니다: {target_kind}")
+        target_key = str(raw.get("target_key") or "").strip() or None
+
+        if action == "match_existing":
+            option = next(
+                (
+                    candidate
+                    for candidate in conflict.options
+                    if candidate.document_kind == target_kind
+                    and candidate.document_key == target_key
+                ),
+                None,
+            )
+            if option is None:
+                raise ValueError(
+                    f"판정 후보에 없는 기존 Wiki key입니다: {target_kind}/{target_key}"
+                )
+            canonical_label = option.title
+        elif action == "create":
+            if target_key is not None:
+                raise ValueError("새 Wiki identity 생성에는 target_key를 지정할 수 없습니다.")
+            requested_label = str(raw.get("canonical_label") or "").strip()
+            canonical_label = next(
+                (
+                    label
+                    for label in conflict.incoming_labels
+                    if normalize_wiki_surface(label)
+                    == normalize_wiki_surface(requested_label)
+                ),
+                "",
+            )
+            if not canonical_label:
+                raise ValueError(
+                    "새 canonical label은 incoming label 중 하나여야 합니다."
+                )
+        else:
+            raise ValueError(f"허용되지 않은 Wiki identity action입니다: {action}")
+        decisions[conflict_id] = _ResolutionDecision(
+            conflict_id=conflict_id,
+            action=action,
+            target_kind=target_kind,
+            target_key=target_key,
+            canonical_label=canonical_label,
+        )
+
+    missing = [conflict_id for conflict_id in conflicts if conflict_id not in decisions]
+    if missing:
+        raise ValueError(f"Wiki identity 판정이 누락되었습니다: {', '.join(missing)}")
+    return [decisions[conflict.conflict_id] for conflict in draft.conflicts]
+
+
+def _to_entity(
+    value: EntityClassification | ConceptClassification,
+    canonical_label: str,
+) -> EntityClassification:
+    """entity·concept 후보를 canonical entity 병합 입력으로 변환한다."""
+    if isinstance(value, EntityClassification):
+        return replace(
+            value,
+            name=canonical_label,
+            aliases=_unique(
+                [*value.aliases, *([value.name] if value.name != canonical_label else [])]
+            ),
+            matched_existing_key=None,
+        )
+    return EntityClassification(
+        name=canonical_label,
+        subtype="other",
+        description=value.definition,
+        aliases=_unique(
+            [*value.aliases, *([value.title] if value.title != canonical_label else [])]
+        ),
+        related_entity_names=value.related_entity_names,
+        related_concepts=value.related_concepts,
+        mentions=value.mentions,
+    )
+
+
+def _to_concept(
+    value: EntityClassification | ConceptClassification,
+    canonical_label: str,
+) -> ConceptClassification:
+    """entity·concept 후보를 canonical concept 병합 입력으로 변환한다."""
+    if isinstance(value, ConceptClassification):
+        return replace(
+            value,
+            title=canonical_label,
+            aliases=_unique(
+                [*value.aliases, *([value.title] if value.title != canonical_label else [])]
+            ),
+            matched_existing_key=None,
+            overlaps_existing=False,
+        )
+    return ConceptClassification(
+        title=canonical_label,
+        subtype="term",
+        definition=value.description,
+        related_entity_names=value.related_entity_names,
+        related_concepts=value.related_concepts,
+        aliases=_unique(
+            [*value.aliases, *([value.name] if value.name != canonical_label else [])]
+        ),
+        mentions=value.mentions,
+    )
+
+
+def _select_conflict_values(
+    classification: WikiClassification, conflict: WikiIdentityConflict
+) -> list[EntityClassification | ConceptClassification]:
+    """충돌의 kind·label 쌍에 해당하는 현재 분류 후보를 순서대로 찾는다."""
+    values: list[EntityClassification | ConceptClassification] = []
+    used: set[int] = set()
+    combined: list[tuple[str, EntityClassification | ConceptClassification]] = [
+        *(('entity', entity) for entity in classification.entities),
+        *(('concept', concept) for concept in classification.concepts),
+    ]
+    for kind, label in zip(
+        conflict.incoming_kinds, conflict.incoming_labels, strict=True
+    ):
+        marker = normalize_wiki_surface(label)
+        selected = next(
+            (
+                (index, value)
+                for index, (candidate_kind, value) in enumerate(combined)
+                if index not in used
+                and candidate_kind == kind
+                and normalize_wiki_surface(
+                    value.name
+                    if isinstance(value, EntityClassification)
+                    else value.title
+                )
+                == marker
+            ),
+            None,
+        )
+        if selected is None:
+            raise ValueError(f"Wiki identity 분류 후보를 다시 찾을 수 없습니다: {kind}/{label}")
+        index, value = selected
+        used.add(index)
+        values.append(value)
+    return values
+
+
+def _rewrite_relations(
+    classification: WikiClassification,
+    mappings: dict[tuple[str, str], tuple[str, str, str | None]],
+) -> list:
+    """canonical kind·이름 변경을 관계 양 끝에 반영하고 자기 관계를 제거한다."""
+    rewritten = []
+    signatures: set[tuple[str, str, str, str, str]] = set()
+    for relation in classification.relations:
+        source = mappings.get(
+            (relation.source_kind, normalize_wiki_surface(relation.source_name)),
+            (
+                relation.source_kind,
+                relation.source_name,
+                relation.source_matched_key,
+            ),
+        )
+        target = mappings.get(
+            (relation.target_kind, normalize_wiki_surface(relation.target_name)),
+            (
+                relation.target_kind,
+                relation.target_name,
+                relation.target_matched_key,
+            ),
+        )
+        if (
+            source[0] == target[0]
+            and normalize_wiki_surface(source[1])
+            == normalize_wiki_surface(target[1])
+        ):
+            continue
+        if source[0] == "concept" and target[0] == "entity":
+            source, target = target, source
+        relation_type = {
+            ("entity", "entity"): "entity_relation",
+            ("entity", "concept"): "applies_concept",
+            ("concept", "concept"): "related_concept",
+        }.get((source[0], target[0]))
+        if relation_type is None:
+            continue
+        signature = (
+            source[0],
+            normalize_wiki_surface(source[1]),
+            target[0],
+            normalize_wiki_surface(target[1]),
+            relation_type,
+        )
+        if signature in signatures:
+            continue
+        signatures.add(signature)
+        rewritten.append(
+            replace(
+                relation,
+                source_kind=source[0],
+                source_name=source[1],
+                source_matched_key=source[2],
+                target_kind=target[0],
+                target_name=target[1],
+                target_matched_key=target[2],
+                relation_type=relation_type,
+            )
+        )
+    return rewritten
+
+
+def apply_wiki_identity_decisions(
+    draft: WikiResolutionDraft, decisions: Sequence[_ResolutionDecision]
+) -> WikiClassification:
+    """검증된 판정을 분류 노드와 관계에 적용해 canonical 결과를 만든다."""
+    classification = draft.classification
+    entities = list(classification.entities)
+    concepts = list(classification.concepts)
+    mappings: dict[tuple[str, str], tuple[str, str, str | None]] = {}
+    conflict_by_id = {conflict.conflict_id: conflict for conflict in draft.conflicts}
+    for decision in decisions:
+        conflict = conflict_by_id[decision.conflict_id]
+        values = _select_conflict_values(
+            replace(classification, entities=entities, concepts=concepts), conflict
+        )
+        for value in values:
+            if isinstance(value, EntityClassification):
+                entities.remove(value)
+                old_kind, old_label = "entity", value.name
+            else:
+                concepts.remove(value)
+                old_kind, old_label = "concept", value.title
+            mappings[(old_kind, normalize_wiki_surface(old_label))] = (
+                decision.target_kind,
+                decision.canonical_label,
+                decision.target_key,
+            )
+
+        target_entry = (
+            ExistingWikiEntry(
+                document_kind=decision.target_kind,
+                document_key=decision.target_key or "",
+                title=decision.canonical_label,
+                domain=None,
+                summary=None,
+            )
+            if decision.target_key
+            else None
+        )
+        if decision.target_kind == "entity":
+            values.sort(key=lambda value: not isinstance(value, EntityClassification))
+            converted = [
+                _IncomingNode(
+                    ref=f"resolved:{index}",
+                    document_kind="entity",
+                    label=decision.canonical_label,
+                    aliases=(),
+                    value=_to_entity(value, decision.canonical_label),
+                )
+                for index, value in enumerate(values)
+            ]
+            entities.append(_merge_entities(converted, target_entry))
+        else:
+            values.sort(key=lambda value: not isinstance(value, ConceptClassification))
+            converted = [
+                _IncomingNode(
+                    ref=f"resolved:{index}",
+                    document_kind="concept",
+                    label=decision.canonical_label,
+                    aliases=(),
+                    value=_to_concept(value, decision.canonical_label),
+                )
+                for index, value in enumerate(values)
+            ]
+            concepts.append(_merge_concepts(converted, target_entry))
+
+    return replace(
+        classification,
+        entities=entities,
+        concepts=concepts,
+        relations=_rewrite_relations(classification, mappings),
+    )
+
+
+def resolve_wiki_identity_conflicts(
+    *,
+    draft: WikiResolutionDraft,
+    source_title: str,
+    model: str,
+    completion: IdentityResolverCompletion = complete_with_usage,
+) -> WikiIdentityResolutionResult:
+    """남은 후보군을 한 번의 LLM 호출로 판정하고 canonical 분류를 반환한다."""
+    if not draft.conflicts:
+        return WikiIdentityResolutionResult(
+            classification=draft.classification,
+            model=_DETERMINISTIC_RESOLVER_MODEL,
+            resolved_conflict_count=0,
+        )
+    user_prompt = json.dumps(
+        {
+            "source_title": source_title,
+            "source_summary": draft.classification.source_summary,
+            "conflicts": [
+                _conflict_payload(conflict, draft.classification)
+                for conflict in draft.conflicts
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    completed = completion(
+        _SYSTEM_PROMPT,
+        user_prompt,
+        model=model,
+        temperature=0,
+    )
+    decisions = _parse_resolution_decisions(completed.text, draft)
+    return WikiIdentityResolutionResult(
+        classification=apply_wiki_identity_decisions(draft, decisions),
+        model=completed.model,
+        resolved_conflict_count=len(decisions),
+        input_tokens=completed.input_tokens,
+        output_tokens=completed.output_tokens,
     )

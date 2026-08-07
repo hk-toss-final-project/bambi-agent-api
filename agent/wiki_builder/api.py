@@ -24,9 +24,11 @@ from .features.planning import build_wiki_plan
 from .features.identity_resolution import (
     WikiIdentityConflict,
     WikiIdentityOption,
+    WikiIdentityResolutionResult,
     WikiResolutionDraft,
     normalize_wiki_surface,
     prepare_wiki_identity_resolution,
+    resolve_wiki_identity_conflicts,
 )
 
 __all__ = [
@@ -49,7 +51,9 @@ __all__ = [
     "wba_017",
     "WikiIdentityConflict",
     "WikiIdentityOption",
+    "WikiIdentityResolutionResult",
     "WikiResolutionDraft",
     "normalize_wiki_surface",
     "prepare_wiki_identity_resolution",
+    "resolve_wiki_identity_conflicts",
 ]

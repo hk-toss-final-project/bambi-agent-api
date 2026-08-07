@@ -14,6 +14,8 @@
 - subtype은 theory, method, field, phenomenon, standard, term, other 중 하나다.
 - subtype은 other를 마지막 수단으로만 쓴다. 설계 원칙·기법·방법론은 method, 사건·추세는 phenomenon으로 분류한다.
 - 기존 concept과 의미가 겹치면 matched_existing_key를 채우고 overlaps_existing=true로 표시한다. 이때도 concepts 배열에서 빼지 말고 함께 반환한다.
+- 같은 concept의 번역명·영문명·약어·띄어쓰기 변형은 aliases에 함께 넣고 별도 concept으로 중복 생성하지 마라.
+- 표기 언어나 형태가 달라도(한글명과 영문명, 붙여쓰기와 띄어쓰기) 같은 의미라면 기존 concept의 matched_existing_key를 우선 사용하라.
 
 [관계 판단 기준]
 - 각 entity와 concept에 E1, E2, C1처럼 응답 안에서 고유한 ref를 부여한다.
