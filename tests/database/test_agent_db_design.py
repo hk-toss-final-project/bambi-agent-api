@@ -55,7 +55,7 @@ CHANGE_HISTORY_MIGRATION_PATH = (
     PROJECT_ROOT
     / "database"
     / "migrations"
-    / "0012_change_history_delta.sql"
+    / "0015_change_history_delta.sql"
 )
 MIGRATION_PATHS = (
     MIGRATION_PATH,
@@ -249,7 +249,8 @@ def test_change_history_migration_adds_delta_facts_without_touching_existing_tab
     assert "supersedes_fact_id uuid REFERENCES agent.change_history_facts(id)" in migration
     assert "change_history_fact_isolation" in migration
     assert "agent.current_user_id()" in migration
-    assert "VALUES (12," in migration
+    # 0012 가 0012_global_source_search_body 와 겹쳐 건너뛰어져 0015 로 재발행했다(2026-08-07).
+    assert "VALUES (15," in migration
     assert "ALTER TABLE" not in migration.replace(
         "ALTER TABLE agent.change_history_runs ENABLE ROW LEVEL SECURITY", ""
     ).replace("ALTER TABLE agent.change_history_facts ENABLE ROW LEVEL SECURITY", "")

@@ -1,19 +1,11 @@
--- 0012_change_history_delta.sql 재발행(2026-08-07).
+-- 변경점(Delta) 추적 에이전트가 실행마다 추출한 팩트와 실행 메타를 저장한다.
+-- 이 테이블은 "출력"이 아니라 다음 실행의 Base 재료다. publish_snapshots는
+-- Markdown 본문뿐이라 팩트 단위 대조에 쓸 수 없어서 별도 저장소를 둔다.
+-- 기존 테이블은 변경하지 않는 순수 additive Migration이다.
 --
--- 왜 재발행하는가: 0012 번호가 0012_global_source_search_body.sql 과 겹쳤다.
--- 러너는 파일명 접두사로 version 을 뽑고 schema_migrations 에 그 version 이 이미
--- 있으면 건너뛴다. 운영 DB는 0012_global_source_search_body 가 먼저(08-05) 적용돼
--- version 12 를 기록했고, 뒤에 들어온 delta(08-06)는 "이미 적용됨"으로 조용히
--- 건너뛰어졌다. 배포 로그에 `Skipping applied migration 0012_change_history_delta.sql`
--- 로 남지만 실패가 아니라 눈에 띄지 않았다. 결과적으로 Delta 추적 에이전트 코드는
--- 배포됐는데 테이블이 없는 상태였다(change_history_enabled 기본 false 라 아직 표면화 X).
---
--- 원본 0012_change_history_delta.sql 은 삭제한다. 남겨두면 새 DB에서 알파벳 순서상
--- delta 가 먼저 적용돼 version 12 를 선점하고, 이번엔 global_source_search_body 가
--- 건너뛰어지는 정반대 사고가 난다.
---
--- 모든 DDL 에 존재 검사를 붙였다. delta 가 version 12 로 이미 적용된 로컬 DB 에서도
--- 안전하게 재실행된다. 내용은 원본과 동일하며 스키마 변경은 없다.
+-- 2026-08-07 재발행: 원래 0012 였는데 0012_global_source_search_body.sql 과 번호가
+-- 겹쳐 러너가 조용히 건너뛰었다(운영에 한 번도 적용되지 않았다). 내용은 그대로 두고
+-- 파일명과 기록 version 만 15 로 옮겼다.
 
 \set ON_ERROR_STOP on
 
@@ -21,7 +13,7 @@ BEGIN;
 
 -- 한 번의 변경점 추적 실행. "직전 보고서 시점"을 날짜가 아니라 이 실행 기록으로
 -- 잡는다(매일 돌지 않아도 델타가 끊기지 않게 한다).
-CREATE TABLE IF NOT EXISTS agent.change_history_runs (
+CREATE TABLE agent.change_history_runs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id text NOT NULL,
     topic text NOT NULL,
@@ -42,12 +34,12 @@ CREATE TABLE IF NOT EXISTS agent.change_history_runs (
     created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
-CREATE INDEX IF NOT EXISTS ix_change_history_runs_latest
+CREATE INDEX ix_change_history_runs_latest
     ON agent.change_history_runs (user_id, topic, created_at DESC);
 
 -- 팩트 하나 = (subject, attribute, fact_value) 세 요소. 중복·갱신 판정은
 -- (subject, attribute) 매칭으로 하고, fact_value가 다르면 갱신으로 본다.
-CREATE TABLE IF NOT EXISTS agent.change_history_facts (
+CREATE TABLE agent.change_history_facts (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     run_id uuid NOT NULL REFERENCES agent.change_history_runs(id) ON DELETE CASCADE,
     user_id text NOT NULL,
@@ -75,38 +67,32 @@ CREATE TABLE IF NOT EXISTS agent.change_history_facts (
 
 -- search_base_facts 도구와 Base 조회는 항상 (user_id, topic) 소속의 active
 -- 팩트만 본다. 다른 사용자·다른 토픽 팩트를 가리킨 오매칭은 조회에서 걸러진다.
-CREATE INDEX IF NOT EXISTS ix_change_history_facts_scope
+CREATE INDEX ix_change_history_facts_scope
     ON agent.change_history_facts (user_id, topic, status, created_at DESC);
-CREATE INDEX IF NOT EXISTS ix_change_history_facts_subject
+CREATE INDEX ix_change_history_facts_subject
     ON agent.change_history_facts (user_id, topic, subject, attribute);
 -- 도구의 query 검색은 subject·attribute·statement를 trigram으로 훑는다
 -- (임베딩·벡터스토어는 이 규모에 과설계라 쓰지 않는다).
-CREATE INDEX IF NOT EXISTS ix_change_history_facts_search
+CREATE INDEX ix_change_history_facts_search
     ON agent.change_history_facts USING gin (
         (subject || ' ' || attribute || ' ' || statement) gin_trgm_ops
     );
 
--- RLS 활성화는 이미 켜져 있어도 오류가 아니다.
 ALTER TABLE agent.change_history_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE agent.change_history_facts ENABLE ROW LEVEL SECURITY;
 
--- CREATE POLICY / CREATE TRIGGER 에는 IF NOT EXISTS 가 없어 DROP 선행으로 멱등화한다.
-DROP POLICY IF EXISTS change_history_run_isolation ON agent.change_history_runs;
 CREATE POLICY change_history_run_isolation ON agent.change_history_runs
     USING (agent.has_system_scope() OR user_id = agent.current_user_id())
     WITH CHECK (agent.has_system_scope() OR user_id = agent.current_user_id());
-DROP POLICY IF EXISTS change_history_fact_isolation ON agent.change_history_facts;
 CREATE POLICY change_history_fact_isolation ON agent.change_history_facts
     USING (agent.has_system_scope() OR user_id = agent.current_user_id())
     WITH CHECK (agent.has_system_scope() OR user_id = agent.current_user_id());
 
-DROP TRIGGER IF EXISTS set_change_history_facts_updated_at ON agent.change_history_facts;
 CREATE TRIGGER set_change_history_facts_updated_at
     BEFORE UPDATE ON agent.change_history_facts
     FOR EACH ROW EXECUTE FUNCTION agent.set_updated_at();
 
 INSERT INTO agent.schema_migrations (version, description)
-VALUES (15, 'Store change history delta facts and per-run delta metadata (reissue of duplicated 0012)')
-ON CONFLICT (version) DO NOTHING;
+VALUES (15, 'Store change history delta facts and per-run delta metadata');
 
 COMMIT;
