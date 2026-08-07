@@ -191,6 +191,53 @@ def test_run_report_job_invokes_generation_graph_runner() -> None:
     assert call["topic"] == "개인화"
     assert call["content_type"] == "article"
     assert call["attempt_number"] == 1
+    assert call["generation_scope"] == "SINGLE_TOPIC"
+    assert call["interest_bundle"] is None
+
+
+def test_development_workflow_passes_interest_bundle_snapshot() -> None:
+    """개발 즉시 실행 경로도 운영 Worker와 같은 관심사 묶음 스냅샷을 사용한다."""
+    bundle = {
+        "root": {"keyword": "생성형 AI"},
+        "neighbors": [{"keyword": "AI 에이전트"}],
+        "keywords": ["생성형 AI", "AI 에이전트"],
+    }
+
+    class _BundleRepository(_FakeAgentRepository):
+        """범주 리포트 Job payload를 반환하는 저장소 대역."""
+
+        async def claim_job(
+            self, *, job_id: str, worker_id: str, lease_seconds: int
+        ) -> ClaimedJobRecord | None:
+            """기본 점유 결과의 payload를 관심사 묶음 요청으로 바꾼다."""
+            claimed = await super().claim_job(
+                job_id=job_id, worker_id=worker_id, lease_seconds=lease_seconds
+            )
+            assert claimed is not None
+            return replace(
+                claimed,
+                payload={
+                    "topic": "생성형 AI",
+                    "content_type": "interest_news_card",
+                    "language": "ko",
+                    "generation_scope": "INTEREST_BUNDLE",
+                    "interest_bundle": bundle,
+                },
+            )
+
+    repository = _BundleRepository("report_generation")
+    runner = _RecordingRunner({"content_candidate_id": "candidate-1"})
+    service = AgentWorkflowService(
+        repository,  # type: ignore[arg-type]
+        Settings(environment="test", dev_agent_timeout_seconds=30),
+        report_runner=runner,
+    )
+
+    response = asyncio.run(service.run_job("job-1"))
+
+    assert response.status == "completed"
+    assert runner.calls[0]["generation_scope"] == "INTEREST_BUNDLE"
+    assert runner.calls[0]["interest_bundle"] == bundle
 
 
 class _FakeBatchRepository(_FakeAgentRepository):

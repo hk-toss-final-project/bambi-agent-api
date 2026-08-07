@@ -115,6 +115,17 @@ class AgentWorkflowService:
             change_history_enabled = bool(
                 job.payload.get("change_history_enabled") or False
             )
+            generation_scope = str(
+                job.payload.get("generation_scope") or "SINGLE_TOPIC"
+            )
+            raw_interest_bundle = job.payload.get("interest_bundle")
+            interest_bundle = (
+                dict(raw_interest_bundle)
+                if isinstance(raw_interest_bundle, dict)
+                else None
+            )
+            if generation_scope == "INTEREST_BUNDLE" and interest_bundle is None:
+                raise ValueError("INTEREST_BUNDLE Job Payload에 interest_bundle이 필요합니다.")
             async with self._repository.acquire_connection() as connection:
                 feature_result = await report_001(
                     FeatureRequest(
@@ -133,6 +144,8 @@ class AgentWorkflowService:
                                 language=language,
                                 model=self._settings.report_llm_model,
                                 change_history_enabled=change_history_enabled,
+                                generation_scope=generation_scope,
+                                interest_bundle=interest_bundle,
                             )
                         },
                     )

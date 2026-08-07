@@ -96,6 +96,39 @@ def test_generate_report_content_passes_stable_context_to_llm(monkeypatch: pytes
     assert result.citation_references == ("P1",)
 
 
+def test_generate_interest_bundle_keeps_root_as_one_integrated_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """범주 묶음은 연결 키워드를 독립 섹션이 아닌 루트 관심사의 관점으로 지시한다."""
+    captured: dict[str, str] = {}
+
+    def _complete(system_prompt: str, user_prompt: str, model: str) -> str:
+        """실제 LLM 호출 없이 범주 작성 지시를 기록한다."""
+        captured["user"] = user_prompt
+        return (
+            '{"title":"생성 제목","summary":"생성 요약",'
+            '"body":"루트 중심 분석이다. [P1]","citation_refs":["P1"]}'
+        )
+
+    monkeypatch.setattr(generation, "complete", _complete)
+
+    generate_report_content(
+        topic="생성형 AI",
+        content_type="interest_news_card",
+        language="ko",
+        contexts=[_context()],
+        interest_bundle={
+            "root": {"keyword": "생성형 AI"},
+            "neighbors": [{"keyword": "AI 에이전트"}, {"keyword": "RAG"}],
+        },
+    )
+
+    assert "주제: 생성형 AI" in captured["user"]
+    assert "연결 관점: AI 에이전트, RAG" in captured["user"]
+    assert "하나의 통합 리포트" in captured["user"]
+    assert "독립 리포트" in captured["user"]
+
+
 def _good_json(body: str) -> str:
     """품질 검사를 통과하는 생성 응답 JSON을 만든다."""
     import json

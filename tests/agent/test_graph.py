@@ -10,6 +10,7 @@ import pytest
 
 from agent import graph as agent_graph
 from agent.report_builder.api import ResearchOutcome
+from shared.report_models import ReportContextDocument
 
 
 class _FakeConnection:
@@ -514,6 +515,59 @@ def test_research_agent_output_becomes_generation_context(
     assert result == {"content_candidate_id": "candidate-1"}
 
 
+def test_interest_bundle_snapshot_reaches_research_and_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """그래프는 Job의 연결 키워드를 조사 계획과 루트 중심 생성에 그대로 전달한다."""
+    order: list[str] = []
+    _patch_generation_tail(monkeypatch, order)
+    generated_with: dict[str, Any] = {}
+    bundle = {
+        "root": {"keyword": "생성형 AI"},
+        "neighbors": [{"keyword": "AI 에이전트"}, {"keyword": "RAG"}],
+        "keywords": ["생성형 AI", "AI 에이전트", "RAG"],
+    }
+
+    async def fake_research(connection: Any, **kwargs: Any) -> Any:
+        """조사원이 전달받은 결정적 연결 키워드를 검증한다."""
+        assert kwargs["planned_queries"] == ["AI 에이전트", "RAG"]
+        return SimpleNamespace(
+            documents=("doc-1",),
+            calls=(),
+            collected_live=False,
+            notes="묶음 조사 완료",
+            stop_reason="final",
+        )
+
+    def fake_generate(**kwargs: Any) -> str:
+        """생성기에 전달된 관심사 묶음 스냅샷을 기록한다."""
+        generated_with.update(kwargs)
+        return "generated"
+
+    monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: True)
+    monkeypatch.setattr(agent_graph, "research_context", fake_research)
+    monkeypatch.setattr(
+        agent_graph, "generate_report_content_with_quality", fake_generate
+    )
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="생성형 AI",
+            content_type="interest_news_card",
+            language="ko",
+            generation_scope="INTEREST_BUNDLE",
+            interest_bundle=bundle,
+        )
+    )
+
+    assert generated_with["interest_bundle"] == bundle
+    assert generated_with["topic"] == "생성형 AI"
+
+
 def test_research_failure_falls_back_to_fixed_collection_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -899,3 +953,99 @@ def test_single_topic_report_keeps_the_existing_path(
     )
 
     assert searched == ["반도체"]
+
+
+def test_interest_bundle_fixed_path_searches_snapshot_keywords_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """조사원을 꺼도 루트·스냅샷 이웃을 검색하고 현재 Wiki 이웃은 다시 읽지 않는다."""
+    searched: list[str] = []
+    collected_with: list[str] = []
+    generated_with: dict[str, Any] = {}
+    bundle = {
+        "root": {"keyword": "생성형 AI"},
+        "neighbors": [{"keyword": "AI 에이전트"}, {"keyword": "RAG"}],
+        "keywords": ["생성형 AI", "AI 에이전트", "RAG"],
+    }
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """DB 사용자 Scope 설정을 생략한다."""
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[Any]:
+        """검색어마다 고유한 개인 Wiki 근거를 반환한다."""
+        query = kwargs["query"]
+        searched.append(query)
+        number = len(searched)
+        return [
+            ReportContextDocument(
+                reference="P1",
+                document_version_id=f"version-{number}",
+                chunk_id=f"chunk-{number}",
+                namespace_key="user/user-1",
+                title=query,
+                content=f"{query} 근거",
+                url=None,
+                score=0.9,
+            )
+        ]
+
+    async def fake_freshness(connection: Any, ids: list[str]) -> dict[str, Any]:
+        """Global 문서가 없는 검색 결과의 신선도 조회를 생략한다."""
+        return {}
+
+    async def fake_prag_006(contexts: list[Any]) -> list[Any]:
+        """맥락화 단계를 통과시킨다."""
+        return contexts
+
+    async def fail_related(*args: Any, **kwargs: Any) -> list[Any]:
+        """현재 Wiki 이웃을 다시 조회하면 테스트를 실패시킨다."""
+        raise AssertionError("스냅샷 범주는 현재 Wiki 이웃을 다시 조회하면 안 된다.")
+
+    def fake_collect(topic: str, user_id: str, **kwargs: Any) -> list[Any]:
+        """실시간 수집에 스냅샷 이웃이 전달되는지 기록한다."""
+        collected_with.extend(kwargs["related_keywords"])
+        return []
+
+    def fake_generate(**kwargs: Any) -> str:
+        """생성 입력을 기록한다."""
+        generated_with.update(kwargs)
+        return "generated"
+
+    async def fake_persist(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """저장 결과를 고정한다."""
+        return {"content_candidate_id": "candidate-1"}
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "load_global_document_freshness", fake_freshness)
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
+    monkeypatch.setattr(agent_graph, "list_related_wiki_keywords", fail_related)
+    monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect)
+    monkeypatch.setattr(
+        agent_graph, "generate_report_content_with_quality", fake_generate
+    )
+    monkeypatch.setattr(agent_graph, "prag_007", fake_persist)
+    _disable_research(monkeypatch)
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="생성형 AI",
+            content_type="interest_news_card",
+            language="ko",
+            generation_scope="INTEREST_BUNDLE",
+            interest_bundle=bundle,
+        )
+    )
+
+    assert searched == ["생성형 AI", "AI 에이전트", "RAG"]
+    assert collected_with == ["AI 에이전트", "RAG"]
+    assert [context.reference for context in generated_with["contexts"]] == [
+        "P1",
+        "P2",
+        "P3",
+    ]
+    assert generated_with["interest_bundle"] == bundle

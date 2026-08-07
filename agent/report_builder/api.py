@@ -24,6 +24,7 @@ from .features.pool_context import (
 from .features.critic import CriticVerdict, critic_enabled, review_report
 from .features.researcher import (
     ResearchOutcome,
+    merge_context_documents,
     research_agent_enabled,
     research_context,
 )
@@ -69,4 +70,5 @@ __all__ = [
     "report_019",
     "report_020",
     "report_021",
+    "merge_context_documents",
 ]

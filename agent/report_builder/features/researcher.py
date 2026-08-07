@@ -258,6 +258,16 @@ class DocumentCollector:
         return tuple(self._documents)
 
 
+def merge_context_documents(
+    *groups: Sequence[ReportContextDocument],
+) -> list[ReportContextDocument]:
+    """여러 검색 결과의 중복을 없애고 충돌하지 않는 참조 번호로 합친다."""
+    collector = DocumentCollector()
+    for documents in groups:
+        collector.add(documents)
+    return list(collector.documents)
+
+
 def build_research_tools(
     connection: AsyncConnection[DictRow],
     *,
@@ -319,6 +329,7 @@ async def research_context(
     topic_intent: str = "news",
     model: str = "gpt-4.1-mini",
     max_iterations: int = RESEARCH_MAX_ITERATIONS,
+    planned_queries: Sequence[str] = (),
 ) -> ResearchOutcome:
     """조사원이 저장된 자료를 훑고, 부족하면 실시간 수집으로 보강한다.
 
@@ -338,20 +349,49 @@ async def research_context(
         topic_intent: 토픽 성격("news"|"evergreen")
         model: 조사 판단과 수집에 사용할 모델
         max_iterations: 도구 호출 왕복 상한
+        planned_queries: 호출자가 확정한 연결 키워드. LLM 판단 전에 결정적으로
+            저장 검색하고, 실시간 보강에도 같은 목록을 사용한다.
 
     Returns:
         모인 근거 문서와 도구 호출 기록
     """
     collector = DocumentCollector()
+    normalized_planned: list[str] = []
+    seen_queries = {topic.strip().casefold()}
+    for raw_query in planned_queries:
+        query = str(raw_query).strip()
+        marker = query.casefold()
+        if not query or marker in seen_queries:
+            continue
+        seen_queries.add(marker)
+        normalized_planned.append(query)
+    if normalized_planned:
+        for query in (topic, *normalized_planned):
+            found = await search_stored_documents(
+                connection,
+                user_id=user_id,
+                query=query,
+                topic_intent=topic_intent,
+            )
+            collector.add(found)
     tools = build_research_tools(
         connection,
         user_id=user_id,
         topic_intent=topic_intent,
         collector=collector,
     )
+    planned_note = (
+        "\n아래 검색어는 요청에서 확정되어 이미 저장 자료 검색을 마쳤다: "
+        + ", ".join([topic, *normalized_planned])
+        + "\n선계획 검색 결과:\n"
+        + describe_documents(collector.documents)
+        + "\n같은 검색을 반복하지 말고, 이 결과에서 꼭 필요한 추가 방향만 찾는다."
+        if normalized_planned
+        else ""
+    )
     result = await run_tool_loop(
         SYSTEM_PROMPT,
-        f"리포트 주제: {topic}\n이 주제로 리포트를 쓸 근거 자료를 모아라.",
+        f"리포트 주제: {topic}\n이 주제로 리포트를 쓸 근거 자료를 모아라.{planned_note}",
         tools,
         model=model,
         max_iterations=max_iterations,
@@ -370,7 +410,15 @@ async def research_context(
     if not (is_pool_sufficient(decision_pool) and relevant):
         collected_live = True
         try:
-            live = await to_thread(collect_live_context, topic, user_id, model=model)
+            live_kwargs: dict[str, object] = {"model": model}
+            if normalized_planned:
+                live_kwargs["related_keywords"] = normalized_planned
+            live = await to_thread(
+                collect_live_context,
+                topic,
+                user_id,
+                **live_kwargs,
+            )
             collector.add(live)
         except Exception:
             logger.exception("실시간 수집에 실패해 저장된 자료만 사용합니다.")

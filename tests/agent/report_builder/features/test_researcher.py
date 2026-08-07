@@ -17,6 +17,7 @@ from agent.report_builder.features import researcher
 from agent.report_builder.features.researcher import (
     DocumentCollector,
     build_research_tools,
+    merge_context_documents,
     research_context,
 )
 from shared.report_models import ReportContextDocument
@@ -132,6 +133,22 @@ def test_search_pool_tool_deduplicates_across_calls(
 
     assert len(collector.documents) == 1
     assert second == "결과 없음."
+
+
+def test_merge_context_documents_renumbers_references_and_deduplicates() -> None:
+    """키워드별 검색 결과를 합칠 때 참조 충돌과 같은 URL 중복을 제거한다."""
+    shared = _document("G1", title="공통 기사", url="https://example.com/shared")
+    merged = merge_context_documents(
+        [shared, _document("P1", title="루트 Wiki")],
+        [shared, _document("G1", title="연결 기사", url="https://example.com/neighbor")],
+    )
+
+    assert [document.reference for document in merged] == ["G1", "P1", "G2"]
+    assert [document.title for document in merged] == [
+        "공통 기사",
+        "루트 Wiki",
+        "연결 기사",
+    ]
 
 
 def test_collector_renumbers_references_across_searches(
@@ -273,6 +290,43 @@ def test_live_collection_is_skipped_when_stored_documents_suffice(
 
     assert collected == []
     assert len(outcome.documents) == 3
+
+
+def test_planned_queries_search_bundle_before_llm_and_reuse_it_for_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """고정된 연결 키워드는 LLM 판단 전에 검색하고 한 번의 실시간 보강에 재사용한다."""
+    queries = _patch_db(
+        monkeypatch,
+        [_document("G1", title="루트 기사", url="https://example.com/root")],
+    )
+    captured_live: list[list[str]] = []
+
+    async def fake_loop(system_prompt, user_prompt, tools, **kwargs):
+        """선계획 검색 뒤 추가 도구 호출 없이 조사를 끝낸다."""
+        assert "이미 저장 자료 검색을 마쳤다" in user_prompt
+        return ToolLoopResult(text="선계획 검색 완료", stop_reason="final")
+
+    def fake_collect(topic, user_id, *, model, related_keywords):
+        """실시간 보강에 전달된 연결 키워드를 기록한다."""
+        captured_live.append(list(related_keywords))
+        return []
+
+    monkeypatch.setattr(researcher, "run_tool_loop", fake_loop)
+    monkeypatch.setattr(researcher, "collect_live_context", fake_collect)
+
+    outcome = asyncio.run(
+        research_context(
+            _FakeConnection(),  # type: ignore[arg-type]
+            topic="생성형 AI",
+            user_id="user-1",
+            planned_queries=["AI 에이전트", "RAG", "ai 에이전트"],
+        )
+    )
+
+    assert queries == ["생성형 AI", "AI 에이전트", "RAG"]
+    assert captured_live == [["AI 에이전트", "RAG"]]
+    assert outcome.collected_live is True
 
 
 def test_research_survives_live_collection_failure(
