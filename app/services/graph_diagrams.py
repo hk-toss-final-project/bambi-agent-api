@@ -17,6 +17,15 @@ from agent.graph import build_personal_wiki_graph, build_report_generation_graph
 
 
 @dataclass(frozen=True, slots=True)
+class GraphNodeDescription:
+    """그래프 노드 하나의 표시 이름과 기능 설명."""
+
+    node_id: str
+    title: str
+    description: str
+
+
+@dataclass(frozen=True, slots=True)
 class GraphDiagram:
     """시각화 페이지에 표시할 그래프 하나의 정보."""
 
@@ -24,11 +33,52 @@ class GraphDiagram:
     title: str
     description: str
     mermaid: str
+    nodes: tuple[GraphNodeDescription, ...]
+
+
+_START_NODE = GraphNodeDescription(
+    node_id="__start__",
+    title="실행 시작",
+    description="그래프 실행 요청을 받아 첫 작업 노드로 전달하는 LangGraph 시작점입니다.",
+)
+_END_NODE = GraphNodeDescription(
+    node_id="__end__",
+    title="실행 종료",
+    description="모든 작업이 끝난 상태를 받아 그래프 실행을 완료하는 LangGraph 종료점입니다.",
+)
 
 
 def _mermaid_of(compiled: Any) -> str:
     """컴파일된 LangGraph에서 Mermaid 정의 텍스트를 추출한다."""
     return compiled.get_graph().draw_mermaid()
+
+
+def _diagram(
+    *,
+    slug: str,
+    title: str,
+    description: str,
+    compiled: Any,
+    nodes: tuple[GraphNodeDescription, ...],
+) -> GraphDiagram:
+    """실제 그래프와 노드 설명의 정합성을 확인해 다이어그램 정보를 만든다."""
+    documented_nodes = (_START_NODE, *nodes, _END_NODE)
+    actual_ids = set(compiled.get_graph().nodes)
+    documented_ids = {node.node_id for node in documented_nodes}
+    if actual_ids != documented_ids:
+        missing = sorted(actual_ids - documented_ids)
+        unknown = sorted(documented_ids - actual_ids)
+        raise ValueError(
+            f"그래프 노드 설명이 실제 구조와 다릅니다: slug={slug}, "
+            f"missing={missing}, unknown={unknown}"
+        )
+    return GraphDiagram(
+        slug=slug,
+        title=title,
+        description=description,
+        mermaid=_mermaid_of(compiled),
+        nodes=documented_nodes,
+    )
 
 
 @lru_cache(maxsize=1)
@@ -40,7 +90,7 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
     이 전제는 tests/app/test_graph_diagrams.py가 회귀를 감지한다.
     """
     return (
-        GraphDiagram(
+        _diagram(
             slug="personal-wiki",
             title="Personal Wiki Build",
             description=(
@@ -49,9 +99,75 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                 "(resolve_identity) → canonical 중복 품질 검증(quality_gate) → "
                 "반영 계획(plan) → 문서·Chunk 저장(persist) → Job 결과 조립(finalize)"
             ),
-            mermaid=_mermaid_of(build_personal_wiki_graph(None)),
+            compiled=build_personal_wiki_graph(None),
+            nodes=(
+                GraphNodeDescription(
+                    node_id="load_source",
+                    title="원본과 기존 Wiki 조회",
+                    description=(
+                        "원본 문서 Version과 기존 Entity·Concept·관계를 하나의 조회 "
+                        "트랜잭션에서 읽고, 원문이 없으면 실행을 중단합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="classify",
+                    title="Wiki 항목 추출·분류",
+                    description=(
+                        "트랜잭션 밖에서 원본 유형과 기존 Wiki 상태를 참고해 새 "
+                        "Entity·Concept·관계 후보를 추출하고 분류합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="prepare_identity",
+                    title="표기 정규화와 충돌 탐색",
+                    description=(
+                        "표기만 다른 동일 노드는 결정적으로 병합하고, 의미 판단이 "
+                        "필요한 후보만 추려 resolve_identity 또는 quality_gate로 보냅니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="resolve_identity",
+                    title="모호한 Identity 판정",
+                    description=(
+                        "의미 충돌 후보가 있을 때만 LLM을 한 번 호출해 기존 노드와 "
+                        "합칠지 별도 노드로 둘지 판정합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="quality_gate",
+                    title="Canonical 품질 검증",
+                    description=(
+                        "canonical 중복과 잘못된 기존 key를 검사해 잘못된 Identity가 "
+                        "저장 단계로 넘어가지 않게 막습니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="plan",
+                    title="Wiki 반영 계획 생성",
+                    description=(
+                        "분류 결과와 기존 Wiki 상태를 비교해 만들거나 갱신할 문서·관계·"
+                        "Chunk·Snapshot의 Build 계획을 구성합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="persist",
+                    title="Wiki 결과 저장",
+                    description=(
+                        "계획된 문서·관계·Chunk와 Build Snapshot을 하나의 저장 "
+                        "트랜잭션으로 기록합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="finalize",
+                    title="Job 결과 조립",
+                    description=(
+                        "저장 결과와 Build 통계를 Job 결과 계약에 맞춰 조립하고, 변경된 "
+                        "문서와 Identity 판정 사용량을 함께 반환합니다."
+                    ),
+                ),
+            ),
         ),
-        GraphDiagram(
+        _diagram(
             slug="report-generation",
             title="Report Builder Generation",
             description=(
@@ -66,9 +182,60 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                 "만들고(꺼져 있으면 기존 경로 그대로), 그쪽이 실패하면 generate로 "
                 "되돌아간다."
             ),
-            mermaid=_mermaid_of(build_report_generation_graph(None)),
+            compiled=build_report_generation_graph(None),
+            nodes=(
+                GraphNodeDescription(
+                    node_id="research",
+                    title="근거 조사",
+                    description=(
+                        "조사원 에이전트가 주제별로 search_pool·collect_live 도구를 "
+                        "선택해 근거를 모읍니다. 실패하거나 빈손이면 다음 노드가 고정 "
+                        "수집 경로로 복구합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="load_context",
+                    title="생성 Context 선별",
+                    description=(
+                        "조사 결과를 생성용 Context로 정리합니다. 조사 자료가 없으면 개인 "
+                        "Wiki와 Global 풀을 검색하고, 필요할 때만 실시간 수집을 수행합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="generate",
+                    title="리포트 본문 생성",
+                    description=(
+                        "트랜잭션 밖에서 LLM으로 제목·본문·태그·인용을 생성하고 무료 "
+                        "품질 검사를 적용해 지연 시간과 함께 결과를 남깁니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="change_history",
+                    title="변경점 리포트 생성",
+                    description=(
+                        "변경점 추적 토글이 켜졌을 때 일반 생성 대신 서브그래프로 직전 "
+                        "보고서 이후의 변화를 만듭니다. 실패하면 generate로 복구합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="review",
+                    title="인용·사실관계 검토",
+                    description=(
+                        "검토자 에이전트가 초안 인용을 원문과 대조합니다. 일반 리포트의 "
+                        "사실관계 문제가 발견되면 교정 지시와 함께 최대 한 번 재생성합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="persist",
+                    title="리포트와 발행 정보 저장",
+                    description=(
+                        "생성 Run·후보·Citation·Snapshot·Outbox를 저장 트랜잭션에 기록하고 "
+                        "최종 발행 결과 계약을 반환합니다."
+                    ),
+                ),
+            ),
         ),
-        GraphDiagram(
+        _diagram(
             slug="change-history",
             title="변경점(Delta) 추적",
             description=(
@@ -80,16 +247,116 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                 "변화 없음·워커 1회 재작업 세 갈래를 판단한다. 조립 결과는 상위 "
                 "그래프의 review(Critic)로 이어진다."
             ),
-            mermaid=_mermaid_of(build_change_history_graph(None)),
+            compiled=build_change_history_graph(None),
+            nodes=(
+                GraphNodeDescription(
+                    node_id="prepare",
+                    title="비교 기준 조회",
+                    description=(
+                        "직전 발행 Snapshot의 요약과 과거 델타 팩트를 한 조회 트랜잭션에서 "
+                        "읽어 첫 실행 여부와 비교 기준을 준비합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="supervisor",
+                    title="다음 작업 결정",
+                    description=(
+                        "완료 상태·실패·재작업 예산을 코드로 판단해 diff, compose, impact, "
+                        "validate, assemble 중 다음 노드를 선택합니다. LLM은 호출하지 않습니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="diff",
+                    title="오늘 팩트와 과거 기록 대조",
+                    description=(
+                        "오늘 근거에서 구조화된 팩트를 추출하고 과거 기록을 도구로 조회해 "
+                        "신규·변경·중복 여부를 판정합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="compose",
+                    title="개요와 타임라인 생성",
+                    description=(
+                        "중복을 제외한 팩트와 직전 보고서 요약을 사용해 Overview와 시간순 "
+                        "타임라인을 한 번의 LLM 호출로 작성합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="impact",
+                    title="파급효과와 행동 지침 추론",
+                    description=(
+                        "정제된 변경 팩트를 바탕으로 의미·파급효과·권장 행동을 추론하며, "
+                        "필요하면 이 노드만 더 강한 모델을 사용합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="validate",
+                    title="정합성 검증",
+                    description=(
+                        "팩트 연결, 타임라인 날짜 범위, 인용 마커를 결정적 코드로 검사하고 "
+                        "문제가 난 워커와 교정 사유를 supervisor에 돌려줍니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="assemble",
+                    title="Markdown 리포트 조립",
+                    description=(
+                        "검증을 통과한 개요·타임라인·파급효과에 섹션 헤더를 붙여 하나의 "
+                        "Markdown으로 만들고 기존 무료 품질 검사를 적용합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="store",
+                    title="델타 실행과 팩트 저장",
+                    description=(
+                        "이번 실행 메타데이터와 유효 팩트를 다음 실행의 비교 기준으로 "
+                        "저장합니다. 저장 실패는 경고만 남기고 보고서 발행은 계속합니다."
+                    ),
+                ),
+            ),
         ),
-        GraphDiagram(
+        _diagram(
             slug="assistant",
             title="키워드 비서 리서치 에이전트",
             description=(
                 "검색어 초기화(plan) → 수집·선별(select) → 결과가 빈약하면 "
                 "검색어 재구성(reformulate) 후 재시도 → 보고서 작성(write_report)"
             ),
-            mermaid=_mermaid_of(build_assistant_graph()),
+            compiled=build_assistant_graph(),
+            nodes=(
+                GraphNodeDescription(
+                    node_id="plan",
+                    title="첫 검색어 계획",
+                    description=(
+                        "입력 토픽을 첫 검색어로 정하고 시도 이력·오류·재구성 한도를 "
+                        "초기화합니다. 결정적 코드이며 LLM을 호출하지 않습니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="select",
+                    title="자료 수집·선별과 재시도 판단",
+                    description=(
+                        "검색 파이프라인으로 자료를 수집·선별하고 실패 원인과 남은 시도 "
+                        "횟수를 분류해 재검색할지 보고서를 쓸지 결정합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="reformulate",
+                    title="검색어 재구성",
+                    description=(
+                        "결과 부족이 검색어로 해결될 수 있을 때 LLM으로 새 검색어를 "
+                        "제안합니다. 빈 값·중복·과도하게 긴 제안은 재시도하지 않습니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="write_report",
+                    title="브리핑 작성",
+                    description=(
+                        "선별 결과를 바탕으로 최종 Markdown 브리핑을 생성합니다. 근거만 "
+                        "필요한 호출에서는 불필요한 LLM 생성을 건너뜁니다."
+                    ),
+                ),
+            ),
         ),
     )
 
