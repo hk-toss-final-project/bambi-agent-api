@@ -809,3 +809,67 @@ def resolve_wiki_identity_conflicts(
         input_tokens=completed.input_tokens,
         output_tokens=completed.output_tokens,
     )
+
+
+def validate_wiki_identity_quality(
+    *,
+    classification: WikiClassification,
+    existing_entities: Sequence[ExistingWikiEntry],
+    existing_concepts: Sequence[ExistingWikiEntry],
+) -> WikiClassification:
+    """저장 직전 canonical 중복·잘못된 기존 key·자기 관계가 없는지 검증한다."""
+    existing_keys = {
+        "entity": {entry.document_key for entry in existing_entities},
+        "concept": {entry.document_key for entry in existing_concepts},
+    }
+    surface_owners: dict[str, set[str]] = defaultdict(set)
+    matched_owners: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for index, entity in enumerate(classification.entities):
+        owner = f"entity:{index}"
+        for surface in _surfaces(entity.name, entity.aliases):
+            surface_owners[surface].add(owner)
+        if entity.matched_existing_key:
+            if entity.matched_existing_key not in existing_keys["entity"]:
+                raise ValueError(
+                    "존재하지 않는 기존 entity key를 저장할 수 없습니다: "
+                    f"{entity.matched_existing_key}"
+                )
+            matched_owners[("entity", entity.matched_existing_key)].add(owner)
+    for index, concept in enumerate(classification.concepts):
+        owner = f"concept:{index}"
+        for surface in _surfaces(concept.title, concept.aliases):
+            surface_owners[surface].add(owner)
+        if concept.matched_existing_key:
+            if concept.matched_existing_key not in existing_keys["concept"]:
+                raise ValueError(
+                    "존재하지 않는 기존 concept key를 저장할 수 없습니다: "
+                    f"{concept.matched_existing_key}"
+                )
+            matched_owners[("concept", concept.matched_existing_key)].add(owner)
+
+    duplicate_surfaces = sorted(
+        surface for surface, owners in surface_owners.items() if len(owners) > 1
+    )
+    if duplicate_surfaces:
+        raise ValueError(
+            "canonical 표면형이 여러 Wiki 노드에 남아 있습니다: "
+            + ", ".join(duplicate_surfaces)
+        )
+    duplicate_keys = sorted(
+        f"{kind}/{key}"
+        for (kind, key), owners in matched_owners.items()
+        if len(owners) > 1
+    )
+    if duplicate_keys:
+        raise ValueError(
+            "같은 기존 Wiki key를 여러 후보가 갱신하려 합니다: "
+            + ", ".join(duplicate_keys)
+        )
+    for relation in classification.relations:
+        if (
+            relation.source_kind == relation.target_kind
+            and normalize_wiki_surface(relation.source_name)
+            == normalize_wiki_surface(relation.target_name)
+        ):
+            raise ValueError("canonical identity 자기 관계를 저장할 수 없습니다.")
+    return classification

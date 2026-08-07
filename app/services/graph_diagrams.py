@@ -44,8 +44,10 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
             slug="personal-wiki",
             title="Personal Wiki Build",
             description=(
-                "원본 조회(load_source) → LLM 분류(classify) → 반영 계획(plan) → "
-                "문서·Chunk 저장(persist) → Job 결과 조립(finalize)"
+                "원본 조회(load_source) → 추출 분류(classify) → 표기 정규화와 "
+                "후보 탐색(prepare_identity) → 충돌이 있을 때만 의미 판정"
+                "(resolve_identity) → canonical 중복 품질 검증(quality_gate) → "
+                "반영 계획(plan) → 문서·Chunk 저장(persist) → Job 결과 조립(finalize)"
             ),
             mermaid=_mermaid_of(build_personal_wiki_graph(None)),
         ),

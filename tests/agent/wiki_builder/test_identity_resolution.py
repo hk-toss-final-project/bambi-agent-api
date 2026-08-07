@@ -8,6 +8,7 @@ from agent.wiki_builder.features.identity_resolution import (
     normalize_wiki_surface,
     prepare_wiki_identity_resolution,
     resolve_wiki_identity_conflicts,
+    validate_wiki_identity_quality,
 )
 from agent.llm.api import LlmCompletion
 from shared.wiki_models import (
@@ -391,3 +392,54 @@ def test_resolver_rejects_missing_conflict_decision() -> None:
             model="test-model",
             completion=lambda *args, **kwargs: _completion({"resolutions": []}),
         )
+
+
+def test_quality_gate_rejects_cross_kind_canonical_duplicate() -> None:
+    """저장 직전 같은 canonical 표면형이 두 namespace에 남으면 실패한다."""
+    with pytest.raises(ValueError, match="여러 Wiki 노드"):
+        validate_wiki_identity_quality(
+            classification=WikiClassification(
+                entities=[EntityClassification(name="머신러닝")],
+                concepts=[ConceptClassification(title="머신 러닝")],
+            ),
+            existing_entities=[],
+            existing_concepts=[],
+        )
+
+
+def test_quality_gate_rejects_unknown_matched_key() -> None:
+    """후보 목록에 없던 기존 key는 최종 저장 경계에서도 거절한다."""
+    with pytest.raises(ValueError, match="존재하지 않는 기존 concept key"):
+        validate_wiki_identity_quality(
+            classification=WikiClassification(
+                concepts=[
+                    ConceptClassification(
+                        title="머신 러닝",
+                        matched_existing_key="missing-key",
+                    )
+                ]
+            ),
+            existing_entities=[],
+            existing_concepts=[],
+        )
+
+
+def test_quality_gate_accepts_resolved_existing_concept() -> None:
+    """하나의 유효한 기존 Concept로 정리된 결과는 그대로 통과시킨다."""
+    classification = WikiClassification(
+        concepts=[
+            ConceptClassification(
+                title="머신러닝",
+                aliases=["Machine Learning"],
+                matched_existing_key="머신-러닝",
+            )
+        ]
+    )
+
+    result = validate_wiki_identity_quality(
+        classification=classification,
+        existing_entities=[],
+        existing_concepts=[_entry("concept", "머신-러닝", "머신 러닝")],
+    )
+
+    assert result is classification

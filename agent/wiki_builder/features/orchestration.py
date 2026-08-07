@@ -15,6 +15,11 @@ from agent.wiki_builder.features.classification import (
     classify_source_for_wiki,
     classify_wiki_source,
 )
+from agent.wiki_builder.features.identity_resolution import (
+    prepare_wiki_identity_resolution,
+    resolve_wiki_identity_conflicts,
+    validate_wiki_identity_quality,
+)
 from agent.wiki_builder.features.planning import build_wiki_plan
 from agent.wiki_builder.models import WikiBuildPlan, WikiClassification
 from infrastructure.persistence.api import (
@@ -87,6 +92,22 @@ async def build_incremental_wiki(
         model=model,
         classifier=classifier,
     )
+    resolution_draft = prepare_wiki_identity_resolution(
+        classification=classification,
+        existing_entities=existing_entities,
+        existing_concepts=existing_concepts,
+    )
+    identity_resolution = await to_thread(
+        resolve_wiki_identity_conflicts,
+        draft=resolution_draft,
+        source_title=source.title,
+        model=model,
+    )
+    classification = validate_wiki_identity_quality(
+        classification=identity_resolution.classification,
+        existing_entities=existing_entities,
+        existing_concepts=existing_concepts,
+    )
     timestamp = generated_at or datetime.now(UTC).isoformat()
     plan = build_wiki_plan(
         source_title=source.title,
@@ -98,7 +119,7 @@ async def build_incremental_wiki(
         existing_entities=existing_entities,
         existing_concepts=existing_concepts,
         generated_at=timestamp,
-        model=classification_model,
+        model=f"{classification_model};identity={identity_resolution.model}",
         existing_relations=existing_relations,
     )
     async with connection.transaction():

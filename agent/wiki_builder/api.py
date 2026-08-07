@@ -29,6 +29,7 @@ from .features.identity_resolution import (
     normalize_wiki_surface,
     prepare_wiki_identity_resolution,
     resolve_wiki_identity_conflicts,
+    validate_wiki_identity_quality,
 )
 
 __all__ = [
@@ -56,4 +57,5 @@ __all__ = [
     "normalize_wiki_surface",
     "prepare_wiki_identity_resolution",
     "resolve_wiki_identity_conflicts",
+    "validate_wiki_identity_quality",
 ]
