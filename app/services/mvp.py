@@ -37,6 +37,7 @@ from app.services.agent_jobs import (
     SubmittedGenerationJob,
     SubmittedSourceJob,
 )
+from domain.interests.api import ActiveInterestRequiredError
 from domain.jobs.api import job_002
 from domain.personal_wiki.source_events.api import wse_001, wse_011, wse_014
 from infrastructure.persistence.api import (
@@ -232,6 +233,12 @@ class AgentApiMvpService:
                     idempotency_key=payload.idempotency_key,
                     topic=payload.topic,
                     topics=payload.topics,
+                    generation_scope=payload.generation_scope.value,
+                    interest_id=(
+                        str(payload.interest_id)
+                        if payload.interest_id is not None
+                        else None
+                    ),
                     content_type=payload.content_type,
                     report_type=payload.report_type,
                     language=payload.language,
@@ -246,6 +253,17 @@ class AgentApiMvpService:
                 ErrorDetail(
                     code="USER_CONTEXT_REQUIRED",
                     message="콘텐츠 생성 전에 사용자 컨텍스트를 등록해야 합니다.",
+                ),
+            ) from exc
+        except ActiveInterestRequiredError as exc:
+            raise AgentApiError(
+                status.HTTP_409_CONFLICT,
+                ErrorDetail(
+                    code="ACTIVE_INTEREST_REQUIRED",
+                    message=(
+                        "범주 리포트에는 현재 활성화되어 있고 차단되지 않은 "
+                        "LLM Wiki 관심사가 필요합니다."
+                    ),
                 ),
             ) from exc
         job = submission.job

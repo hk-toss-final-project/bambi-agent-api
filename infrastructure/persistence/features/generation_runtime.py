@@ -14,6 +14,10 @@ from uuid import UUID
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
+from domain.interests.api import int_012
+from infrastructure.persistence.features.interest_bundles import (
+    ConnectionInterestBundleRepository,
+)
 from shared.report_models import ReportContextDocument, GeneratedReportContent
 
 type DictRow = dict[str, Any]
@@ -189,8 +193,10 @@ async def enqueue_report_generation_job(
     *,
     user_id: str,
     idempotency_key: str,
-    topic: str,
+    topic: str | None,
     topics: list[str] | None = None,
+    generation_scope: str = "SINGLE_TOPIC",
+    interest_id: str | None = None,
     content_type: str,
     report_type: str = "",
     language: str | None,
@@ -223,10 +229,30 @@ async def enqueue_report_generation_job(
     if context is None:
         raise UserContextRequiredError(user_id)
     resolved_language = language or context["preferred_language"]
+    interest_bundle: dict[str, object] | None = None
+    resolved_topic = (topic or "").strip()
+    resolved_topics = list(topics or [])
+    if generation_scope == "INTEREST_BUNDLE":
+        bundle = await int_012(
+            ConnectionInterestBundleRepository(connection),
+            user_id,
+            interest_id=interest_id or "",
+            neighbor_limit=2,
+        )
+        interest_bundle = bundle.to_payload()
+        resolved_topic = bundle.root_keyword
+        resolved_topics = []
+    elif generation_scope != "SINGLE_TOPIC":
+        raise ValueError(f"지원하지 않는 generation_scope입니다: {generation_scope}")
+    if not resolved_topic:
+        raise ValueError("Report Builder 생성에는 topic이 필요합니다.")
     job_payload = {
-        "topic": topic,
+        "topic": resolved_topic,
         # 여러 주제를 한 장에 묶는 요약 리포트용. 비어 있으면 topic 하나만 다룬다.
-        "topics": list(topics or []),
+        "topics": resolved_topics,
+        "generation_scope": generation_scope,
+        "interest_id": interest_id,
+        "interest_bundle": interest_bundle,
         "content_type": content_type,
         "report_type": report_type,
         "language": resolved_language,
@@ -290,7 +316,7 @@ async def enqueue_report_generation_job(
             job["id"],
             user_id,
             context["id"],
-            topic,
+            resolved_topic,
             content_type,
             context["plan"],
             resolved_language,
@@ -301,6 +327,9 @@ async def enqueue_report_generation_job(
                 {
                     "retrieval": "personal-wiki-global-cache-keyword-v2",
                     "report_type": report_type,
+                    "generation_scope": generation_scope,
+                    "interest_id": interest_id,
+                    "interest_bundle": interest_bundle,
                 }
             ),
         ),

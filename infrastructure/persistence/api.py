@@ -125,6 +125,7 @@ from .features.interest_profiles import (
     save_feedback_signals_for_user,
     save_interest_profile_for_user,
 )
+from .features.interest_bundles import ConnectionInterestBundleRepository
 from .features.wiki_deletion import (
     WikiDocumentNotFoundError,
     delete_wiki_document_and_record_event,
@@ -161,5 +162,6 @@ __all__ = [
     "db_028",
     "db_029",
     "db_030",
+    "ConnectionInterestBundleRepository",
     "save_fetched_url_and_enqueue",
 ]

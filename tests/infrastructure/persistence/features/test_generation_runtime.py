@@ -229,6 +229,65 @@ def test_enqueue_stores_report_type_for_the_publish_snapshot() -> None:
     assert request_params[-1].obj["report_type"] == "MORNING_BRIEFING"
 
 
+def test_enqueue_snapshots_active_interest_bundle() -> None:
+    """활성 관심사와 1홉 Wiki 노드를 접수 시점 Job·요청 Payload에 고정한다."""
+    connection = _FakeConnection(
+        [
+            [{"id": "context-1", "plan": "free", "preferred_language": "ko"}],
+            [
+                {
+                    "profile_id": "profile-1",
+                    "profile_version": 7,
+                    "topic": "생성형 AI",
+                    "score": 0.91,
+                    "document_ids": ["11111111-1111-4111-8111-111111111111"],
+                }
+            ],
+            [
+                {
+                    "document_id": "22222222-2222-4222-8222-222222222222",
+                    "keyword": "AI 에이전트",
+                    "document_kind": "concept",
+                    "weight": 1.0,
+                    "relation_types": ["applies_concept"],
+                    "shared_source_count": 2,
+                    "degree": 3.0,
+                }
+            ],
+            [{"id": "job-1"}],
+            [{"id": "request-1"}],
+        ]
+    )
+
+    submission = asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-bundle",
+            topic=None,
+            generation_scope="INTEREST_BUNDLE",
+            interest_id="33333333-3333-4333-8333-333333333333",
+            content_type="interest_news_card",
+            language="ko",
+            request_id="request-1",
+        )
+    )
+
+    assert submission.job_id == "job-1"
+    _, job_params = connection.executed[3]
+    assert job_params is not None
+    payload = job_params[2].obj
+    assert payload["topic"] == "생성형 AI"
+    assert payload["topics"] == []
+    assert payload["generation_scope"] == "INTEREST_BUNDLE"
+    assert payload["interest_bundle"]["profile_version"] == 7
+    assert payload["interest_bundle"]["keywords"] == ["생성형 AI", "AI 에이전트"]
+    _, request_params = connection.executed[4]
+    assert request_params is not None
+    assert request_params[3] == "생성형 AI"
+    assert request_params[-1].obj["interest_bundle"] == payload["interest_bundle"]
+
+
 def test_uuid_or_none_keeps_wiki_ids_and_drops_live_references() -> None:
     """Wiki UUID는 유지하고 실시간 자료 참조(L1 등)·빈 값은 None으로 바꾼다.
 

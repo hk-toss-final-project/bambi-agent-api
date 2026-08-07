@@ -298,8 +298,10 @@ class InMemoryAgentJobRepository:
         *,
         user_id: str,
         idempotency_key: str,
-        topic: str,
+        topic: str | None,
         topics: list[str] | None = None,
+        generation_scope: str = "SINGLE_TOPIC",
+        interest_id: str | None = None,
         content_type: str,
         report_type: str = "",
         language: str | None,
@@ -312,6 +314,8 @@ class InMemoryAgentJobRepository:
             raise UserContextRequiredError(user_id)
         # 라우트가 요청의 report_type을 저장소까지 전달하는지 확인하기 위해 남긴다.
         self.last_report_type = report_type
+        self.last_generation_scope = generation_scope
+        self.last_interest_id = interest_id
         record, _created = self._submit_job(
             feature_id="SVC-008",
             job_type="report_generation",

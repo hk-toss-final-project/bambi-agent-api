@@ -22,6 +22,13 @@ from .features.recalculation import (
     InterestProfileRepository,
     int_011,
 )
+from .features.bundles import (
+    ActiveInterestRequiredError,
+    InterestBundleNeighbor,
+    InterestBundleRepository,
+    InterestReportBundle,
+    int_012,
+)
 
 __all__ = [
     "DEFAULT_EXPANSION_LIMIT",
@@ -38,4 +45,9 @@ __all__ = [
     "int_007",
     "int_010",
     "int_011",
+    "int_012",
+    "ActiveInterestRequiredError",
+    "InterestBundleNeighbor",
+    "InterestBundleRepository",
+    "InterestReportBundle",
 ]

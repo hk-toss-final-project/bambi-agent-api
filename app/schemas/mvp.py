@@ -3,6 +3,7 @@
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Literal
+from uuid import UUID
 
 from pydantic import (
     AliasChoices,
@@ -62,6 +63,13 @@ class PublishBatchResultStatus(StrEnum):
     PUBLISHED = "published"
     RETRY_SCHEDULED = "retry_scheduled"
     FAILED = "failed"
+
+
+class GenerationScope(StrEnum):
+    """Report Builder가 검색 범위를 해석하는 방식."""
+
+    SINGLE_TOPIC = "SINGLE_TOPIC"
+    INTEREST_BUNDLE = "INTEREST_BUNDLE"
 
 
 class HealthResponse(ImmutableSchema):
@@ -302,7 +310,26 @@ class GenerationRequest(ImmutableSchema):
             "`{schedule window}-{user_id}-{content_type}` 규칙을 권장한다."
         ),
     )
-    topic: str = Field(min_length=1, max_length=500, description="생성할 콘텐츠 주제")
+    generation_scope: GenerationScope = Field(
+        default=GenerationScope.SINGLE_TOPIC,
+        description=(
+            "검색 범위. SINGLE_TOPIC은 요청 topic·topics를 사용하고, "
+            "INTEREST_BUNDLE은 활성 LLM Wiki 관심사와 연결 노드 묶음을 사용한다."
+        ),
+    )
+    interest_id: UUID | None = Field(
+        default=None,
+        description="INTEREST_BUNDLE에서 사용할 현재 활성 관심사 UUID",
+    )
+    topic: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=500,
+        description=(
+            "생성할 콘텐츠 주제. SINGLE_TOPIC에서는 필수이며, "
+            "INTEREST_BUNDLE에서는 활성 관심사의 루트 키워드로 결정된다."
+        ),
+    )
     topics: list[str] = Field(
         default_factory=list,
         max_length=_MAX_REPORT_TOPICS,
@@ -372,6 +399,19 @@ class GenerationRequest(ImmutableSchema):
             seen.add(marker)
             normalized.append(topic)
         return normalized
+
+    @model_validator(mode="after")
+    def validate_generation_scope(self) -> "GenerationRequest":
+        """범위별 필수 식별자를 확인하고 서로 다른 입력 방식을 섞지 않게 한다."""
+        if self.generation_scope is GenerationScope.INTEREST_BUNDLE:
+            if self.interest_id is None:
+                raise ValueError("INTEREST_BUNDLE에는 interest_id가 필요합니다.")
+            if self.topics:
+                raise ValueError("INTEREST_BUNDLE에서는 topics를 함께 보낼 수 없습니다.")
+            return self
+        if self.topic is None or not self.topic.strip():
+            raise ValueError("SINGLE_TOPIC에는 topic이 필요합니다.")
+        return self
 
     @model_validator(mode="after")
     def validate_scheduled_at_timezone(self) -> "GenerationRequest":
