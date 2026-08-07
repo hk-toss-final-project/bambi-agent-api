@@ -27,6 +27,13 @@ from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 
 from app.config import Settings, load_settings
+from infrastructure.persistence.api import (
+    ClaimedAgentJob,
+    claim_runnable_agent_jobs,
+    complete_agent_job,
+    fail_agent_job,
+    set_system_job_scope,
+)
 from .collection import (
     SCHEDULED_PROVIDERS,
     CollectionCredentials,
@@ -37,6 +44,7 @@ from .collection import (
     sch_003,
     sch_004,
 )
+from .management import sch_021
 from workers.api import run_global_content_fetch_batch
 
 type DictRow = dict[str, Any]
@@ -64,6 +72,56 @@ PROVIDER_SCHEDULES: dict[str, Callable[..., Any]] = {
 # 어떻게 읽었는가"를 나타내므로 수집 Provider와 겹치지 않는 값을 쓴다.
 CONTENT_FETCH_STEP = "content-fetch"
 
+# 수동 실행이 큐에 넣는 수집 Job의 유형. 수동 실행 API는 이 Job만 등록하고 바로
+# 응답하며, 실제 수집은 Scheduler tick이 이 Job을 집어 처리한다.
+MANUAL_COLLECTION_JOB_TYPE = "global_collection_run"
+
+# 수동 실행 Job 처리 단계를 결과 목록에서 가리키는 이름.
+MANUAL_RUN_STEP = "manual-collection-run"
+
+
+def _summarize_manual_run(
+    source_key: str, results: list[CollectionScheduleResult]
+) -> dict[str, object]:
+    """수동 실행 수집 결과를 Job에 저장할 요약으로 압축한다.
+
+    부르는 쪽(Service)이 `GET /jobs/{job_id}`로 확인할 값이다. Provider별 저장
+    건수를 합산하고, 하나라도 실패가 있으면 partial, 전부 실패면 failed로 정한다.
+    """
+    providers = [
+        provider
+        for result in results
+        for provider in result.results
+        if isinstance(provider, dict)
+    ]
+    failed = [item for item in providers if item.get("status") == "failed"]
+    if not providers:
+        status = "skipped"
+    elif len(failed) == len(providers):
+        status = "failed"
+    elif failed:
+        status = "partial"
+    else:
+        status = "completed"
+
+    def _total(field: str) -> int:
+        """Provider 결과에서 정수 건수 필드를 합산한다."""
+        return sum(
+            value
+            for item in providers
+            if isinstance(value := item.get(field), int)
+            and not isinstance(value, bool)
+        )
+
+    return {
+        "source_key": source_key,
+        "status": status,
+        "keyword_count": len(results),
+        "fetched_count": _total("fetched_count"),
+        "created_count": _total("created_count"),
+        "duplicate_count": _total("duplicate_count"),
+    }
+
 
 @dataclass(frozen=True, slots=True)
 class CollectionScheduler:
@@ -74,22 +132,34 @@ class CollectionScheduler:
     tick_seconds: int
     # tick마다 본문을 채울 문서 수. 0이면 본문 수집 단계를 건너뛴다.
     content_fetch_limit: int = 0
+    # 이 Scheduler 프로세스의 Job Lease 소유자 식별자.
+    worker_id: str = "collection-scheduler"
+    # tick마다 처리할 수동 실행 Job 수. 수집 하나가 관심 Topic이 많으면 오래
+    # 걸리므로 기본 1개씩만 집어 다른 tick 작업이 과하게 밀리지 않게 한다.
+    manual_run_claim_limit: int = 1
+    # 수동 실행 Job Lease 유지 시간(초). taxonomy 수집이 수 분 걸릴 수 있어 최대
+    # 값(1시간)을 쓴다 — 수집이 끝나기 전에 Lease가 풀려 중복 처리되지 않게 한다.
+    manual_run_lease_seconds: int = 3600
 
     async def run_once(
         self, *, now: datetime | None = None, force: bool = False
     ) -> list[CollectionScheduleResult]:
         """수집 스케줄을 한 번 판정·실행하고, 이어서 본문을 채운다.
 
+        먼저 큐에 쌓인 수동 실행 Job을 처리하고(사용자가 즉시 결과를 기다리는
+        요청이므로 우선), 이어서 정기 수집을 판정·실행한 뒤 본문을 채운다.
+
         Args:
             now: 판정 기준 시각 (미지정 시 현재 UTC)
             force: True면 Cron 실행 시각 조건을 건너뛴다 (쿼터는 지킨다)
 
         Returns:
-            Provider·Source·키워드별 판정과 실행 결과 목록. 마지막에 본문 수집
-            단계의 결과가 붙는다
+            수동 실행·Provider·Source·키워드별 판정과 실행 결과 목록. 마지막에
+            본문 수집 단계의 결과가 붙는다
         """
         moment = now or datetime.now(UTC)
         results: list[CollectionScheduleResult] = []
+        results.extend(await self.drain_manual_collection_runs(now=moment))
         connection: AsyncConnection[DictRow] = await AsyncConnection.connect(
             self.database_url,
             row_factory=dict_row,
@@ -123,6 +193,132 @@ class CollectionScheduler:
             await connection.close()
         results.extend(await self.fetch_pending_content())
         return results
+
+    async def drain_manual_collection_runs(
+        self, *, now: datetime | None = None
+    ) -> list[CollectionScheduleResult]:
+        """큐에 쌓인 수동 실행 Job을 집어 정기 수집과 같은 경로로 처리한다.
+
+        수동 실행 API(SCH-021)는 Job만 큐에 넣고 바로 응답하므로, 실제 수집은
+        여기서 한다. Job을 SKIP LOCKED·Lease로 점유해 여러 Scheduler가 떠도 같은
+        Job을 두 번 돌리지 않는다. Job 하나의 수집·실패가 다른 Job이나 정기 수집을
+        막지 않도록 Job 단위로 격리한다.
+
+        Args:
+            now: 다음 실행 시각 계산 기준 시각 (미지정 시 현재 UTC)
+
+        Returns:
+            처리한 Job별 수집 결과 목록. 점유한 Job이 없으면 빈 목록
+        """
+        moment = now or datetime.now(UTC)
+        claim_connection: AsyncConnection[DictRow] = await AsyncConnection.connect(
+            self.database_url,
+            row_factory=dict_row,
+        )
+        try:
+            async with claim_connection.transaction():
+                await set_system_job_scope(claim_connection)
+                claimed = await claim_runnable_agent_jobs(
+                    claim_connection,
+                    job_type=MANUAL_COLLECTION_JOB_TYPE,
+                    worker_id=self.worker_id,
+                    limit=self.manual_run_claim_limit,
+                    lease_seconds=self.manual_run_lease_seconds,
+                )
+        finally:
+            await claim_connection.close()
+
+        results: list[CollectionScheduleResult] = []
+        for job in claimed:
+            results.append(await self._process_manual_collection_run(job, now=moment))
+        return results
+
+    async def _process_manual_collection_run(
+        self, job: ClaimedAgentJob, *, now: datetime
+    ) -> CollectionScheduleResult:
+        """점유한 수동 실행 Job 하나를 수집하고 완료·실패로 마감한다.
+
+        수집(sch_021)과 Job 마감은 **서로 다른 연결**로 나눈다. sch_021이 넘겨받은
+        연결로 스케줄을 조회하며 트랜잭션을 열어 두므로, 같은 연결로 마감하면
+        완료 UPDATE가 그 트랜잭션의 SAVEPOINT 안에 갇혀 커밋되지 않는다. 마감은
+        새 연결에서 독립 트랜잭션으로 처리해 확실히 커밋한다.
+        """
+        source_key = str(job.payload.get("source_key") or "")
+        error: Exception | None = None
+        run_results: list[CollectionScheduleResult] = []
+        connection: AsyncConnection[DictRow] = await AsyncConnection.connect(
+            self.database_url,
+            row_factory=dict_row,
+        )
+        try:
+            _view, run_results = await sch_021(
+                connection,
+                source_key=source_key,
+                database_url=self.database_url,
+                credentials=self.credentials,
+                now=now,
+            )
+        except Exception as collect_error:  # noqa: BLE001 - Job 단위로 실패를 가둔다
+            error = collect_error
+        finally:
+            await connection.close()
+
+        if error is not None:
+            await self._finalize_manual_run(job, error=error)
+            return CollectionScheduleResult(
+                provider=MANUAL_RUN_STEP,
+                source_key=source_key or None,
+                status="skipped",
+                reason=f"수동 수집 실패: {error}",
+            )
+        summary = _summarize_manual_run(source_key, run_results)
+        await self._finalize_manual_run(job, summary=summary)
+        return CollectionScheduleResult(
+            provider=MANUAL_RUN_STEP,
+            source_key=source_key or None,
+            status="completed",
+            results=[summary],
+        )
+
+    async def _finalize_manual_run(
+        self,
+        job: ClaimedAgentJob,
+        *,
+        summary: dict[str, object] | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        """수동 실행 Job을 새 연결에서 완료 또는 실패로 마감한다.
+
+        마감 자체가 실패해도 삼킨다 — 그 Job은 Lease가 만료되면 다음 tick에서
+        회수된다. 정기 수집·다른 Job까지 막지 않기 위함이다.
+        """
+        connection: AsyncConnection[DictRow] = await AsyncConnection.connect(
+            self.database_url,
+            row_factory=dict_row,
+        )
+        try:
+            async with connection.transaction():
+                await set_system_job_scope(connection)
+                if error is not None:
+                    await fail_agent_job(
+                        connection,
+                        job=job,
+                        worker_id=self.worker_id,
+                        error_code="collection_run_failed",
+                        error_message=str(error),
+                        retryable=False,
+                    )
+                else:
+                    await complete_agent_job(
+                        connection,
+                        job=job,
+                        worker_id=self.worker_id,
+                        result=summary or {},
+                    )
+        except Exception:  # noqa: BLE001 - 다음 tick의 Lease 만료로 회수된다
+            logger.exception("수동 수집 Job 마감에 실패했습니다: %s", job.job_id)
+        finally:
+            await connection.close()
 
     async def fetch_pending_content(self) -> list[CollectionScheduleResult]:
         """본문이 비어 있는 수집 문서를 Batch로 점유해 본문을 채운다.

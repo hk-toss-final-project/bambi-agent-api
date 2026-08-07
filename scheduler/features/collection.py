@@ -28,6 +28,7 @@ Worker(WORKER-001)로 넘긴다. 즉 이 모듈은 "무엇을 언제 돌릴지"�
 한국어 기사 0건을 끌어왔다). 라벨 검색이 그런 Topic의 안전망 역할을 한다.
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -248,6 +249,94 @@ def _evaluate_schedule(
     return None, next_run_at
 
 
+# 수동 실행(SCH-021)에서 한 번에 동시에 수집할 최대 검색 수.
+#
+# 순차로 돌리면 관심 Topic이 많은 taxonomy Source에서 외부 API 호출이 수십 번
+# 직렬로 쌓여 HTTP 응답이 분 단위로 늦어진다(2026-08-07 실측:
+# interest-taxonomy-google-news 수동 실행 한 번에 google_news RSS 74회 이상,
+# 5분 초과로 클라이언트 타임아웃). 검색을 동시에 돌려 시간을 줄이되, 동시 호출
+# 수를 제한해 google_news RSS의 429(rate limit)와 DB 연결 폭증을 막는다.
+# worker_001은 검색마다 자체 DB 연결을 열고 닫으므로, 이 상수가 곧 동시 연결
+# 수의 상한이 된다.
+MANUAL_RUN_CONCURRENCY = 6
+
+
+async def _collect_planned_query(
+    schedule: GlobalCollectionSchedule,
+    planned: CollectionQuery,
+    *,
+    database_url: str,
+    credentials: CollectionCredentials,
+    following_run_at: datetime | None,
+) -> CollectionScheduleResult:
+    """검색 하나를 수집 Worker로 실행하고 완료 결과로 감싼다.
+
+    키워드를 하나씩 넘겨야 주제가 섞인 단일 질의가 되지 않는다. 순차 실행과
+    동시 실행이 같은 규칙으로 Worker를 호출하도록 이 헬퍼를 공유한다.
+    """
+    collected = await worker_001(
+        database_url=database_url,
+        keywords=[planned.query],
+        providers=[schedule.provider],
+        limit_per_provider=planned.limit,
+        language=schedule.language,
+        naver_client_id=credentials.naver_client_id,
+        naver_client_secret=credentials.naver_client_secret,
+        gdelt_base_url=credentials.gdelt_base_url,
+        news_api_key=credentials.news_api_key,
+        search_options=dict(schedule.search_options),
+        # 실행 이력을 이 수집을 지시한 Source에 남긴다. Provider 이름으로
+        # 되돌리면 Cron 주기·일일 한도 판정이 쓰는 "마지막 실행 시각"이
+        # 엉뚱한 Source에 쌓인다(persist_collected_articles 주석 참고).
+        source_key=schedule.source_key,
+        # 확장 검색어로 모은 문서도 원래 Topic에 연결한다. 이게 없으면
+        # 검색어 글자가 달라 연결이 끊기고, 그 Topic의 next_collection_at도
+        # 갱신되지 않아 매 tick 재검색된다.
+        target_key=planned.target_key,
+    )
+    return CollectionScheduleResult(
+        provider=schedule.provider,
+        source_key=schedule.source_key,
+        status="completed",
+        keyword=planned.query,
+        next_run_at=following_run_at,
+        results=collected,
+    )
+
+
+async def _collect_queries_concurrently(
+    schedule: GlobalCollectionSchedule,
+    planned_queries: list[CollectionQuery],
+    *,
+    database_url: str,
+    credentials: CollectionCredentials,
+    following_run_at: datetime | None,
+    concurrency: int,
+) -> list[CollectionScheduleResult]:
+    """여러 검색을 동시에 수집한다. 동시 실행 수를 세마포어로 제한한다.
+
+    `asyncio.gather`는 입력 순서대로 결과를 돌려주므로, 결과 순서는 순차 실행과
+    같다. 검색 하나가 실패해도 다른 검색을 막지 않는 오류 격리는 worker_001이
+    Provider별 결과에 오류를 담아 돌려주는 것으로 유지된다(예외로 던지지 않는다).
+    """
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def _bounded(planned: CollectionQuery) -> CollectionScheduleResult:
+        """세마포어로 동시 실행 수를 제한하며 검색 하나를 수집한다."""
+        async with semaphore:
+            return await _collect_planned_query(
+                schedule,
+                planned,
+                database_url=database_url,
+                credentials=credentials,
+                following_run_at=following_run_at,
+            )
+
+    return list(
+        await asyncio.gather(*(_bounded(planned) for planned in planned_queries))
+    )
+
+
 async def collect_schedule_keywords(
     schedule: GlobalCollectionSchedule,
     *,
@@ -255,6 +344,7 @@ async def collect_schedule_keywords(
     credentials: CollectionCredentials,
     now: datetime,
     enforce_daily_limit: bool = True,
+    concurrency: int = 1,
 ) -> list[CollectionScheduleResult]:
     """실행하기로 정해진 Source 스케줄의 키워드를 하나씩 수집한다.
 
@@ -265,12 +355,17 @@ async def collect_schedule_keywords(
     일일 실행 한도는 정기 실행에서만 지킨다. 수동 실행(SCH-021)은 관리자가
     지금 결과를 보겠다고 명시한 요청이라 한도로 막지 않는다.
 
+    `concurrency`가 1보다 크고 일일 한도를 세지 않는 실행(수동 실행)이면 검색을
+    동시에 수집해 응답 지연을 줄인다. 한도를 세는 정기 실행은 남은 호출 수를
+    순서대로 깎아야 하므로 concurrency 값과 무관하게 순차로 돈다.
+
     Args:
         schedule: 수집할 Source 스케줄 설정
         database_url: 수집 Worker가 사용할 Agent DB 연결 문자열
         credentials: Provider 자격 증명 묶음
         now: 다음 실행 시각 계산 기준 시각
         enforce_daily_limit: False면 일일 실행 한도를 무시하고 모두 수집한다
+        concurrency: 한도를 세지 않는 실행에서 동시에 수집할 최대 검색 수
 
     Returns:
         키워드별 수집 결과 목록. 한도를 채운 키워드는 skipped로 남는다
@@ -286,8 +381,20 @@ async def collect_schedule_keywords(
         if schedule.daily_max_runs is None or not enforce_daily_limit
         else schedule.daily_max_runs - schedule.runs_today
     )
+    planned_queries = plan_schedule_queries(schedule)
+    # 한도를 세지 않는 실행만 동시에 돌린다. 한도를 세는 정기 실행은 남은 호출
+    # 수를 순서대로 깎아 초과분을 skipped로 남겨야 하므로 순차 경로를 지킨다.
+    if remaining is None and concurrency > 1:
+        return await _collect_queries_concurrently(
+            schedule,
+            planned_queries,
+            database_url=database_url,
+            credentials=credentials,
+            following_run_at=following_run_at,
+            concurrency=concurrency,
+        )
     results: list[CollectionScheduleResult] = []
-    for planned in plan_schedule_queries(schedule):
+    for planned in planned_queries:
         if remaining is not None and remaining <= 0:
             results.append(
                 CollectionScheduleResult(
@@ -302,39 +409,16 @@ async def collect_schedule_keywords(
                 )
             )
             continue
-        # 키워드를 하나씩 넘겨야 주제가 섞인 단일 질의가 되지 않는다.
-        collected = await worker_001(
+        result = await _collect_planned_query(
+            schedule,
+            planned,
             database_url=database_url,
-            keywords=[planned.query],
-            providers=[schedule.provider],
-            limit_per_provider=planned.limit,
-            language=schedule.language,
-            naver_client_id=credentials.naver_client_id,
-            naver_client_secret=credentials.naver_client_secret,
-            gdelt_base_url=credentials.gdelt_base_url,
-            news_api_key=credentials.news_api_key,
-            search_options=dict(schedule.search_options),
-            # 실행 이력을 이 수집을 지시한 Source에 남긴다. Provider 이름으로
-            # 되돌리면 Cron 주기·일일 한도 판정이 쓰는 "마지막 실행 시각"이
-            # 엉뚱한 Source에 쌓인다(persist_collected_articles 주석 참고).
-            source_key=schedule.source_key,
-            # 확장 검색어로 모은 문서도 원래 Topic에 연결한다. 이게 없으면
-            # 검색어 글자가 달라 연결이 끊기고, 그 Topic의 next_collection_at도
-            # 갱신되지 않아 매 tick 재검색된다.
-            target_key=planned.target_key,
+            credentials=credentials,
+            following_run_at=following_run_at,
         )
         if remaining is not None:
             remaining -= 1
-        results.append(
-            CollectionScheduleResult(
-                provider=schedule.provider,
-                source_key=schedule.source_key,
-                status="completed",
-                keyword=planned.query,
-                next_run_at=following_run_at,
-                results=collected,
-            )
-        )
+        results.append(result)
     return results
 
 
