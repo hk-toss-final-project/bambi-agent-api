@@ -1,6 +1,7 @@
 """Service API용 MCP Personal Access Token 요청·응답 스키마."""
 
 from datetime import UTC, datetime
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -35,7 +36,7 @@ class McpApiKeyCreateRequest(BaseModel):
 class McpApiKeyResponse(BaseModel):
     """원문과 Hash를 제외한 MCP API Key 관리 정보."""
 
-    id: str
+    id: UUID
     name: str
     key_prefix: str
     scopes: list[str]

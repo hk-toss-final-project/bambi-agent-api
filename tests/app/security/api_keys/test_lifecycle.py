@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 from app.security.api_keys.api import key_001, key_005, key_014
 
@@ -17,7 +18,8 @@ class _FakeApiKeyRepository:
     async def create_api_key(self, **values: object) -> dict[str, object]:
         """Hash와 Prefix만 포함한 발급 레코드를 저장한다."""
         record = {
-            "id": "11111111-1111-1111-1111-111111111111",
+            # psycopg의 uuid 컬럼 반환 타입과 동일하게 유지한다.
+            "id": UUID("11111111-1111-1111-1111-111111111111"),
             "status": "active",
             "last_used_at": None,
             "created_at": datetime(2026, 8, 6, tzinfo=UTC),
@@ -40,7 +42,7 @@ class _FakeApiKeyRepository:
     ) -> dict[str, object] | None:
         """소유자가 일치하는 Key를 폐기한다."""
         for record in self.records.values():
-            if record["id"] == key_id and record["principal_id"] == principal_id:
+            if str(record["id"]) == key_id and record["principal_id"] == principal_id:
                 record["status"] = "revoked"
                 record["revoked_at"] = datetime(2026, 8, 6, tzinfo=UTC)
                 return record
