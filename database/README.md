@@ -162,6 +162,9 @@ docker compose exec -T agent-db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_US
 - 적용된 SQL 파일은 수정하지 않고 다음 순번 파일을 추가합니다.
 - Migration 파일은 `NNNN_description.sql` 형식으로 만들고 Transaction 안에서 같은
   번호를 `agent.schema_migrations`에 기록합니다.
+- 2026-08-07 이전에는 `0012` 번호가 두 파일에 중복되고 `0014`가 version을 기록하지
+  않은 예외가 있었습니다. `0015`는 어느 `0012`가 먼저 적용됐든 기존 Delta 데이터를
+  보존하고, `0016`은 누락된 Global 검색 본문 Schema만 조건부로 복구합니다.
 - 로컬 DB 시작 스크립트는 실행 중인 컨테이너에도 Initializer를 명시적으로 호출하고,
   Compose `post_start` Hook은 컨테이너가 실제로 시작될 때 같은 경로를 실행합니다.
   Migration은 Advisory Lock을, Seed는 볼륨 내 Checksum과 File Lock을 사용해

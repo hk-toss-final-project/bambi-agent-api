@@ -281,14 +281,26 @@ def test_persist_links_documents_by_target_key_when_given() -> None:
     # 검색어는 이력으로 남기되, 어느 Topic에 묶을지는 target_key가 정한다.
     assert link_params[0] == "스페이스X"
     assert link_params[1] == "taxonomy:v1:space"
-    assert "target.target_key = %s" in link_sql
+    assert "target.target_key = %s::text" in link_sql
+    # ::text 캐스트가 빠지면 PostgreSQL이 IS NOT NULL의 파라미터 타입을 정하지
+    # 못해 IndeterminateDatatype으로 실패한다(2026-08-06 실 DB에서 확인).
+    # 대역 Connection은 SQL을 실행하지 않으므로 여기서 문자열로 지킨다.
+    assert "%s::text IS NOT NULL" in link_sql
 
     target_updates = [
-        params
+        (sql, params)
         for sql, params in connection.executed
         if "UPDATE agent.interest_collection_targets" in sql
     ]
-    assert target_updates == [("taxonomy:v1:space", "taxonomy:v1:space", "스페이스X")]
+    assert len(target_updates) == 1
+    target_update_sql, target_update_params = target_updates[0]
+    assert target_update_params == (
+        "taxonomy:v1:space",
+        "taxonomy:v1:space",
+        "스페이스X",
+    )
+    assert "%s::text IS NOT NULL" in target_update_sql
+    assert "target_key = %s::text" in target_update_sql
 
 
 def test_claim_returns_pending_articles() -> None:
