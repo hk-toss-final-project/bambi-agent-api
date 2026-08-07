@@ -34,8 +34,14 @@ class Settings(BaseModel):
         min_length=32,
         description="Service API와 Service Worker가 내부 API 호출에 사용하는 Bearer 토큰",
     )
+    mcp_server_port: int = Field(
+        default=8100,
+        ge=1,
+        le=65535,
+        description="MCP 전용 프로세스가 수신할 내부 포트",
+    )
     mcp_server_url: str = Field(
-        default="http://localhost:8000/mcp",
+        default="http://localhost:8100/mcp",
         description="외부 MCP Client가 등록할 공개 Streamable HTTP URL",
     )
     mcp_auth_issuer_url: str = Field(
@@ -175,7 +181,8 @@ def load_settings() -> Settings:
         enable_assistant_ui=_boolean_env("ENABLE_ASSISTANT_UI", True),
         enable_dev_agent_api=_boolean_env("ENABLE_DEV_AGENT_API", False),
         internal_api_token=_optional_env("AGENT_INTERNAL_TOKEN"),
-        mcp_server_url=os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp"),
+        mcp_server_port=_integer_env("MCP_SERVER_PORT", 8100),
+        mcp_server_url=os.getenv("MCP_SERVER_URL", "http://localhost:8100/mcp"),
         mcp_auth_issuer_url=os.getenv(
             "MCP_AUTH_ISSUER_URL",
             "http://localhost:8080",

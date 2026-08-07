@@ -19,6 +19,7 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv(
         "AGENT_INTERNAL_TOKEN", "test-agent-internal-token-0123456789abcdef"
     )
+    monkeypatch.setenv("MCP_SERVER_PORT", "8101")
     monkeypatch.setenv("OPENAI_API_KEY", "test-secret")
     monkeypatch.setenv("WIKI_LLM_MODEL", "gpt-4.1-mini")
     monkeypatch.setenv("REPORT_LLM_MODEL", "gpt-4.1-nano")
@@ -40,6 +41,7 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
         settings.internal_api_token.get_secret_value()
         == "test-agent-internal-token-0123456789abcdef"
     )
+    assert settings.mcp_server_port == 8101
     assert settings.openai_api_key is not None
     assert settings.openai_api_key.get_secret_value() == "test-secret"
     assert settings.wiki_llm_model == "gpt-4.1-mini"
@@ -49,6 +51,14 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     assert settings.personal_wiki_job_lease_seconds == 900
     assert settings.wiki_build_quiet_minutes == 15
     assert settings.wiki_build_max_wait_minutes == 45
+
+
+def test_settings_uses_dedicated_mcp_port_by_default() -> None:
+    """MCP 전용 프로세스는 Agent API와 다른 8100 포트를 기본으로 사용한다."""
+    settings = Settings()
+
+    assert settings.mcp_server_port == 8100
+    assert settings.mcp_server_url == "http://localhost:8100/mcp"
 
 
 def test_create_container_uses_postgres_for_publish_snapshots() -> None:

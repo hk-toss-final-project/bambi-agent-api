@@ -145,7 +145,7 @@ async def _run() -> None:
     try:
         await server.run_streamable_http_async(
             host="0.0.0.0",
-            port=8000,
+            port=settings.mcp_server_port,
             streamable_http_path="/mcp",
             json_response=True,
             stateless_http=True,
