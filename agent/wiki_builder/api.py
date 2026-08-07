@@ -21,6 +21,13 @@ from .features.classification import (
     split_source_content,
 )
 from .features.planning import build_wiki_plan
+from .features.identity_resolution import (
+    WikiIdentityConflict,
+    WikiIdentityOption,
+    WikiResolutionDraft,
+    normalize_wiki_surface,
+    prepare_wiki_identity_resolution,
+)
 
 __all__ = [
     "wba_001",
@@ -40,4 +47,9 @@ __all__ = [
     "wba_015",
     "wba_016",
     "wba_017",
+    "WikiIdentityConflict",
+    "WikiIdentityOption",
+    "WikiResolutionDraft",
+    "normalize_wiki_surface",
+    "prepare_wiki_identity_resolution",
 ]

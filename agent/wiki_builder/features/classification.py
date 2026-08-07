@@ -8,6 +8,7 @@ entity와 이론·방법·분야·용어 등의 concept을 추출한다. 여러 
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -46,6 +47,8 @@ _CONCEPT_SUBTYPES = {
 }
 ONBOARDING_CLASSIFIER_MODEL = "deterministic:onboarding-seed-v1"
 
+_ONBOARDING_COMPOUND_SEPARATOR = re.compile(r"\s*·\s*")
+
 type WikiClassifier = Callable[..., WikiClassification]
 
 _PROMPT_PATH = Path(__file__).parents[2] / "prompts" / "templates" / "personal_wiki_classifier.md"
@@ -72,12 +75,18 @@ def classify_onboarding_seed_for_wiki(
     raw_labels = source_metadata.get("labels")
     if not isinstance(raw_labels, list):
         raise ValueError("온보딩 시드 metadata.labels가 문자열 목록이어야 합니다.")
-    labels = _unique(item for item in raw_labels if isinstance(item, str))
-    if not labels:
+    source_labels = _unique(item for item in raw_labels if isinstance(item, str))
+    if not source_labels:
         raise ValueError("온보딩 시드에 유효한 관심 주제 label이 없습니다.")
+    labels = _unique(
+        atomic_label
+        for source_label in source_labels
+        for atomic_label in _ONBOARDING_COMPOUND_SEPARATOR.split(source_label)
+    )
     return WikiClassification(
         source_summary=(
-            "사용자가 온보딩에서 직접 선택한 관심 주제: " + ", ".join(labels)
+            "사용자가 온보딩에서 직접 선택한 관심 주제: "
+            + ", ".join(source_labels)
         ),
         concepts=[
             ConceptClassification(
