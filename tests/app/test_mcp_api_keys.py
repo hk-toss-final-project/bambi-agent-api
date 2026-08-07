@@ -37,6 +37,7 @@ def test_mcp_api_key_create_list_and_revoke_routes() -> None:
         )
 
     assert created.status_code == 201
+    assert created.json()["id"] == "11111111-1111-1111-1111-111111111111"
     assert created.json()["api_key"].startswith("bmb_mcp_")
     assert created.json()["token_type"] == "Bearer"
     assert listed.status_code == 200
