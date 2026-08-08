@@ -120,6 +120,26 @@ def _format_existing_entries(entries: Sequence[ExistingWikiEntry]) -> str:
     return "\n".join(lines)
 
 
+# 원문에서 노드가 맡은 역할. 관심사 후보를 고를 때 subject만 남긴다.
+#
+# 2026-08-07 실측: 관심사 상위권에 DBeaver Community·pgAdmin 4·OpenWiki(도구),
+# "기술노트with 알렉"·"AI 시대 개발을 위한 필수 IT 지식"(출처), "API 키 발급"(절차),
+# Cauchy·Kepler(글에 언급된 인물)이 올라와 있었다. 전부 글에서 스쳐 간 것이지
+# 사용자가 뉴스로 받아보고 싶은 대상이 아니다. subtype으로는 못 가른다 —
+# DBeaver Community와 리튬황 배터리가 둘 다 product였다.
+_NODE_ROLES = {"subject", "tool", "source", "mention"}
+
+
+def _validated_role(value: object) -> str:
+    """LLM이 반환한 역할을 허용 목록으로 제한한다.
+
+    값이 없거나 모르는 값이면 subject로 둔다. 판정에 실패했다고 관심사를
+    통째로 잃는 것보다, 걸러내지 못하는 쪽이 덜 나쁘기 때문이다.
+    """
+    role = str(value or "subject").strip().lower()
+    return role if role in _NODE_ROLES else "subject"
+
+
 def _validated_subtype(value: object, allowed: set[str]) -> str:
     """LLM이 반환한 subtype을 허용 목록으로 제한한다."""
     subtype = str(value or "other").strip().lower()
@@ -152,6 +172,7 @@ def _parse_entity(
             else None
         ),
         is_alias=bool(raw.get("is_alias", False)),
+        role=_validated_role(raw.get("role")),
     )
 
 
@@ -175,6 +196,7 @@ def _parse_concept(
             else None
         ),
         overlaps_existing=bool(raw.get("overlaps_existing", False)),
+        role=_validated_role(raw.get("role")),
     )
 
 

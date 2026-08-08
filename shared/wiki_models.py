@@ -34,6 +34,9 @@ class EntityClassification:
     mentions: list[str] = field(default_factory=list)
     matched_existing_key: str | None = None
     is_alias: bool = False
+    # 이 노드가 원문에서 맡은 역할. 관심사 후보를 고를 때 쓴다.
+    # subject만 관심사가 되고 tool·source·mention은 제외된다.
+    role: str = "subject"
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +54,8 @@ class ConceptClassification:
     mentions: list[str] = field(default_factory=list)
     matched_existing_key: str | None = None
     overlaps_existing: bool = False
+    # EntityClassification.role과 같은 의미다.
+    role: str = "subject"
 
 
 @dataclass(frozen=True, slots=True)
