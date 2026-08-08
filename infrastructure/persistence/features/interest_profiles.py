@@ -92,30 +92,46 @@ async def load_interest_documents_for_user(
              AND version.namespace_key = document.namespace_key
              AND version.version = document.current_version
             LEFT JOIN LATERAL (
-                SELECT SUM(
-                    CASE relation.relation_type
-                        WHEN 'entity_relation' THEN 1.0
-                        WHEN 'applies_concept' THEN 1.0
-                        WHEN 'related_concept' THEN 0.5
-                        ELSE 0.0
-                    END
-                ) AS degree
-                FROM agent.wiki_document_relations AS relation
-                JOIN agent.wiki_documents AS peer
-                  ON peer.id = CASE
-                         WHEN relation.source_document_id = document.id
-                         THEN relation.target_document_id
-                         ELSE relation.source_document_id
-                     END
-                 AND peer.namespace_key = relation.namespace_key
-                WHERE relation.namespace_key = document.namespace_key
-                  AND document.id IN (
-                      relation.source_document_id,
-                      relation.target_document_id
-                  )
-                  AND peer.document_kind IN ('entity', 'concept')
-                  AND peer.status = 'active'
-                  AND peer.deleted_at IS NULL
+                SELECT SUM(neighbor.max_weight) AS degree
+                FROM (
+                    SELECT
+                        peer.id,
+                        MAX(
+                            CASE relation.relation_type
+                                WHEN 'entity_relation' THEN 1.0
+                                WHEN 'applies_concept' THEN 1.0
+                                WHEN 'related_concept' THEN 0.5
+                                WHEN 'instance_of' THEN 1.0
+                                WHEN 'subtopic_of' THEN 1.0
+                                WHEN 'part_of' THEN 1.0
+                                WHEN 'located_in' THEN 1.0
+                                WHEN 'occurs_in' THEN 1.0
+                                WHEN 'affects' THEN 1.0
+                                WHEN 'causes' THEN 1.0
+                                WHEN 'associated_with' THEN 0.5
+                                ELSE 0.0
+                            END
+                        ) AS max_weight
+                    FROM agent.wiki_document_relations AS relation
+                    JOIN agent.wiki_documents AS peer
+                      ON peer.id = CASE
+                             WHEN relation.source_document_id = document.id
+                             THEN relation.target_document_id
+                             ELSE relation.source_document_id
+                         END
+                     AND peer.namespace_key = relation.namespace_key
+                    WHERE relation.namespace_key = document.namespace_key
+                      AND relation.status = 'active'
+                      AND relation.review_status <> 'rejected'
+                      AND document.id IN (
+                          relation.source_document_id,
+                          relation.target_document_id
+                      )
+                      AND peer.document_kind IN ('entity', 'concept')
+                      AND peer.status = 'active'
+                      AND peer.deleted_at IS NULL
+                    GROUP BY peer.id
+                ) AS neighbor
             ) AS relation_stats ON true
             LEFT JOIN LATERAL (
                 SELECT

@@ -55,7 +55,12 @@ class ConceptClassification:
 
 @dataclass(frozen=True, slots=True)
 class WikiRelationClassification:
-    """LLM 원문 근거로 검증된 entity·concept 관계 후보 한 건."""
+    """LLM 검토와 근거 검증을 통과한 Wiki 관계 후보 한 건.
+
+    ``provenance_kind``는 원문에 관계가 직접 적힌 경우와 기존 지식에 대한
+    의미 추론을 구분한다. 의미 추론도 자동 저장되기 전에 ``confidence``와
+    ``review_status`` 품질 게이트를 통과해야 한다.
+    """
 
     source_name: str
     source_kind: str
@@ -65,6 +70,23 @@ class WikiRelationClassification:
     evidence: str
     source_matched_key: str | None = None
     target_matched_key: str | None = None
+    provenance_kind: str = "source_explicit"
+    confidence: float = 1.0
+    review_status: str = "accepted"
+    rationale: str = ""
+    model: str | None = None
+    prompt_version: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WikiNodeDisposition:
+    """추출 노드가 병합·연결·독립 중 어디로 처리됐는지 남기는 결정."""
+
+    node_name: str
+    node_kind: str
+    disposition: str
+    reason: str
+    matched_existing_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +98,7 @@ class WikiClassification:
     concepts: list[ConceptClassification] = field(default_factory=list)
     relations: list[WikiRelationClassification] = field(default_factory=list)
     relation_warnings: list[str] = field(default_factory=list)
+    node_dispositions: list[WikiNodeDisposition] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +150,7 @@ class WikiBuildPlan:
     extracted_relation_count: int = 0
     isolated_node_count: int = 0
     relation_warnings: list[str] = field(default_factory=list)
+    node_dispositions: list[WikiNodeDisposition] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)

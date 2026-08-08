@@ -29,11 +29,47 @@ _PROMPT_PATH = (
     / "personal_wiki_relation_reviewer.md"
 )
 _SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8").strip()
-_ALLOWED_RELATIONS = {
-    ("entity", "entity"): "entity_relation",
-    ("entity", "concept"): "applies_concept",
-    ("concept", "concept"): "related_concept",
+_RELATION_KIND_PAIRS: dict[str, set[tuple[str, str]]] = {
+    # 기존 관계 유형은 저장된 Graph와 API 하위 호환을 위해 계속 읽는다.
+    "entity_relation": {("entity", "entity")},
+    "applies_concept": {("entity", "concept")},
+    "related_concept": {("concept", "concept")},
+    "alias_of": {("entity", "entity"), ("concept", "concept")},
+    # 의미를 드러내는 관계 유형. ``associated_with``만 모든 방향을 허용하고,
+    # 나머지는 관계 의미상 가능한 노드 종류로 범위를 좁힌다.
+    "instance_of": {("entity", "concept"), ("concept", "concept")},
+    "subtopic_of": {("concept", "concept")},
+    "part_of": {
+        ("entity", "entity"),
+        ("entity", "concept"),
+        ("concept", "concept"),
+    },
+    "located_in": {("entity", "entity")},
+    "occurs_in": {("entity", "entity")},
+    "affects": {
+        ("entity", "entity"),
+        ("entity", "concept"),
+        ("concept", "entity"),
+        ("concept", "concept"),
+    },
+    "causes": {
+        ("entity", "entity"),
+        ("entity", "concept"),
+        ("concept", "entity"),
+        ("concept", "concept"),
+    },
+    "associated_with": {
+        ("entity", "entity"),
+        ("entity", "concept"),
+        ("concept", "entity"),
+        ("concept", "concept"),
+    },
 }
+ALLOWED_RELATION_TYPES = frozenset(_RELATION_KIND_PAIRS)
+ALLOWED_PROVENANCE_KINDS = frozenset(
+    {"source_explicit", "semantic_inference", "user_declared", "system_rule"}
+)
+ALLOWED_REVIEW_STATUSES = frozenset({"unreviewed", "accepted", "rejected"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +99,8 @@ def parse_relation_candidates(
     *,
     node_refs: dict[str, WikiNodeRef],
     source_content: str | None,
+    model: str | None = None,
+    prompt_version: str | None = None,
 ) -> RelationReviewResult:
     """LLM 관계 배열을 검증된 개인 Wiki 관계 후보로 변환한다."""
     if raw_relations is None:
@@ -103,11 +141,33 @@ def parse_relation_candidates(
             warnings.append(f"relations[{index}]의 자기 참조를 제외했습니다.")
             continue
         relation_type = str(raw.get("relation_type") or "").strip()
-        expected_type = _ALLOWED_RELATIONS.get((source_kind, target_kind))
-        if expected_type is None or relation_type != expected_type:
+        allowed_pairs = _RELATION_KIND_PAIRS.get(relation_type)
+        if allowed_pairs is None or (source_kind, target_kind) not in allowed_pairs:
             warnings.append(
                 f"relations[{index}]의 노드 종류와 관계 유형이 일치하지 않습니다: "
                 f"{source_kind}->{target_kind}/{relation_type or '(없음)'}"
+            )
+            continue
+        provenance_kind = str(
+            raw.get("provenance_kind") or "source_explicit"
+        ).strip()
+        if provenance_kind not in ALLOWED_PROVENANCE_KINDS:
+            warnings.append(
+                f"relations[{index}]의 provenance_kind이 허용 값이 아닙니다."
+            )
+            continue
+        try:
+            confidence = float(raw.get("confidence", 1.0))
+        except (TypeError, ValueError):
+            warnings.append(f"relations[{index}]의 confidence가 숫자가 아닙니다.")
+            continue
+        if not 0.0 <= confidence <= 1.0:
+            warnings.append(f"relations[{index}]의 confidence가 0~1 범위가 아닙니다.")
+            continue
+        review_status = str(raw.get("review_status") or "accepted").strip()
+        if review_status not in ALLOWED_REVIEW_STATUSES:
+            warnings.append(
+                f"relations[{index}]의 review_status가 허용 값이 아닙니다."
             )
             continue
         evidence = str(raw.get("evidence") or "").strip()
@@ -137,6 +197,12 @@ def parse_relation_candidates(
                 evidence=evidence,
                 source_matched_key=source_matched_key,
                 target_matched_key=target_matched_key,
+                provenance_kind=provenance_kind,
+                confidence=confidence,
+                review_status=review_status,
+                rationale=str(raw.get("rationale") or "").strip(),
+                model=model,
+                prompt_version=prompt_version,
             )
         )
     return RelationReviewResult(relations=relations, warnings=warnings)

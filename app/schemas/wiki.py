@@ -32,7 +32,10 @@ class WikiGraphNode(WikiGraphSchema):
     version: int = Field(ge=1, description="현재 Wiki 문서 Version")
     updated_at: datetime = Field(description="Wiki Head 마지막 갱신 시각")
     markdown: str = Field(description="현재 Version의 정규화된 Markdown 본문")
-    degree: int = Field(ge=0, description="현재 Graph에서 연결된 Edge 개수")
+    degree: int = Field(
+        ge=0,
+        description="현재 Graph에서 중복 관계 유형을 제외한 인접 노드 수",
+    )
 
 
 class WikiGraphEdge(WikiGraphSchema):
@@ -46,6 +49,14 @@ class WikiGraphEdge(WikiGraphSchema):
         "applies_concept",
         "related_concept",
         "alias_of",
+        "instance_of",
+        "subtopic_of",
+        "part_of",
+        "located_in",
+        "occurs_in",
+        "affects",
+        "causes",
+        "associated_with",
     ] = Field(description="Wiki 문서 관계 유형")
     metadata: dict[str, object] = Field(
         default_factory=dict, description="관계 생성 과정의 부가 Metadata"
@@ -80,15 +91,21 @@ class WikiGraphResponse(WikiGraphSchema):
 
 
 class WikiTopNode(WikiGraphSchema):
-    """연결 Edge 수 기준으로 정렬된 Wiki 문서 Node 요약."""
+    """고유 인접 Node 수 기준으로 정렬된 Wiki 문서 Node 요약."""
 
-    rank: int = Field(ge=1, description="연결 수 기준 순위. 1이 가장 많이 연결된 Node")
+    rank: int = Field(
+        ge=1,
+        description="고유 인접 Node 수 기준 순위. 1이 가장 많이 연결된 Node",
+    )
     document_id: str = Field(description="Wiki 문서 UUID")
     document_kind: Literal["entity", "concept"] = Field(description="Wiki 문서 종류")
     document_key: str = Field(description="사용자 Namespace 안의 논리 문서 Key")
     title: str = Field(description="Wiki 문서 제목")
     subtype: str = Field(description="Entity 또는 Concept 세부 유형")
-    degree: int = Field(ge=0, description="현재 Graph에서 연결된 Edge 개수")
+    degree: int = Field(
+        ge=0,
+        description="현재 Graph에서 중복 관계 유형을 제외한 인접 노드 수",
+    )
     summary: str | None = Field(default=None, description="Wiki 문서 요약")
     aliases: list[str] = Field(default_factory=list, description="문서 별칭 목록")
     file_path: str = Field(description="Obsidian Vault 호환 문서 경로")

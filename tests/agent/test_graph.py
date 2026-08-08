@@ -10,7 +10,9 @@ import pytest
 
 from agent import graph as agent_graph
 from agent.report_builder.api import ResearchOutcome
+from infrastructure.persistence.api import WikiGraphRelationSnapshot
 from shared.report_models import ReportContextDocument
+from shared.wiki_models import WikiClassification
 
 
 class _FakeConnection:
@@ -54,6 +56,35 @@ def _fake_onboarding_source() -> SimpleNamespace:
     return source
 
 
+def _graph_snapshot_relation(
+    source_key: str,
+    source_title: str,
+    target_key: str,
+    target_title: str,
+    **overrides: object,
+) -> WikiGraphRelationSnapshot:
+    """기본 검증 상태의 Wiki Graph 관계 Snapshot 한 건을 만든다."""
+    values: dict[str, object] = {
+        "source_document_kind": "concept",
+        "source_document_key": source_key,
+        "source_title": source_title,
+        "source_domain": "topic",
+        "target_document_kind": "concept",
+        "target_document_key": target_key,
+        "target_title": target_title,
+        "target_domain": "topic",
+        "relation_type": "associated_with",
+        "status": "active",
+        "review_status": "accepted",
+        "provenance_kind": "source_explicit",
+        "confidence": 0.9,
+        "weight": 1.0,
+        "supported": True,
+    }
+    values.update(overrides)
+    return WikiGraphRelationSnapshot(**values)  # type: ignore[arg-type]
+
+
 def _fake_persisted() -> SimpleNamespace:
     """persist 노드가 반환하는 Build 결과 대역."""
     document = SimpleNamespace(
@@ -80,6 +111,10 @@ def test_run_personal_wiki_build_assembles_result(
     """Wiki 그래프가 분류→identity 판정→품질 검증→저장 순서로 결과를 조립한다."""
     order: list[str] = []
     plan = SimpleNamespace(
+        entities=[],
+        concepts=[],
+        relations=[],
+        node_dispositions=[],
         index=SimpleNamespace(content="index"),
         source_manifest=SimpleNamespace(content="manifest"),
         log_entry=SimpleNamespace(content="log"),
@@ -105,43 +140,53 @@ def test_run_personal_wiki_build_assembles_result(
         """기존 Wiki 관계가 없는 상태를 반환한다."""
         return []
 
-    def fake_classify(**kwargs: Any) -> str:
+    classification = WikiClassification()
+    resolved_classification = WikiClassification(source_summary="resolved")
+
+    def fake_classify(**kwargs: Any) -> WikiClassification:
         """분류 입력을 검증하고 고정 분류 결과를 반환한다."""
         order.append("classify")
         assert kwargs["source_title"] == "원본 제목"
         assert kwargs["model"] == "test-model"
-        return "classification"
+        return classification
 
     def fake_prepare_identity(**kwargs: Any) -> SimpleNamespace:
         """LLM 판정이 필요한 identity 충돌 한 건을 반환한다."""
         order.append("prepare_identity")
-        assert kwargs["classification"] == "classification"
-        return SimpleNamespace(classification="classification", conflicts=("conflict",))
+        assert kwargs["classification"] is classification
+        return SimpleNamespace(classification=classification, conflicts=("conflict",))
 
     def fake_resolve_identity(**kwargs: Any) -> SimpleNamespace:
         """identity 충돌을 해결한 고정 분류 결과를 반환한다."""
         order.append("resolve_identity")
         assert kwargs["source_title"] == "원본 제목"
         return SimpleNamespace(
-            classification="resolved-classification",
+            classification=resolved_classification,
             model="test-resolver",
             resolved_conflict_count=1,
             input_tokens=120,
             output_tokens=30,
         )
 
-    def fake_quality_gate(**kwargs: Any) -> str:
+    def fake_quality_gate(**kwargs: Any) -> WikiClassification:
         """저장 전 품질 검증 호출을 기록하고 분류 결과를 통과시킨다."""
         order.append("quality_gate")
-        assert kwargs["classification"] == "resolved-classification"
+        assert kwargs["classification"] is resolved_classification
         return kwargs["classification"]
 
     async def fake_wba_003(**kwargs: Any) -> SimpleNamespace:
         """WBA-003 계획 함수 호출을 기록하고 고정 계획을 반환한다."""
         order.append("plan")
-        assert kwargs["classification"] == "resolved-classification"
-        assert kwargs["model"] == "test-model;identity=test-resolver"
+        assert kwargs["classification"] is resolved_classification
+        assert kwargs["model"] == (
+            "test-model;identity=test-resolver;relation=test-model"
+        )
         return plan
+
+    async def fake_plan_quality(*args: Any, **kwargs: Any) -> SimpleNamespace:
+        """계획 Lint 순서를 기록하고 통과 보고서를 반환한다."""
+        order.append("validate_plan")
+        return SimpleNamespace(passed=True, issues=(), metrics={"error_count": 0})
 
     async def fake_pwiki_002(
         connection: Any, **kwargs: Any
@@ -151,6 +196,12 @@ def test_run_personal_wiki_build_assembles_result(
         assert kwargs["plan"] is plan
         assert kwargs["job_id"] == "job-1"
         return _fake_persisted()
+
+    async def fake_wba_011(connection: Any, **kwargs: Any) -> int:
+        """변경 Chunk Embedding 갱신 순서를 기록한다."""
+        order.append("embed")
+        assert kwargs["document_version_ids"] == ["doc-version-1"]
+        return 1
 
     async def fake_int_011(
         repository: Any, user_id: str, *, limit: int = 20
@@ -166,6 +217,10 @@ def test_run_personal_wiki_build_assembles_result(
     )
     monkeypatch.setattr(agent_graph, "list_existing_wiki_entries", fake_entries)
     monkeypatch.setattr(agent_graph, "list_existing_wiki_relations", fake_relations)
+    monkeypatch.setattr(
+        agent_graph, "list_onboarding_wiki_anchor_keys", fake_entries
+    )
+    monkeypatch.setattr(agent_graph, "list_wiki_node_embeddings", fake_entries)
     monkeypatch.setattr(agent_graph, "classify_source_for_wiki", fake_classify)
     monkeypatch.setattr(
         agent_graph, "prepare_wiki_identity_resolution", fake_prepare_identity
@@ -175,6 +230,8 @@ def test_run_personal_wiki_build_assembles_result(
     )
     monkeypatch.setattr(agent_graph, "validate_wiki_identity_quality", fake_quality_gate)
     monkeypatch.setattr(agent_graph, "wba_003", fake_wba_003)
+    monkeypatch.setattr(agent_graph, "wba_014", fake_plan_quality)
+    monkeypatch.setattr(agent_graph, "wba_011", fake_wba_011)
     monkeypatch.setattr(agent_graph, "pwiki_002", fake_pwiki_002)
     monkeypatch.setattr(agent_graph, "int_011", fake_int_011)
 
@@ -196,7 +253,9 @@ def test_run_personal_wiki_build_assembles_result(
         "resolve_identity",
         "quality_gate",
         "plan",
+        "validate_plan",
         "persist",
+        "embed",
         "recalculate",
     ]
     assert result["source_document_id"] == "source-1"
@@ -212,7 +271,7 @@ def test_run_personal_wiki_build_assembles_result(
         "input_tokens": 120,
         "output_tokens": 30,
     }
-    assert "embedding_count" not in result
+    assert result["embedding_count"] == 1
     assert result["affected_documents"][0]["document_key"] == "entity-key"
     assert result["artifacts"]["index"] == "index"
 
@@ -223,6 +282,10 @@ def test_run_personal_wiki_build_materializes_onboarding_labels_without_llm(
     """실제 Worker 그래프도 온보딩 라벨을 결정적으로 Concept로 만든다."""
     captured: dict[str, Any] = {}
     plan = SimpleNamespace(
+        entities=[],
+        concepts=[],
+        relations=[],
+        node_dispositions=[],
         index=SimpleNamespace(content="index"),
         source_manifest=SimpleNamespace(content="manifest"),
         log_entry=SimpleNamespace(content="log"),
@@ -261,6 +324,10 @@ def test_run_personal_wiki_build_materializes_onboarding_labels_without_llm(
         """고정 저장 결과를 반환한다."""
         return _fake_persisted()
 
+    async def fake_embedding(connection: Any, **kwargs: Any) -> int:
+        """테스트에서 외부 Embedding 호출을 생략한다."""
+        return 1
+
     async def fake_int_011(
         repository: Any, user_id: str, *, limit: int = 20
     ) -> dict[str, Any]:
@@ -273,12 +340,17 @@ def test_run_personal_wiki_build_materializes_onboarding_labels_without_llm(
     )
     monkeypatch.setattr(agent_graph, "list_existing_wiki_entries", fake_listing)
     monkeypatch.setattr(agent_graph, "list_existing_wiki_relations", fake_listing)
+    monkeypatch.setattr(
+        agent_graph, "list_onboarding_wiki_anchor_keys", fake_listing
+    )
+    monkeypatch.setattr(agent_graph, "list_wiki_node_embeddings", fake_listing)
     monkeypatch.setattr(agent_graph, "classify_source_for_wiki", fail_if_llm_is_called)
     monkeypatch.setattr(
         agent_graph, "resolve_wiki_identity_conflicts", fail_if_identity_llm_is_called
     )
     monkeypatch.setattr(agent_graph, "wba_003", fake_wba_003)
     monkeypatch.setattr(agent_graph, "pwiki_002", fake_pwiki_002)
+    monkeypatch.setattr(agent_graph, "wba_011", fake_embedding)
     monkeypatch.setattr(agent_graph, "int_011", fake_int_011)
 
     result = asyncio.run(
@@ -298,7 +370,8 @@ def test_run_personal_wiki_build_materializes_onboarding_labels_without_llm(
         "반도체",
     ]
     assert captured["model"] == (
-        "deterministic:onboarding-seed-v1;identity=deterministic:wiki-surface-v1"
+        "deterministic:onboarding-seed-v1;identity=deterministic:wiki-surface-v1;"
+        "relation=deterministic:onboarding-anchor-v1"
     )
     assert result["identity_resolution"]["resolved_conflict_count"] == 0
     assert result["wiki_version_id"] == "wiki-version-1"
@@ -309,6 +382,10 @@ def test_run_personal_wiki_build_survives_interest_recalc_failure(
 ) -> None:
     """관심사 재계산 훅이 실패해도 Build 결과 Payload는 그대로 반환된다."""
     plan = SimpleNamespace(
+        entities=[],
+        concepts=[],
+        relations=[],
+        node_dispositions=[],
         index=SimpleNamespace(content="index"),
         source_manifest=SimpleNamespace(content="manifest"),
         log_entry=SimpleNamespace(content="log"),
@@ -333,9 +410,11 @@ def test_run_personal_wiki_build_survives_interest_recalc_failure(
         """고정 Build 계획을 반환한다."""
         return plan
 
+    classification = WikiClassification()
+
     def fake_prepare_identity(**kwargs: Any) -> SimpleNamespace:
         """충돌이 없는 고정 identity 초안을 반환한다."""
-        return SimpleNamespace(classification="classification", conflicts=())
+        return SimpleNamespace(classification=classification, conflicts=())
 
     def fake_quality_gate(**kwargs: Any) -> str:
         """고정 분류 결과를 저장 전 검증에서 통과시킨다."""
@@ -344,6 +423,10 @@ def test_run_personal_wiki_build_survives_interest_recalc_failure(
     async def fake_pwiki_002(connection: Any, **kwargs: Any) -> SimpleNamespace:
         """고정 저장 결과를 반환한다."""
         return _fake_persisted()
+
+    async def fake_embedding(connection: Any, **kwargs: Any) -> int:
+        """테스트에서 외부 Embedding 호출을 생략한다."""
+        return 1
 
     async def failing_int_011(
         repository: Any, user_id: str, *, limit: int = 20
@@ -358,7 +441,11 @@ def test_run_personal_wiki_build_survives_interest_recalc_failure(
     monkeypatch.setattr(agent_graph, "list_existing_wiki_entries", fake_listing)
     monkeypatch.setattr(agent_graph, "list_existing_wiki_relations", fake_listing)
     monkeypatch.setattr(
-        agent_graph, "classify_source_for_wiki", lambda **kwargs: "classification"
+        agent_graph, "list_onboarding_wiki_anchor_keys", fake_listing
+    )
+    monkeypatch.setattr(agent_graph, "list_wiki_node_embeddings", fake_listing)
+    monkeypatch.setattr(
+        agent_graph, "classify_source_for_wiki", lambda **kwargs: classification
     )
     monkeypatch.setattr(
         agent_graph, "prepare_wiki_identity_resolution", fake_prepare_identity
@@ -366,6 +453,7 @@ def test_run_personal_wiki_build_survives_interest_recalc_failure(
     monkeypatch.setattr(agent_graph, "validate_wiki_identity_quality", fake_quality_gate)
     monkeypatch.setattr(agent_graph, "wba_003", fake_wba_003)
     monkeypatch.setattr(agent_graph, "pwiki_002", fake_pwiki_002)
+    monkeypatch.setattr(agent_graph, "wba_011", fake_embedding)
     monkeypatch.setattr(agent_graph, "int_011", failing_int_011)
 
     result = asyncio.run(
@@ -395,6 +483,182 @@ def _disable_research(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: False)
     monkeypatch.setattr(agent_graph, "resolve_topic_intent", lambda *args: "news")
     _disable_critic(monkeypatch)
+
+
+def test_wiki_keyword_expansion_uses_bounded_ppr_and_excludes_organizations() -> None:
+    """성숙한 Snapshot은 2-hop PPR을 쓰고 조직·3-hop·top_k 초과를 제외한다."""
+    snapshot = [
+        _graph_snapshot_relation("weather", "날씨", "heatwave", "폭염"),
+        _graph_snapshot_relation("heatwave", "폭염", "illness", "온열질환"),
+        _graph_snapshot_relation("weather", "날씨", "typhoon", "태풍"),
+        _graph_snapshot_relation("typhoon", "태풍", "surge", "폭풍해일"),
+        _graph_snapshot_relation("heatwave", "폭염", "typhoon", "태풍"),
+        _graph_snapshot_relation("surge", "폭풍해일", "coast", "해안"),
+        _graph_snapshot_relation(
+            "weather",
+            "날씨",
+            "agency",
+            "기상 기관",
+            target_domain="organization",
+            weight=10.0,
+        ),
+    ]
+
+    expansion = agent_graph._expand_wiki_graph_keywords(
+        "날씨",
+        snapshot,
+        top_k=3,
+    )
+
+    assert expansion.gate_passed is True
+    assert expansion.mode == "bounded_ppr"
+    assert len(expansion.keywords) == 3
+    assert "기상 기관" not in expansion.keywords
+    assert "해안" not in expansion.keywords
+    assert set(expansion.keywords) <= {"폭염", "온열질환", "태풍", "폭풍해일"}
+
+
+def test_wiki_keyword_expansion_gate_failure_uses_verified_one_hop_only() -> None:
+    """Gate 실패 시 accepted·supported·confidence 통과 직접 이웃만 반환한다."""
+    snapshot = [
+        _graph_snapshot_relation(
+            "weather",
+            "날씨",
+            "heatwave",
+            "폭염",
+            provenance_kind="semantic_inference",
+            confidence=0.84,
+        ),
+        _graph_snapshot_relation(
+            "weather",
+            "날씨",
+            "finance",
+            "금융",
+            provenance_kind="semantic_inference",
+            confidence=0.77,
+        ),
+        _graph_snapshot_relation(
+            "weather",
+            "날씨",
+            "festival",
+            "축제",
+            review_status="unreviewed",
+        ),
+        _graph_snapshot_relation(
+            "weather",
+            "날씨",
+            "unsupported",
+            "근거 없음",
+            supported=False,
+        ),
+    ]
+
+    expansion = agent_graph._expand_wiki_graph_keywords(
+        "weather",
+        snapshot,
+        top_k=5,
+    )
+
+    assert expansion.gate_passed is False
+    assert expansion.mode == "one_hop"
+    assert expansion.keywords == ("폭염",)
+    assert any("검증 Edge" in reason for reason in expansion.maturity_reasons)
+
+
+def test_graph_snapshot_query_failure_uses_legacy_one_hop_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Migration 미적용 등 Snapshot 조회 실패에서만 기존 1-hop SQL로 폴백한다."""
+    calls: list[str] = []
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """테스트 DB Scope 설정 호출을 기록한다."""
+        calls.append(f"scope:{user_id}")
+
+    async def fail_snapshot(connection: Any, **kwargs: Any) -> list[object]:
+        """Migration 전 UndefinedColumn 조회 실패를 재현한다."""
+        calls.append("snapshot")
+        raise RuntimeError("undefined column relation.status")
+
+    async def fake_legacy(connection: Any, **kwargs: Any) -> list[SimpleNamespace]:
+        """신규 lifecycle SQL 실패 뒤 구버전 1-hop SQL에서 이웃을 반환한다."""
+        lifecycle_aware = bool(kwargs["lifecycle_aware"])
+        calls.append(f"legacy:{lifecycle_aware}")
+        assert kwargs["limit"] == 2
+        if lifecycle_aware:
+            raise RuntimeError("undefined column relation.status")
+        return [SimpleNamespace(title="폭염"), SimpleNamespace(title="태풍")]
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(
+        agent_graph,
+        "list_wiki_graph_relation_snapshot",
+        fail_snapshot,
+    )
+    monkeypatch.setattr(agent_graph, "list_related_wiki_keywords", fake_legacy)
+    connection = _FakeConnection()
+
+    expansion = asyncio.run(
+        agent_graph._load_related_keyword_expansion(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            topic="날씨",
+            top_k=2,
+        )
+    )
+
+    assert expansion.mode == "legacy_one_hop"
+    assert expansion.keywords == ("폭염", "태풍")
+    assert calls == [
+        "scope:user-1",
+        "snapshot",
+        "scope:user-1",
+        "legacy:True",
+        "scope:user-1",
+        "legacy:False",
+    ]
+    assert connection.transactions == 3
+
+
+def test_successful_graph_snapshot_never_calls_legacy_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Snapshot 조회가 성공한 Gate 실패는 기존 SQL이 아닌 검증 1-hop을 쓴다."""
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """테스트에서는 DB Scope 설정을 생략한다."""
+
+    async def fake_snapshot(
+        connection: Any, **kwargs: Any
+    ) -> list[WikiGraphRelationSnapshot]:
+        """검증 Edge 한 건인 미성숙 Graph를 반환한다."""
+        return [_graph_snapshot_relation("weather", "날씨", "heatwave", "폭염")]
+
+    async def fail_legacy(connection: Any, **kwargs: Any) -> list[object]:
+        """성공한 Snapshot 뒤 기존 조회가 호출되면 테스트를 실패시킨다."""
+        raise AssertionError("legacy 1-hop must not be called")
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(
+        agent_graph,
+        "list_wiki_graph_relation_snapshot",
+        fake_snapshot,
+    )
+    monkeypatch.setattr(agent_graph, "list_related_wiki_keywords", fail_legacy)
+    connection = _FakeConnection()
+
+    expansion = asyncio.run(
+        agent_graph._load_related_keyword_expansion(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            topic="날씨",
+            top_k=1,
+        )
+    )
+
+    assert expansion.mode == "one_hop"
+    assert expansion.keywords == ("폭염",)
+    assert connection.transactions == 1
 
 
 def test_run_report_generation_chains_search_generate_persist(
@@ -434,11 +698,24 @@ def test_run_report_generation_chains_search_generate_persist(
         assert list(related_keywords) == ["추천 시스템"]
         return []
 
-    async def fake_related_keywords(connection: Any, **kwargs: Any) -> list:
-        """Wiki 그래프 이웃 조회를 고정 결과로 대체한다."""
+    async def fake_graph_snapshot(
+        connection: Any, **kwargs: Any
+    ) -> list[WikiGraphRelationSnapshot]:
+        """Wiki Graph Snapshot 조회를 미성숙 검증 Edge 한 건으로 대체한다."""
         order.append("related_keywords")
-        assert kwargs["topic"] == "개인화"
-        return [SimpleNamespace(title="추천 시스템", weight=2.0)]
+        assert kwargs["namespace_key"] == "user/user-1"
+        return [
+            _graph_snapshot_relation(
+                "personalization",
+                "개인화",
+                "recommendation",
+                "추천 시스템",
+            )
+        ]
+
+    async def fail_legacy_query(connection: Any, **kwargs: Any) -> list[object]:
+        """Snapshot 성공 뒤 기존 1-hop SQL을 호출하면 테스트를 실패시킨다."""
+        raise AssertionError("legacy 1-hop must not be called")
 
     def fake_generate(**kwargs: Any) -> str:
         """생성 입력을 검증하고 고정 콘텐츠를 반환한다(품질 루프 래퍼를 대체)."""
@@ -461,8 +738,9 @@ def test_run_report_generation_chains_search_generate_persist(
     monkeypatch.setattr(agent_graph, "generate_report_content_with_quality", fake_generate)
     monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect_live_context)
     monkeypatch.setattr(
-        agent_graph, "list_related_wiki_keywords", fake_related_keywords
+        agent_graph, "list_wiki_graph_relation_snapshot", fake_graph_snapshot
     )
+    monkeypatch.setattr(agent_graph, "list_related_wiki_keywords", fail_legacy_query)
     monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
     # 이 테스트는 조사원을 끈 고정 경로를 검증한다. 끄지 않으면 research 노드가
     # 실제 LLM을 호출한다(테스트는 LLM을 부르지 않아야 한다).

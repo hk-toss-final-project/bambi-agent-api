@@ -4,12 +4,22 @@ OpenAI Embedding Provider 호출을 한 모듈에 격리해 Worker 테스트에�
 결정적인 가짜 Client로 대체할 수 있게 한다.
 """
 
+from asyncio import to_thread
 from collections.abc import Callable, Sequence
-from typing import Protocol
+from functools import partial
+from typing import Any, Protocol
 
-from infrastructure.persistence.api import WikiChunkForEmbedding, WikiEmbeddingValue
+from psycopg import AsyncConnection
 
-from shared.contracts import FeatureRequest, FeatureResult
+from infrastructure.persistence.api import (
+    WikiChunkForEmbedding,
+    WikiEmbeddingValue,
+    get_wiki_chunks_for_embedding,
+    persist_wiki_embeddings,
+    set_personal_wiki_scope,
+)
+
+type DictRow = dict[str, Any]
 
 
 class EmbeddingClient(Protocol):
@@ -52,9 +62,61 @@ def generate_wiki_embeddings(
     ]
 
 
-async def wba_011(request: FeatureRequest) -> FeatureResult:
+def generate_relation_query_embeddings(
+    texts: Sequence[str],
+    *,
+    model: str = "text-embedding-3-small",
+    client_factory: Callable[[str], EmbeddingClient] = _default_client,
+) -> list[tuple[float, ...]]:
+    """Relation Linker 후보 recall용 문장을 같은 모델 Vector로 변환한다."""
+    if not texts:
+        return []
+    vectors = client_factory(model).embed_documents(list(texts))
+    if len(vectors) != len(texts):
+        raise RuntimeError(
+            "Embedding Provider의 Vector 개수가 관계 Query 개수와 다릅니다."
+        )
+    return [tuple(vector) for vector in vectors]
+
+
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
+async def wba_011(
+    connection: AsyncConnection[DictRow],
+    *,
+    namespace_key: str,
+    document_version_ids: Sequence[str],
+    model: str = "text-embedding-3-small",
+    client_factory: Callable[[str], EmbeddingClient] = _default_client,
+) -> int:
     """[WBA-011] Wiki 재임베딩.
 
     변경된 문서와 구조의 Embedding을 갱신한다.
     """
-    raise NotImplementedError("[WBA-011] 기능 구현이 필요합니다.")
+    if not namespace_key.startswith("user/"):
+        raise ValueError("WBA-011은 user/{user_id} Namespace만 재임베딩합니다.")
+    user_id = namespace_key.removeprefix("user/")
+    if not user_id:
+        raise ValueError("WBA-011 Namespace에 user_id가 없습니다.")
+    async with connection.transaction():
+        await set_personal_wiki_scope(connection, user_id=user_id)
+        chunks = await get_wiki_chunks_for_embedding(
+            connection,
+            namespace_key=namespace_key,
+            document_version_ids=document_version_ids,
+        )
+    values = await to_thread(
+        partial(
+            generate_wiki_embeddings,
+            chunks,
+            model=model,
+            client_factory=client_factory,
+        )
+    )
+    async with connection.transaction():
+        await set_personal_wiki_scope(connection, user_id=user_id)
+        return await persist_wiki_embeddings(
+            connection,
+            namespace_key=namespace_key,
+            model_name=model,
+            values=values,
+        )

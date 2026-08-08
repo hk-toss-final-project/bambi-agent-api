@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from psycopg import AsyncConnection
@@ -165,6 +165,32 @@ class PersistedWikiBuild:
     affected_documents: list[PersistedWikiDocument]
     chunk_count: int
     stored_relation_count: int = 0
+    superseded_relation_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class RelationSupportSyncResult:
+    """한 번의 Build에서 동기화한 Wiki 관계 근거와 수명주기 집계."""
+
+    observed_relation_count: int
+    stored_support_count: int
+    superseded_support_count: int
+    superseded_relation_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class _RelationPersistenceValues:
+    """관계 계획 Metadata에서 검증해 분리한 영속화 전용 값."""
+
+    metadata: dict[str, object]
+    provenance_kind: str
+    confidence: float
+    review_status: str
+    evidence: str | None
+    model_name: str | None
+    model_version: str | None
+    prompt_key: str | None
+    prompt_version: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +208,15 @@ class WikiEmbeddingValue:
     chunk_id: str
     content: str
     embedding: list[float]
+
+
+@dataclass(frozen=True, slots=True)
+class WikiNodeEmbedding:
+    """현재 Wiki 노드의 검색 Chunk Vector를 평균한 후보 표현."""
+
+    document_kind: str
+    document_key: str
+    embedding: tuple[float, ...]
 
 
 async def get_user_source_document_version_for_agent(
@@ -253,6 +288,174 @@ async def get_user_source_document_version_for_agent(
         content_hash=row["content_hash"],
         object_uri=row["object_uri"],
         source_metadata=dict(row["source_metadata"] or {}),
+    )
+
+
+async def list_user_source_versions_for_rebuild(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+) -> list[UserSourceDocumentForAgent]:
+    """전체 Wiki 재구성에 쓸 삭제되지 않은 원본의 현재 Version을 조회한다."""
+    cursor = await connection.execute(
+        """
+        SELECT
+            document.id AS source_document_id,
+            document.user_id,
+            document.namespace_key,
+            document.source_type,
+            document.canonical_url,
+            version.id AS source_document_version_id,
+            version.source_event_id,
+            version.version,
+            version.title,
+            version.author,
+            version.published_at,
+            version.clipped_on,
+            version.description,
+            version.tags,
+            version.raw_content,
+            version.content_format,
+            version.content_hash,
+            version.object_uri,
+            version.source_metadata
+        FROM agent.user_source_documents AS document
+        JOIN agent.user_source_document_versions AS version
+          ON version.source_document_id = document.id
+         AND version.namespace_key = document.namespace_key
+         AND version.version = document.current_version
+        WHERE document.user_id = %s
+          AND document.namespace_key = %s
+          AND document.deleted_at IS NULL
+          AND version.raw_content IS NOT NULL
+        ORDER BY
+            CASE
+                WHEN document.source_type = 'onboarding_seed' THEN 0
+                ELSE 1
+            END,
+            document.created_at,
+            document.id
+        """,
+        (user_id, f"user/{user_id}"),
+    )
+    rows = await cursor.fetchall()
+    return [
+        UserSourceDocumentForAgent(
+            source_document_id=str(row["source_document_id"]),
+            source_document_version_id=str(row["source_document_version_id"]),
+            source_event_id=(
+                str(row["source_event_id"]) if row["source_event_id"] else None
+            ),
+            user_id=row["user_id"],
+            namespace_key=row["namespace_key"],
+            source_type=row["source_type"],
+            canonical_url=row["canonical_url"],
+            version=int(row["version"]),
+            title=row["title"],
+            author=row["author"],
+            published_at=row["published_at"],
+            clipped_on=row["clipped_on"],
+            description=row["description"],
+            tags=list(row["tags"] or []),
+            raw_content=row["raw_content"],
+            content_format=row["content_format"],
+            content_hash=row["content_hash"],
+            object_uri=row["object_uri"],
+            source_metadata=dict(row["source_metadata"] or {}),
+        )
+        for row in rows
+    ]
+
+
+async def supersede_personal_wiki_for_rebuild(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    job_id: str,
+) -> int:
+    """전체 재구성 저장 직전에 기존 파생 Wiki를 대체 상태로 전환한다.
+
+    호출자가 모든 LLM 호출·품질 검증을 끝낸 후 최종 저장 Transaction
+    안에서만 호출해야 한다. 후속 저장이 실패하면 이 변경도 같이 rollback된다.
+    """
+    namespace_key = f"user/{user_id}"
+    await connection.execute(
+        """
+        DELETE FROM agent.wiki_version_documents AS snapshot
+        USING agent.wiki_versions AS build
+        WHERE snapshot.wiki_version_id = build.id
+          AND build.user_id = %s
+          AND build.built_by_job_id = %s
+        """,
+        (user_id, job_id),
+    )
+    await connection.execute(
+        """
+        UPDATE agent.wiki_relation_supports
+        SET status = 'superseded',
+            superseded_at = clock_timestamp(),
+            updated_at = clock_timestamp()
+        WHERE namespace_key = %s AND status = 'active'
+        """,
+        (namespace_key,),
+    )
+    await connection.execute(
+        """
+        UPDATE agent.wiki_document_relations
+        SET status = 'superseded',
+            superseded_at = clock_timestamp(),
+            updated_at = clock_timestamp()
+        WHERE namespace_key = %s AND status = 'active'
+        """,
+        (namespace_key,),
+    )
+    cursor = await connection.execute(
+        """
+        UPDATE agent.wiki_documents
+        SET status = 'superseded',
+            deleted_at = clock_timestamp(),
+            updated_at = clock_timestamp()
+        WHERE namespace_key = %s
+          AND knowledge_scope = 'personal'
+          AND deleted_at IS NULL
+        RETURNING id
+        """,
+        (namespace_key,),
+    )
+    return len(await cursor.fetchall())
+
+
+async def update_full_wiki_rebuild_summary(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    wiki_version_id: str,
+    source_count: int,
+    affected_document_count: int,
+    superseded_document_count: int,
+) -> None:
+    """Full Rebuild Wiki Version에 전체 교체 범위 요약을 기록한다."""
+    await connection.execute(
+        """
+        UPDATE agent.wiki_versions
+        SET change_summary = %s
+        WHERE id = %s
+          AND user_id = %s
+          AND namespace_key = %s
+        """,
+        (
+            Jsonb(
+                {
+                    "mode": "full_rebuild",
+                    "source_count": source_count,
+                    "affected_document_count": affected_document_count,
+                    "superseded_document_count": superseded_document_count,
+                }
+            ),
+            wiki_version_id,
+            user_id,
+            f"user/{user_id}",
+        ),
     )
 
 
@@ -563,6 +766,92 @@ async def list_existing_wiki_entries(
     ]
 
 
+_RELATION_PROVENANCE_KINDS = frozenset(
+    {
+        "source_explicit",
+        "semantic_inference",
+        "user_declared",
+        "system_rule",
+    }
+)
+_RELATION_REVIEW_STATUSES = frozenset({"unreviewed", "accepted", "rejected"})
+
+
+def _optional_relation_trace(value: object) -> str | None:
+    """관계 Model·Prompt 추적 값을 비어 있지 않은 문자열로 정규화한다."""
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _relation_persistence_values(
+    relation: WikiRelationPlan,
+) -> _RelationPersistenceValues:
+    """관계 계획 Metadata를 검증해 관계 Head와 Support 컬럼 값으로 분리한다."""
+    metadata = dict(relation.metadata)
+    metadata.pop("observed_in_current_build", None)
+
+    provenance_kind = str(
+        relation.metadata.get("provenance_kind", "source_explicit")
+    ).strip()
+    if provenance_kind not in _RELATION_PROVENANCE_KINDS:
+        raise ValueError(f"허용되지 않은 관계 근거 유형입니다: {provenance_kind}")
+
+    raw_confidence = relation.metadata.get("confidence", 1.0)
+    if isinstance(raw_confidence, bool):
+        raise ValueError("관계 confidence는 0과 1 사이 숫자여야 합니다.")
+    try:
+        confidence = float(raw_confidence)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("관계 confidence는 0과 1 사이 숫자여야 합니다.") from exc
+    if not 0.0 <= confidence <= 1.0:
+        raise ValueError("관계 confidence는 0과 1 사이 숫자여야 합니다.")
+
+    review_status = str(
+        relation.metadata.get("review_status", "unreviewed")
+    ).strip()
+    if review_status not in _RELATION_REVIEW_STATUSES:
+        raise ValueError(f"허용되지 않은 관계 검토 상태입니다: {review_status}")
+
+    return _RelationPersistenceValues(
+        metadata=metadata,
+        provenance_kind=provenance_kind,
+        confidence=confidence,
+        review_status=review_status,
+        evidence=_optional_relation_trace(relation.metadata.get("evidence")),
+        model_name=_optional_relation_trace(
+            relation.metadata.get("model_name", relation.metadata.get("model"))
+        ),
+        model_version=_optional_relation_trace(relation.metadata.get("model_version")),
+        prompt_key=_optional_relation_trace(relation.metadata.get("prompt_key")),
+        prompt_version=_optional_relation_trace(
+            relation.metadata.get("prompt_version")
+        ),
+    )
+
+
+def _relation_metadata_from_row(row: Mapping[str, Any]) -> dict[str, object]:
+    """관계 Head의 구조화 컬럼을 기존 Metadata 기반 계약과 함께 반환한다."""
+    metadata: dict[str, object] = dict(row.get("metadata") or {})
+    for key in (
+        "status",
+        "provenance_kind",
+        "review_status",
+        "model_name",
+        "model_version",
+        "prompt_key",
+        "prompt_version",
+        "superseded_at",
+    ):
+        value = row.get(key)
+        if value is not None:
+            metadata[key] = value
+    if row.get("confidence") is not None:
+        metadata["confidence"] = float(row["confidence"])
+    return metadata
+
+
 async def list_existing_wiki_relations(
     connection: AsyncConnection[DictRow],
     *,
@@ -577,7 +866,16 @@ async def list_existing_wiki_relations(
             target.document_kind AS target_document_kind,
             target.document_key AS target_document_key,
             relation.relation_type,
-            relation.metadata
+            relation.metadata,
+            relation.status,
+            relation.provenance_kind,
+            relation.confidence,
+            relation.review_status,
+            relation.model_name,
+            relation.model_version,
+            relation.prompt_key,
+            relation.prompt_version,
+            relation.superseded_at
         FROM agent.wiki_document_relations AS relation
         JOIN agent.wiki_documents AS source
           ON source.id = relation.source_document_id
@@ -586,6 +884,8 @@ async def list_existing_wiki_relations(
           ON target.id = relation.target_document_id
          AND target.namespace_key = relation.namespace_key
         WHERE relation.namespace_key = %s
+          AND relation.status = 'active'
+          AND relation.review_status <> 'rejected'
           AND source.deleted_at IS NULL
           AND target.deleted_at IS NULL
         ORDER BY
@@ -605,7 +905,7 @@ async def list_existing_wiki_relations(
             target_document_key=row["target_document_key"],
             target_document_kind=row["target_document_kind"],
             relation_type=row["relation_type"],
-            metadata=dict(row["metadata"] or {}),
+            metadata=_relation_metadata_from_row(row),
         )
         for row in rows
     ]
@@ -615,14 +915,35 @@ async def list_existing_wiki_relations(
 class RelatedWikiKeyword:
     """관심 키워드와 Wiki 그래프에서 1홉으로 연결된 이웃 노드 하나.
 
-    ``weight``는 관계 유형을 가중해 합산한 연결 강도이며, 이웃이 여러 관계로
-    이어져 있으면 그만큼 커진다. 정렬·상한의 기준으로만 쓴다.
+    ``weight``는 같은 이웃으로 향하는 관계 중 가장 강한 유형의 가중치다.
+    predicate Row 수가 노드 중요도를 부풀리지 않게 하며 정렬·상한에만 쓴다.
     """
 
     title: str
     document_kind: str
     weight: float
     relation_types: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WikiGraphRelationSnapshot:
+    """검색 확장 Gate에 전달할 관계 Head와 양 endpoint의 현재 표시 정보."""
+
+    source_document_kind: str
+    source_document_key: str
+    source_title: str
+    source_domain: str | None
+    target_document_kind: str
+    target_document_key: str
+    target_title: str
+    target_domain: str | None
+    relation_type: str
+    status: str
+    review_status: str
+    provenance_kind: str
+    confidence: float
+    weight: float
+    supported: bool
 
 
 # 관계 유형별 가중치. load_interest_documents(degree 계산)와 같은 값을 쓴다 —
@@ -633,9 +954,122 @@ _RELATION_WEIGHT_SQL = """
                     WHEN 'entity_relation' THEN 1.0
                     WHEN 'applies_concept' THEN 1.0
                     WHEN 'related_concept' THEN 0.5
+                    WHEN 'instance_of' THEN 1.0
+                    WHEN 'subtopic_of' THEN 1.0
+                    WHEN 'part_of' THEN 1.0
+                    WHEN 'located_in' THEN 1.0
+                    WHEN 'occurs_in' THEN 1.0
+                    WHEN 'affects' THEN 1.0
+                    WHEN 'causes' THEN 1.0
+                    WHEN 'associated_with' THEN 0.5
                     ELSE 0.0
                 END
 """
+
+
+async def list_wiki_graph_relation_snapshot(
+    connection: AsyncConnection[DictRow],
+    *,
+    namespace_key: str,
+) -> list[WikiGraphRelationSnapshot]:
+    """사용자 Wiki Graph의 관계 Head·endpoint 제목·active support를 조회한다.
+
+    관계 상태를 SQL에서 미리 거르지 않는다. Agent 품질 Gate가 superseded,
+    rejected, 미지원, provenance별 confidence 미달 Edge를 같은 정책으로 판정해야
+    하므로 Head 상태 전체가 필요하다. endpoint 문서는 현재 활성 Entity·Concept로
+    제한하고, 조직 여부는 제목을 검색어로 반환하는 Agent 단계에서 사용한다.
+
+    Args:
+        connection: 개인 Wiki RLS Scope가 설정된 현재 Transaction 연결
+        namespace_key: 조회 대상 사용자 Wiki Namespace
+
+    Returns:
+        안정적인 관계 서명 순서의 typed Graph Snapshot
+    """
+    cursor = await connection.execute(
+        f"""
+        SELECT
+            source.document_kind AS source_document_kind,
+            source.document_key AS source_document_key,
+            source_version.title AS source_title,
+            source.domain AS source_domain,
+            target.document_kind AS target_document_kind,
+            target.document_key AS target_document_key,
+            target_version.title AS target_title,
+            target.domain AS target_domain,
+            relation.relation_type,
+            relation.status,
+            relation.review_status,
+            relation.provenance_kind,
+            relation.confidence::float8 AS confidence,
+            ({_RELATION_WEIGHT_SQL})::float8 AS weight,
+            EXISTS (
+                SELECT 1
+                FROM agent.wiki_relation_supports AS support
+                WHERE support.relation_id = relation.id
+                  AND support.namespace_key = relation.namespace_key
+                  AND support.status = 'active'
+            ) AS supported
+        FROM agent.wiki_document_relations AS relation
+        JOIN agent.wiki_documents AS source
+          ON source.id = relation.source_document_id
+         AND source.namespace_key = relation.namespace_key
+        JOIN agent.wiki_document_versions AS source_version
+          ON source_version.document_id = source.id
+         AND source_version.namespace_key = source.namespace_key
+         AND source_version.version = source.current_version
+        JOIN agent.wiki_documents AS target
+          ON target.id = relation.target_document_id
+         AND target.namespace_key = relation.namespace_key
+        JOIN agent.wiki_document_versions AS target_version
+          ON target_version.document_id = target.id
+         AND target_version.namespace_key = target.namespace_key
+         AND target_version.version = target.current_version
+        WHERE relation.namespace_key = %s
+          AND source.document_kind IN ('entity', 'concept')
+          AND target.document_kind IN ('entity', 'concept')
+          AND source.status = 'active'
+          AND target.status = 'active'
+          AND source.deleted_at IS NULL
+          AND target.deleted_at IS NULL
+        ORDER BY
+            source.document_kind,
+            source.document_key,
+            target.document_kind,
+            target.document_key,
+            relation.relation_type
+        """,
+        (namespace_key,),
+    )
+    rows = await cursor.fetchall()
+    return [
+        WikiGraphRelationSnapshot(
+            source_document_kind=str(row["source_document_kind"]),
+            source_document_key=str(row["source_document_key"]),
+            source_title=str(row["source_title"] or "").strip(),
+            source_domain=(
+                str(row["source_domain"])
+                if row.get("source_domain") is not None
+                else None
+            ),
+            target_document_kind=str(row["target_document_kind"]),
+            target_document_key=str(row["target_document_key"]),
+            target_title=str(row["target_title"] or "").strip(),
+            target_domain=(
+                str(row["target_domain"])
+                if row.get("target_domain") is not None
+                else None
+            ),
+            relation_type=str(row["relation_type"]),
+            status=str(row["status"]),
+            review_status=str(row["review_status"]),
+            provenance_kind=str(row["provenance_kind"]),
+            confidence=float(row["confidence"]),
+            weight=float(row["weight"]),
+            supported=bool(row["supported"]),
+        )
+        for row in rows
+    ]
 
 
 async def list_related_wiki_keywords(
@@ -644,6 +1078,7 @@ async def list_related_wiki_keywords(
     user_id: str,
     topic: str,
     limit: int = 5,
+    lifecycle_aware: bool = True,
 ) -> list[RelatedWikiKeyword]:
     """관심 키워드와 개인 Wiki에서 직접 연결된 이웃 노드 제목을 조회한다.
 
@@ -664,6 +1099,8 @@ async def list_related_wiki_keywords(
         user_id: 조회 대상 사용자 ID
         topic: 시작점이 될 관심 키워드(노드 제목 또는 document_key)
         limit: 반환할 최대 이웃 수. 0 이하면 조회하지 않는다.
+        lifecycle_aware: 관계 lifecycle Migration이 적용된 정상 조회 여부. False는
+            Snapshot 조회가 schema 오류로 실패한 배포 전환기의 1-hop 폴백에서만 쓴다.
 
     Returns:
         연결 강도 내림차순으로 정렬된 이웃 목록. 일치하는 노드가 없거나 이웃이
@@ -674,6 +1111,12 @@ async def list_related_wiki_keywords(
         return []
 
     namespace_key = f"user/{user_id}"
+    lifecycle_predicate = (
+        "AND relation.status = 'active' "
+        "AND relation.review_status <> 'rejected'"
+        if lifecycle_aware
+        else ""
+    )
     cursor = await connection.execute(
         f"""
         WITH origin AS (
@@ -695,7 +1138,7 @@ async def list_related_wiki_keywords(
         SELECT
             peer_version.title AS title,
             peer.document_kind AS document_kind,
-            SUM({_RELATION_WEIGHT_SQL})::float8 AS weight,
+            MAX({_RELATION_WEIGHT_SQL})::float8 AS weight,
             array_agg(DISTINCT relation.relation_type) AS relation_types
         FROM agent.wiki_document_relations AS relation
         JOIN origin
@@ -715,13 +1158,14 @@ async def list_related_wiki_keywords(
          AND peer_version.namespace_key = peer.namespace_key
          AND peer_version.version = peer.current_version
         WHERE relation.namespace_key = %s
+          {lifecycle_predicate}
           AND peer.document_kind IN ('entity', 'concept')
           AND peer.status = 'active'
           AND peer.deleted_at IS NULL
           AND COALESCE(peer.domain, '') <> 'organization'
           AND peer.id NOT IN (SELECT id FROM origin)
         GROUP BY peer.id, peer_version.title, peer.document_kind
-        HAVING SUM({_RELATION_WEIGHT_SQL}) > 0
+        HAVING MAX({_RELATION_WEIGHT_SQL}) > 0
         ORDER BY weight DESC, title ASC
         LIMIT %s
         """,
@@ -965,6 +1409,338 @@ async def _upsert_wiki_document(
     )
 
 
+def _relation_signature(
+    relation: WikiRelationPlan,
+) -> tuple[str, str, str, str, str]:
+    """관계 계획 한 건을 Build 안에서 중복 제거할 안정적인 Key로 변환한다."""
+    return (
+        relation.source_document_kind,
+        relation.source_document_key,
+        relation.target_document_kind,
+        relation.target_document_key,
+        relation.relation_type,
+    )
+
+
+def _observed_relations_for_build(plan: WikiBuildPlan) -> list[WikiRelationPlan]:
+    """누적 관계 계획에서 이번 원본이 실제로 관측한 관계만 선택한다.
+
+    새 Planner는 신규 관계에 ``observed_in_current_build``를 표시한다. 이전
+    Planner와의 호환을 위해 누적 관계 없이 전부 신규인 계획은
+    ``extracted_relation_count``로 식별한다. 모호한 누적 계획을 현재 원본의
+    근거로 잘못 귀속하는 것보다 빈 목록을 선택하는 편이 안전하다.
+    """
+    has_explicit_marker = any(
+        "observed_in_current_build" in relation.metadata
+        for relation in plan.relations
+    )
+    if has_explicit_marker:
+        return [
+            relation
+            for relation in plan.relations
+            if relation.metadata.get("observed_in_current_build") is True
+        ]
+    if plan.relations and plan.extracted_relation_count == len(plan.relations):
+        return list(plan.relations)
+    return []
+
+
+async def sync_wiki_relation_supports(
+    connection: AsyncConnection[DictRow],
+    *,
+    namespace_key: str,
+    source_document_id: str | None = None,
+    source_document_version_id: str,
+    job_id: str,
+    relations: Sequence[WikiRelationPlan],
+    observed_relations: Sequence[WikiRelationPlan] | None = None,
+) -> RelationSupportSyncResult:
+    """관계 Head와 현재 원본 Version의 근거 이력을 원자적으로 동기화한다.
+
+    같은 원본 Version의 이전 active support는 먼저 supersede한다. 이번 Build가
+    관측한 관계는 Job 단위 Unique Key로 멱등 저장하고 다시 active로 만든다.
+    다른 원본의 support가 남아 있는 관계는 유지하며, 마지막 active support가
+    사라진 관계 Head만 supersede한다.
+
+    Args:
+        connection: 개인 Wiki RLS Scope가 설정된 현재 Transaction 연결
+        namespace_key: 관계와 원본이 속한 사용자 Namespace
+        source_document_id: 최신 Version이 대체하는 논리 원본 문서 ID. 전달하면
+            이 문서의 과거 Version support도 함께 supersede한다.
+        source_document_version_id: 이번 Build가 읽은 사용자 원본 Version ID
+        job_id: 같은 Build 재시도를 식별할 Agent Job ID
+        relations: 현재 Wiki 계획에 포함할 관계. 기존 호출 호환을 위해 Head는
+            모두 Upsert하지만 현재 원본의 근거로 자동 귀속하지 않는다.
+        observed_relations: 이번 원본에서 실제 관측한 관계. 생략하면 relations
+            전체를 관측 관계로 간주한다.
+
+    Returns:
+        저장·supersede한 관계 support와 Head 집계
+    """
+    observed = list(relations if observed_relations is None else observed_relations)
+    all_by_signature = {_relation_signature(relation): relation for relation in relations}
+    for relation in observed:
+        all_by_signature.setdefault(_relation_signature(relation), relation)
+
+    stale_cursor = await connection.execute(
+        """
+        UPDATE agent.wiki_relation_supports AS support
+        SET
+            status = 'superseded',
+            superseded_at = clock_timestamp()
+        WHERE support.namespace_key = %s
+          AND (
+                support.source_document_version_id = %s
+                OR (
+                    %s IS NOT NULL
+                    AND EXISTS (
+                        SELECT 1
+                        FROM agent.user_source_document_versions AS source_version
+                        WHERE source_version.id = support.source_document_version_id
+                          AND source_version.namespace_key =
+                            support.namespace_key
+                          AND source_version.source_document_id = %s
+                    )
+                )
+          )
+          AND support.status = 'active'
+        RETURNING support.relation_id
+        """,
+        (
+            namespace_key,
+            source_document_version_id,
+            source_document_id,
+            source_document_id,
+        ),
+    )
+    stale_rows = await stale_cursor.fetchall()
+    touched_relation_ids = {row["relation_id"] for row in stale_rows}
+
+    document_cursor = await connection.execute(
+        """
+        SELECT id, document_kind, document_key
+        FROM agent.wiki_documents
+        WHERE namespace_key = %s AND deleted_at IS NULL
+        """,
+        (namespace_key,),
+    )
+    document_rows = await document_cursor.fetchall()
+    document_ids = {
+        (row["document_kind"], row["document_key"]): row["id"]
+        for row in document_rows
+    }
+
+    head_ids: dict[tuple[str, str, str, str, str], object] = {}
+    for signature, relation in all_by_signature.items():
+        source_id = document_ids.get(
+            (relation.source_document_kind, relation.source_document_key)
+        )
+        target_id = document_ids.get(
+            (relation.target_document_kind, relation.target_document_key)
+        )
+        if source_id is None or target_id is None or source_id == target_id:
+            continue
+        values = _relation_persistence_values(relation)
+        head_cursor = await connection.execute(
+            """
+            INSERT INTO agent.wiki_document_relations (
+                source_document_id,
+                target_document_id,
+                namespace_key,
+                relation_type,
+                metadata,
+                status,
+                provenance_kind,
+                confidence,
+                review_status,
+                model_name,
+                model_version,
+                prompt_key,
+                prompt_version,
+                superseded_at
+            ) VALUES (
+                %s, %s, %s, %s, %s,
+                'active', %s, %s, %s, %s, %s, %s, %s, NULL
+            )
+            ON CONFLICT (source_document_id, target_document_id, relation_type)
+            DO UPDATE SET
+                metadata = EXCLUDED.metadata,
+                status = 'active',
+                provenance_kind = EXCLUDED.provenance_kind,
+                confidence = EXCLUDED.confidence,
+                review_status = EXCLUDED.review_status,
+                model_name = EXCLUDED.model_name,
+                model_version = EXCLUDED.model_version,
+                prompt_key = EXCLUDED.prompt_key,
+                prompt_version = EXCLUDED.prompt_version,
+                superseded_at = NULL
+            RETURNING id
+            """,
+            (
+                source_id,
+                target_id,
+                namespace_key,
+                relation.relation_type,
+                Jsonb(values.metadata),
+                values.provenance_kind,
+                values.confidence,
+                values.review_status,
+                values.model_name,
+                values.model_version,
+                values.prompt_key,
+                values.prompt_version,
+            ),
+        )
+        head_row = await head_cursor.fetchone()
+        head_ids[signature] = head_row["id"]
+
+    stored_support_count = 0
+    observed_by_signature = {
+        _relation_signature(relation): relation for relation in observed
+    }
+    for signature, relation in observed_by_signature.items():
+        relation_id = head_ids.get(signature)
+        if relation_id is None:
+            continue
+        values = _relation_persistence_values(relation)
+        await connection.execute(
+            """
+            INSERT INTO agent.wiki_relation_supports (
+                relation_id,
+                namespace_key,
+                source_document_version_id,
+                build_job_id,
+                provenance_kind,
+                confidence,
+                review_status,
+                evidence,
+                model_name,
+                model_version,
+                prompt_key,
+                prompt_version,
+                metadata,
+                status,
+                superseded_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                'active', NULL
+            )
+            ON CONFLICT (relation_id, source_document_version_id, build_job_id)
+            DO UPDATE SET
+                provenance_kind = EXCLUDED.provenance_kind,
+                confidence = EXCLUDED.confidence,
+                review_status = EXCLUDED.review_status,
+                evidence = EXCLUDED.evidence,
+                model_name = EXCLUDED.model_name,
+                model_version = EXCLUDED.model_version,
+                prompt_key = EXCLUDED.prompt_key,
+                prompt_version = EXCLUDED.prompt_version,
+                metadata = EXCLUDED.metadata,
+                status = 'active',
+                superseded_at = NULL
+            """,
+            (
+                relation_id,
+                namespace_key,
+                source_document_version_id,
+                job_id,
+                values.provenance_kind,
+                values.confidence,
+                values.review_status,
+                values.evidence,
+                values.model_name,
+                values.model_version,
+                values.prompt_key,
+                values.prompt_version,
+                Jsonb(values.metadata),
+            ),
+        )
+        touched_relation_ids.add(relation_id)
+        stored_support_count += 1
+
+    superseded_relation_count = 0
+    if touched_relation_ids:
+        touched_ids = list(touched_relation_ids)
+        await connection.execute(
+            """
+            WITH representative AS (
+                SELECT DISTINCT ON (support.relation_id)
+                    support.relation_id,
+                    support.provenance_kind,
+                    support.confidence,
+                    support.review_status,
+                    support.model_name,
+                    support.model_version,
+                    support.prompt_key,
+                    support.prompt_version,
+                    support.metadata
+                FROM agent.wiki_relation_supports AS support
+                WHERE support.namespace_key = %s
+                  AND support.relation_id = ANY(%s::uuid[])
+                  AND support.status = 'active'
+                ORDER BY
+                    support.relation_id,
+                    CASE support.review_status
+                        WHEN 'accepted' THEN 0
+                        WHEN 'unreviewed' THEN 1
+                        ELSE 2
+                    END,
+                    support.confidence DESC,
+                    support.updated_at DESC,
+                    support.id DESC
+            )
+            UPDATE agent.wiki_document_relations AS relation
+            SET
+                status = 'active',
+                provenance_kind = representative.provenance_kind,
+                confidence = representative.confidence,
+                review_status = representative.review_status,
+                model_name = representative.model_name,
+                model_version = representative.model_version,
+                prompt_key = representative.prompt_key,
+                prompt_version = representative.prompt_version,
+                metadata = representative.metadata,
+                superseded_at = NULL
+            FROM representative
+            WHERE relation.id = representative.relation_id
+              AND relation.namespace_key = %s
+            """,
+            (namespace_key, touched_ids, namespace_key),
+        )
+        superseded_cursor = await connection.execute(
+            """
+            UPDATE agent.wiki_document_relations AS relation
+            SET
+                status = 'superseded',
+                superseded_at = COALESCE(
+                    relation.superseded_at,
+                    clock_timestamp()
+                )
+            WHERE relation.namespace_key = %s
+              AND relation.id = ANY(%s::uuid[])
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM agent.wiki_relation_supports AS support
+                    WHERE support.relation_id = relation.id
+                      AND support.namespace_key = relation.namespace_key
+                      AND support.status = 'active'
+              )
+              AND relation.status <> 'superseded'
+            RETURNING relation.id
+            """,
+            (namespace_key, touched_ids),
+        )
+        superseded_rows = await superseded_cursor.fetchall()
+        superseded_relation_count = len(superseded_rows)
+
+    return RelationSupportSyncResult(
+        observed_relation_count=len(observed_by_signature),
+        stored_support_count=stored_support_count,
+        superseded_support_count=len(stale_rows),
+        superseded_relation_count=superseded_relation_count,
+    )
+
+
 async def _count_wiki_relations(
     connection: AsyncConnection[DictRow], *, namespace_key: str
 ) -> int:
@@ -980,6 +1756,8 @@ async def _count_wiki_relations(
           ON target.id = relation.target_document_id
          AND target.namespace_key = relation.namespace_key
         WHERE relation.namespace_key = %s
+          AND relation.status = 'active'
+          AND relation.review_status <> 'rejected'
           AND source.deleted_at IS NULL
           AND target.deleted_at IS NULL
         """,
@@ -1013,48 +1791,15 @@ async def persist_wiki_build(
         persisted.append(saved)
         changed_count += int(changed)
 
-    document_cursor = await connection.execute(
-        """
-        SELECT id, document_kind, document_key
-        FROM agent.wiki_documents
-        WHERE namespace_key = %s AND deleted_at IS NULL
-        """,
-        (source.namespace_key,),
+    relation_sync = await sync_wiki_relation_supports(
+        connection,
+        namespace_key=source.namespace_key,
+        source_document_id=source.source_document_id,
+        source_document_version_id=source.source_document_version_id,
+        job_id=job_id,
+        relations=plan.relations,
+        observed_relations=_observed_relations_for_build(plan),
     )
-    document_rows = await document_cursor.fetchall()
-    ids = {
-        (row["document_kind"], row["document_key"]): row["id"]
-        for row in document_rows
-    }
-    for relation in plan.relations:
-        source_id = ids.get(
-            (relation.source_document_kind, relation.source_document_key)
-        )
-        target_id = ids.get(
-            (relation.target_document_kind, relation.target_document_key)
-        )
-        if source_id is None or target_id is None or source_id == target_id:
-            continue
-        await connection.execute(
-            """
-            INSERT INTO agent.wiki_document_relations (
-                source_document_id,
-                target_document_id,
-                namespace_key,
-                relation_type,
-                metadata
-            ) VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (source_document_id, target_document_id, relation_type)
-            DO UPDATE SET metadata = EXCLUDED.metadata
-            """,
-            (
-                source_id,
-                target_id,
-                source.namespace_key,
-                relation.relation_type,
-                Jsonb(relation.metadata),
-            ),
-        )
 
     existing_build_cursor = await connection.execute(
         """
@@ -1169,6 +1914,7 @@ async def persist_wiki_build(
         affected_documents=persisted,
         chunk_count=chunk_count,
         stored_relation_count=stored_relation_count,
+        superseded_relation_count=relation_sync.superseded_relation_count,
     )
 
 
@@ -1196,6 +1942,124 @@ async def get_wiki_chunks_for_embedding(
     return [
         WikiChunkForEmbedding(chunk_id=str(row["id"]), content=row["content"])
         for row in rows
+    ]
+
+
+def _parse_vector_text(value: object) -> tuple[float, ...]:
+    """pgvector의 문자열 표현을 float tuple로 변환한다."""
+    text = str(value or "").strip()
+    if not text.startswith("[") or not text.endswith("]"):
+        return ()
+    try:
+        return tuple(float(item) for item in text[1:-1].split(","))
+    except ValueError:
+        return ()
+
+
+async def list_wiki_node_embeddings(
+    connection: AsyncConnection[DictRow],
+    *,
+    namespace_key: str,
+    model_name: str,
+) -> list[WikiNodeEmbedding]:
+    """활성 Entity·Concept의 현재 Embedding을 노드별 평균 Vector로 조회한다.
+
+    반환 Vector는 Relation Linker의 후보 recall에만 쓰이며 Edge를 자동으로
+    생성하지 않는다. 현재 문서 Version과 활성 모델 설정을 고정해
+    재임베딩 중 서로 다른 모델 Vector가 섞이지 않게 한다.
+    """
+    cursor = await connection.execute(
+        """
+        SELECT
+            document.document_kind,
+            document.document_key,
+            embedding.embedding::text AS embedding
+        FROM agent.wiki_documents AS document
+        JOIN agent.wiki_document_versions AS version
+          ON version.document_id = document.id
+         AND version.namespace_key = document.namespace_key
+         AND version.version = document.current_version
+        JOIN agent.wiki_chunks AS chunk
+          ON chunk.document_version_id = version.id
+         AND chunk.namespace_key = version.namespace_key
+         AND chunk.is_searchable
+        JOIN agent.wiki_embeddings AS embedding
+          ON embedding.chunk_id = chunk.id
+         AND embedding.namespace_key = chunk.namespace_key
+        JOIN agent.embedding_configs AS config
+          ON config.id = embedding.embedding_config_id
+         AND config.status = 'active'
+         AND config.model_name = %s
+        WHERE document.namespace_key = %s
+          AND document.document_kind IN ('entity', 'concept')
+          AND document.status = 'active'
+          AND document.deleted_at IS NULL
+        ORDER BY document.document_kind, document.document_key, chunk.chunk_index
+        """,
+        (model_name, namespace_key),
+    )
+    rows = await cursor.fetchall()
+    grouped: dict[tuple[str, str], list[tuple[float, ...]]] = {}
+    for row in rows:
+        vector = _parse_vector_text(row["embedding"])
+        if vector:
+            grouped.setdefault(
+                (row["document_kind"], row["document_key"]), []
+            ).append(vector)
+    result: list[WikiNodeEmbedding] = []
+    for (document_kind, document_key), vectors in grouped.items():
+        dimensions = len(vectors[0])
+        compatible = [vector for vector in vectors if len(vector) == dimensions]
+        if not compatible:
+            continue
+        result.append(
+            WikiNodeEmbedding(
+                document_kind=document_kind,
+                document_key=document_key,
+                embedding=tuple(
+                    sum(vector[index] for vector in compatible) / len(compatible)
+                    for index in range(dimensions)
+                ),
+            )
+        )
+    return result
+
+
+async def list_onboarding_wiki_anchor_keys(
+    connection: AsyncConnection[DictRow],
+    *,
+    namespace_key: str,
+) -> list[tuple[str, str]]:
+    """온보딩 시드를 직접 근거로 가진 현재 Wiki 노드 key를 조회한다."""
+    cursor = await connection.execute(
+        """
+        SELECT DISTINCT document.document_kind, document.document_key
+        FROM agent.wiki_documents AS document
+        JOIN agent.wiki_document_versions AS version
+          ON version.document_id = document.id
+         AND version.namespace_key = document.namespace_key
+         AND version.version = document.current_version
+        JOIN agent.wiki_document_sources AS link
+          ON link.wiki_document_version_id = version.id
+         AND link.namespace_key = version.namespace_key
+        JOIN agent.user_source_document_versions AS source_version
+          ON source_version.id = link.source_document_version_id
+         AND source_version.namespace_key = link.namespace_key
+        JOIN agent.user_source_documents AS source_document
+          ON source_document.id = source_version.source_document_id
+         AND source_document.namespace_key = source_version.namespace_key
+        WHERE document.namespace_key = %s
+          AND document.document_kind IN ('entity', 'concept')
+          AND document.status = 'active'
+          AND document.deleted_at IS NULL
+          AND source_document.source_type = 'onboarding_seed'
+        ORDER BY document.document_kind, document.document_key
+        """,
+        (namespace_key,),
+    )
+    return [
+        (str(row["document_kind"]), str(row["document_key"]))
+        for row in await cursor.fetchall()
     ]
 
 

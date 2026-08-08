@@ -14,6 +14,14 @@ _RELATION_WEIGHT_SQL = """
         WHEN 'entity_relation' THEN 1.0
         WHEN 'applies_concept' THEN 1.0
         WHEN 'related_concept' THEN 0.5
+        WHEN 'instance_of' THEN 1.0
+        WHEN 'subtopic_of' THEN 1.0
+        WHEN 'part_of' THEN 1.0
+        WHEN 'located_in' THEN 1.0
+        WHEN 'occurs_in' THEN 1.0
+        WHEN 'affects' THEN 1.0
+        WHEN 'causes' THEN 1.0
+        WHEN 'associated_with' THEN 0.5
         ELSE 0.0
     END
 """
@@ -85,32 +93,71 @@ class ConnectionInterestBundleRepository:
                   AND document.document_kind IN ('entity', 'concept')
                   AND document.status = 'active'
                   AND document.deleted_at IS NULL
+            ),
+            raw_neighbor_relations AS (
+                SELECT
+                    origin.id AS origin_id,
+                    peer.id AS peer_id,
+                    relation.relation_type,
+                    {_RELATION_WEIGHT_SQL} AS weight
+                FROM agent.wiki_document_relations AS relation
+                JOIN origin
+                  ON origin.id IN (
+                         relation.source_document_id,
+                         relation.target_document_id
+                     )
+                JOIN agent.wiki_documents AS peer
+                  ON peer.id = CASE
+                         WHEN relation.source_document_id = origin.id
+                         THEN relation.target_document_id
+                         ELSE relation.source_document_id
+                     END
+                 AND peer.namespace_key = relation.namespace_key
+                WHERE relation.namespace_key = %s
+                  AND relation.status = 'active'
+                  AND relation.review_status <> 'rejected'
+                  AND peer.document_kind IN ('entity', 'concept')
+                  AND peer.status = 'active'
+                  AND peer.deleted_at IS NULL
+                  AND COALESCE(peer.domain, '') <> 'organization'
+                  AND peer.id NOT IN (SELECT id FROM origin)
+            ),
+            neighbor_pairs AS (
+                SELECT origin_id, peer_id, MAX(weight) AS max_weight
+                FROM raw_neighbor_relations
+                GROUP BY origin_id, peer_id
+            ),
+            neighbor_scores AS (
+                SELECT peer_id, SUM(max_weight)::float8 AS weight
+                FROM neighbor_pairs
+                GROUP BY peer_id
+            ),
+            neighbor_relation_types AS (
+                SELECT
+                    peer_id,
+                    array_agg(DISTINCT relation_type ORDER BY relation_type)
+                        AS relation_types
+                FROM raw_neighbor_relations
+                GROUP BY peer_id
             )
             SELECT
                 peer.id::text AS document_id,
                 peer_version.title AS keyword,
                 peer.document_kind,
-                SUM({_RELATION_WEIGHT_SQL})::float8 AS weight,
-                array_agg(DISTINCT relation.relation_type) AS relation_types,
+                neighbor_scores.weight,
+                neighbor_relation_types.relation_types,
                 COALESCE(shared_sources.count, 0)::integer AS shared_source_count,
                 COALESCE(peer_relations.degree, 0)::float8 AS degree
-            FROM agent.wiki_document_relations AS relation
-            JOIN origin
-              ON origin.id IN (
-                     relation.source_document_id,
-                     relation.target_document_id
-                 )
+            FROM neighbor_scores
             JOIN agent.wiki_documents AS peer
-              ON peer.id = CASE
-                     WHEN relation.source_document_id = origin.id
-                     THEN relation.target_document_id
-                     ELSE relation.source_document_id
-                 END
-             AND peer.namespace_key = relation.namespace_key
+              ON peer.id = neighbor_scores.peer_id
+             AND peer.namespace_key = %s
             JOIN agent.wiki_document_versions AS peer_version
               ON peer_version.document_id = peer.id
              AND peer_version.namespace_key = peer.namespace_key
              AND peer_version.version = peer.current_version
+            JOIN neighbor_relation_types
+              ON neighbor_relation_types.peer_id = peer.id
             LEFT JOIN LATERAL (
                 SELECT COUNT(DISTINCT peer_source.source_document_version_id) AS count
                 FROM agent.wiki_document_sources AS origin_source
@@ -124,43 +171,51 @@ class ConnectionInterestBundleRepository:
                   AND peer_source.namespace_key = %s
             ) AS shared_sources ON true
             LEFT JOIN LATERAL (
-                SELECT SUM(
-                    CASE peer_relation.relation_type
-                        WHEN 'entity_relation' THEN 1.0
-                        WHEN 'applies_concept' THEN 1.0
-                        WHEN 'related_concept' THEN 0.5
-                        ELSE 0.0
-                    END
-                ) AS degree
-                FROM agent.wiki_document_relations AS peer_relation
-                JOIN agent.wiki_documents AS active_peer
-                  ON active_peer.id = CASE
-                         WHEN peer_relation.source_document_id = peer.id
-                         THEN peer_relation.target_document_id
-                         ELSE peer_relation.source_document_id
-                     END
-                 AND active_peer.namespace_key = peer_relation.namespace_key
-                WHERE peer.id IN (
-                    peer_relation.source_document_id,
-                    peer_relation.target_document_id
-                )
-                  AND peer_relation.namespace_key = %s
-                  AND active_peer.status = 'active'
-                  AND active_peer.deleted_at IS NULL
+                SELECT SUM(neighbor.max_weight) AS degree
+                FROM (
+                    SELECT
+                        active_peer.id,
+                        MAX(
+                            CASE peer_relation.relation_type
+                                WHEN 'entity_relation' THEN 1.0
+                                WHEN 'applies_concept' THEN 1.0
+                                WHEN 'related_concept' THEN 0.5
+                                WHEN 'instance_of' THEN 1.0
+                                WHEN 'subtopic_of' THEN 1.0
+                                WHEN 'part_of' THEN 1.0
+                                WHEN 'located_in' THEN 1.0
+                                WHEN 'occurs_in' THEN 1.0
+                                WHEN 'affects' THEN 1.0
+                                WHEN 'causes' THEN 1.0
+                                WHEN 'associated_with' THEN 0.5
+                                ELSE 0.0
+                            END
+                        ) AS max_weight
+                    FROM agent.wiki_document_relations AS peer_relation
+                    JOIN agent.wiki_documents AS active_peer
+                      ON active_peer.id = CASE
+                             WHEN peer_relation.source_document_id = peer.id
+                             THEN peer_relation.target_document_id
+                             ELSE peer_relation.source_document_id
+                         END
+                     AND active_peer.namespace_key = peer_relation.namespace_key
+                    WHERE peer.id IN (
+                        peer_relation.source_document_id,
+                        peer_relation.target_document_id
+                    )
+                      AND peer_relation.namespace_key = %s
+                      AND peer_relation.status = 'active'
+                      AND peer_relation.review_status <> 'rejected'
+                      AND active_peer.status = 'active'
+                      AND active_peer.deleted_at IS NULL
+                    GROUP BY active_peer.id
+                ) AS neighbor
             ) AS peer_relations ON true
-            WHERE relation.namespace_key = %s
-              AND peer.document_kind IN ('entity', 'concept')
+            WHERE peer.document_kind IN ('entity', 'concept')
               AND peer.status = 'active'
               AND peer.deleted_at IS NULL
               AND COALESCE(peer.domain, '') <> 'organization'
-              AND peer.id NOT IN (SELECT id FROM origin)
-            GROUP BY
-                peer.id,
-                peer_version.title,
-                peer.document_kind,
-                shared_sources.count,
-                peer_relations.degree
-            HAVING SUM({_RELATION_WEIGHT_SQL}) > 0
+              AND neighbor_scores.weight > 0
             ORDER BY
                 weight DESC,
                 shared_source_count DESC,
@@ -170,6 +225,7 @@ class ConnectionInterestBundleRepository:
             """,
             (
                 list(document_ids),
+                namespace_key,
                 namespace_key,
                 namespace_key,
                 namespace_key,

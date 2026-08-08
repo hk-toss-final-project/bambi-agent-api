@@ -115,6 +115,13 @@ def test_load_interest_documents_reads_weighted_relation_and_source_stats() -> N
     document_query = connection.executed[2][0]
     assert "FROM agent.wiki_document_relations AS relation" in document_query
     assert "WHEN 'related_concept' THEN 0.5" in document_query
+    assert "WHEN 'subtopic_of' THEN 1.0" in document_query
+    assert "WHEN 'associated_with' THEN 0.5" in document_query
+    assert "relation.status = 'active'" in document_query
+    assert "relation.review_status <> 'rejected'" in document_query
+    assert "SELECT SUM(neighbor.max_weight) AS degree" in document_query
+    assert ") AS max_weight" in document_query
+    assert "GROUP BY peer.id" in document_query
     assert "COUNT(DISTINCT source_document.id)" in document_query
     assert "document.document_kind IN ('entity', 'concept')" in document_query
     assert "document.status = 'active'" in document_query

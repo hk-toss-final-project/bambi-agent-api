@@ -220,6 +220,20 @@ Concept은 이론·방법·분야·현상·표준·용어를 표현한다.
 이미 DB에 entity·concept로 동시에 저장된 과거 중복을 삭제·이관하는 소급 정리는
 출처와 관계를 함께 옮겨야 하므로 별도 maintenance migration 범위다.
 
+### 관계 판정·근거 파이프라인
+
+2026-08-07부터 노드 추출과 관계 판정을 분리한다. 표면형·어휘·문자 trigram·선택적
+Embedding·기존 Graph 1-hop·온보딩 관심 Anchor는 기존 노드 후보를 회수하는 데만
+사용한다. Relation Linker는 추출 결과에 일부 관계가 있어도 신규·갱신 노드 전체를
+항상 검토하며, 후보 유사도나 공동 출현만으로 Edge를 만들지 않는다.
+
+관계는 원문 evidence 또는 명시적 사용자·System 근거, provenance, confidence,
+review 상태와 Model·Prompt trace를 함께 저장한다. `wiki_document_relations`는 현재
+Head이고 `wiki_relation_supports`는 원본 Version·Build별 근거 이력이다. 같은 논리
+원본의 새 Version이 들어오면 과거 Support만 supersede하며 다른 active Support가
+남아 있는 Head는 유지한다. Ontology와 P0~P3의 연결·미연결 범위는
+[LLM Wiki Builder P0~P3 개선 설계](wiki-builder-p0-p3-improvement.md)를 따른다.
+
 DB MVP 계약에서 `schema/schema.md`는 Graph Snapshot으로 자동 생성하고,
 DB 무결성 Hash는 SHA-256 64자를 유지한다. source/index/log는 현재
 Build Artifact로 반환하며 실제 Vault 파일 Export는 별도 Adapter 범위다.

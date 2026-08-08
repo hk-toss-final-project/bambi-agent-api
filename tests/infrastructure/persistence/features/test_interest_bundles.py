@@ -85,10 +85,23 @@ def test_repository_orders_one_hop_neighbors_by_evidence_strength() -> None:
     assert "document.id = ANY(%s::uuid[])" in query
     assert "COALESCE(peer.domain, '') <> 'organization'" in query
     assert "peer.id NOT IN (SELECT id FROM origin)" in query
+    assert "WHEN 'subtopic_of' THEN 1.0" in query
+    assert "WHEN 'associated_with' THEN 0.5" in query
+    assert "relation.status = 'active'" in query
+    assert "relation.review_status <> 'rejected'" in query
+    assert "peer_relation.status = 'active'" in query
+    assert "raw_neighbor_relations AS" in query
+    assert "neighbor_pairs AS" in query
+    assert "GROUP BY origin_id, peer_id" in query
+    assert "MAX(weight) AS max_weight" in query
+    assert "SUM(max_weight)::float8 AS weight" in query
+    assert "SELECT SUM(neighbor.max_weight) AS degree" in query
+    assert "GROUP BY active_peer.id" in query
     assert "shared_source_count DESC" in query
     assert "degree DESC" in query
     assert params == (
         ["root-1"],
+        "user/user-1",
         "user/user-1",
         "user/user-1",
         "user/user-1",
