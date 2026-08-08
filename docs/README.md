@@ -25,7 +25,8 @@
 | 문서 | 현재 성격 |
 |---|---|
 | [LLM Wiki Vault 구조](llm-wiki-vault-structure.md) | 관찰 기반 산출물 형식과 구현 차이 |
-| [Wiki 그래프 기반 검색어 확장](wiki-graph-query-expansion.md) | 선행 조건이 남은 설계 초안 |
+| [LLM Wiki Builder P0~P3 개선](wiki-builder-p0-p3-improvement.md) | 후보 회수·Relation Linker·관계 이력·Lint·Embedding·Graph Gate 구현 기준과 운영 한계 |
+| [Wiki 그래프 기반 검색어 확장](wiki-graph-query-expansion.md) | 기존 1-hop 실측과 품질 Gate 기반 2-hop PPR 운영 계약 |
 | [지식 파이프라인·관심사·구독](wiki-interest-subscription-design.md) | 팀 결정이 남은 데이터 흐름 설계 |
 | [비서 UI 제거 안내](assistant-ui-removal.md) | 제거 시점이 남은 정리 계획 |
 | [관심사 범주 묶음 리포트](interest-bundle-report-design.md) | 구현 승인된 활성 관심사·Wiki 1홉 기반 리포트 설계 |

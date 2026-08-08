@@ -1,13 +1,20 @@
 """WBA-001 증분 Wiki Build의 계층 조정을 검증한다."""
 
 import asyncio
+from dataclasses import replace
 from datetime import date
 from typing import Any
 
 from pytest import MonkeyPatch
 
 from agent.wiki_builder.features import orchestration
-from agent.wiki_builder.models import EntityClassification, WikiClassification
+from agent.wiki_builder.models import (
+    ConceptClassification,
+    EntityClassification,
+    WikiClassification,
+    WikiNodeDisposition,
+    WikiRelationClassification,
+)
 from infrastructure.persistence.features.personal_wiki import (
     PersistedWikiBuild,
     PersistedWikiDocument,
@@ -122,6 +129,15 @@ def test_build_incremental_wiki_closes_read_transaction_before_llm(
             ],
         )
 
+    def fake_linker(**kwargs: object) -> WikiClassification:
+        """별도 관계 판정이 Transaction 밖에서 실행되는지 기록한다."""
+        captured["transactions_at_linker"] = connection.transaction_count
+        return kwargs["classification"]  # type: ignore[return-value]
+
+    async def fake_embedding(connection: object, **kwargs: object) -> int:
+        """외부 Embedding 호출 없이 갱신 건수를 반환한다."""
+        return 1
+
     async def fake_persist(connection: object, **kwargs: object) -> PersistedWikiBuild:
         """고정된 Wiki Build 저장 결과를 반환한다."""
         captured["plan"] = kwargs["plan"]
@@ -148,6 +164,12 @@ def test_build_incremental_wiki_closes_read_transaction_before_llm(
     )
     monkeypatch.setattr(orchestration, "list_existing_wiki_entries", fake_existing)
     monkeypatch.setattr(orchestration, "list_existing_wiki_relations", fake_existing)
+    monkeypatch.setattr(
+        orchestration, "list_onboarding_wiki_anchor_keys", fake_existing
+    )
+    monkeypatch.setattr(orchestration, "list_wiki_node_embeddings", fake_existing)
+    monkeypatch.setattr(orchestration, "link_wiki_relations", fake_linker)
+    monkeypatch.setattr(orchestration, "wba_011", fake_embedding)
     monkeypatch.setattr(orchestration, "persist_wiki_build", fake_persist)
 
     persisted, plan = asyncio.run(
@@ -162,6 +184,7 @@ def test_build_incremental_wiki_closes_read_transaction_before_llm(
     )
 
     assert captured["transactions_at_llm"] == 1
+    assert captured["transactions_at_linker"] == 1
     assert connection.transaction_count == 2
     assert captured["scopes"] == ["user-1", "user-1"]
     assert captured["classifier"]["source_tags"] == ["clippings", "pkm"]
@@ -208,6 +231,10 @@ def test_build_incremental_wiki_materializes_onboarding_labels_without_llm(
     )
     monkeypatch.setattr(orchestration, "list_existing_wiki_entries", fake_existing)
     monkeypatch.setattr(orchestration, "list_existing_wiki_relations", fake_existing)
+    monkeypatch.setattr(
+        orchestration, "list_onboarding_wiki_anchor_keys", fake_existing
+    )
+    monkeypatch.setattr(orchestration, "list_wiki_node_embeddings", fake_existing)
     monkeypatch.setattr(orchestration, "persist_wiki_build", fake_persist)
 
     persisted, plan = asyncio.run(
@@ -228,3 +255,203 @@ def test_build_incremental_wiki_materializes_onboarding_labels_without_llm(
     assert all(concept.title not in {"온보딩", "온보딩 관심 주제 시드"} for concept in plan.concepts)
     assert connection.transaction_count == 2
     assert captured["scopes"] == ["user-onboarding", "user-onboarding"]
+
+
+def test_rebuild_full_wiki_stages_all_llm_work_before_atomic_replacement(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """전체 원본 계획과 Lint가 끝난 후 하나의 Transaction에서 Wiki를 교체한다."""
+    connection = _FakeConnection()
+    events: list[str] = []
+    onboarding = _onboarding_source()
+    article = replace(
+        _source(),
+        title="폭염 기사",
+        raw_content="서울에 38도 폭염이 이어졌다.",
+    )
+
+    async def fake_scope(_connection: object, *, user_id: str) -> None:
+        """테스트에서 RLS 설정을 기록한다."""
+        events.append(f"scope:{user_id}")
+
+    async def fake_sources(_connection: object, *, user_id: str) -> list[object]:
+        """온보딩과 클리핑 현재 Version을 반환한다."""
+        return [onboarding, article]
+
+    def fake_classifier(**kwargs: object) -> WikiClassification:
+        """클리핑에서 폭염 Concept을 추출한다."""
+        events.append("classify:heatwave")
+        assert connection.transaction_count == 1
+        return WikiClassification(
+            source_summary="폭염",
+            concepts=[
+                ConceptClassification(
+                    title="폭염",
+                    subtype="phenomenon",
+                    definition="매우 심한 더위",
+                )
+            ],
+        )
+
+    def fake_linker(**kwargs: object) -> WikiClassification:
+        """폭염을 온보딩 날씨 anchor에 연결한다."""
+        events.append("link:weather")
+        classification = kwargs["classification"]
+        return WikiClassification(
+            source_summary=classification.source_summary,  # type: ignore[union-attr]
+            concepts=classification.concepts,  # type: ignore[union-attr]
+            relations=[
+                WikiRelationClassification(
+                    source_name="폭염",
+                    source_kind="concept",
+                    target_name="날씨",
+                    target_kind="concept",
+                    target_matched_key="날씨",
+                    relation_type="subtopic_of",
+                    evidence="서울에 38도 폭염이 이어졌다.",
+                    provenance_kind="semantic_inference",
+                    confidence=0.86,
+                    review_status="accepted",
+                    rationale="폭염은 날씨의 세부 현상",
+                )
+            ],
+            node_dispositions=[
+                WikiNodeDisposition(
+                    node_name="폭염",
+                    node_kind="concept",
+                    disposition="connect",
+                    reason="날씨 하위 주제",
+                )
+            ],
+        )
+
+    async def fake_supersede(
+        _connection: object, *, user_id: str, job_id: str
+    ) -> int:
+        """최종 Transaction에서만 기존 Wiki를 대체한다."""
+        events.append("supersede")
+        assert connection.transaction_count == 2
+        assert job_id == "rebuild-job"
+        return 5
+
+    async def fake_persist(
+        _connection: object, *, source: object, plan: object, job_id: str
+    ) -> PersistedWikiBuild:
+        """원본별 스테이징 계획을 같은 Transaction에 저장한다."""
+        events.append(f"persist:{source.source_type}")  # type: ignore[union-attr]
+        key = f"version-{len(events)}"
+        documents = []
+        if plan.concepts:  # type: ignore[union-attr]
+            document = plan.concepts[0]  # type: ignore[union-attr]
+            documents.append(
+                PersistedWikiDocument(
+                    document_id=f"doc-{key}",
+                    document_version_id=key,
+                    document_kind="concept",
+                    document_key=document.document_key,
+                    file_path=document.file_path,
+                    version=1,
+                    action="create",
+                )
+            )
+        return PersistedWikiBuild(
+            wiki_version_id="wiki-rebuild",
+            wiki_version=2,
+            affected_documents=documents,
+            chunk_count=len(documents),
+        )
+
+    async def fake_embedding(_connection: object, **kwargs: object) -> int:
+        """스테이징 문서 Vector 갱신 건수를 반환한다."""
+        events.append("embed")
+        return len(kwargs["document_version_ids"])  # type: ignore[arg-type]
+
+    async def fake_summary(_connection: object, **kwargs: object) -> None:
+        """최종 Wiki Version 요약이 전체 원본 범위를 기록하는지 검증한다."""
+        events.append("summary")
+        assert kwargs == {
+            "user_id": "user-onboarding",
+            "wiki_version_id": "wiki-rebuild",
+            "source_count": 2,
+            "affected_document_count": 2,
+            "superseded_document_count": 5,
+        }
+
+    monkeypatch.setattr(orchestration, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(
+        orchestration, "list_user_source_versions_for_rebuild", fake_sources
+    )
+    monkeypatch.setattr(
+        orchestration, "supersede_personal_wiki_for_rebuild", fake_supersede
+    )
+    monkeypatch.setattr(orchestration, "persist_wiki_build", fake_persist)
+    monkeypatch.setattr(
+        orchestration,
+        "update_full_wiki_rebuild_summary",
+        fake_summary,
+    )
+    monkeypatch.setattr(orchestration, "wba_011", fake_embedding)
+
+    result = asyncio.run(
+        orchestration.rebuild_full_wiki(
+            connection,  # type: ignore[arg-type]
+            user_id="user-onboarding",
+            job_id="rebuild-job",
+            classifier=fake_classifier,
+            linker=fake_linker,
+            generated_at="2026-08-07T12:00:00+09:00",
+        )
+    )
+
+    assert events.index("classify:heatwave") < events.index("supersede")
+    assert events.index("link:weather") < events.index("supersede")
+    assert events[-5:] == [
+        "supersede",
+        "persist:onboarding_seed",
+        "persist:web_clipping",
+        "summary",
+        "embed",
+    ]
+    assert connection.transaction_count == 2
+    assert result.source_count == 2
+    assert result.superseded_document_count == 5
+    assert result.quality.passed is True
+    assert result.embedding_count == 2
+
+
+def test_combine_rebuild_results_keeps_only_latest_document_version() -> None:
+    """여러 원본이 같은 노드를 갱신해도 최종 Version만 재임베딩 대상으로 남긴다."""
+    first_document = PersistedWikiDocument(
+        document_id="weather",
+        document_version_id="weather-v1",
+        document_kind="concept",
+        document_key="weather",
+        file_path="concepts/weather.md",
+        version=1,
+        action="create",
+    )
+    latest_document = replace(
+        first_document,
+        document_version_id="weather-v2",
+        version=2,
+        action="update",
+    )
+    first = PersistedWikiBuild(
+        wiki_version_id="wiki",
+        wiki_version=1,
+        affected_documents=[first_document],
+        chunk_count=1,
+        superseded_relation_count=2,
+    )
+    latest = PersistedWikiBuild(
+        wiki_version_id="wiki",
+        wiki_version=1,
+        affected_documents=[latest_document],
+        chunk_count=1,
+        superseded_relation_count=3,
+    )
+
+    combined = orchestration._combine_rebuild_results([first, latest])
+
+    assert combined.affected_documents == [latest_document]
+    assert combined.superseded_relation_count == 5

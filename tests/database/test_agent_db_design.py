@@ -63,6 +63,12 @@ DUPLICATED_VERSION_REPAIR_MIGRATION_PATH = (
     / "migrations"
     / "0016_reconcile_duplicated_version_12.sql"
 )
+WIKI_RELATION_LIFECYCLE_MIGRATION_PATH = (
+    PROJECT_ROOT
+    / "database"
+    / "migrations"
+    / "0017_wiki_relation_lifecycle.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
@@ -74,6 +80,7 @@ MIGRATION_PATHS = (
     USER_CONTEXT_SELECTION_MIGRATION_PATH,
     CHANGE_HISTORY_MIGRATION_PATH,
     DUPLICATED_VERSION_REPAIR_MIGRATION_PATH,
+    WIKI_RELATION_LIFECYCLE_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"

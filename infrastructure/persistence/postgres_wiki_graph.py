@@ -37,14 +37,14 @@ def build_wiki_graph_payload(
     namespace_key = f"user/{user_id}"
     node_ids = {str(row["id"]) for row in node_rows}
     edges = []
-    degree = {node_id: 0 for node_id in node_ids}
+    neighbors: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
     for row in edge_rows:
         source_id = str(row["source_document_id"])
         target_id = str(row["target_document_id"])
         if source_id not in node_ids or target_id not in node_ids:
             continue
-        degree[source_id] += 1
-        degree[target_id] += 1
+        neighbors[source_id].add(target_id)
+        neighbors[target_id].add(source_id)
         edges.append(
             {
                 "id": f"{source_id}:{row['relation_type']}:{target_id}",
@@ -78,7 +78,7 @@ def build_wiki_graph_payload(
                 "version": row["version"],
                 "updated_at": row["updated_at"],
                 "markdown": row["normalized_content"] or "",
-                "degree": degree[node_id],
+                "degree": len(neighbors[node_id]),
             }
         )
 
@@ -96,7 +96,7 @@ def build_wiki_graph_payload(
             "edge_count": len(edges),
             "entity_count": entity_count,
             "concept_count": concept_count,
-            "orphan_count": sum(int(value == 0) for value in degree.values()),
+            "orphan_count": sum(int(not value) for value in neighbors.values()),
         },
         "nodes": nodes,
         "edges": edges,
@@ -177,6 +177,8 @@ class PostgresWikiGraphRepository:
                       ON target.id = relation.target_document_id
                      AND target.namespace_key = relation.namespace_key
                     WHERE relation.namespace_key = %s
+                      AND relation.status = 'active'
+                      AND relation.review_status <> 'rejected'
                       AND source.document_kind IN ('entity', 'concept')
                       AND target.document_kind IN ('entity', 'concept')
                       AND source.status = 'active'
@@ -438,7 +440,11 @@ class PostgresWikiGraphRepository:
                      AND related_version.namespace_key = related.namespace_key
                      AND related_version.version = related.current_version
                     WHERE relation.namespace_key = %s
+                      AND relation.status = 'active'
+                      AND relation.review_status <> 'rejected'
                       AND (%s IN (relation.source_document_id, relation.target_document_id))
+                      AND related.status = 'active'
+                      AND related.deleted_at IS NULL
                     ORDER BY direction, related.document_kind, related.document_key
                     """,
                     (document_id, document_id, namespace_key, document_id),

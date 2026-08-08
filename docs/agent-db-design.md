@@ -68,6 +68,8 @@ erDiagram
     WIKI_DOCUMENTS ||--o{ WIKI_DOCUMENT_VERSIONS : "versions"
     WIKI_DOCUMENTS ||--o{ WIKI_DOCUMENT_RELATIONS : "source"
     WIKI_DOCUMENTS ||--o{ WIKI_DOCUMENT_RELATIONS : "target"
+    WIKI_DOCUMENT_RELATIONS ||--o{ WIKI_RELATION_SUPPORTS : "supported by"
+    USER_SOURCE_DOCUMENT_VERSIONS ||--o{ WIKI_RELATION_SUPPORTS : "evidence"
     WIKI_DOCUMENT_VERSIONS ||--o{ WIKI_CHUNKS : "chunks"
     WIKI_CHUNKS ||--o{ WIKI_EMBEDDINGS : "embeds"
     EMBEDDING_CONFIGS ||--o{ WIKI_EMBEDDINGS : "configures"
@@ -86,7 +88,7 @@ erDiagram
 |---|---|---|
 | DB-001 | 사용자 컨텍스트 저장 | `user_context_snapshots` |
 | DB-002 | Wiki Source Event·사용자 원본 저장 | `wiki_source_events`, `user_source_documents`, `user_source_document_versions` |
-| DB-003 | 개인 LLM Wiki 문서 저장과 원본·문서 관계 추적 | `wiki_documents`, `wiki_document_versions`, `wiki_document_sources`, `wiki_document_relations` |
+| DB-003 | 개인 LLM Wiki 문서 저장과 원본·문서 관계 추적 | `wiki_documents`, `wiki_document_versions`, `wiki_document_sources`, `wiki_document_relations`, `wiki_relation_supports` |
 | DB-004 | 개인 Wiki Chunk 저장 | `wiki_chunks` |
 | DB-005 | 개인 Wiki Embedding 저장 | `wiki_embeddings` |
 | DB-006 | 개인 Wiki Build Version과 구성 문서 저장 | `wiki_versions`, `wiki_version_documents` |
@@ -158,7 +160,8 @@ Personal LLM Wiki의 Entity, Concept, Schema는 서로 다른 Table이 아니라
 - `file_path`는 Obsidian으로 내보낼 Vault 경로이며 Namespace 내 활성 문서 사이에서 Unique합니다.
 - `source_type`은 클리핑·RSS·Agent 생성 등 유입 경로이므로 Entity·Concept·Schema 구분에 사용하지 않습니다.
 - YAML Frontmatter를 포함한 완성 Markdown은 `wiki_document_versions.normalized_content`에 저장해 Vault 파일로 손실 없이 내보냅니다.
-- `wiki_document_relations`는 Entity 관계, Concept 적용, Concept 간 관계와 별칭을 구조화합니다. 관계 설명·Cardinality는 Metadata에 보존합니다.
+- `wiki_document_relations`는 현재 관계 Head를 저장합니다. 기존 4종과 의미를 드러내는 `instance_of`, `subtopic_of`, `part_of`, `located_in`, `occurs_in`, `affects`, `causes`, `associated_with`를 지원하고 active/superseded, provenance, confidence, review 상태와 Model·Prompt trace를 보존합니다.
+- `wiki_relation_supports`는 관계를 지지하는 원본 Version·Build별 evidence와 판정 이력을 보존합니다. 마지막 active Support가 사라질 때만 관계 Head를 superseded로 바꿉니다.
 - 각 `wiki_versions` Build는 `wiki_version_documents`로 정확한 문서 Version과 당시 파일 경로를 고정해 해당 시점의 Vault를 재구성할 수 있게 합니다.
 
 Concept의 2개 이상 Entity 공유, 기존 Concept과 70% 이상 중복, 실질적 설계
@@ -190,6 +193,7 @@ Concept의 2개 이상 Entity 공유, 기존 Concept과 70% 이상 중복, 실�
 - 한국어 및 다국어 부분 일치: `wiki_chunks.content`의 `pg_trgm` GIN Index
 - Wiki 검색은 반드시 `namespace_key = 'user/{user_id}'` 조건을 먼저 적용합니다. Global 최신 자료 검색은 `global_source_documents`의 `content_status = 'fetched'` 문서를 따로 조회해 Scope별 top-k로 합칩니다(Report Builder `load_report_context` 참조).
 - MVP의 Embedding 차원은 1536으로 고정합니다. 다른 차원의 모델을 활성화할 때는 기존 Column을 혼용하지 않고 별도 Migration과 Index를 추가합니다.
+- 2026-08-07 Runtime에서 Vector는 Wiki Builder Relation Linker의 기존 노드 후보 recall에 사용합니다. `PRAG-003` 리포트 개인 문서 검색은 아직 FTS·키워드 결합이며 pgvector 결과 결합은 별도 구현·Recall 측정 범위입니다.
 
 Cloud SQL의 pgvector는 ANN Index를 지원하며 HNSW 예시는 [Cloud SQL Vector 문서](https://docs.cloud.google.com/sql/docs/postgres/generate-manage-vector-embeddings)에 설명되어 있습니다. 데이터가 작을 때는 Filter가 적용된 Exact Search가 더 단순할 수 있으므로 실제 Query Plan과 Recall을 측정한 뒤 HNSW Parameter를 조정합니다.
 
