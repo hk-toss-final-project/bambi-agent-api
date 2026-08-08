@@ -30,7 +30,17 @@ def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
         "assistant",
         "change-history",
     }
-    assert "load_source" in diagrams["personal-wiki"].mermaid
+    for node in (
+        "load_source",
+        "classify",
+        "prepare_identity",
+        "resolve_identity",
+        "quality_gate",
+        "plan",
+        "persist",
+        "finalize",
+    ):
+        assert node in diagrams["personal-wiki"].mermaid
     assert "load_context" in diagrams["report-generation"].mermaid
     # 토글이 켜졌을 때 generate를 대체하는 분기가 그래프에 실제로 있어야 한다.
     assert "change_history" in diagrams["report-generation"].mermaid
@@ -40,6 +50,19 @@ def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
         assert node in diagrams["change-history"].mermaid
     for diagram in diagrams.values():
         assert "-->" in diagram.mermaid  # 엣지가 최소 하나는 있어야 그래프다
+
+
+def test_every_graph_node_has_display_text() -> None:
+    """시각화되는 시작·작업·종료 노드마다 제목과 기능 설명이 있어야 한다."""
+    for diagram in list_graph_diagrams():
+        node_ids = [node.node_id for node in diagram.nodes]
+
+        assert node_ids[0] == "__start__"
+        assert node_ids[-1] == "__end__"
+        assert len(node_ids) == len(set(node_ids))
+        for node in diagram.nodes:
+            assert node.title.strip()
+            assert node.description.strip()
 
 
 def test_every_stategraph_definition_is_registered() -> None:
@@ -69,7 +92,7 @@ def test_get_graph_diagram_returns_none_for_unknown_slug() -> None:
 
 
 def test_graphs_page_renders_all_diagrams() -> None:
-    """/dev/graphs 페이지가 그래프 4개의 Mermaid 블록을 모두 담는다."""
+    """/dev/graphs 페이지가 그래프와 모든 노드의 설명 패널을 담는다."""
     with _dev_client() as client:
         response = client.get("/dev/graphs")
 
@@ -77,9 +100,29 @@ def test_graphs_page_renders_all_diagrams() -> None:
     assert response.headers["content-type"].startswith("text/html")
     body = response.text
     assert body.count('<pre class="mermaid">') == 4
+    assert body.count('class="node-panel"') == 4
+    assert body.count('class="node-detail"') == sum(
+        len(diagram.nodes) for diagram in list_graph_diagrams()
+    )
     assert "Personal Wiki Build" in body
     assert "키워드 비서 리서치 에이전트" in body
     assert "변경점(Delta) 추적" in body
+    assert 'data-node-id="load_source"' in body
+    assert "원본과 기존 Wiki 조회" in body
+    assert "노드를 선택하세요" in body
+
+
+def test_graphs_page_binds_click_and_keyboard_node_selection() -> None:
+    """렌더된 Mermaid 노드는 클릭과 키보드 선택으로 설명을 전환해야 한다."""
+    with _dev_client() as client:
+        response = client.get("/dev/graphs")
+
+    body = response.text
+    assert 'querySelectorAll(".mermaid .node")' in body
+    assert 'nodeElement.setAttribute("tabindex", "0")' in body
+    assert 'event.key === "Enter" || event.key === " "' in body
+    assert 'nodeElement.addEventListener("click"' in body
+    assert 'detail.hidden = detail !== selectedDetail' in body
 
 
 def test_graph_mermaid_raw_endpoint_returns_plain_text() -> None:

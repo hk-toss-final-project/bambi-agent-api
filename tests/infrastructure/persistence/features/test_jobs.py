@@ -7,12 +7,14 @@ import pytest
 
 from infrastructure.persistence.features.jobs import (
     ClaimedAgentJob,
+    EnqueuedCollectionRunJob,
     EnqueuedWikiBuildJob,
     claim_agent_job_by_id,
     claim_personal_wiki_jobs,
     claim_runnable_agent_jobs,
     complete_agent_job,
     defer_user_wiki_build_jobs,
+    enqueue_global_collection_run_job,
     enqueue_personal_wiki_build_job,
     fail_agent_job,
     release_user_wiki_build_jobs,
@@ -290,6 +292,47 @@ def test_enqueue_personal_wiki_build_job_reuses_existing_job() -> None:
     assert "DO NOTHING" in connection.executed[0][0]
     assert "SELECT id" in connection.executed[1][0]
     assert connection.executed[2][1] == ("job-9", "event-1")
+
+
+def test_enqueue_global_collection_run_job_creates_system_job() -> None:
+    """수동 실행 Job을 user_id 없이 queued로 등록하고 payload에 source_key를 담는다."""
+    connection = _FakeConnection([[{"id": "job-1"}]])
+
+    enqueued = asyncio.run(
+        enqueue_global_collection_run_job(
+            connection,  # type: ignore[arg-type]
+            source_key="interest-taxonomy-google-news",
+            request_id="req-1",
+        )
+    )
+
+    assert enqueued == EnqueuedCollectionRunJob(job_id="job-1", created=True)
+    insert_sql, insert_params = connection.executed[0]
+    assert "'global_collection_run'" in insert_sql
+    assert "'SCH-021'" in insert_sql
+    # 사용자 소속이 없는 시스템 Job이라 user_id는 NULL로 저장한다.
+    assert "NULL" in insert_sql
+    assert "ON CONFLICT (feature_id, COALESCE(user_id, ''), idempotency_key)" in insert_sql
+    assert insert_params is not None
+    # 마지막 파라미터는 Request ID(추적·멱등 Key 재료)다.
+    assert insert_params[-1] == "req-1"
+
+
+def test_enqueue_global_collection_run_job_reuses_on_idempotency_conflict() -> None:
+    """같은 source_key·request_id 재요청은 새 Job 없이 기존 Job을 반환한다."""
+    connection = _FakeConnection([[], [{"id": "job-9"}]])
+
+    enqueued = asyncio.run(
+        enqueue_global_collection_run_job(
+            connection,  # type: ignore[arg-type]
+            source_key="latest-naver",
+            request_id="req-9",
+        )
+    )
+
+    assert enqueued == EnqueuedCollectionRunJob(job_id="job-9", created=False)
+    assert "DO NOTHING" in connection.executed[0][0]
+    assert "SELECT id" in connection.executed[1][0]
 
 
 def test_enqueue_personal_wiki_build_job_skips_event_link_without_row_id() -> None:

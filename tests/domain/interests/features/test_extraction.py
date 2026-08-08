@@ -15,6 +15,7 @@ def _node(
     domain: str | None = "product",
     document_kind: str = "entity",
     aliases: list[str] | None = None,
+    interest_subject: bool | None = None,
     source_count: int = 1,
     source_types: list[str] | None = None,
     last_activity_at: str | None = "2026-07-20T00:00:00+00:00",
@@ -26,7 +27,11 @@ def _node(
         "document_key": title.casefold(),
         "title": title,
         "domain": domain,
-        "source_metadata": {"aliases": aliases or []},
+        "source_metadata": (
+            {"aliases": aliases or []}
+            if interest_subject is None
+            else {"aliases": aliases or [], "interest_subject": interest_subject}
+        ),
         "degree": degree,
         "source_count": source_count,
         "source_types": source_types or ["web_clipping"],
@@ -237,3 +242,54 @@ def test_int_001_ignores_rows_without_identity() -> None:
     )
 
     assert [candidate.topic for candidate in candidates] == ["정상 노드"]
+
+
+def test_int_001_drops_nodes_that_were_never_a_subject() -> None:
+    """글이 다룬 주제가 아니라 스쳐 간 노드는 관심 후보에서 뺀다.
+
+    2026-08-07 실측: DBeaver Community·pgAdmin 4·OpenWiki(도구), "기술노트with
+    알렉"(출처), "API 키 발급"(절차)이 관심사 상위권을 차지했다. 글을 많이
+    저장할수록 이런 노드가 연결 수를 얻어 위로 올라온다.
+    """
+    candidates = asyncio.run(
+        int_001(
+            [
+                _node("doc-1", "DBeaver Community", degree=9.0, interest_subject=False),
+                _node("doc-2", "PostgreSQL 인덱스", degree=3.0, interest_subject=True),
+            ]
+        )
+    )
+
+    assert [candidate.topic for candidate in candidates] == ["PostgreSQL 인덱스"]
+
+
+def test_int_001_keeps_nodes_built_before_the_role_judgment() -> None:
+    """역할 판정이 없던 시절 노드는 그대로 후보로 남긴다.
+
+    표시가 없다고 걸러내면 다시 Build되기 전까지 기존 사용자의 관심사가 통째로
+    사라진다. 판정이 붙은 노드부터 걸러진다.
+    """
+    candidates = asyncio.run(
+        int_001(
+            [
+                _node("doc-1", "코스피", degree=5.0),
+                _node("doc-2", "환율", degree=3.0),
+            ]
+        )
+    )
+
+    assert [candidate.topic for candidate in candidates] == ["코스피", "환율"]
+
+
+def test_int_001_keeps_a_node_that_was_a_subject_at_least_once() -> None:
+    """어느 글에서든 한 번 주제였으면 남긴다.
+
+    같은 노드가 글마다 역할이 다르다. DBeaver를 소개하는 글에서는 주제고,
+    DBeaver로 튜닝하는 글에서는 도구다. 사용자가 그 대상을 다룬 글을 저장한
+    적이 있다는 뜻이므로 관심 후보로 인정한다.
+    """
+    candidates = asyncio.run(
+        int_001([_node("doc-1", "DBeaver", degree=4.0, interest_subject=True)])
+    )
+
+    assert [candidate.topic for candidate in candidates] == ["DBeaver"]

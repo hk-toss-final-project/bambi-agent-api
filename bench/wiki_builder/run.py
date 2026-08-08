@@ -129,6 +129,24 @@ def _score(
         concept = concepts.get(name.casefold())
         if concept and concept.subtype != subtype:
             errors.append(f"concept subtype: {name}={concept.subtype}")
+    # 노드가 원문에서 맡은 역할. 관심사 후보가 되는 기준은 subject냐 아니냐
+    # 하나뿐이라, 비-subject끼리(tool·source·mention) 갈리는 것은 통과로 본다.
+    # 노드가 아예 안 뽑힌 경우도 마찬가지다 — 관심사가 될 수 없기 때문이다.
+    # 반대로 subject를 기대한 노드는 실제로 뽑혀서 subject여야 한다. 못 뽑으면
+    # 사용자의 진짜 관심사를 잃는다.
+    #
+    # (2026-08-08: 처음에는 역할이 정확히 일치해야 통과로 짰는데, 목적과
+    # 어긋나 OpenWiki=mention·"API 키 발급" 미추출이 실패로 잡혔다. 둘 다
+    # 관심사에서 빠지므로 의도한 결과다.)
+    for name, role in expected.get("node_roles", {}).items():
+        node = entities.get(name.casefold()) or concepts.get(name.casefold())
+        if role == "subject":
+            if node is None:
+                errors.append(f"missing node for role: {name}")
+            elif node.role != "subject":
+                errors.append(f"node role: {name}={node.role} (expected subject)")
+        elif node is not None and node.role == "subject":
+            errors.append(f"node role: {name}=subject (expected non-subject)")
     for name, aliases in expected.get("entity_aliases", {}).items():
         entity = entities.get(name.casefold())
         if entity:

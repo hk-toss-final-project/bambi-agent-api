@@ -26,8 +26,32 @@ from scheduler.api import (
 _NOW = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
 
 
+class _FakeCursor:
+    """execute 결과를 흉내 내는 Cursor 대역. 기본은 빈 결과다."""
+
+    async def fetchone(self) -> None:
+        """조회 결과가 없음을 나타낸다."""
+        return None
+
+    async def fetchall(self) -> list[Any]:
+        """조회 결과가 없음을 나타낸다."""
+        return []
+
+
+class _FakeTransaction:
+    """async with 문을 흉내 내는 Transaction 대역."""
+
+    async def __aenter__(self) -> "_FakeTransaction":
+        """Transaction 진입을 흉내 낸다."""
+        return self
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        """Transaction 종료를 흉내 낸다."""
+        return False
+
+
 class _FakeConnection:
-    """close만 기록하는 Connection 대역."""
+    """수동 실행 Job 처리에 필요한 최소 동작만 흉내 내는 Connection 대역."""
 
     def __init__(self) -> None:
         self.closed = False
@@ -35,6 +59,28 @@ class _FakeConnection:
     async def close(self) -> None:
         """연결 종료를 기록한다."""
         self.closed = True
+
+    async def execute(self, *_args: Any, **_kwargs: Any) -> _FakeCursor:
+        """SET LOCAL 등 부수 실행을 삼키고 빈 Cursor를 돌려준다."""
+        return _FakeCursor()
+
+    def transaction(self) -> _FakeTransaction:
+        """Transaction async context manager 대역을 돌려준다."""
+        return _FakeTransaction()
+
+
+@pytest.fixture(autouse=True)
+def _stub_manual_run_claim(monkeypatch: pytest.MonkeyPatch) -> None:
+    """수동 실행 Job Claim을 기본적으로 "없음"으로 만들어 drain을 무해화한다.
+
+    drain을 직접 검증하는 테스트는 이 대역을 다시 덮어써 Job을 돌려주게 한다.
+    """
+
+    async def _no_jobs(*_args: Any, **_kwargs: Any) -> list[Any]:
+        """점유할 수동 실행 Job이 없음을 나타낸다."""
+        return []
+
+    monkeypatch.setattr(runtime, "claim_runnable_agent_jobs", _no_jobs)
 
 
 def _patch_connection(
@@ -336,3 +382,80 @@ def test_scheduler_loop_survives_tick_failure() -> None:
     assert scheduler.attempts == 2
     # 실패한 tick은 Callback을 부르지 않고, 성공한 tick만 결과를 넘긴다.
     assert len(ticks) == 1
+
+
+def test_run_once_drains_manual_collection_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """수동 실행 Job을 집어 정기 수집 경로로 돌리고 완료로 마감하는지 검증한다."""
+    connection = _FakeConnection()
+    _patch_connection(monkeypatch, connection)
+    _patch_content_fetch(monkeypatch)
+    # 정기 수집은 이 테스트의 관심이 아니므로 Provider 목록을 비운다.
+    monkeypatch.setattr(runtime, "PROVIDER_SCHEDULES", {})
+
+    claimed = runtime.ClaimedAgentJob(
+        job_id="job-1",
+        user_id=None,  # type: ignore[arg-type]
+        feature_id="SCH-021",
+        job_type=runtime.MANUAL_COLLECTION_JOB_TYPE,
+        attempt_number=1,
+        max_attempts=3,
+        payload={"source_key": "interest-taxonomy-google-news"},
+    )
+
+    async def _claim(*_args: Any, **_kwargs: Any) -> list[Any]:
+        """점유한 수동 실행 Job 하나를 돌려준다."""
+        return [claimed]
+
+    monkeypatch.setattr(runtime, "claim_runnable_agent_jobs", _claim)
+
+    async def _fake_sch_021(
+        _connection: Any, *, source_key: str, **_kwargs: Any
+    ) -> tuple[None, list[CollectionScheduleResult]]:
+        """수집 결과 한 건을 돌려주는 수동 실행 대역."""
+        return (
+            None,
+            [
+                CollectionScheduleResult(
+                    provider="google_news",
+                    source_key=source_key,
+                    status="completed",
+                    keyword="AI",
+                    results=[
+                        {
+                            "provider": "google_news",
+                            "status": "completed",
+                            "fetched_count": 5,
+                            "created_count": 3,
+                            "duplicate_count": 2,
+                        }
+                    ],
+                )
+            ],
+        )
+
+    monkeypatch.setattr(runtime, "sch_021", _fake_sch_021)
+
+    completed: list[tuple[str, dict[str, object]]] = []
+
+    async def _complete(
+        _connection: Any, *, job: Any, worker_id: str, result: dict[str, object]
+    ) -> None:
+        """완료 처리 인자를 기록한다."""
+        completed.append((job.job_id, result))
+
+    monkeypatch.setattr(runtime, "complete_agent_job", _complete)
+
+    scheduler = build_scheduler(_settings())
+    results = asyncio.run(scheduler.run_once(now=_NOW))
+
+    # Job이 완료로 마감되고 요약이 저장된다.
+    assert completed and completed[0][0] == "job-1"
+    summary = completed[0][1]
+    assert summary["source_key"] == "interest-taxonomy-google-news"
+    assert summary["created_count"] == 3
+    assert summary["status"] == "completed"
+    # 결과 목록에도 수동 실행 단계가 완료로 남는다.
+    manual = [item for item in results if item.provider == runtime.MANUAL_RUN_STEP]
+    assert manual and manual[0].status == "completed"

@@ -128,7 +128,7 @@ Chunking이나 Embedding을 수행하지 않습니다.
 1. `queued` 상태의 `personal_wiki_build` Job을 `FOR UPDATE SKIP LOCKED`로 Batch Claim합니다.
 2. `locked_by`, `locked_at`, `lease_expires_at`, `status=running`을 같은 Transaction에서 갱신합니다.
 3. Job Payload의 source_document_version_id로 저장된 Markdown과 Frontmatter를 조회합니다.
-4. 정규화·중복 확인과 LLM 구성을 거쳐 `document_kind + document_key`로 Entity·Concept·Schema Head를 멱등 Upsert하고 새 `wiki_document_versions`·원본 출처·문서 관계를 저장합니다.
+4. 추출 결과를 canonical 표면형으로 정규화해 기존 title·aliases와 비교합니다. 동일 kind 단일 후보는 자동 병합하고 namespace 충돌·복수 후보에만 identity 판정 LLM을 호출합니다. 품질 게이트 통과 후 `document_kind + document_key`로 Entity·Concept·Schema Head를 멱등 Upsert하고 새 `wiki_document_versions`·원본 출처·문서 관계를 저장합니다.
 5. 생성된 Wiki Version을 Chunking하고 wiki_chunks를 멱등 Upsert합니다.
 6. Chunk별 Embedding을 생성해 wiki_embeddings에 설정 Version과 함께 멱등 Upsert합니다.
 7. `wiki_versions`와 `wiki_version_documents`에 현재 Vault의 문서 Version·파일 경로를 고정하고 관심사 재계산을 반영합니다.

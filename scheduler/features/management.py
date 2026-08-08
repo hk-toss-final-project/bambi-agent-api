@@ -30,6 +30,7 @@ from infrastructure.persistence.api import (
     upsert_collection_schedule,
 )
 from .collection import (
+    MANUAL_RUN_CONCURRENCY,
     SCHEDULED_PROVIDERS,
     CollectionCredentials,
     CollectionScheduleResult,
@@ -297,12 +298,16 @@ async def sch_021(
                 )
             ],
         )
+    # 수동 실행은 등록된 검색을 전부 수집하되, 관심 Topic이 많은 taxonomy
+    # Source에서 수십 개 검색이 직렬로 쌓여 응답이 분 단위로 늦어지지 않도록
+    # 동시에 수집한다(동시 실행 수는 collection.MANUAL_RUN_CONCURRENCY로 제한).
     results = await collect_schedule_keywords(
         schedule,
         database_url=database_url,
         credentials=credentials,
         now=moment,
         enforce_daily_limit=False,
+        concurrency=MANUAL_RUN_CONCURRENCY,
     )
     # 실행 직후 상태(마지막 실행 시각·오늘 실행 횟수)를 다시 읽어 돌려준다.
     refreshed = await load_collection_schedule(connection, source_key=source_key)
