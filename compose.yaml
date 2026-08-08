@@ -33,5 +33,63 @@ services:
       - command: /bin/sh /usr/local/bin/initialize-agent-db
         user: postgres
 
+  # 로컬에서 API만 띄워 queued Job이 영구 대기하는 실수를 막기 위한 명시적 Worker.
+  # 실제 LLM 비용이 발생하므로 기본 `docker compose up`에는 포함하지 않고
+  # `--profile workers`를 지정했을 때만 실행한다.
+  agent-worker-wiki:
+    profiles: ["workers"]
+    build: .
+    command:
+      - python
+      - -m
+      - workers.main
+      - --worker
+      - personal-wiki
+      - --loop
+      - --interval-seconds
+      - "5"
+    environment:
+      AGENT_DATABASE_URL: postgresql://${AGENT_DB_USER:-bambi_agent}:${AGENT_DB_PASSWORD}@agent-db:5432/${AGENT_DB_NAME:-bambi_agent}
+      VECTOR_STORE_URL: postgresql://${AGENT_DB_USER:-bambi_agent}:${AGENT_DB_PASSWORD}@agent-db:5432/${AGENT_DB_NAME:-bambi_agent}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY must be set in .env}
+      WIKI_LLM_MODEL: ${WIKI_LLM_MODEL:-gpt-4o-mini}
+      PERSONAL_WIKI_WORKER_BATCH_SIZE: ${PERSONAL_WIKI_WORKER_BATCH_SIZE:-20}
+      PERSONAL_WIKI_JOB_LEASE_SECONDS: ${PERSONAL_WIKI_JOB_LEASE_SECONDS:-1800}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      agent-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # 생성 Job도 같은 로컬 프로필에서 별도 프로세스로 소비한다. Wiki와 Report는
+  # 서로 다른 모델 설정을 사용하므로 운영 구조와 같이 Worker를 분리한다.
+  agent-worker-report:
+    profiles: ["workers"]
+    build: .
+    command:
+      - python
+      - -m
+      - workers.main
+      - --worker
+      - report-generation
+      - --loop
+      - --interval-seconds
+      - "5"
+    environment:
+      AGENT_DATABASE_URL: postgresql://${AGENT_DB_USER:-bambi_agent}:${AGENT_DB_PASSWORD}@agent-db:5432/${AGENT_DB_NAME:-bambi_agent}
+      VECTOR_STORE_URL: postgresql://${AGENT_DB_USER:-bambi_agent}:${AGENT_DB_PASSWORD}@agent-db:5432/${AGENT_DB_NAME:-bambi_agent}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY must be set in .env}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      NAVER_CLIENT_ID: ${NAVER_CLIENT_ID:-}
+      NAVER_CLIENT_SECRET: ${NAVER_CLIENT_SECRET:-}
+      REPORT_LLM_MODEL: ${REPORT_LLM_MODEL:-gpt-4o-mini}
+      PERSONAL_WIKI_WORKER_BATCH_SIZE: ${PERSONAL_WIKI_WORKER_BATCH_SIZE:-20}
+      PERSONAL_WIKI_JOB_LEASE_SECONDS: ${PERSONAL_WIKI_JOB_LEASE_SECONDS:-1800}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      agent-db:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   agent-db-data:

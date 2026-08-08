@@ -154,6 +154,18 @@ Wiki 빌드와 Report Builder 생성은 OpenAI를 실제 호출하므로 비용�
 | `global-collector` | 키워드로 외부 기사 수집 (`--keywords` 필수, Provider 기본 `gdelt,naver,google_news`) | 단발 |
 | `global-content` | 수집된 기사의 본문 확보 (**Scheduler가 tick마다 자동 실행**, 이 CLI는 수동 점검·backlog 소진용) | 단발 |
 
+로컬에서 클리핑 API를 실제 LLM Wiki까지 관통하려면 API와 별도로 Worker를 반드시
+실행해야 합니다. `202 Accepted`는 원본과 Job 저장만 보장하며, Worker가 없으면 Job은
+`queued`에 계속 남습니다. 아래 Compose 프로필은 Wiki·Report Worker를 함께 띄우며
+실제 OpenAI 비용이 발생하므로 명시적으로만 활성화됩니다.
+
+```bash
+docker compose --profile workers up -d --build agent-worker-wiki agent-worker-report
+```
+
+현재 상태는 `docker compose --profile workers ps`로 확인하고, 로컬 Worker를 끌 때는
+`docker compose --profile workers stop agent-worker-wiki agent-worker-report`를 사용합니다.
+
 ```bash
 # 단발: 대기 Job 한 Batch를 처리하고 종료
 uv run python -m workers.main --worker url-collection

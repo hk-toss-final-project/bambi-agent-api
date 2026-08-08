@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 PROJECT_ROOT = Path(__file__).parents[2]
 PROJECT_README_PATH = PROJECT_ROOT / "README.md"
 MIGRATION_PATH = PROJECT_ROOT / "database" / "migrations" / "0001_initial.sql"
@@ -427,6 +429,42 @@ def test_compose_requires_secret_and_runs_database_initializer() -> None:
     assert "/docker-entrypoint-initdb.d/" not in compose
     assert "initialize-agent-db --check" in compose
     assert "pg_isready" in compose
+
+
+def test_compose_workers_explicitly_consume_wiki_and_report_jobs() -> None:
+    """로컬 Worker 프로필이 Wiki·Report Queue를 별도 프로세스로 소비하는지 검증한다."""
+    compose = yaml.safe_load(_read(COMPOSE_PATH))
+    services = compose["services"]
+
+    wiki = services["agent-worker-wiki"]
+    report = services["agent-worker-report"]
+
+    assert wiki["profiles"] == ["workers"]
+    assert report["profiles"] == ["workers"]
+    assert wiki["command"] == [
+        "python",
+        "-m",
+        "workers.main",
+        "--worker",
+        "personal-wiki",
+        "--loop",
+        "--interval-seconds",
+        "5",
+    ]
+    assert report["command"] == [
+        "python",
+        "-m",
+        "workers.main",
+        "--worker",
+        "report-generation",
+        "--loop",
+        "--interval-seconds",
+        "5",
+    ]
+    for worker in (wiki, report):
+        assert worker["depends_on"]["agent-db"]["condition"] == "service_healthy"
+        assert "OPENAI_API_KEY" in worker["environment"]
+        assert "AGENT_DATABASE_URL" in worker["environment"]
 
 
 def test_migration_runner_applies_only_pending_versioned_files() -> None:
