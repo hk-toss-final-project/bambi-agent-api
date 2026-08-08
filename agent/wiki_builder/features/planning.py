@@ -49,6 +49,18 @@ def _unique(items: Iterable[str]) -> list[str]:
     return result
 
 
+def _interest_subject(old_metadata: dict[str, object], role: str) -> bool:
+    """이 노드가 어느 원문에서든 한 번이라도 주제였는지 누적한다.
+
+    같은 노드가 글마다 다른 역할을 맡는다. DBeaver를 소개하는 글에서는 주제고,
+    DBeaver로 튜닝하는 글에서는 도구다. 한 번이라도 주제였으면 관심사 후보로
+    남긴다 — 사용자가 그 대상을 다룬 글을 저장했다는 뜻이기 때문이다.
+
+    이미 참이면 뒤에 오는 글이 도구로 써도 내려가지 않는다.
+    """
+    return bool(old_metadata.get("interest_subject")) or role == "subject"
+
+
 def _metadata_strings(metadata: dict[str, object], key: str) -> list[str]:
     """Metadata의 목록 값을 안전한 문자열 목록으로 변환한다."""
     value = metadata.get(key, [])
@@ -186,6 +198,7 @@ def _plan_entities(
             "sources": sources,
             "created": created,
             "updated": generated_date,
+            "interest_subject": _interest_subject(old_metadata, candidate.role),
         }
         content = render_entity_markdown(
             name=title,
@@ -303,6 +316,7 @@ def _plan_concepts(
             "sources": sources,
             "created": created,
             "updated": generated_date,
+            "interest_subject": _interest_subject(old_metadata, candidate.role),
         }
         content = render_concept_markdown(
             title=resolved_title,

@@ -22,6 +22,16 @@
   canonical identity 판정 후 기존 Wiki 후보까지 포함해 검토한다.
 - 같은 문서에 등장했다는 이유로 related_* 필드를 임의로 채우지 마라.
 
+[role 판단 기준]
+- entity와 concept 모두 role을 붙인다. subject, tool, source, mention 중 하나다.
+- subject: 원문이 실제로 다루는 대상. 이 글이 무엇에 관한 글인지 물었을 때 답이 되는 것.
+- tool: 글쓴이가 작업에 사용한 도구·플랫폼·서비스. 글의 주제가 아니라 수단이다. 예: DB 클라이언트, 문서화 도구, 편집기.
+- source: 원문의 출처. 매체·블로그·채널·책·문서 제목.
+- mention: 배경 설명이나 예시로 한 번 스쳐 간 것. 정의를 인용한 역사적 인물, 곁가지로 언급한 사건 등.
+- 판단 기준은 "사용자가 이 대상의 새 소식을 받아보고 싶을까"다. 도구를 소개하는 글이라면 그 도구가 subject지만, 도구를 써서 다른 일을 하는 글이라면 tool이다.
+- 정리·증명·이론의 유래로 이름만 언급된 인물, 배경 설명으로 스쳐 간 과거 사건은 mention이다. 원문이 그 인물이나 사건 자체를 다루고 있을 때만 subject다.
+- 애매하면 subject로 둔다. 잘못 걸러내는 것보다 남기는 편이 낫다.
+
 [On-source 규칙]
 - mentions에는 원문에서 글자 그대로 복사한 짧은 인용문만 넣어라. 요약·의역·번역하지 마라.
 - 출처 요약은 2~4문장으로 작성한다.
@@ -31,6 +41,6 @@
 
 {
   "source_summary": "string",
-  "entities": [{"name":"string","subtype":"other","description":"string","aliases":[],"mentions":[],"matched_existing_key":null,"is_alias":false}],
-  "concepts": [{"title":"string","subtype":"other","definition":"string","key_characteristics":[],"applications":[],"aliases":[],"mentions":[],"matched_existing_key":null,"overlaps_existing":false}]
+  "entities": [{"name":"string","subtype":"other","role":"subject","description":"string","aliases":[],"mentions":[],"matched_existing_key":null,"is_alias":false}],
+  "concepts": [{"title":"string","subtype":"other","role":"subject","definition":"string","key_characteristics":[],"applications":[],"aliases":[],"mentions":[],"matched_existing_key":null,"overlaps_existing":false}]
 }

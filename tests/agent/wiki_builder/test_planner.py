@@ -360,3 +360,66 @@ def test_index_and_log_use_vault_artifact_paths() -> None:
     assert "[[entities/obsidian|Obsidian]]" in plan.index.content
     assert "gpt-4.1-mini · 2.0KB" in plan.log_entry.content
     assert "[[entities/obsidian]]" in plan.log_entry.content
+
+
+def test_node_role_is_recorded_for_interest_candidates() -> None:
+    """원문에서 도구로 쓰인 노드는 관심 후보 표시가 붙지 않는다.
+
+    이 표시가 없으면 DBeaver 같은 도구가 연결 수만으로 관심사 1위가 된다
+    (2026-08-07 실측).
+    """
+    classification = WikiClassification(
+        entities=[
+            EntityClassification(name="PostgreSQL", subtype="product", role="subject"),
+            EntityClassification(name="DBeaver", subtype="product", role="tool"),
+        ],
+        concepts=[
+            ConceptClassification(title="인덱스 튜닝", subtype="method", role="subject"),
+            ConceptClassification(title="API 키 발급", subtype="method", role="mention"),
+        ],
+    )
+
+    plan = _plan(classification)
+
+    roles = {node.title: node.metadata["interest_subject"] for node in plan.entities}
+    roles.update(
+        {node.title: node.metadata["interest_subject"] for node in plan.concepts}
+    )
+    assert roles == {
+        "PostgreSQL": True,
+        "DBeaver": False,
+        "인덱스 튜닝": True,
+        "API 키 발급": False,
+    }
+
+
+def test_node_stays_an_interest_once_it_was_a_subject() -> None:
+    """한 번 주제였던 노드는 뒤에 도구로 쓰여도 관심 후보로 남는다.
+
+    같은 노드가 글마다 역할이 다르다. 사용자가 그 대상을 다룬 글을 저장한 적이
+    있다는 사실은 뒤에 오는 글이 지울 수 없다.
+    """
+    existing = [
+        ExistingWikiEntry(
+            "entity",
+            "dbeaver",
+            "DBeaver",
+            "product",
+            "기존 설명",
+            {"created": "2026-07-01", "interest_subject": True},
+        )
+    ]
+    classification = WikiClassification(
+        entities=[
+            EntityClassification(
+                name="DBeaver",
+                subtype="product",
+                role="tool",
+                matched_existing_key="dbeaver",
+            )
+        ]
+    )
+
+    plan = _plan(classification, existing_entities=existing)
+
+    assert plan.entities[0].metadata["interest_subject"] is True

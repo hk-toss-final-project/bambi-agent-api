@@ -130,6 +130,27 @@ def _is_unselected_seed_node(
     return not _matches_onboarding_label(names, labels)
 
 
+def _is_incidental_node(node: Mapping[str, object]) -> bool:
+    """글이 다룬 주제가 아니라 스쳐 간 노드인지 판정한다.
+
+    Wiki Build가 노드마다 원문에서 맡은 역할을 판정해 metadata에
+    `interest_subject`로 남긴다(한 번이라도 주제였으면 참). 거짓이면 도구·출처·
+    곁가지 언급으로만 등장한 노드라 관심 후보에서 뺀다.
+
+    2026-08-07 실측: 관심사 상위권에 DBeaver Community·pgAdmin 4·OpenWiki(도구),
+    "기술노트with 알렉"(출처), "API 키 발급"(절차), Cauchy·Kepler(인용된 인물)가
+    올라와 있었다. 글을 많이 저장할수록 이런 노드가 연결 수를 얻어 위로 온다.
+
+    **표시가 없는 노드는 통과시킨다.** 이 판정이 생기기 전에 만들어진 위키에는
+    키 자체가 없는데, 없다고 걸러내면 기존 사용자의 관심사가 통째로 사라진다.
+    다시 Build된 노드부터 판정이 붙는다.
+    """
+    metadata = node.get("source_metadata")
+    if not isinstance(metadata, Mapping) or "interest_subject" not in metadata:
+        return False
+    return not bool(metadata.get("interest_subject"))
+
+
 def _isoformat(value: object) -> str | None:
     """근거 원문의 최신 활동 시각을 JSON 저장용 ISO 문자열로 변환한다.
 
@@ -180,6 +201,8 @@ async def int_001(
         if not document_id or not title:
             continue
         if _is_unselected_seed_node(node, labels):
+            continue
+        if _is_incidental_node(node):
             continue
         key = title.casefold()
         if key not in groups:
