@@ -525,8 +525,11 @@ def test_interest_rebuild_requires_ready_service(client: TestClient) -> None:
     assert response.json()["code"] == "SERVICE_NOT_READY"
 
 
-def test_feedback_signals_accepts_batch_idempotently(client: TestClient) -> None:
-    """행동 신호 Batch가 저장되고 같은 이벤트 재전송은 집계에서 빠지는지 검증한다."""
+def test_feedback_signals_accepts_batch_idempotently(
+    client: TestClient,
+    agent_jobs_fake: InMemoryAgentJobRepository,
+) -> None:
+    """행동 신호와 계측값을 보존하고 같은 이벤트 재전송은 제외한다."""
     payload = {
         "signals": [
             {
@@ -534,6 +537,12 @@ def test_feedback_signals_accepts_batch_idempotently(client: TestClient) -> None
                 "signal_type": "like",
                 "topics": ["LangGraph"],
                 "content_id": "content-1",
+                "metadata": {
+                    "axis": "topic",
+                    "dwell_seconds": 1.8,
+                    "scroll_ratio": 0.0,
+                    "source": {"surface": "report"},
+                },
             },
             {
                 "source_event_id": "signal-2",
@@ -552,6 +561,12 @@ def test_feedback_signals_accepts_batch_idempotently(client: TestClient) -> None
     assert first.json()["accepted_count"] == 2
     assert duplicate.status_code == 200
     assert duplicate.json()["accepted_count"] == 0
+    assert agent_jobs_fake.feedback_signals[0]["metadata"] == {
+        "axis": "topic",
+        "dwell_seconds": 1.8,
+        "scroll_ratio": 0.0,
+        "source": {"surface": "report"},
+    }
 
 
 def test_feedback_signals_rejects_unknown_type(client: TestClient) -> None:

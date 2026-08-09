@@ -95,7 +95,7 @@ class ConnectionInterestBundleRepository:
                     )
                     ELSE ARRAY[]::text[]
                 END AS aliases,
-                document.updated_at
+                version.created_at AS updated_at
             FROM agent.wiki_documents AS document
             JOIN agent.wiki_document_versions AS version
               ON version.document_id = document.id
@@ -275,7 +275,7 @@ class ConnectionInterestBundleRepository:
                     )
                     ELSE ARRAY[]::text[]
                 END AS aliases,
-                peer.updated_at,
+                peer_version.created_at AS updated_at,
                 neighbor_scores.weight,
                 neighbor_relation_types.relation_types,
                 neighbor_relation_details.relations,

@@ -578,7 +578,7 @@ async def load_personal_wiki_vector_context(
                     document.canonical_url,
                     version.source_metadata ->> 'url'
                 ) AS url,
-                document.updated_at,
+                version.created_at AS updated_at,
                 wiki_embedding.embedding <=> query_vector.embedding AS distance
             FROM agent.wiki_embeddings AS wiki_embedding
             JOIN agent.embedding_configs AS config
@@ -706,6 +706,7 @@ async def load_report_context(
                 version.title,
                 chunk.content,
                 COALESCE(document.canonical_url, version.source_metadata->>'url') AS url,
+                version.created_at AS source_updated_at,
                 GREATEST(
                     similarity(chunk.content, %s),
                     ts_rank(chunk.search_vector, plainto_tsquery('simple', %s))
@@ -734,6 +735,7 @@ async def load_report_context(
                 cache.title,
                 cache.markdown AS content,
                 COALESCE(cache.resolved_url, cache.canonical_url) AS url,
+                cache.updated_at AS source_updated_at,
                 CASE WHEN topic_match.exact THEN 1.0 ELSE 0.0 END +
                 GREATEST(
                     similarity(COALESCE(cache.search_body, cache.markdown), %s),
@@ -850,7 +852,8 @@ async def load_report_context(
                 title,
                 content,
                 url,
-                score
+                score,
+                recency AS source_updated_at
             FROM recent
             WHERE scope_rank <= %s
             ORDER BY (namespace_key = 'global'), scope_rank
@@ -878,6 +881,16 @@ async def load_report_context(
                 content=row["content"],
                 url=row["url"],
                 score=float(row["score"]),
+                context_role=(
+                    "global_retrieval"
+                    if row["namespace_key"] == "global"
+                    else "keyword_retrieval"
+                ),
+                source_updated_at=(
+                    str(row["source_updated_at"])
+                    if row.get("source_updated_at") is not None
+                    else None
+                ),
             )
         )
     return contexts
@@ -981,6 +994,15 @@ async def persist_report_generation(
                     "retrieval_scores": {
                         context.reference: context.score for context in contexts
                     },
+                    "retrieval_contexts": [
+                        {
+                            "reference": context.reference,
+                            "namespace_key": context.namespace_key,
+                            "context_role": context.context_role,
+                            "source_updated_at": context.source_updated_at,
+                        }
+                        for context in contexts
+                    ],
                     "review_outcome": review_outcome,
                     "review_problem": review_problem,
                 }

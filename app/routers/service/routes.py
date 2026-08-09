@@ -282,7 +282,7 @@ async def submit_feedback_signals(
 ) -> FeedbackSignalsResponse:
     """[SVC-006] 좋아요·숨김·신고 신호를 관심사 반영 이벤트로 접수한다.
 
-    Wiki 문서를 만들지 않으며, 다음 관심사 재계산 때 점수에 반영된다.
+    Wiki 문서를 만들지 않으며 저장 직후 관심사 재계산을 best-effort로 시도한다.
     """
     return await svc_006(
         service,

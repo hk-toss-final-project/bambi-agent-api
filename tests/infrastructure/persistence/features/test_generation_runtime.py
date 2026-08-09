@@ -14,7 +14,7 @@ from infrastructure.persistence.features.generation_runtime import (
     persist_report_generation,
     upsert_user_context_snapshot,
 )
-from shared.report_models import GeneratedReportContent
+from shared.report_models import GeneratedReportContent, ReportContextDocument
 
 
 class _FakeCursor:
@@ -679,6 +679,44 @@ def test_report_context_search_excludes_wiki_schema_documents() -> None:
     assert len(connection.executed) == 2
     for sql, _ in connection.executed:
         assert "document.document_kind <> 'schema'" in sql
+    assert "version.created_at AS source_updated_at" in connection.executed[0][0]
+    assert "recency AS source_updated_at" in connection.executed[1][0]
+
+
+def test_report_context_exposes_version_time_and_retrieval_role() -> None:
+    """개인 Wiki Keyword 결과에 정확한 Version 시각과 역할을 전달한다."""
+    from infrastructure.persistence.features.generation_runtime import (
+        load_report_context,
+    )
+
+    updated_at = datetime(2026, 8, 9, 10, 30, tzinfo=UTC)
+    connection = _FakeConnection(
+        [
+            [
+                {
+                    "document_version_id": "version-1",
+                    "chunk_id": "chunk-1",
+                    "namespace_key": "user/user-1",
+                    "title": "LangGraph",
+                    "content": "사용자가 저장한 Wiki 내용",
+                    "url": None,
+                    "score": 0.8,
+                    "source_updated_at": updated_at,
+                }
+            ]
+        ]
+    )
+
+    contexts = asyncio.run(
+        load_report_context(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            query="LangGraph",
+        )
+    )
+
+    assert contexts[0].context_role == "keyword_retrieval"
+    assert contexts[0].source_updated_at == str(updated_at)
 
 
 def test_report_context_gives_topic_bonus_through_collection_target() -> None:
@@ -935,6 +973,50 @@ def test_run_metadata_records_what_the_critic_objected_to() -> None:
     metadata = _run_metadata(connection)
     assert metadata["review_outcome"] == "revise_exhausted"
     assert metadata["review_problem"] == "인용한 G2 원문은 코스피 상승에 관한 내용이다."
+
+
+def test_run_metadata_records_context_role_and_knowledge_time() -> None:
+    """생성 Run이 Wiki Context의 역할과 지식 기준 시각을 재현 가능하게 남긴다."""
+    connection = _connection_for_persist("생성형 AI")
+    context = ReportContextDocument(
+        reference="P1",
+        document_version_id="version-1",
+        chunk_id="chunk-1",
+        namespace_key="user/user-1",
+        title="생성형 AI",
+        content="사용자가 저장한 기존 지식",
+        url=None,
+        score=1.0,
+        context_role="wiki_root",
+        source_updated_at="2026-08-09T10:00:00+00:00",
+    )
+
+    asyncio.run(
+        persist_report_generation(
+            connection,  # type: ignore[arg-type]
+            job_id="job-1",
+            user_id="user-1",
+            attempt_number=1,
+            content_type="interest_news_card",
+            generated=GeneratedReportContent(
+                title="제목",
+                summary="요약",
+                body="본문",
+                citation_references=(),
+            ),
+            contexts=[context],
+            latency_ms=100,
+        )
+    )
+
+    assert _run_metadata(connection)["retrieval_contexts"] == [
+        {
+            "reference": "P1",
+            "namespace_key": "user/user-1",
+            "context_role": "wiki_root",
+            "source_updated_at": "2026-08-09T10:00:00+00:00",
+        }
+    ]
 
 
 def test_stale_context_error_carries_the_current_version() -> None:

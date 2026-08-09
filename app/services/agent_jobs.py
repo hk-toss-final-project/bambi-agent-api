@@ -186,7 +186,7 @@ class AgentJobRepository(Protocol):
         user_id: str,
         signals: list[dict[str, Any]],
     ) -> int:
-        """행동 신호 Batch를 저장하고 신규 저장 수를 반환한다."""
+        """행동 신호 Batch를 저장하고 관심사 재계산을 시도한 뒤 신규 수를 반환한다."""
         ...
 
     async def submit_generation(

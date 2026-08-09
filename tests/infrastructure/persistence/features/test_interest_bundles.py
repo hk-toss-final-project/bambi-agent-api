@@ -82,7 +82,7 @@ def test_repository_snapshots_current_root_versions_in_input_order() -> None:
     assert rows[0]["document_version_id"] == "version-1"
     assert "version.version = document.current_version" in query
     assert "version.source_metadata -> 'aliases'" in query
-    assert "document.updated_at" in query
+    assert "version.created_at AS updated_at" in query
     assert "ORDER BY array_position(%s::uuid[], document.id)" in query
     assert params == (
         ["root-2", "root-1"],
@@ -144,7 +144,7 @@ def test_repository_orders_one_hop_neighbors_by_evidence_strength() -> None:
     assert "degree DESC" in query
     assert "peer_version.id::text AS document_version_id" in query
     assert "peer_version.source_metadata -> 'aliases'" in query
-    assert "peer.updated_at" in query
+    assert "peer_version.created_at AS updated_at" in query
     assert params == (
         ["root-1"],
         "user/user-1",
