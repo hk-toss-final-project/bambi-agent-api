@@ -98,6 +98,7 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, order: list[str]) -> dict[str
     monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
     monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: False)
     monkeypatch.setattr(agent_graph, "resolve_topic_intent", lambda *args: "news")
+    monkeypatch.setattr(agent_graph, "embed_wiki_queries", lambda queries: {})
     monkeypatch.setattr(agent_graph, "critic_enabled", lambda: False)
     monkeypatch.setattr(agent_graph, "change_history_available", lambda: True)
     return captured

@@ -9,6 +9,7 @@ import pytest
 
 from infrastructure.persistence.features.generation_runtime import (
     enqueue_report_generation_job,
+    load_personal_wiki_vector_context,
     load_pinned_wiki_context,
     persist_report_generation,
     upsert_user_context_snapshot,
@@ -423,6 +424,71 @@ def test_load_pinned_wiki_context_uses_exact_snapshot_versions() -> None:
     assert [context.reference for context in contexts] == ["P1", "P2"]
     assert contexts[0].source_updated_at == "2026-08-09T10:00:00+00:00"
     assert "사용자의 기존 관심 맥락" in contexts[0].content
+
+
+def test_load_personal_wiki_vector_context_uses_active_matching_model() -> None:
+    """Vector 검색은 현재 Wiki와 active 동일 모델 Embedding만 Cosine top-k 조회한다."""
+    connection = _FakeConnection(
+        [
+            [
+                {
+                    "document_version_id": "44444444-4444-4444-8444-444444444444",
+                    "chunk_id": "66666666-6666-4666-8666-666666666666",
+                    "namespace_key": "user/user-1",
+                    "title": "폭염",
+                    "content": "장기간 높은 기온이 이어지는 현상",
+                    "url": None,
+                    "updated_at": "2026-08-09T10:00:00+00:00",
+                    "score": 0.82,
+                }
+            ]
+        ]
+    )
+
+    contexts = asyncio.run(
+        load_personal_wiki_vector_context(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            query_embedding=[0.1] * 1536,
+            model_name="text-embedding-3-small",
+            top_k=5,
+        )
+    )
+
+    query, params = connection.executed[0]
+    assert "wiki_embedding.embedding <=> query_vector.embedding" in query
+    assert "config.status = 'active'" in query
+    assert "document.current_version = version.version" in query
+    assert "document.document_kind IN ('entity', 'concept')" in query
+    assert "GREATEST(0.0, 1.0 - distance) + 0.05" in query
+    assert params is not None
+    assert str(params[0]).startswith("[0.1,0.1")
+    assert params[1:] == (
+        "personal-wiki/text-embedding-3-small",
+        "text-embedding-3-small",
+        "user/user-1",
+        "text-embedding-3-small",
+        5,
+    )
+    assert contexts[0].context_role == "semantic_retrieval"
+    assert contexts[0].source_updated_at == "2026-08-09T10:00:00+00:00"
+
+
+def test_load_personal_wiki_vector_context_rejects_wrong_dimensions() -> None:
+    """DB 호출 전 Query Embedding 차원을 검증한다."""
+    connection = _FakeConnection([])
+
+    with pytest.raises(ValueError, match="1536차원"):
+        asyncio.run(
+            load_personal_wiki_vector_context(
+                connection,  # type: ignore[arg-type]
+                user_id="user-1",
+                query_embedding=[0.1, 0.2],
+                model_name="text-embedding-3-small",
+            )
+        )
+
+    assert connection.executed == []
 
 
 def test_enqueue_bundle_retry_returns_snapshot_without_revalidating_interest() -> None:

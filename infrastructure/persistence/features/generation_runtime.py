@@ -6,6 +6,7 @@ Wiki와 Global 문서를 검색해 만든 콘텐츠·Citation·Publish Snapshot�
 
 import hashlib
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -511,6 +512,143 @@ async def enqueue_report_generation_job(
         job_id=str(job["id"]),
         generation_request_id=str(generation_request["id"]),
     )
+
+
+def _embedding_vector_literal(query_embedding: Sequence[float]) -> str:
+    """1536차원 Query Embedding을 안전한 pgvector Literal로 변환한다."""
+    if len(query_embedding) != 1536:
+        raise ValueError(
+            f"개인 Wiki Query Embedding은 1536차원이어야 합니다: {len(query_embedding)}"
+        )
+    values: list[float] = []
+    for raw_value in query_embedding:
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError) as error:
+            raise ValueError("Query Embedding에 숫자가 아닌 값이 있습니다.") from error
+        if not math.isfinite(value):
+            raise ValueError("Query Embedding에는 유한한 숫자만 사용할 수 있습니다.")
+        values.append(value)
+    return "[" + ",".join(str(value) for value in values) + "]"
+
+
+async def load_personal_wiki_vector_context(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    query_embedding: Sequence[float],
+    model_name: str,
+    top_k: int = 5,
+) -> list[ReportContextDocument]:
+    """활성 개인 Wiki Chunk를 Query Embedding과 Cosine 거리로 조회한다.
+
+    현재 Entity·Concept Version과 같은 active Embedding config/model만 비교한다.
+    유사도 hard cutoff는 적용하지 않고 top-k 후보를 반환해 Hybrid RRF가 Keyword
+    결과와 함께 순서를 정하게 한다.
+
+    Args:
+        connection: 개인 Wiki RLS Scope가 설정된 PostgreSQL 연결
+        user_id: 조회 대상 사용자 ID
+        query_embedding: 1536차원 검색 Query Vector
+        model_name: 저장 Vector와 일치시킬 Embedding 모델 이름
+        top_k: 반환할 최대 개인 Wiki Chunk 수
+
+    Returns:
+        Cosine 거리 오름차순 개인 Wiki Context 목록
+    """
+    if not user_id.strip():
+        raise ValueError("Vector 검색에 user_id가 필요합니다.")
+    if not 1 <= top_k <= 20:
+        raise ValueError("개인 Wiki Vector 검색 top_k는 1에서 20 사이여야 합니다.")
+    vector_literal = _embedding_vector_literal(query_embedding)
+    namespace_key = f"user/{user_id}"
+    config_key = f"personal-wiki/{model_name}"
+    cursor = await connection.execute(
+        """
+        WITH query_vector AS (
+            SELECT %s::vector AS embedding
+        ), ranked AS (
+            SELECT
+                version.id::text AS document_version_id,
+                chunk.id::text AS chunk_id,
+                document.namespace_key,
+                version.title,
+                chunk.content,
+                COALESCE(
+                    document.canonical_url,
+                    version.source_metadata ->> 'url'
+                ) AS url,
+                document.updated_at,
+                wiki_embedding.embedding <=> query_vector.embedding AS distance
+            FROM agent.wiki_embeddings AS wiki_embedding
+            JOIN agent.embedding_configs AS config
+              ON config.id = wiki_embedding.embedding_config_id
+             AND config.status = 'active'
+             AND config.config_key = %s
+             AND config.model_name = %s
+            JOIN agent.wiki_chunks AS chunk
+              ON chunk.id = wiki_embedding.chunk_id
+             AND chunk.namespace_key = wiki_embedding.namespace_key
+             AND chunk.is_searchable
+            JOIN agent.wiki_document_versions AS version
+              ON version.id = chunk.document_version_id
+             AND version.namespace_key = chunk.namespace_key
+            JOIN agent.wiki_documents AS document
+              ON document.id = version.document_id
+             AND document.namespace_key = version.namespace_key
+             AND document.current_version = version.version
+            CROSS JOIN query_vector
+            WHERE wiki_embedding.namespace_key = %s
+              AND wiki_embedding.model_name = %s
+              AND document.document_kind IN ('entity', 'concept')
+              AND document.status = 'active'
+              AND document.deleted_at IS NULL
+            ORDER BY
+                wiki_embedding.embedding <=> query_vector.embedding,
+                chunk.id
+            LIMIT %s
+        )
+        SELECT
+            document_version_id,
+            chunk_id,
+            namespace_key,
+            title,
+            content,
+            url,
+            updated_at,
+            (GREATEST(0.0, 1.0 - distance) + 0.05)::float8 AS score
+        FROM ranked
+        ORDER BY distance, chunk_id
+        """,
+        (
+            vector_literal,
+            config_key,
+            model_name,
+            namespace_key,
+            model_name,
+            top_k,
+        ),
+    )
+    rows = await cursor.fetchall()
+    return [
+        ReportContextDocument(
+            reference=f"P{index}",
+            document_version_id=str(row["document_version_id"]),
+            chunk_id=str(row["chunk_id"]),
+            namespace_key=str(row["namespace_key"]),
+            title=str(row["title"]),
+            content=str(row["content"]),
+            url=str(row["url"]) if row.get("url") else None,
+            score=float(row["score"]),
+            context_role="semantic_retrieval",
+            source_updated_at=(
+                str(row["updated_at"])
+                if row.get("updated_at") is not None
+                else None
+            ),
+        )
+        for index, row in enumerate(rows, start=1)
+    ]
 
 
 async def load_report_context(

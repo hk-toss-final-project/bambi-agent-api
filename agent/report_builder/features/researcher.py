@@ -41,6 +41,7 @@ from .pool_context import (
     select_personal_documents,
     select_pool_documents,
 )
+from .wiki_retrieval import embed_wiki_queries
 
 logger = logging.getLogger("agent.report_builder.researcher")
 
@@ -141,9 +142,15 @@ async def search_stored_documents(
     Returns:
         개인 Wiki 문서와 컷오프를 통과한 풀 문서 목록
     """
+    query_embeddings = await to_thread(embed_wiki_queries, [query])
     async with connection.transaction():
         await set_personal_wiki_scope(connection, user_id=user_id)
-        hybrid = await prag_003(connection, user_id=user_id, query=query)
+        hybrid = await prag_003(
+            connection,
+            user_id=user_id,
+            query=query,
+            query_embedding=query_embeddings.get(query.strip()),
+        )
         freshness = await load_global_document_freshness(
             connection,
             [

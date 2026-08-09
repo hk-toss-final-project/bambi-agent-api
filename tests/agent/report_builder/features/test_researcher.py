@@ -72,6 +72,7 @@ def _patch_db(
         return {}
 
     monkeypatch.setattr(researcher, "prag_003", fake_prag_003)
+    monkeypatch.setattr(researcher, "embed_wiki_queries", lambda queries: {})
     monkeypatch.setattr(researcher, "set_personal_wiki_scope", fake_scope)
     monkeypatch.setattr(researcher, "load_global_document_freshness", fake_freshness)
     monkeypatch.setattr(

@@ -77,6 +77,8 @@ def build_contexts(case: dict[str, Any]) -> list[ReportContextDocument]:
             content=str(case["root_context"]),
             url=None,
             score=1.0,
+            context_role="wiki_root",
+            source_updated_at="2026-08-01T00:00:00+00:00",
         )
     ]
     for index, (keyword, content) in enumerate(
@@ -92,6 +94,8 @@ def build_contexts(case: dict[str, Any]) -> list[ReportContextDocument]:
                 content=str(content),
                 url=None,
                 score=0.9,
+                context_role="wiki_neighbor",
+                source_updated_at="2026-08-01T00:00:00+00:00",
             )
         )
     contexts.append(
@@ -110,7 +114,7 @@ def build_contexts(case: dict[str, Any]) -> list[ReportContextDocument]:
 
 
 def current_revision() -> str:
-    """결과 재현에 쓸 현재 Git 짧은 커밋 해시를 반환한다."""
+    """결과 재현에 쓸 현재 Git 해시와 Working Tree 상태를 반환한다."""
     completed = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"],
         cwd=PROJECT_ROOT,
@@ -118,7 +122,15 @@ def current_revision() -> str:
         capture_output=True,
         text=True,
     )
-    return completed.stdout.strip()
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    suffix = "+dirty" if status.stdout.strip() else ""
+    return completed.stdout.strip() + suffix
 
 
 def evaluate_case(case: dict[str, Any], *, model: str) -> dict[str, Any]:
@@ -145,7 +157,28 @@ def evaluate_case(case: dict[str, Any], *, model: str) -> dict[str, Any]:
             interest_bundle={
                 "root": {"keyword": case["root"]},
                 "neighbors": [
-                    {"keyword": keyword} for keyword in case["neighbors"]
+                    {
+                        "keyword": keyword,
+                        "relations": [
+                            {
+                                "direction": "root_to_neighbor",
+                                "relation_type": "associated_with",
+                                "confidence": 0.9,
+                                "provenance_kind": "source_explicit",
+                                "review_status": "accepted",
+                                "rationale": "벤치마크 Fixture의 검증 연결",
+                                "supports": [
+                                    {
+                                        "source_document_version_id": (
+                                            f"source-{index}"
+                                        ),
+                                        "evidence": case["neighbor_contexts"][index],
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                    for index, keyword in enumerate(case["neighbors"])
                 ],
             },
         )

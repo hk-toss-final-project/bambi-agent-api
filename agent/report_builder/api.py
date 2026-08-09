@@ -28,6 +28,7 @@ from .features.researcher import (
     research_agent_enabled,
     research_context,
 )
+from .features.wiki_retrieval import embed_wiki_queries
 from .features.generation import (
     ReportContextDocument,
     GeneratedReportContent,
@@ -71,4 +72,5 @@ __all__ = [
     "report_020",
     "report_021",
     "merge_context_documents",
+    "embed_wiki_queries",
 ]

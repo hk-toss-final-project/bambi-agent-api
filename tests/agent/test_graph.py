@@ -482,6 +482,7 @@ def _disable_research(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: False)
     monkeypatch.setattr(agent_graph, "resolve_topic_intent", lambda *args: "news")
+    monkeypatch.setattr(agent_graph, "embed_wiki_queries", lambda queries: {})
     _disable_critic(monkeypatch)
 
 
@@ -804,6 +805,7 @@ def _patch_generation_tail(
     )
     monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
     monkeypatch.setattr(agent_graph, "resolve_topic_intent", lambda *args: "news")
+    monkeypatch.setattr(agent_graph, "embed_wiki_queries", lambda queries: {})
     monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
     _disable_critic(monkeypatch)
     return used_contexts

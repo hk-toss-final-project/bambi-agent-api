@@ -35,6 +35,7 @@ from agent.report_builder.api import (
     related_keyword_fetch_limit,
     GLOBAL_NAMESPACE,
     critic_enabled,
+    embed_wiki_queries,
     is_pool_relevant,
     is_pool_sufficient,
     merge_context_documents,
@@ -975,6 +976,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             return await _finalize_contexts(state, research_contexts)
         bundle_keywords = _interest_bundle_keywords(state)
         search_queries = bundle_keywords or [state["topic"]]
+        query_embeddings = await to_thread(embed_wiki_queries, search_queries)
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=state["user_id"])
             search_groups = [
@@ -982,6 +984,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                     connection,
                     user_id=state["user_id"],
                     query=query,
+                    query_embedding=query_embeddings.get(query),
                 )
                 for query in search_queries
             ]
@@ -1133,10 +1136,14 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         )
         if researched:
             return researched
+        query_embeddings = await to_thread(embed_wiki_queries, [topic])
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=state["user_id"])
             hybrid = await prag_003(
-                connection, user_id=state["user_id"], query=topic
+                connection,
+                user_id=state["user_id"],
+                query=topic,
+                query_embedding=query_embeddings.get(topic),
             )
             pool_freshness = await load_global_document_freshness(
                 connection,

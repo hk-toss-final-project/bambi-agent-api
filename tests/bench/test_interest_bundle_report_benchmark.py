@@ -36,3 +36,9 @@ def test_interest_bundle_benchmark_builds_root_neighbor_and_global_references() 
     assert [context.reference for context in contexts] == ["P1", "P2", "P3", "G1"]
     assert contexts[0].title == "생성형 AI"
     assert contexts[1].title == "AI 에이전트"
+    assert [context.context_role for context in contexts[:3]] == [
+        "wiki_root",
+        "wiki_neighbor",
+        "wiki_neighbor",
+    ]
+    assert contexts[0].source_updated_at == "2026-08-01T00:00:00+00:00"
