@@ -1491,16 +1491,12 @@ async def sync_wiki_relation_supports(
         WHERE support.namespace_key = %s
           AND (
                 support.source_document_version_id = %s
-                OR (
-                    %s IS NOT NULL
-                    AND EXISTS (
-                        SELECT 1
-                        FROM agent.user_source_document_versions AS source_version
-                        WHERE source_version.id = support.source_document_version_id
-                          AND source_version.namespace_key =
-                            support.namespace_key
-                          AND source_version.source_document_id = %s
-                    )
+                OR EXISTS (
+                    SELECT 1
+                    FROM agent.user_source_document_versions AS source_version
+                    WHERE source_version.id = support.source_document_version_id
+                      AND source_version.namespace_key = support.namespace_key
+                      AND source_version.source_document_id = %s
                 )
           )
           AND support.status = 'active'
@@ -1509,7 +1505,6 @@ async def sync_wiki_relation_supports(
         (
             namespace_key,
             source_document_version_id,
-            source_document_id,
             source_document_id,
         ),
     )

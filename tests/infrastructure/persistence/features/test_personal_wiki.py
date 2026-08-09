@@ -1038,10 +1038,10 @@ def test_sync_wiki_relation_supports_replaces_source_support_and_supersedes_head
     assert "UPDATE agent.wiki_relation_supports" in stale_query
     assert "status = 'superseded'" in stale_query
     assert "source_version.source_document_id = %s" in stale_query
+    assert "%s IS NOT NULL" not in stale_query
     assert stale_params == (
         "user/user-1",
         "source-version-1",
-        "source-document-1",
         "source-document-1",
     )
 
