@@ -109,6 +109,8 @@ class ResearchOutcome:
 
 def _document_key(document: ReportContextDocument) -> str:
     """중복 판정에 쓸 문서 식별 키를 만든다."""
+    if document.namespace_key != GLOBAL_NAMESPACE and document.document_version_id:
+        return f"{document.namespace_key}:{document.document_version_id}"
     return document.url or f"{document.namespace_key}:{document.document_version_id}"
 
 

@@ -1,13 +1,15 @@
 """Report Builder Generation Job 등록의 예약 시각(scheduled_at) 영속화를 검증한다."""
 
 import asyncio
-
-import pytest
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
+
 from infrastructure.persistence.features.generation_runtime import (
     enqueue_report_generation_job,
+    load_pinned_wiki_context,
     persist_report_generation,
     upsert_user_context_snapshot,
 )
@@ -51,6 +53,11 @@ class _FakeConnection:
         self.executed.append((query, params))
         rows = self._responses.pop(0) if self._responses else []
         return _FakeCursor(rows)
+
+    @asynccontextmanager
+    async def transaction(self):  # type: ignore[no-untyped-def]
+        """아무 작업 없이 열린 Transaction 문맥을 제공한다."""
+        yield self
 
 
 def _connection_with_context() -> _FakeConnection:
@@ -246,9 +253,24 @@ def test_enqueue_snapshots_active_interest_bundle() -> None:
             ],
             [
                 {
+                    "document_id": "11111111-1111-4111-8111-111111111111",
+                    "document_version_id": "44444444-4444-4444-8444-444444444444",
+                    "keyword": "생성형 AI",
+                    "document_kind": "concept",
+                    "summary": "생성 모델 기반 인공지능",
+                    "aliases": ["Generative AI"],
+                    "updated_at": "2026-08-09T10:00:00+00:00",
+                }
+            ],
+            [
+                {
                     "document_id": "22222222-2222-4222-8222-222222222222",
+                    "document_version_id": "55555555-5555-4555-8555-555555555555",
                     "keyword": "AI 에이전트",
                     "document_kind": "concept",
+                    "summary": "도구를 사용해 목표를 수행하는 AI",
+                    "aliases": ["Agentic AI"],
+                    "updated_at": "2026-08-08T10:00:00+00:00",
                     "weight": 1.0,
                     "relation_types": ["applies_concept"],
                     "shared_source_count": 2,
@@ -275,7 +297,7 @@ def test_enqueue_snapshots_active_interest_bundle() -> None:
     )
 
     assert submission.job_id == "job-1"
-    _, job_params = connection.executed[4]
+    _, job_params = connection.executed[5]
     assert job_params is not None
     payload = job_params[2].obj
     assert payload["topic"] == "생성형 AI"
@@ -283,10 +305,90 @@ def test_enqueue_snapshots_active_interest_bundle() -> None:
     assert payload["generation_scope"] == "INTEREST_BUNDLE"
     assert payload["interest_bundle"]["profile_version"] == 7
     assert payload["interest_bundle"]["keywords"] == ["생성형 AI", "AI 에이전트"]
-    _, request_params = connection.executed[5]
+    assert (
+        payload["interest_bundle"]["root"]["documents"][0][
+            "document_version_id"
+        ]
+        == "44444444-4444-4444-8444-444444444444"
+    )
+    assert (
+        payload["interest_bundle"]["neighbors"][0]["document_version_id"]
+        == "55555555-5555-4555-8555-555555555555"
+    )
+    _, request_params = connection.executed[6]
     assert request_params is not None
     assert request_params[3] == "생성형 AI"
     assert request_params[-1].obj["interest_bundle"] == payload["interest_bundle"]
+
+
+def test_load_pinned_wiki_context_uses_exact_snapshot_versions() -> None:
+    """Worker는 현재 Version 재검색 없이 Job에 고정된 Version을 루트 우선 조회한다."""
+    connection = _FakeConnection(
+        [
+            [],
+            [
+                {
+                    "document_version_id": "44444444-4444-4444-8444-444444444444",
+                    "title": "생성형 AI",
+                    "summary": "생성 모델 기반 인공지능",
+                    "chunk_id": "66666666-6666-4666-8666-666666666666",
+                    "content": "## Description\n사용자의 기존 관심 맥락",
+                },
+                {
+                    "document_version_id": "55555555-5555-4555-8555-555555555555",
+                    "title": "AI 에이전트",
+                    "summary": "목표를 수행하는 AI",
+                    "chunk_id": "77777777-7777-4777-8777-777777777777",
+                    "content": "## Definition\n도구 사용과 계획 실행",
+                },
+            ],
+        ]
+    )
+    bundle = {
+        "root": {
+            "documents": [
+                {
+                    "document_version_id": "44444444-4444-4444-8444-444444444444",
+                    "keyword": "생성형 AI",
+                    "updated_at": "2026-08-09T10:00:00+00:00",
+                }
+            ]
+        },
+        "neighbors": [
+            {
+                "document_version_id": "55555555-5555-4555-8555-555555555555",
+                "keyword": "AI 에이전트",
+                "updated_at": "2026-08-08T10:00:00+00:00",
+            }
+        ],
+    }
+
+    contexts = asyncio.run(
+        load_pinned_wiki_context(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            interest_bundle=bundle,
+        )
+    )
+
+    query, params = connection.executed[1]
+    assert "unnest(%s::uuid[]) WITH ORDINALITY" in query
+    assert "version.id = requested.version_id" in query
+    assert "document.current_version" not in query
+    assert params == (
+        [
+            "44444444-4444-4444-8444-444444444444",
+            "55555555-5555-4555-8555-555555555555",
+        ],
+        "user/user-1",
+    )
+    assert [context.context_role for context in contexts] == [
+        "wiki_root",
+        "wiki_neighbor",
+    ]
+    assert [context.reference for context in contexts] == ["P1", "P2"]
+    assert contexts[0].source_updated_at == "2026-08-09T10:00:00+00:00"
+    assert "사용자의 기존 관심 맥락" in contexts[0].content
 
 
 def test_enqueue_bundle_retry_returns_snapshot_without_revalidating_interest() -> None:

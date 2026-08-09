@@ -30,6 +30,40 @@ class InterestBundleRepository(Protocol):
         """관심 근거 문서의 1홉 Wiki 이웃을 연결 강도 순으로 조회한다."""
         ...
 
+    async def list_node_snapshots(
+        self,
+        user_id: str,
+        *,
+        document_ids: Sequence[str],
+    ) -> Sequence[Mapping[str, object]]:
+        """관심 근거 문서의 현재 Version과 요약을 입력 순서대로 조회한다."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class InterestBundleNode:
+    """Job 접수 시점에 고정한 개인 Wiki 노드 Version."""
+
+    document_id: str
+    document_version_id: str
+    keyword: str
+    document_kind: str
+    summary: str
+    aliases: tuple[str, ...]
+    updated_at: str | None
+
+    def to_payload(self) -> dict[str, object]:
+        """비동기 Job에 저장할 JSON 호환 노드 Snapshot으로 변환한다."""
+        return {
+            "document_id": self.document_id,
+            "document_version_id": self.document_version_id,
+            "keyword": self.keyword,
+            "document_kind": self.document_kind,
+            "summary": self.summary,
+            "aliases": list(self.aliases),
+            "updated_at": self.updated_at,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class InterestBundleNeighbor:
@@ -42,6 +76,10 @@ class InterestBundleNeighbor:
     relation_types: tuple[str, ...]
     shared_source_count: int
     degree: float
+    document_version_id: str = ""
+    summary: str = ""
+    aliases: tuple[str, ...] = ()
+    updated_at: str | None = None
 
     def to_payload(self) -> dict[str, object]:
         """비동기 Job에 저장할 JSON 호환 Payload로 변환한다."""
@@ -53,6 +91,10 @@ class InterestBundleNeighbor:
             "relation_types": list(self.relation_types),
             "shared_source_count": self.shared_source_count,
             "degree": self.degree,
+            "document_version_id": self.document_version_id,
+            "summary": self.summary,
+            "aliases": list(self.aliases),
+            "updated_at": self.updated_at,
         }
 
 
@@ -66,6 +108,7 @@ class InterestReportBundle:
     root_keyword: str
     root_score: float
     root_document_ids: tuple[str, ...]
+    root_documents: tuple[InterestBundleNode, ...]
     neighbors: tuple[InterestBundleNeighbor, ...]
 
     @property
@@ -83,6 +126,7 @@ class InterestReportBundle:
                 "keyword": self.root_keyword,
                 "score": self.root_score,
                 "document_ids": list(self.root_document_ids),
+                "documents": [document.to_payload() for document in self.root_documents],
             },
             "neighbors": [neighbor.to_payload() for neighbor in self.neighbors],
             "keywords": list(self.keywords),
@@ -137,6 +181,32 @@ async def int_012(
             if str(document_id).strip()
         )
     )
+    root_rows = (
+        await repository.list_node_snapshots(
+            normalized_user_id,
+            document_ids=document_ids,
+        )
+        if document_ids
+        else ()
+    )
+    root_documents = tuple(
+        InterestBundleNode(
+            document_id=str(item.get("document_id") or ""),
+            document_version_id=str(item.get("document_version_id") or ""),
+            keyword=str(item.get("keyword") or "").strip(),
+            document_kind=str(item.get("document_kind") or ""),
+            summary=str(item.get("summary") or "").strip(),
+            aliases=tuple(str(value) for value in item.get("aliases") or ()),
+            updated_at=(
+                str(item["updated_at"])
+                if item.get("updated_at") is not None
+                else None
+            ),
+        )
+        for item in root_rows
+        if str(item.get("document_id") or "").strip()
+        and str(item.get("document_version_id") or "").strip()
+    )
     related = (
         await repository.list_related_nodes(
             normalized_user_id,
@@ -155,6 +225,14 @@ async def int_012(
             relation_types=tuple(str(value) for value in item.get("relation_types") or ()),
             shared_source_count=int(item.get("shared_source_count") or 0),
             degree=float(item.get("degree") or 0.0),
+            document_version_id=str(item.get("document_version_id") or ""),
+            summary=str(item.get("summary") or "").strip(),
+            aliases=tuple(str(value) for value in item.get("aliases") or ()),
+            updated_at=(
+                str(item["updated_at"])
+                if item.get("updated_at") is not None
+                else None
+            ),
         )
         for item in related
         if str(item.get("document_id") or "").strip()
@@ -167,5 +245,6 @@ async def int_012(
         root_keyword=root_keyword,
         root_score=float(active.get("score") or 0.0),
         root_document_ids=document_ids,
+        root_documents=root_documents,
         neighbors=neighbors,
     )

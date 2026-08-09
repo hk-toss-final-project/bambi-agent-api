@@ -55,6 +55,42 @@ def test_repository_loads_only_active_unblocked_interest() -> None:
     assert params == ("user-1", "interest-1")
 
 
+def test_repository_snapshots_current_root_versions_in_input_order() -> None:
+    """루트 Wiki는 현재 Version·요약·별칭·갱신 시각을 입력 순서대로 조회한다."""
+    connection = _Connection(
+        [
+            [
+                {
+                    "document_id": "root-1",
+                    "document_version_id": "version-1",
+                    "keyword": "코스피",
+                    "summary": "대표 지수",
+                    "aliases": ["KOSPI"],
+                }
+            ]
+        ]
+    )
+    repository = ConnectionInterestBundleRepository(connection)  # type: ignore[arg-type]
+
+    rows = asyncio.run(
+        repository.list_node_snapshots(
+            "user-1", document_ids=["root-2", "root-1"]
+        )
+    )
+
+    query, params = connection.executed[0]
+    assert rows[0]["document_version_id"] == "version-1"
+    assert "version.version = document.current_version" in query
+    assert "version.source_metadata -> 'aliases'" in query
+    assert "document.updated_at" in query
+    assert "ORDER BY array_position(%s::uuid[], document.id)" in query
+    assert params == (
+        ["root-2", "root-1"],
+        "user/user-1",
+        ["root-2", "root-1"],
+    )
+
+
 def test_repository_orders_one_hop_neighbors_by_evidence_strength() -> None:
     """1홉·조직 제외·공동 원문·degree 정렬과 상한을 조회에 반영한다."""
     connection = _Connection(
@@ -99,6 +135,9 @@ def test_repository_orders_one_hop_neighbors_by_evidence_strength() -> None:
     assert "GROUP BY active_peer.id" in query
     assert "shared_source_count DESC" in query
     assert "degree DESC" in query
+    assert "peer_version.id::text AS document_version_id" in query
+    assert "peer_version.source_metadata -> 'aliases'" in query
+    assert "peer.updated_at" in query
     assert params == (
         ["root-1"],
         "user/user-1",

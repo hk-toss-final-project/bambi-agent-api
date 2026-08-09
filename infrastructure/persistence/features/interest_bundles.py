@@ -68,6 +68,50 @@ class ConnectionInterestBundleRepository:
         row = await cursor.fetchone()
         return dict(row) if row is not None else None
 
+    async def list_node_snapshots(
+        self,
+        user_id: str,
+        *,
+        document_ids: Sequence[str],
+    ) -> Sequence[Mapping[str, object]]:
+        """관심 근거 노드의 현재 Version·요약·별칭을 입력 순서대로 조회한다."""
+        if not document_ids:
+            return []
+        namespace_key = f"user/{user_id}"
+        cursor = await self._connection.execute(
+            """
+            SELECT
+                document.id::text AS document_id,
+                version.id::text AS document_version_id,
+                version.title AS keyword,
+                document.document_kind,
+                COALESCE(version.summary, '') AS summary,
+                CASE
+                    WHEN jsonb_typeof(version.source_metadata -> 'aliases') = 'array'
+                    THEN ARRAY(
+                        SELECT jsonb_array_elements_text(
+                            version.source_metadata -> 'aliases'
+                        )
+                    )
+                    ELSE ARRAY[]::text[]
+                END AS aliases,
+                document.updated_at
+            FROM agent.wiki_documents AS document
+            JOIN agent.wiki_document_versions AS version
+              ON version.document_id = document.id
+             AND version.namespace_key = document.namespace_key
+             AND version.version = document.current_version
+            WHERE document.id = ANY(%s::uuid[])
+              AND document.namespace_key = %s
+              AND document.document_kind IN ('entity', 'concept')
+              AND document.status = 'active'
+              AND document.deleted_at IS NULL
+            ORDER BY array_position(%s::uuid[], document.id)
+            """,
+            (list(document_ids), namespace_key, list(document_ids)),
+        )
+        return [dict(row) for row in await cursor.fetchall()]
+
     async def list_related_nodes(
         self,
         user_id: str,
@@ -142,8 +186,22 @@ class ConnectionInterestBundleRepository:
             )
             SELECT
                 peer.id::text AS document_id,
+                peer_version.id::text AS document_version_id,
                 peer_version.title AS keyword,
                 peer.document_kind,
+                COALESCE(peer_version.summary, '') AS summary,
+                CASE
+                    WHEN jsonb_typeof(
+                        peer_version.source_metadata -> 'aliases'
+                    ) = 'array'
+                    THEN ARRAY(
+                        SELECT jsonb_array_elements_text(
+                            peer_version.source_metadata -> 'aliases'
+                        )
+                    )
+                    ELSE ARRAY[]::text[]
+                END AS aliases,
+                peer.updated_at,
                 neighbor_scores.weight,
                 neighbor_relation_types.relation_types,
                 COALESCE(shared_sources.count, 0)::integer AS shared_source_count,

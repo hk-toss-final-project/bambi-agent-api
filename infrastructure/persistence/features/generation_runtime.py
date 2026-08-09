@@ -6,6 +6,7 @@ Wiki와 Global 문서를 검색해 만든 콘텐츠·Citation·Publish Snapshot�
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Sequence
@@ -18,6 +19,7 @@ from domain.interests.api import int_012
 from infrastructure.persistence.features.interest_bundles import (
     ConnectionInterestBundleRepository,
 )
+from infrastructure.persistence.features.personal_wiki import set_personal_wiki_scope
 from shared.report_models import ReportContextDocument, GeneratedReportContent
 
 type DictRow = dict[str, Any]
@@ -71,6 +73,148 @@ class PersistedGenerationSubmission:
 
     job_id: str
     generation_request_id: str
+
+
+def _pinned_wiki_snapshots(
+    interest_bundle: Mapping[str, object] | None,
+    *,
+    root_limit: int = 2,
+) -> list[tuple[str, Mapping[str, object]]]:
+    """관심사 Bundle에서 루트 우선 Wiki Version Snapshot을 선택한다."""
+    if not interest_bundle:
+        return []
+    root = interest_bundle.get("root")
+    root_documents = root.get("documents") if isinstance(root, Mapping) else None
+    selected: list[tuple[str, Mapping[str, object]]] = []
+    seen_versions: set[str] = set()
+    for raw in list(root_documents or [])[:root_limit]:
+        if not isinstance(raw, Mapping):
+            continue
+        version_id = str(raw.get("document_version_id") or "").strip()
+        if not version_id or version_id in seen_versions:
+            continue
+        seen_versions.add(version_id)
+        selected.append(("wiki_root", raw))
+    for neighbor in interest_bundle.get("neighbors") or []:
+        if not isinstance(neighbor, Mapping):
+            continue
+        version_id = str(neighbor.get("document_version_id") or "").strip()
+        if not version_id or version_id in seen_versions:
+            continue
+        seen_versions.add(version_id)
+        selected.append(("wiki_neighbor", neighbor))
+    return selected
+
+
+async def load_pinned_wiki_context(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    interest_bundle: Mapping[str, object] | None,
+    root_limit: int = 2,
+) -> list[ReportContextDocument]:
+    """Job에 고정된 Wiki Version을 점수와 무관하게 생성 Context로 조회한다.
+
+    루트는 최대 두 Version, 이웃은 선택된 노드마다 한 Version을 읽는다. 각
+    Version의 canonical summary에 Description·Definition Chunk 하나를 보강해,
+    제목 재검색이 실패해도 사용자의 기존 지식이 생성기에 전달되게 한다.
+
+    Args:
+        connection: 개인 Wiki RLS Scope가 설정될 PostgreSQL 연결
+        user_id: 조회 대상 사용자 ID
+        interest_bundle: 접수 시 고정한 관심사 Bundle Payload
+        root_limit: 포함할 최대 루트 Version 수
+
+    Returns:
+        루트 우선으로 정렬되고 P 참조가 붙은 Wiki Context 목록
+    """
+    if root_limit < 1:
+        raise ValueError("고정 Wiki 루트 상한은 1 이상이어야 합니다.")
+    snapshots = _pinned_wiki_snapshots(interest_bundle, root_limit=root_limit)
+    if not snapshots:
+        return []
+    version_ids = [
+        str(snapshot.get("document_version_id")) for _role, snapshot in snapshots
+    ]
+    async with connection.transaction():
+        await set_personal_wiki_scope(connection, user_id=user_id)
+        cursor = await connection.execute(
+            """
+            WITH requested AS (
+                SELECT version_id, position
+                FROM unnest(%s::uuid[]) WITH ORDINALITY
+                    AS item(version_id, position)
+            )
+            SELECT
+                version.id::text AS document_version_id,
+                version.title,
+                COALESCE(version.summary, '') AS summary,
+                chunk.id::text AS chunk_id,
+                COALESCE(chunk.content, '') AS content
+            FROM requested
+            JOIN agent.wiki_document_versions AS version
+              ON version.id = requested.version_id
+             AND version.namespace_key = %s
+            JOIN agent.wiki_documents AS document
+              ON document.id = version.document_id
+             AND document.namespace_key = version.namespace_key
+            LEFT JOIN LATERAL (
+                SELECT candidate.id, candidate.content
+                FROM agent.wiki_chunks AS candidate
+                WHERE candidate.document_version_id = version.id
+                  AND candidate.namespace_key = version.namespace_key
+                  AND candidate.is_searchable
+                ORDER BY
+                    CASE
+                        WHEN candidate.content LIKE '## Description%%' THEN 0
+                        WHEN candidate.content LIKE '## Definition%%' THEN 0
+                        ELSE 1
+                    END,
+                    candidate.chunk_index
+                LIMIT 1
+            ) AS chunk ON true
+            WHERE document.document_kind IN ('entity', 'concept')
+              AND document.deleted_at IS NULL
+            ORDER BY requested.position
+            """,
+            (version_ids, f"user/{user_id}"),
+        )
+        rows = await cursor.fetchall()
+    snapshot_by_version = {
+        str(snapshot.get("document_version_id")): (role, snapshot)
+        for role, snapshot in snapshots
+    }
+    contexts: list[ReportContextDocument] = []
+    for row in rows:
+        version_id = str(row["document_version_id"])
+        role, snapshot = snapshot_by_version[version_id]
+        summary = str(row.get("summary") or snapshot.get("summary") or "").strip()
+        chunk = str(row.get("content") or "").strip()
+        parts = [f"요약: {summary}" if summary else ""]
+        if chunk and chunk not in summary:
+            parts.append(chunk)
+        content = "\n\n".join(part for part in parts if part)
+        if not content:
+            continue
+        contexts.append(
+            ReportContextDocument(
+                reference=f"P{len(contexts) + 1}",
+                document_version_id=version_id,
+                chunk_id=str(row.get("chunk_id") or ""),
+                namespace_key=f"user/{user_id}",
+                title=str(row.get("title") or snapshot.get("keyword") or ""),
+                content=content,
+                url=None,
+                score=1.0 if role == "wiki_root" else 0.95,
+                context_role=role,
+                source_updated_at=(
+                    str(snapshot["updated_at"])
+                    if snapshot.get("updated_at") is not None
+                    else None
+                ),
+            )
+        )
+    return contexts
 
 
 async def upsert_user_context_snapshot(

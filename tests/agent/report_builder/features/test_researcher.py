@@ -151,6 +151,31 @@ def test_merge_context_documents_renumbers_references_and_deduplicates() -> None
     ]
 
 
+def test_merge_keeps_distinct_personal_wiki_versions_with_same_source_url() -> None:
+    """같은 클리핑에서 파생된 서로 다른 Wiki 노드는 Version ID로 구분한다."""
+    merged = merge_context_documents(
+        [
+            _document(
+                "P1",
+                title="폭염",
+                namespace="user/user-1",
+                url="https://example.com/weather",
+            )
+        ],
+        [
+            _document(
+                "P2",
+                title="태풍 돌핀",
+                namespace="user/user-1",
+                url="https://example.com/weather",
+            )
+        ],
+    )
+
+    assert [document.title for document in merged] == ["폭염", "태풍 돌핀"]
+    assert [document.reference for document in merged] == ["P1", "P2"]
+
+
 def test_collector_renumbers_references_across_searches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
