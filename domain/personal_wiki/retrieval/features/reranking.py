@@ -26,7 +26,8 @@ async def prag_004(
     """[PRAG-004] 검색 결과 Reranking.
 
     Keyword·Vector 순위에 Reciprocal Rank Fusion을 적용해 개인 Wiki 후보를
-    재정렬한다. 원래 검색 점수는 하류 품질 하한에 쓰이므로 최댓값을 보존한다.
+    재정렬한다. 두 검색기가 각각 P1부터 붙인 참조는 최종 순서대로 다시 매긴다.
+    원래 검색 점수는 하류 품질 하한에 쓰이므로 최댓값을 보존한다.
     """
     if not 1 <= top_k <= 20:
         raise ValueError("PRAG-004 top_k는 1에서 20 사이여야 합니다.")
@@ -56,7 +57,12 @@ async def prag_004(
             key,
         ),
     )
+    selected_keys = ordered_keys[:top_k]
     return [
-        replace(documents[key], score=original_scores[key])
-        for key in ordered_keys[:top_k]
+        replace(
+            documents[key],
+            reference=f"P{rank}",
+            score=original_scores[key],
+        )
+        for rank, key in enumerate(selected_keys, start=1)
     ]

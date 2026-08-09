@@ -1,10 +1,32 @@
 """개인 Wiki Hybrid 검색의 RRF 결합과 Keyword 폴백을 검증한다."""
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from domain.personal_wiki.retrieval.features import hybrid
 from shared.report_models import ReportContextDocument
+
+
+class _Connection:
+    """Vector 실패 시 Savepoint Rollback을 재현하는 연결 대역."""
+
+    def __init__(self) -> None:
+        """오류 상태와 중첩 Transaction 횟수를 초기화한다."""
+        self.aborted = False
+        self.transactions = 0
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[None]:
+        """예외가 나면 진입 전 오류 상태로 되돌리는 Savepoint를 제공한다."""
+        previous = self.aborted
+        self.transactions += 1
+        try:
+            yield
+        except Exception:
+            self.aborted = previous
+            raise
 
 
 def _document(
@@ -46,9 +68,10 @@ def test_prag_003_fuses_personal_rankings_and_preserves_global_results(
     monkeypatch.setattr(hybrid, "prag_001", fake_keyword)
     monkeypatch.setattr(hybrid, "prag_002", fake_vector)
 
+    connection = _Connection()
     result = asyncio.run(
         hybrid.prag_003(
-            object(),  # type: ignore[arg-type]
+            connection,  # type: ignore[arg-type]
             user_id="user-1",
             query="날씨",
             top_k_per_scope=3,
@@ -57,12 +80,19 @@ def test_prag_003_fuses_personal_rankings_and_preserves_global_results(
     )
 
     assert [document.title for document in result] == ["B", "A", "C", "news"]
+    assert [document.reference for document in result] == [
+        "P1",
+        "P2",
+        "P3",
+        "G-news",
+    ]
     assert len(captured["query_embedding"]) == 1536
     assert captured["model_name"] == "text-embedding-3-small"
+    assert connection.transactions == 1
 
 
 def test_prag_003_falls_back_to_keyword_when_vector_query_fails(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Vector 저장소 장애는 리포트 검색 전체를 실패시키지 않는다."""
+    """Vector DB 장애를 Savepoint로 복구해 Keyword 검색을 계속 사용한다."""
 
     async def fake_keyword(*args, **kwargs):  # type: ignore[no-untyped-def]
         """Keyword 개인·Global 결과를 반환한다."""
@@ -71,16 +101,18 @@ def test_prag_003_falls_back_to_keyword_when_vector_query_fails(monkeypatch) -> 
             _document("news", namespace="global", score=1.1),
         ]
 
-    async def fail_vector(*args, **kwargs):  # type: ignore[no-untyped-def]
+    async def fail_vector(connection, *args, **kwargs):  # type: ignore[no-untyped-def]
         """pgvector 조회 장애를 재현한다."""
+        connection.aborted = True
         raise RuntimeError("vector unavailable")
 
     monkeypatch.setattr(hybrid, "prag_001", fake_keyword)
     monkeypatch.setattr(hybrid, "prag_002", fail_vector)
 
+    connection = _Connection()
     result = asyncio.run(
         hybrid.prag_003(
-            object(),  # type: ignore[arg-type]
+            connection,  # type: ignore[arg-type]
             user_id="user-1",
             query="날씨",
             query_embedding=[0.1] * 1536,
@@ -88,3 +120,5 @@ def test_prag_003_falls_back_to_keyword_when_vector_query_fails(monkeypatch) -> 
     )
 
     assert [document.title for document in result] == ["A", "news"]
+    assert not connection.aborted
+    assert connection.transactions == 1

@@ -48,13 +48,17 @@ async def prag_003(
     vector: list[ReportContextDocument] = []
     if query_embedding is not None:
         try:
-            vector = await prag_002(
-                connection,
-                user_id=user_id,
-                query_embedding=query_embedding,
-                top_k=top_k_per_scope,
-                model_name=embedding_model,
-            )
+            # Vector SQL 자체가 실패하면 PostgreSQL은 현재 Transaction을 aborted로
+            # 만든다. Savepoint 안에서 실행해야 예외를 잡은 뒤 Keyword 결과와
+            # Global freshness 조회를 같은 외부 Transaction에서 계속 사용할 수 있다.
+            async with connection.transaction():
+                vector = await prag_002(
+                    connection,
+                    user_id=user_id,
+                    query_embedding=query_embedding,
+                    top_k=top_k_per_scope,
+                    model_name=embedding_model,
+                )
         except Exception as error:  # noqa: BLE001 - Vector 장애는 Keyword로 격리한다.
             logger.warning(
                 "개인 Wiki Vector 검색 실패, Keyword 결과로 폴백합니다: %s", error

@@ -1,6 +1,7 @@
 """개인 Wiki Keyword·Vector RRF 재정렬을 검증한다."""
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -30,8 +31,30 @@ def test_prag_004_prioritizes_candidate_found_by_both_rankings() -> None:
     result = asyncio.run(prag_004(keyword, vector, top_k=3))
 
     assert [document.title for document in result] == ["B", "A", "C"]
+    assert [document.reference for document in result] == ["P1", "P2", "P3"]
     assert result[0].score == 0.9
     assert len({document.chunk_id for document in result}) == 3
+
+
+def test_prag_004_renumbers_colliding_source_references() -> None:
+    """각 검색기가 P1부터 매긴 참조가 RRF 결과에서 충돌하지 않게 다시 번호를 붙인다."""
+    keyword = [
+        _document("A", score=0.7),
+        _document("B", score=0.6),
+    ]
+    vector = [
+        _document("C", score=0.9),
+        _document("D", score=0.8),
+    ]
+    keyword[0] = replace(keyword[0], reference="P1")
+    keyword[1] = replace(keyword[1], reference="P2")
+    vector[0] = replace(vector[0], reference="P1")
+    vector[1] = replace(vector[1], reference="P2")
+
+    result = asyncio.run(prag_004(keyword, vector, top_k=4))
+
+    assert len({document.reference for document in result}) == 4
+    assert [document.reference for document in result] == ["P1", "P2", "P3", "P4"]
 
 
 def test_prag_004_validates_cost_bounds() -> None:
