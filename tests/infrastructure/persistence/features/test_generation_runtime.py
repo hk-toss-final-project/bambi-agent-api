@@ -273,6 +273,30 @@ def test_enqueue_snapshots_active_interest_bundle() -> None:
                     "updated_at": "2026-08-08T10:00:00+00:00",
                     "weight": 1.0,
                     "relation_types": ["applies_concept"],
+                    "relations": [
+                        {
+                            "relation_id": "88888888-8888-4888-8888-888888888888",
+                            "root_document_id": "11111111-1111-4111-8111-111111111111",
+                            "direction": "root_to_neighbor",
+                            "relation_type": "applies_concept",
+                            "confidence": 0.96,
+                            "provenance_kind": "source_explicit",
+                            "review_status": "accepted",
+                            "rationale": "에이전트는 생성형 AI를 적용한다.",
+                            "supports": [
+                                {
+                                    "source_document_version_id": (
+                                        "99999999-9999-4999-8999-999999999999"
+                                    ),
+                                    "provenance_kind": "source_explicit",
+                                    "confidence": 0.96,
+                                    "review_status": "accepted",
+                                    "evidence": "생성형 AI 기반 에이전트",
+                                    "rationale": "원문 명시",
+                                }
+                            ],
+                        }
+                    ],
                     "shared_source_count": 2,
                     "degree": 3.0,
                 }
@@ -314,6 +338,16 @@ def test_enqueue_snapshots_active_interest_bundle() -> None:
     assert (
         payload["interest_bundle"]["neighbors"][0]["document_version_id"]
         == "55555555-5555-4555-8555-555555555555"
+    )
+    assert (
+        payload["interest_bundle"]["neighbors"][0]["relations"][0]["direction"]
+        == "root_to_neighbor"
+    )
+    assert (
+        payload["interest_bundle"]["neighbors"][0]["relations"][0]["supports"][
+            0
+        ]["evidence"]
+        == "생성형 AI 기반 에이전트"
     )
     _, request_params = connection.executed[6]
     assert request_params is not None

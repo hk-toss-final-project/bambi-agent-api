@@ -142,7 +142,15 @@ class ConnectionInterestBundleRepository:
                 SELECT
                     origin.id AS origin_id,
                     peer.id AS peer_id,
+                    relation.id AS relation_id,
+                    relation.source_document_id,
+                    relation.target_document_id,
                     relation.relation_type,
+                    relation.confidence::float8 AS confidence,
+                    relation.provenance_kind,
+                    relation.review_status,
+                    COALESCE(relation.metadata ->> 'rationale', '') AS rationale,
+                    active_supports.items AS supports,
                     {_RELATION_WEIGHT_SQL} AS weight
                 FROM agent.wiki_document_relations AS relation
                 JOIN origin
@@ -157,6 +165,48 @@ class ConnectionInterestBundleRepository:
                          ELSE relation.source_document_id
                      END
                  AND peer.namespace_key = relation.namespace_key
+                JOIN LATERAL (
+                    SELECT jsonb_agg(
+                        jsonb_build_object(
+                            'source_document_version_id',
+                                support.source_document_version_id::text,
+                            'provenance_kind', support.provenance_kind,
+                            'confidence', support.confidence::float8,
+                            'review_status', support.review_status,
+                            'evidence', COALESCE(support.evidence, ''),
+                            'rationale', COALESCE(
+                                support.metadata ->> 'rationale',
+                                relation.metadata ->> 'rationale',
+                                ''
+                            )
+                        )
+                        ORDER BY
+                            CASE support.review_status
+                                WHEN 'accepted' THEN 0
+                                ELSE 1
+                            END,
+                            support.confidence DESC,
+                            support.updated_at DESC,
+                            support.id
+                    ) AS items
+                    FROM (
+                        SELECT candidate.*
+                        FROM agent.wiki_relation_supports AS candidate
+                        WHERE candidate.relation_id = relation.id
+                          AND candidate.namespace_key = relation.namespace_key
+                          AND candidate.status = 'active'
+                          AND candidate.review_status <> 'rejected'
+                        ORDER BY
+                            CASE candidate.review_status
+                                WHEN 'accepted' THEN 0
+                                ELSE 1
+                            END,
+                            candidate.confidence DESC,
+                            candidate.updated_at DESC,
+                            candidate.id
+                        LIMIT 3
+                    ) AS support
+                ) AS active_supports ON active_supports.items IS NOT NULL
                 WHERE relation.namespace_key = %s
                   AND relation.status = 'active'
                   AND relation.review_status <> 'rejected'
@@ -183,6 +233,30 @@ class ConnectionInterestBundleRepository:
                         AS relation_types
                 FROM raw_neighbor_relations
                 GROUP BY peer_id
+            ),
+            neighbor_relation_details AS (
+                SELECT
+                    peer_id,
+                    jsonb_agg(
+                        jsonb_build_object(
+                            'relation_id', relation_id::text,
+                            'root_document_id', origin_id::text,
+                            'direction', CASE
+                                WHEN source_document_id = origin_id
+                                THEN 'root_to_neighbor'
+                                ELSE 'neighbor_to_root'
+                            END,
+                            'relation_type', relation_type,
+                            'confidence', confidence,
+                            'provenance_kind', provenance_kind,
+                            'review_status', review_status,
+                            'rationale', rationale,
+                            'supports', supports
+                        )
+                        ORDER BY origin_id::text, relation_type, relation_id::text
+                    ) AS relations
+                FROM raw_neighbor_relations
+                GROUP BY peer_id
             )
             SELECT
                 peer.id::text AS document_id,
@@ -204,6 +278,7 @@ class ConnectionInterestBundleRepository:
                 peer.updated_at,
                 neighbor_scores.weight,
                 neighbor_relation_types.relation_types,
+                neighbor_relation_details.relations,
                 COALESCE(shared_sources.count, 0)::integer AS shared_source_count,
                 COALESCE(peer_relations.degree, 0)::float8 AS degree
             FROM neighbor_scores
@@ -216,6 +291,8 @@ class ConnectionInterestBundleRepository:
              AND peer_version.version = peer.current_version
             JOIN neighbor_relation_types
               ON neighbor_relation_types.peer_id = peer.id
+            JOIN neighbor_relation_details
+              ON neighbor_relation_details.peer_id = peer.id
             LEFT JOIN LATERAL (
                 SELECT COUNT(DISTINCT peer_source.source_document_version_id) AS count
                 FROM agent.wiki_document_sources AS origin_source

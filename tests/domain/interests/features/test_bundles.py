@@ -90,6 +90,28 @@ def test_int_012_builds_versioned_bundle_from_evidence_documents() -> None:
                 "updated_at": "2026-08-08T10:00:00+00:00",
                 "weight": 1.0,
                 "relation_types": ["entity_relation"],
+                "relations": [
+                    {
+                        "relation_id": "relation-1",
+                        "root_document_id": "doc-root",
+                        "direction": "root_to_neighbor",
+                        "relation_type": "entity_relation",
+                        "confidence": 0.94,
+                        "provenance_kind": "source_explicit",
+                        "review_status": "accepted",
+                        "rationale": "두 시장을 함께 비교한다.",
+                        "supports": [
+                            {
+                                "source_document_version_id": "source-version-1",
+                                "provenance_kind": "source_explicit",
+                                "confidence": 0.94,
+                                "review_status": "accepted",
+                                "evidence": "코스피와 코스닥이 동반 하락했다.",
+                                "rationale": "같은 시장 흐름의 근거",
+                            }
+                        ],
+                    }
+                ],
                 "shared_source_count": 2,
                 "degree": 3.0,
             }
@@ -107,12 +129,42 @@ def test_int_012_builds_versioned_bundle_from_evidence_documents() -> None:
     assert bundle.root_documents[0].document_version_id == "version-root"
     assert bundle.root_documents[0].aliases == ("KOSPI",)
     assert bundle.neighbors[0].document_version_id == "version-neighbor"
+    assert bundle.neighbors[0].relations[0].direction == "root_to_neighbor"
+    assert bundle.neighbors[0].relations[0].supports[0].evidence.startswith("코스피")
     assert bundle.keywords == ("코스피", "코스닥시장")
     assert repository.snapshot_call == ("user-1", ("doc-root",))
     assert repository.related_call == ("user-1", ("doc-root",), 2)
     payload = bundle.to_payload()
     assert payload["keywords"] == ["코스피", "코스닥시장"]
     assert payload["root"]["documents"][0]["document_version_id"] == "version-root"
+    assert payload["neighbors"][0]["relations"][0]["confidence"] == 0.94
+
+
+def test_int_012_drops_relation_without_active_support_payload() -> None:
+    """근거가 없는 관계는 저장소가 잘못 반환해도 Bundle Context에서 제외한다."""
+    repository = _Repository(
+        active=_active_interest(),
+        related=[
+            {
+                "document_id": "doc-neighbor",
+                "keyword": "코스닥시장",
+                "document_kind": "entity",
+                "relation_types": ["associated_with"],
+                "relations": [
+                    {
+                        "relation_id": "unsupported",
+                        "direction": "root_to_neighbor",
+                        "relation_type": "associated_with",
+                        "supports": [],
+                    }
+                ],
+            }
+        ],
+    )
+
+    bundle = asyncio.run(int_012(repository, "user-1", interest_id="interest-1"))
+
+    assert bundle.neighbors[0].relations == ()
 
 
 def test_int_012_rejects_interest_outside_active_profile() -> None:

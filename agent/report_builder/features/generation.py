@@ -26,6 +26,7 @@ _SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8").strip()
 # 실제 근거 참조 체계의 전부이며, 프롬프트의 인용 지시와 함께 유지해야 한다.
 _CITATION_REF = re.compile(r"\[([PGL]\d+)\]")
 _MAX_CONTEXT_CHARS = 16000
+_MAX_RELATION_TEXT_CHARS = 300
 
 
 # [REPORT-010] 콘텐츠 태그 제약. 검색·추천 UI가 카드에 노출하므로 개수와 길이를
@@ -111,6 +112,81 @@ def parse_report_generation(
     )
 
 
+def _context_kind(context: ReportContextDocument) -> str:
+    """생성기가 근거의 시간적·소유 Scope를 구분할 표시 이름을 반환한다."""
+    if context.namespace_key.startswith("user/"):
+        return "개인 Wiki 기존 지식"
+    if context.namespace_key == "global":
+        return "Global 저장 자료"
+    if context.namespace_key == "live-source":
+        return "실시간 외부 자료"
+    return "외부 검색 자료"
+
+
+def _short_prompt_text(value: object) -> str:
+    """관계 근거 문자열을 Prompt 예산 안에서 공백 정리·축약한다."""
+    normalized = " ".join(str(value or "").split())
+    if len(normalized) <= _MAX_RELATION_TEXT_CHARS:
+        return normalized
+    return normalized[: _MAX_RELATION_TEXT_CHARS - 1].rstrip() + "…"
+
+
+def _interest_relation_block(
+    interest_bundle: Mapping[str, object], *, root_keyword: str
+) -> str:
+    """관심사 Bundle의 검증 관계와 active support를 생성 지시로 직렬화한다."""
+    lines: list[str] = []
+    for raw_neighbor in interest_bundle.get("neighbors") or ():
+        if not isinstance(raw_neighbor, Mapping):
+            continue
+        neighbor_keyword = str(raw_neighbor.get("keyword") or "").strip()
+        if not neighbor_keyword:
+            continue
+        for raw_relation in raw_neighbor.get("relations") or ():
+            if not isinstance(raw_relation, Mapping):
+                continue
+            direction = str(raw_relation.get("direction") or "")
+            source, target = (
+                (neighbor_keyword, root_keyword)
+                if direction == "neighbor_to_root"
+                else (root_keyword, neighbor_keyword)
+            )
+            relation_type = str(raw_relation.get("relation_type") or "unknown")
+            confidence = float(raw_relation.get("confidence") or 0.0)
+            provenance = str(raw_relation.get("provenance_kind") or "unknown")
+            review = str(raw_relation.get("review_status") or "unknown")
+            lines.append(
+                f"- {source} → {target} | type={relation_type} | "
+                f"confidence={confidence:.3f} | provenance={provenance} | "
+                f"review={review}"
+            )
+            rationale = _short_prompt_text(raw_relation.get("rationale"))
+            if rationale:
+                lines.append(f"  관계 판단 이유: {rationale}")
+            for raw_support in raw_relation.get("supports") or ():
+                if not isinstance(raw_support, Mapping):
+                    continue
+                evidence = _short_prompt_text(raw_support.get("evidence"))
+                support_rationale = _short_prompt_text(raw_support.get("rationale"))
+                source_version = str(
+                    raw_support.get("source_document_version_id") or ""
+                ).strip()
+                detail = evidence or support_rationale
+                if detail:
+                    lines.append(
+                        f"  active support({source_version or 'unknown'}): {detail}"
+                    )
+    if not lines:
+        return ""
+    return (
+        "\n[검증된 개인 Wiki 관계]\n"
+        + "\n".join(lines)
+        + "\n관계 해석 규칙: associated_with·related_concept는 인과관계로 "
+        "확대하지 마세요. 관계 Metadata는 관점 선택에 쓰고, 본문의 사실은 반드시 "
+        "아래 [P/G/L] 근거를 인용하세요.\n"
+    )
+
+
 def generate_report_content(
     *,
     topic: str,
@@ -137,8 +213,15 @@ def generate_report_content(
     current_size = 0
     included_references: list[str] = []
     for context in contexts:
+        updated_at = (
+            f"\n지식 기준 시각: {context.source_updated_at}"
+            if context.source_updated_at
+            else ""
+        )
         block = (
             f"[{context.reference}] {context.title}\n"
+            f"근거 종류: {_context_kind(context)}"
+            f" (role={context.context_role}){updated_at}\n"
             f"URL: {context.url or '(개인 Wiki)'}\n"
             f"내용:\n{context.content.strip()}"
         )
@@ -167,12 +250,19 @@ def generate_report_content(
             if isinstance(item, Mapping) and str(item.get("keyword") or "").strip()
         ]
         perspectives = ", ".join(neighbors) if neighbors else "없음"
+        relation_block = _interest_relation_block(
+            interest_bundle, root_keyword=root_keyword
+        )
         topic_block = (
             f"주제: {root_keyword}\n"
             f"연결 관점: {perspectives}\n"
             "작성 방식: 루트 관심사를 중심으로 하나의 통합 리포트를 쓰고, "
             "연결 관점은 근거가 있을 때 설명을 넓히는 데만 사용한다. "
             "연결 키워드별 독립 리포트나 나열식 섹션으로 만들지 않는다.\n"
+            "개인 Wiki는 사용자가 이전에 저장한 기존 지식입니다. 현재 변화나 최신 "
+            "사실은 Global·실시간 외부 근거로 확인하고, 외부 근거가 없으면 최신인 "
+            "것처럼 단정하지 마세요.\n"
+            + relation_block
         )
     elif len(covered) > 1:
         topic_block = (

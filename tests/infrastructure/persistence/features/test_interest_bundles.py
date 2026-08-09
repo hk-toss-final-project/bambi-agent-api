@@ -125,6 +125,13 @@ def test_repository_orders_one_hop_neighbors_by_evidence_strength() -> None:
     assert "WHEN 'associated_with' THEN 0.5" in query
     assert "relation.status = 'active'" in query
     assert "relation.review_status <> 'rejected'" in query
+    assert "candidate.status = 'active'" in query
+    assert "candidate.review_status <> 'rejected'" in query
+    assert "active_supports.items IS NOT NULL" in query
+    assert "'direction', CASE" in query
+    assert "'source_document_version_id'" in query
+    assert "'evidence', COALESCE(support.evidence, '')" in query
+    assert "LIMIT 3" in query
     assert "peer_relation.status = 'active'" in query
     assert "raw_neighbor_relations AS" in query
     assert "neighbor_pairs AS" in query
