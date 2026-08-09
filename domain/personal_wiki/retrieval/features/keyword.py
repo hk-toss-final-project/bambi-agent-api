@@ -1,14 +1,32 @@
-"""기능 구현 모듈.
+"""개인 Wiki와 Global 저장 자료의 Keyword·Trigram 검색 기능."""
 
-PRAG-001 기능의 실제 구현 위치를 제공한다.
-"""
+from typing import Any
 
-from shared.contracts import FeatureRequest, FeatureResult
+from psycopg import AsyncConnection
+
+from infrastructure.persistence.api import load_report_context
+from shared.report_models import ReportContextDocument
 
 
-async def prag_001(request: FeatureRequest) -> FeatureResult:
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
+async def prag_001(
+    connection: AsyncConnection[dict[str, Any]],
+    *,
+    user_id: str,
+    query: str,
+    top_k_per_scope: int = 5,
+) -> list[ReportContextDocument]:
     """[PRAG-001] Keyword Search.
 
-    개인 Wiki에서 키워드 기반 검색을 수행한다.
+    개인 Wiki와 Global 저장 자료에서 FTS·Trigram 기반 후보를 조회한다.
     """
-    raise NotImplementedError("[PRAG-001] 기능 구현이 필요합니다.")
+    if not user_id.strip():
+        raise ValueError("PRAG-001에 user_id가 필요합니다.")
+    if not query.strip():
+        raise ValueError("PRAG-001에 검색어가 필요합니다.")
+    return await load_report_context(
+        connection,
+        user_id=user_id,
+        query=query,
+        top_k_per_scope=top_k_per_scope,
+    )

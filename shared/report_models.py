@@ -22,6 +22,10 @@ class ReportContextDocument:
     content: str
     url: str | None
     score: float
+    # 고정 Wiki 노드, 일반 검색, Global/Live 등 Context의 생성 역할.
+    context_role: str = "retrieved"
+    # 개인 Wiki 지식이 어느 시점 기준인지 생성기와 실행 추적에 전달한다.
+    source_updated_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

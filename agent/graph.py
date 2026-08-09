@@ -35,6 +35,7 @@ from agent.report_builder.api import (
     related_keyword_fetch_limit,
     GLOBAL_NAMESPACE,
     critic_enabled,
+    embed_wiki_queries,
     is_pool_relevant,
     is_pool_sufficient,
     merge_context_documents,
@@ -77,6 +78,7 @@ from infrastructure.persistence.api import (
     list_wiki_graph_relation_snapshot,
     list_wiki_node_embeddings,
     load_global_document_freshness,
+    load_pinned_wiki_context,
     set_personal_wiki_scope,
     sync_wiki_interest_collection_targets,
 )
@@ -941,23 +943,40 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
     async def load_context(state: ReportGenerationState) -> dict[str, Any]:
         """조사원이 모은 자료를 생성용 Context로 다듬는다.
 
-        조사원이 자료를 모았으면 그대로 쓰고, 비었으면 기존 고정 경로(개인 Wiki
-        조회 → 풀 판정 → 부족하면 실시간 수집)를 그대로 수행한다.
+        관심사 Bundle이면 Job 접수 시 고정한 Wiki Version을 먼저 읽어 생성
+        Context에 보장한다. 조사원이 자료를 모았으면 그 뒤에 합치고, 비었으면 기존
+        고정 경로(개인 Wiki 조회 → 풀 판정 → 부족하면 실시간 수집)를 수행한다.
         """
         topics = _report_topics(state)
         if len(topics) > 1:
             return await _load_multi_topic_contexts(state, topics)
+        pinned_wiki = (
+            await load_pinned_wiki_context(
+                connection,
+                user_id=state["user_id"],
+                interest_bundle=state.get("interest_bundle"),
+            )
+            if state.get("generation_scope") == "INTEREST_BUNDLE"
+            else []
+        )
         researched = list(state.get("research_documents") or [])
         if researched:
             logger.info(
-                "조사원 자료 사용: topic=%s %d건 (도구 호출 %d회)",
+                "조사원 자료 사용: topic=%s %d건, 고정 Wiki %d건 (도구 호출 %d회)",
                 state["topic"],
                 len(researched),
+                len(pinned_wiki),
                 len(state.get("research_calls") or []),
             )
-            return await _finalize_contexts(state, researched)
+            research_contexts = (
+                merge_context_documents(pinned_wiki, researched)
+                if pinned_wiki
+                else researched
+            )
+            return await _finalize_contexts(state, research_contexts)
         bundle_keywords = _interest_bundle_keywords(state)
         search_queries = bundle_keywords or [state["topic"]]
+        query_embeddings = await to_thread(embed_wiki_queries, search_queries)
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=state["user_id"])
             search_groups = [
@@ -965,13 +984,15 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                     connection,
                     user_id=state["user_id"],
                     query=query,
+                    query_embedding=query_embeddings.get(query),
                 )
                 for query in search_queries
             ]
+            groups = [pinned_wiki, *search_groups] if pinned_wiki else search_groups
             hybrid = (
-                merge_context_documents(*search_groups)
-                if len(search_groups) > 1
-                else list(search_groups[0])
+                merge_context_documents(*groups)
+                if len(groups) > 1
+                else list(groups[0])
             )
             # 풀 문서의 신선도는 같은 조회 Transaction에서 함께 읽는다 — Scope가
             # 이미 설정돼 있고, 왕복을 늘리지 않는다.
@@ -1115,10 +1136,14 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         )
         if researched:
             return researched
+        query_embeddings = await to_thread(embed_wiki_queries, [topic])
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=state["user_id"])
             hybrid = await prag_003(
-                connection, user_id=state["user_id"], query=topic
+                connection,
+                user_id=state["user_id"],
+                query=topic,
+                query_embedding=query_embeddings.get(topic),
             )
             pool_freshness = await load_global_document_freshness(
                 connection,

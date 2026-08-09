@@ -202,11 +202,11 @@ class AgentApiMvpService:
         payload: FeedbackSignalsRequest,
         request_id: str,
     ) -> FeedbackSignalsResponse:
-        """행동 신호 Batch를 이벤트로 저장한다 — Wiki 문서는 만들지 않는다.
+        """행동 신호 Batch를 저장하고 관심사 재계산을 시도한다.
 
         좋아요 같은 가벼운 선호는 Wiki 편입 대상이 아니라 관심사 신호다.
-        저장된 신호는 다음 관심사 재계산(INT-011) 때 INT-005가 점수에 반영한다.
-        즉시 반영이 필요하면 재계산 API를 이어서 호출한다.
+        이벤트 저장 직후 INT-011을 best-effort로 실행해 다음 리포트 선택에
+        반영한다. 재계산이 실패해도 이미 접수한 이벤트는 유지한다.
         """
         accepted = await self._agent_jobs.submit_feedback_signals(
             user_id=user_id,

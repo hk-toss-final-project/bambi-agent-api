@@ -241,6 +241,12 @@ def test_save_feedback_signals_deduplicates_by_event_id() -> None:
                     "topics": ["LangGraph"],
                     "content_id": "content-1",
                     "occurred_at": None,
+                    "metadata": {
+                        "axis": "topic",
+                        "dwell_seconds": 1.8,
+                        "scroll_ratio": 0.0,
+                        "source": {"surface": "report"},
+                    },
                 },
                 {
                     "source_event_id": "signal-1",
@@ -257,6 +263,13 @@ def test_save_feedback_signals_deduplicates_by_event_id() -> None:
     insert_sql = connection.executed[1][0]
     assert "'feedback'" in insert_sql
     assert "ON CONFLICT (user_id, source_event_id) DO NOTHING" in insert_sql
+    payload = connection.executed[1][1][-1].obj
+    assert payload["metadata"] == {
+        "axis": "topic",
+        "dwell_seconds": 1.8,
+        "scroll_ratio": 0.0,
+        "source": {"surface": "report"},
+    }
 
 
 def test_load_recent_feedback_signals_flattens_topics() -> None:
@@ -276,6 +289,10 @@ def test_load_recent_feedback_signals_flattens_topics() -> None:
                     "payload": {
                         "signal_type": "like",
                         "topics": ["LangGraph", "  ", "Python"],
+                        "metadata": {
+                            "axis": "angle",
+                            "dwell_seconds": 7.25,
+                        },
                     },
                     "occurred_at": occurred,
                 },
@@ -292,6 +309,16 @@ def test_load_recent_feedback_signals_flattens_topics() -> None:
     )
 
     assert signals == [
-        {"topic": "LangGraph", "signal_type": "like", "occurred_at": occurred},
-        {"topic": "Python", "signal_type": "like", "occurred_at": occurred},
+        {
+            "topic": "LangGraph",
+            "signal_type": "like",
+            "occurred_at": occurred,
+            "metadata": {"axis": "angle", "dwell_seconds": 7.25},
+        },
+        {
+            "topic": "Python",
+            "signal_type": "like",
+            "occurred_at": occurred,
+            "metadata": {"axis": "angle", "dwell_seconds": 7.25},
+        },
     ]

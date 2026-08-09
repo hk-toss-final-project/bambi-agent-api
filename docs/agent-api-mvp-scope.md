@@ -46,7 +46,7 @@
 - [x] `SVC-002` 웹 클리핑 처리 요청 — 원본·Version·Job 한 Transaction Commit 후 202
 - [x] `SVC-003` URL 처리 요청 — URL Head 저장 + `personal_wiki_url` 수집 Job 등록 + 상주 `url-collection` Worker의 Jina 본문 Version 저장·후속 Wiki Job 연결
 - [x] `SVC-004` 위키마킹 처리 요청 — 생성 후보 본문을 `content_mark` 원본 Version으로 물질화 후 기존 `personal_wiki_build` Job으로 처리 (별도 Handler 불필요, 2026-07-27 구현. 대상 콘텐츠 없으면 404)
-- [x] `SVC-006` 사용자 피드백 전달 — 좋아요·숨김·신고 신호를 `feedback` 이벤트로 멱등 저장(Wiki 문서 미생성). 다음 재계산 때 INT-005가 점수 반영 (2026-07-27 구현)
+- [x] `SVC-006` 사용자 피드백 전달 — 좋아요·숨김·신고 신호를 `feedback` 이벤트로 멱등 저장(Wiki 문서 미생성), 계측 Metadata 무손실 보존. 신규 이벤트 저장 후 같은 요청에서 INT-011을 best-effort로 재계산하며 실패해도 이벤트는 유지 (2026-08-09 개선)
 - [x] `SVC-008` 콘텐츠 생성 요청 — `generation_requests` + `report_generation` Job 멱등 등록, `scheduled_at` 예약 실행 지원
 - [x] `SVC-013` Agent Job 상태 조회
 - [x] `SVC-014` Agent 결과 조회 — 미완료 시 `JOB_RESULT_NOT_READY`
@@ -70,7 +70,10 @@
 - [x] `PWE-002` Chunk 저장 — `wiki_chunks` 멱등 Upsert
 - [ ] `PWE-004` Embedding 생성 — ❌ 독립 PWE Feature facade는 아직 스텁이다. 현재 Wiki Build는 `WBA-011` 내부 경로에서 변경 Entity·Concept Chunk의 1536차원 Vector를 생성한다.
 - [ ] `PWE-005` Embedding 저장 — ❌ 독립 PWE Feature facade는 아직 스텁이다. 현재 Wiki Build의 저장은 `WBA-011`이 `wiki_embeddings`에 멱등 반영하며 별도 재시도 Job은 미연결이다.
-- [x] `PRAG-003` Hybrid Search — ⚠️ 리포트 개인 문서 검색은 FTS·키워드만 결합하고 pgvector 의미 검색은 미연결이다. Wiki Builder 내부의 Vector 후보 recall과는 별개다.
+- [x] `PRAG-001` Keyword Search — 개인 Wiki와 Global 저장 자료의 FTS·Trigram 후보 조회
+- [x] `PRAG-002` Vector Search — 기존 `wiki_embeddings`의 active config·동일 모델을 사용한 개인 Wiki Cosine top-k 조회
+- [x] `PRAG-003` Hybrid Search — 개인 Wiki Keyword·Vector 후보를 결정적 RRF로 결합하고 Global Keyword 결과를 유지한다. Embedding Provider·Vector 조회 실패는 Keyword로 폴백한다.
+- [x] `PRAG-004` 검색 결과 Reranking — 순위 기반 RRF로 개인 Wiki Chunk 중복을 제거·재정렬하고 기존 점수는 하류 품질 판정을 위해 보존
 - [x] `PRAG-006` 개인 Wiki Context 구성 — Report Builder 입력 Context(P1, P2 참조) 조립
 - [x] `PRAG-007` Citation 연결 — `citations`에 문서 Version·Chunk 연결
 
@@ -216,7 +219,10 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | PWE-002 | Chunk 저장 | 생성된 Chunk를 문서 Version과 연결해 PostgreSQL에 저장한다. |
 | PWE-004 | Embedding 생성 | 개인 Wiki Chunk의 Vector를 생성한다. |
 | PWE-005 | Embedding 저장 | 사용자별 Vector 검색 저장소에 Embedding을 저장한다. |
+| PRAG-001 | Keyword Search | 개인 Wiki에서 키워드 기반 검색을 수행한다. |
+| PRAG-002 | Vector Search | 개인 Wiki에서 의미 유사도 검색을 수행한다. |
 | PRAG-003 | Hybrid Search | Keyword와 Vector 검색 결과를 결합한다. |
+| PRAG-004 | 검색 결과 Reranking | Keyword·Vector 순위를 결정적으로 결합한다. |
 | PRAG-006 | 개인 Wiki Context 구성 | LLM 입력에 사용할 개인 Wiki Context를 구성한다. |
 | PRAG-007 | Citation 연결 | 생성 결과와 참조한 개인 Wiki 문서를 연결한다. |
 

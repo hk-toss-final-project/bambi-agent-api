@@ -63,6 +63,7 @@ class InMemoryAgentJobRepository:
         self._idempotency: dict[tuple[str, str, str], str] = {}
         self._generated_contents: set[tuple[str, str]] = set()
         self._feedback_events: set[tuple[str, str]] = set()
+        self.feedback_signals: list[dict[str, Any]] = []
         self._taxonomies: dict[str, StoredInterestTaxonomyRecord] = {}
 
     def register_generated_content(self, user_id: str, content_id: str) -> None:
@@ -82,6 +83,7 @@ class InMemoryAgentJobRepository:
             if key in self._feedback_events:
                 continue
             self._feedback_events.add(key)
+            self.feedback_signals.append(dict(signal))
             accepted += 1
         return accepted
 

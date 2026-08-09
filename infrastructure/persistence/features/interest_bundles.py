@@ -68,6 +68,50 @@ class ConnectionInterestBundleRepository:
         row = await cursor.fetchone()
         return dict(row) if row is not None else None
 
+    async def list_node_snapshots(
+        self,
+        user_id: str,
+        *,
+        document_ids: Sequence[str],
+    ) -> Sequence[Mapping[str, object]]:
+        """관심 근거 노드의 현재 Version·요약·별칭을 입력 순서대로 조회한다."""
+        if not document_ids:
+            return []
+        namespace_key = f"user/{user_id}"
+        cursor = await self._connection.execute(
+            """
+            SELECT
+                document.id::text AS document_id,
+                version.id::text AS document_version_id,
+                version.title AS keyword,
+                document.document_kind,
+                COALESCE(version.summary, '') AS summary,
+                CASE
+                    WHEN jsonb_typeof(version.source_metadata -> 'aliases') = 'array'
+                    THEN ARRAY(
+                        SELECT jsonb_array_elements_text(
+                            version.source_metadata -> 'aliases'
+                        )
+                    )
+                    ELSE ARRAY[]::text[]
+                END AS aliases,
+                version.created_at AS updated_at
+            FROM agent.wiki_documents AS document
+            JOIN agent.wiki_document_versions AS version
+              ON version.document_id = document.id
+             AND version.namespace_key = document.namespace_key
+             AND version.version = document.current_version
+            WHERE document.id = ANY(%s::uuid[])
+              AND document.namespace_key = %s
+              AND document.document_kind IN ('entity', 'concept')
+              AND document.status = 'active'
+              AND document.deleted_at IS NULL
+            ORDER BY array_position(%s::uuid[], document.id)
+            """,
+            (list(document_ids), namespace_key, list(document_ids)),
+        )
+        return [dict(row) for row in await cursor.fetchall()]
+
     async def list_related_nodes(
         self,
         user_id: str,
@@ -98,7 +142,15 @@ class ConnectionInterestBundleRepository:
                 SELECT
                     origin.id AS origin_id,
                     peer.id AS peer_id,
+                    relation.id AS relation_id,
+                    relation.source_document_id,
+                    relation.target_document_id,
                     relation.relation_type,
+                    relation.confidence::float8 AS confidence,
+                    relation.provenance_kind,
+                    relation.review_status,
+                    COALESCE(relation.metadata ->> 'rationale', '') AS rationale,
+                    active_supports.items AS supports,
                     {_RELATION_WEIGHT_SQL} AS weight
                 FROM agent.wiki_document_relations AS relation
                 JOIN origin
@@ -113,6 +165,48 @@ class ConnectionInterestBundleRepository:
                          ELSE relation.source_document_id
                      END
                  AND peer.namespace_key = relation.namespace_key
+                JOIN LATERAL (
+                    SELECT jsonb_agg(
+                        jsonb_build_object(
+                            'source_document_version_id',
+                                support.source_document_version_id::text,
+                            'provenance_kind', support.provenance_kind,
+                            'confidence', support.confidence::float8,
+                            'review_status', support.review_status,
+                            'evidence', COALESCE(support.evidence, ''),
+                            'rationale', COALESCE(
+                                support.metadata ->> 'rationale',
+                                relation.metadata ->> 'rationale',
+                                ''
+                            )
+                        )
+                        ORDER BY
+                            CASE support.review_status
+                                WHEN 'accepted' THEN 0
+                                ELSE 1
+                            END,
+                            support.confidence DESC,
+                            support.updated_at DESC,
+                            support.id
+                    ) AS items
+                    FROM (
+                        SELECT candidate.*
+                        FROM agent.wiki_relation_supports AS candidate
+                        WHERE candidate.relation_id = relation.id
+                          AND candidate.namespace_key = relation.namespace_key
+                          AND candidate.status = 'active'
+                          AND candidate.review_status <> 'rejected'
+                        ORDER BY
+                            CASE candidate.review_status
+                                WHEN 'accepted' THEN 0
+                                ELSE 1
+                            END,
+                            candidate.confidence DESC,
+                            candidate.updated_at DESC,
+                            candidate.id
+                        LIMIT 3
+                    ) AS support
+                ) AS active_supports ON active_supports.items IS NOT NULL
                 WHERE relation.namespace_key = %s
                   AND relation.status = 'active'
                   AND relation.review_status <> 'rejected'
@@ -139,13 +233,52 @@ class ConnectionInterestBundleRepository:
                         AS relation_types
                 FROM raw_neighbor_relations
                 GROUP BY peer_id
+            ),
+            neighbor_relation_details AS (
+                SELECT
+                    peer_id,
+                    jsonb_agg(
+                        jsonb_build_object(
+                            'relation_id', relation_id::text,
+                            'root_document_id', origin_id::text,
+                            'direction', CASE
+                                WHEN source_document_id = origin_id
+                                THEN 'root_to_neighbor'
+                                ELSE 'neighbor_to_root'
+                            END,
+                            'relation_type', relation_type,
+                            'confidence', confidence,
+                            'provenance_kind', provenance_kind,
+                            'review_status', review_status,
+                            'rationale', rationale,
+                            'supports', supports
+                        )
+                        ORDER BY origin_id::text, relation_type, relation_id::text
+                    ) AS relations
+                FROM raw_neighbor_relations
+                GROUP BY peer_id
             )
             SELECT
                 peer.id::text AS document_id,
+                peer_version.id::text AS document_version_id,
                 peer_version.title AS keyword,
                 peer.document_kind,
+                COALESCE(peer_version.summary, '') AS summary,
+                CASE
+                    WHEN jsonb_typeof(
+                        peer_version.source_metadata -> 'aliases'
+                    ) = 'array'
+                    THEN ARRAY(
+                        SELECT jsonb_array_elements_text(
+                            peer_version.source_metadata -> 'aliases'
+                        )
+                    )
+                    ELSE ARRAY[]::text[]
+                END AS aliases,
+                peer_version.created_at AS updated_at,
                 neighbor_scores.weight,
                 neighbor_relation_types.relation_types,
+                neighbor_relation_details.relations,
                 COALESCE(shared_sources.count, 0)::integer AS shared_source_count,
                 COALESCE(peer_relations.degree, 0)::float8 AS degree
             FROM neighbor_scores
@@ -158,6 +291,8 @@ class ConnectionInterestBundleRepository:
              AND peer_version.version = peer.current_version
             JOIN neighbor_relation_types
               ON neighbor_relation_types.peer_id = peer.id
+            JOIN neighbor_relation_details
+              ON neighbor_relation_details.peer_id = peer.id
             LEFT JOIN LATERAL (
                 SELECT COUNT(DISTINCT peer_source.source_document_version_id) AS count
                 FROM agent.wiki_document_sources AS origin_source

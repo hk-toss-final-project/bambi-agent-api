@@ -249,6 +249,10 @@ class FeedbackSignalItem(ImmutableSchema):
     occurred_at: datetime | None = Field(
         default=None, description="행동 발생 시각 (시간 감쇠 기준)"
     )
+    metadata: dict[str, object] = Field(
+        default_factory=dict,
+        description="Service가 계측한 신호 부가 정보 (해석하거나 손실시키지 않고 보존)",
+    )
 
 
 class FeedbackSignalsRequest(ImmutableSchema):

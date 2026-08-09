@@ -112,14 +112,48 @@ def test_generate_interest_bundle_keeps_root_as_one_integrated_report(
 
     monkeypatch.setattr(generation, "complete", _complete)
 
+    wiki_context = ReportContextDocument(
+        reference="P1",
+        document_version_id="version-1",
+        chunk_id="chunk-1",
+        namespace_key="user/user-1",
+        title="생성형 AI",
+        content="사용자가 저장한 생성형 AI 기준 지식",
+        url=None,
+        score=1.0,
+        context_role="wiki_root",
+        source_updated_at="2026-08-01T09:00:00+00:00",
+    )
+
     generate_report_content(
         topic="생성형 AI",
         content_type="interest_news_card",
         language="ko",
-        contexts=[_context()],
+        contexts=[wiki_context],
         interest_bundle={
             "root": {"keyword": "생성형 AI"},
-            "neighbors": [{"keyword": "AI 에이전트"}, {"keyword": "RAG"}],
+            "neighbors": [
+                {
+                    "keyword": "AI 에이전트",
+                    "relations": [
+                        {
+                            "direction": "root_to_neighbor",
+                            "relation_type": "applies_concept",
+                            "confidence": 0.96,
+                            "provenance_kind": "source_explicit",
+                            "review_status": "accepted",
+                            "rationale": "에이전트가 생성 모델을 적용한다.",
+                            "supports": [
+                                {
+                                    "source_document_version_id": "source-version-1",
+                                    "evidence": "생성형 AI 기반 에이전트",
+                                }
+                            ],
+                        }
+                    ],
+                },
+                {"keyword": "RAG"},
+            ],
         },
     )
 
@@ -127,6 +161,13 @@ def test_generate_interest_bundle_keeps_root_as_one_integrated_report(
     assert "연결 관점: AI 에이전트, RAG" in captured["user"]
     assert "하나의 통합 리포트" in captured["user"]
     assert "독립 리포트" in captured["user"]
+    assert "생성형 AI → AI 에이전트 | type=applies_concept" in captured["user"]
+    assert "confidence=0.960" in captured["user"]
+    assert "active support(source-version-1): 생성형 AI 기반 에이전트" in captured["user"]
+    assert "associated_with·related_concept는 인과관계" in captured["user"]
+    assert "근거 종류: 개인 Wiki 기존 지식 (role=wiki_root)" in captured["user"]
+    assert "지식 기준 시각: 2026-08-01T09:00:00+00:00" in captured["user"]
+    assert "현재 변화나 최신 사실은 Global·실시간 외부 근거로 확인" in captured["user"]
 
 
 def _good_json(body: str) -> str:

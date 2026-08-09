@@ -482,6 +482,7 @@ def _disable_research(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: False)
     monkeypatch.setattr(agent_graph, "resolve_topic_intent", lambda *args: "news")
+    monkeypatch.setattr(agent_graph, "embed_wiki_queries", lambda queries: {})
     _disable_critic(monkeypatch)
 
 
@@ -804,6 +805,7 @@ def _patch_generation_tail(
     )
     monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
     monkeypatch.setattr(agent_graph, "resolve_topic_intent", lambda *args: "news")
+    monkeypatch.setattr(agent_graph, "embed_wiki_queries", lambda queries: {})
     monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
     _disable_critic(monkeypatch)
     return used_contexts
@@ -871,16 +873,49 @@ def test_interest_bundle_snapshot_reaches_research_and_generation(
     _patch_generation_tail(monkeypatch, order)
     generated_with: dict[str, Any] = {}
     bundle = {
-        "root": {"keyword": "생성형 AI"},
-        "neighbors": [{"keyword": "AI 에이전트"}, {"keyword": "RAG"}],
+        "root": {
+            "keyword": "생성형 AI",
+            "documents": [{"document_version_id": "version-root"}],
+        },
+        "neighbors": [
+            {"keyword": "AI 에이전트", "document_version_id": "version-agent"},
+            {"keyword": "RAG", "document_version_id": "version-rag"},
+        ],
         "keywords": ["생성형 AI", "AI 에이전트", "RAG"],
     }
+    pinned = ReportContextDocument(
+        reference="P1",
+        document_version_id="version-root",
+        chunk_id="chunk-root",
+        namespace_key="user/user-1",
+        title="생성형 AI",
+        content="Job 접수 시 고정한 Wiki 맥락",
+        url=None,
+        score=1.0,
+        context_role="wiki_root",
+        source_updated_at="2026-08-09T10:00:00+00:00",
+    )
+    researched = ReportContextDocument(
+        reference="G1",
+        document_version_id="global-1",
+        chunk_id="global-chunk-1",
+        namespace_key="global",
+        title="생성형 AI 최신 기사",
+        content="새 모델 발표",
+        url="https://example.com/latest",
+        score=0.9,
+    )
+
+    async def fake_pinned_context(connection: Any, **kwargs: Any) -> list[Any]:
+        """고정 Wiki Version을 직접 읽은 결과를 반환한다."""
+        assert kwargs["interest_bundle"] == bundle
+        return [pinned]
 
     async def fake_research(connection: Any, **kwargs: Any) -> Any:
         """조사원이 전달받은 결정적 연결 키워드를 검증한다."""
         assert kwargs["planned_queries"] == ["AI 에이전트", "RAG"]
         return SimpleNamespace(
-            documents=("doc-1",),
+            documents=(researched,),
             calls=(),
             collected_live=False,
             notes="묶음 조사 완료",
@@ -894,6 +929,7 @@ def test_interest_bundle_snapshot_reaches_research_and_generation(
 
     monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: True)
     monkeypatch.setattr(agent_graph, "research_context", fake_research)
+    monkeypatch.setattr(agent_graph, "load_pinned_wiki_context", fake_pinned_context)
     monkeypatch.setattr(
         agent_graph, "generate_report_content_with_quality", fake_generate
     )
@@ -914,6 +950,11 @@ def test_interest_bundle_snapshot_reaches_research_and_generation(
 
     assert generated_with["interest_bundle"] == bundle
     assert generated_with["topic"] == "생성형 AI"
+    assert [context.context_role for context in generated_with["contexts"]] == [
+        "wiki_root",
+        "retrieved",
+    ]
+    assert generated_with["contexts"][0].document_version_id == "version-root"
 
 
 def test_research_failure_falls_back_to_fixed_collection_path(
@@ -1311,10 +1352,32 @@ def test_interest_bundle_fixed_path_searches_snapshot_keywords_only(
     collected_with: list[str] = []
     generated_with: dict[str, Any] = {}
     bundle = {
-        "root": {"keyword": "생성형 AI"},
-        "neighbors": [{"keyword": "AI 에이전트"}, {"keyword": "RAG"}],
+        "root": {
+            "keyword": "생성형 AI",
+            "documents": [{"document_version_id": "version-root"}],
+        },
+        "neighbors": [
+            {"keyword": "AI 에이전트", "document_version_id": "version-agent"},
+            {"keyword": "RAG", "document_version_id": "version-rag"},
+        ],
         "keywords": ["생성형 AI", "AI 에이전트", "RAG"],
     }
+
+    async def fake_pinned_context(connection: Any, **kwargs: Any) -> list[Any]:
+        """고정 루트 Version을 검색 결과보다 먼저 반환한다."""
+        return [
+            ReportContextDocument(
+                reference="P1",
+                document_version_id="version-root",
+                chunk_id="chunk-root",
+                namespace_key="user/user-1",
+                title="생성형 AI 기준 지식",
+                content="사용자가 저장한 기존 맥락",
+                url=None,
+                score=1.0,
+                context_role="wiki_root",
+            )
+        ]
 
     async def fake_scope(connection: Any, *, user_id: str) -> None:
         """DB 사용자 Scope 설정을 생략한다."""
@@ -1364,6 +1427,7 @@ def test_interest_bundle_fixed_path_searches_snapshot_keywords_only(
         return {"content_candidate_id": "candidate-1"}
 
     monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "load_pinned_wiki_context", fake_pinned_context)
     monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
     monkeypatch.setattr(agent_graph, "load_global_document_freshness", fake_freshness)
     monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
@@ -1395,5 +1459,8 @@ def test_interest_bundle_fixed_path_searches_snapshot_keywords_only(
         "P1",
         "P2",
         "P3",
+        "P4",
     ]
+    assert generated_with["contexts"][0].context_role == "wiki_root"
+    assert generated_with["contexts"][0].title == "생성형 AI 기준 지식"
     assert generated_with["interest_bundle"] == bundle
