@@ -15,6 +15,7 @@ from agent.wiki_builder.models import (
     WikiBuildPlan,
     WikiClassification,
     WikiDocumentPlan,
+    WikiNodeDisposition,
     WikiRelationPlan,
 )
 from agent.wiki_builder.vault import (
@@ -366,7 +367,7 @@ def _plan_relations(
         target_key: str,
         target_kind: str,
         relation_type: str,
-        evidence: str,
+        metadata: dict[str, object],
     ) -> None:
         """중복과 자기 참조를 제외하고 관계 하나를 추가한다."""
         signature = (source_key, target_key, relation_type)
@@ -380,7 +381,7 @@ def _plan_relations(
                 target_document_key=target_key,
                 target_document_kind=target_kind,
                 relation_type=relation_type,
-                metadata={"evidence": evidence},
+                metadata=metadata,
             )
         )
 
@@ -416,9 +417,80 @@ def _plan_relations(
                 target_key,
                 relation.target_kind,
                 relation.relation_type,
-                relation.evidence,
+                {
+                    "evidence": relation.evidence,
+                    "provenance_kind": relation.provenance_kind,
+                    "confidence": relation.confidence,
+                    "review_status": relation.review_status,
+                    "rationale": relation.rationale,
+                    "model": relation.model,
+                    "prompt_key": "personal_wiki_relation_linker",
+                    "prompt_version": relation.prompt_version,
+                    "observed_in_current_build": True,
+                },
             )
     return relations
+
+
+def _derive_node_dispositions(
+    *,
+    classification: WikiClassification,
+    extracted_relations: Sequence[WikiRelationPlan],
+    entity_keys: dict[str, str],
+    concept_keys: dict[str, str],
+) -> list[WikiNodeDisposition]:
+    """Linker가 생략한 노드 처리 결과를 빠짐없이 결정적으로 보완한다."""
+    if classification.node_dispositions:
+        return list(classification.node_dispositions)
+    connected = {
+        (relation.source_document_kind, relation.source_document_key)
+        for relation in extracted_relations
+    } | {
+        (relation.target_document_kind, relation.target_document_key)
+        for relation in extracted_relations
+    }
+    dispositions: list[WikiNodeDisposition] = []
+    for candidate in classification.entities:
+        key = entity_keys.get(candidate.name.strip().casefold())
+        if candidate.matched_existing_key:
+            disposition = "merge"
+            reason = "canonical identity 판정으로 기존 Entity에 병합"
+        elif key is not None and ("entity", key) in connected:
+            disposition = "connect"
+            reason = "검증된 Wiki 관계가 있음"
+        else:
+            disposition = "standalone"
+            reason = "관계 판정에서 근거 있는 연결을 확정하지 못함"
+        dispositions.append(
+            WikiNodeDisposition(
+                node_name=candidate.name,
+                node_kind="entity",
+                disposition=disposition,
+                reason=reason,
+                matched_existing_key=candidate.matched_existing_key,
+            )
+        )
+    for candidate in classification.concepts:
+        key = concept_keys.get(candidate.title.strip().casefold())
+        if candidate.matched_existing_key:
+            disposition = "merge"
+            reason = "canonical identity 판정으로 기존 Concept에 병합"
+        elif key is not None and ("concept", key) in connected:
+            disposition = "connect"
+            reason = "검증된 Wiki 관계가 있음"
+        else:
+            disposition = "standalone"
+            reason = "관계 판정에서 근거 있는 연결을 확정하지 못함"
+        dispositions.append(
+            WikiNodeDisposition(
+                node_name=candidate.title,
+                node_kind="concept",
+                disposition=disposition,
+                reason=reason,
+                matched_existing_key=candidate.matched_existing_key,
+            )
+        )
+    return dispositions
 
 
 def _merge_relations(
@@ -470,6 +542,12 @@ def build_wiki_plan(
     )
     extracted_relations = _plan_relations(
         classification=classification,
+        entity_keys=entity_keys,
+        concept_keys=concept_keys,
+    )
+    node_dispositions = _derive_node_dispositions(
+        classification=classification,
+        extracted_relations=extracted_relations,
         entity_keys=entity_keys,
         concept_keys=concept_keys,
     )
@@ -545,4 +623,5 @@ def build_wiki_plan(
         extracted_relation_count=len(extracted_relations),
         isolated_node_count=len(all_nodes - connected_nodes),
         relation_warnings=relation_warnings,
+        node_dispositions=node_dispositions,
     )

@@ -217,7 +217,7 @@ def test_classify_source_for_wiki_sends_metadata_and_existing_context(
     assert "key=obsidian" in captured["user"]
     assert "aliases=옵시디언" in captured["user"]
     assert "사람, 조직, 프로젝트" in captured["system"]
-    assert "source_ref와 target_ref" in captured["system"]
+    assert "별도 Relation Linker" in captured["system"]
 
 
 def test_classify_source_for_wiki_processes_all_long_content(
@@ -248,38 +248,24 @@ def test_classify_source_for_wiki_processes_all_long_content(
     assert result.source_summary == "요약 1\n\n요약 2"
 
 
-def test_classify_source_for_wiki_reviews_missing_relations_once(
+def test_classify_source_for_wiki_leaves_relations_to_separate_linker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """노드가 여러 개인데 관계가 없으면 확정 노드로 관계만 한 번 재검토한다."""
-    responses = [
-        _fake_response(
-            entities=[
-                {"ref": "E1", "name": "Sam Altman", "subtype": "person"},
-                {"ref": "E2", "name": "OpenAI", "subtype": "organization"},
-            ]
-        ),
-        json.dumps(
-            {
-                "relations": [
-                    {
-                        "source_ref": "E1",
-                        "target_ref": "E2",
-                        "relation_type": "entity_relation",
-                        "evidence": "Sam Altman은 OpenAI의 CEO다.",
-                    }
-                ]
-            }
-        ),
-    ]
+    """노드 추출 호출은 Edge 유무와 무관하게 관계 판정을 수행하지 않는다."""
+    response = _fake_response(
+        entities=[
+            {"name": "Sam Altman", "subtype": "person"},
+            {"name": "OpenAI", "subtype": "organization"},
+        ]
+    )
     calls: list[str] = []
 
     def fake_complete(
         system_prompt: str, user_prompt: str, model: str = "gpt-4.1-mini"
     ) -> str:
-        """최초 분류와 한 번의 관계 재검토 응답을 순서대로 반환한다."""
+        """노드 추출 응답 하나만 반환한다."""
         calls.append(system_prompt)
-        return responses.pop(0)
+        return response
 
     monkeypatch.setattr(llm_wiki, "complete", fake_complete)
 
@@ -290,31 +276,67 @@ def test_classify_source_for_wiki_reviews_missing_relations_once(
         existing_concepts=[],
     )
 
-    assert len(calls) == 2
-    assert len(result.relations) == 1
-    assert result.relations[0].relation_type == "entity_relation"
+    assert len(calls) == 1
+    assert result.relations == []
     assert result.relation_warnings == []
 
 
-def test_classify_source_for_wiki_reports_isolated_nodes_after_review(
+def test_classify_source_for_wiki_discards_legacy_relation_side_effects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """관계 재검토 후에도 Edge가 없으면 고립 가능성을 경고로 남긴다."""
-    responses = [
-        _fake_response(
-            entities=[
-                {"ref": "E1", "name": "서로 무관한 대상 A"},
-                {"ref": "E2", "name": "서로 무관한 대상 B"},
-            ]
-        ),
-        json.dumps({"relations": []}),
-    ]
+    """구버전 응답의 부분 관계가 노드 Markdown 연결 필드에도 남지 않는다."""
+    evidence = "Sam Altman은 OpenAI를 이끈다."
+    response = _fake_response(
+        entities=[
+            {"ref": "E1", "name": "Sam Altman", "subtype": "person"},
+            {"ref": "E2", "name": "OpenAI", "subtype": "organization"},
+        ],
+        relations=[
+            {
+                "source_ref": "E1",
+                "target_ref": "E2",
+                "relation_type": "entity_relation",
+                "evidence": evidence,
+            }
+        ],
+    )
 
     def fake_complete(
         system_prompt: str, user_prompt: str, model: str = "gpt-4.1-mini"
     ) -> str:
-        """관계가 없는 최초 분류와 재검토 응답을 반환한다."""
-        return responses.pop(0)
+        """구버전 관계 필드를 포함한 추출 응답을 반환한다."""
+        return response
+
+    monkeypatch.setattr(llm_wiki, "complete", fake_complete)
+
+    result = llm_wiki.classify_source_for_wiki(
+        source_title="OpenAI",
+        source_content=evidence,
+        existing_entities=[],
+        existing_concepts=[],
+    )
+
+    assert result.relations == []
+    assert all(not entity.related_entity_names for entity in result.entities)
+    assert all(not entity.related_concepts for entity in result.entities)
+
+
+def test_classify_source_for_wiki_does_not_decide_isolation_during_extraction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """고립 여부는 후속 Linker가 후보 검토 후 결정하도록 비워 둔다."""
+    response = _fake_response(
+        entities=[
+            {"name": "서로 무관한 대상 A"},
+            {"name": "서로 무관한 대상 B"},
+        ]
+    )
+
+    def fake_complete(
+        system_prompt: str, user_prompt: str, model: str = "gpt-4.1-mini"
+    ) -> str:
+        """관계 필드가 없는 노드 추출 응답을 반환한다."""
+        return response
 
     monkeypatch.setattr(llm_wiki, "complete", fake_complete)
 
@@ -326,9 +348,8 @@ def test_classify_source_for_wiki_reports_isolated_nodes_after_review(
     )
 
     assert result.relations == []
-    assert result.relation_warnings == [
-        "노드가 2개 이상이지만 원문에서 검증된 관계를 찾지 못했습니다."
-    ]
+    assert result.relation_warnings == []
+    assert result.node_dispositions == []
 
 
 def test_split_source_content_preserves_internal_whitespace() -> None:

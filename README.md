@@ -149,7 +149,7 @@ Wiki 빌드와 Report Builder 생성은 OpenAI를 실제 호출하므로 비용�
 | Worker | 용도 | 모드 |
 |---|---|---|
 | `url-collection` | 사용자 URL을 Jina Reader로 읽어 Markdown 원문 Version 저장 | 단발 / `--loop` 상주 |
-| `personal-wiki` | 클리핑·URL 원본을 LLM Wiki로 빌드 (Chunk 포함, Embedding은 보류) | 단발 / `--loop` 상주 |
+| `personal-wiki` | 클리핑·URL 원본을 LLM Wiki로 빌드하고 변경 Chunk를 best-effort 재임베딩 | 단발 / `--loop` 상주 |
 | `report-generation` | 생성 Job을 처리해 콘텐츠·발행 Snapshot 저장 | 단발 / `--loop` 상주 |
 | `global-collector` | 키워드로 외부 기사 수집 (`--keywords` 필수, Provider 기본 `gdelt,naver,google_news`) | 단발 |
 | `global-content` | 수집된 기사의 본문 확보 (**Scheduler가 tick마다 자동 실행**, 이 CLI는 수동 점검·backlog 소진용) | 단발 |

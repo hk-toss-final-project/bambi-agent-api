@@ -6,7 +6,9 @@
 
 from asyncio import to_thread
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+import logging
 from typing import Any
 
 from psycopg import AsyncConnection
@@ -21,21 +23,55 @@ from agent.wiki_builder.features.identity_resolution import (
     validate_wiki_identity_quality,
 )
 from agent.wiki_builder.features.planning import build_wiki_plan
-from agent.wiki_builder.models import WikiBuildPlan, WikiClassification
+from agent.wiki_builder.features.quality import WikiQualityReport, wba_014
+from agent.wiki_builder.features.embeddings import (
+    generate_relation_query_embeddings,
+    wba_011,
+)
+from agent.wiki_builder.features.relation_candidates import WikiNodeIdentity
+from agent.wiki_builder.features.relation_linking import (
+    build_relation_candidate_sets,
+    link_wiki_relations,
+)
+from agent.wiki_builder.models import (
+    ExistingWikiEntry,
+    WikiBuildPlan,
+    WikiClassification,
+    WikiDocumentPlan,
+    WikiRelationPlan,
+)
 from infrastructure.persistence.api import (
     PersistedWikiBuild,
+    UserSourceDocumentForAgent,
     get_user_source_document_version_for_agent,
     list_existing_wiki_entries,
     list_existing_wiki_relations,
+    list_onboarding_wiki_anchor_keys,
+    list_wiki_node_embeddings,
+    list_user_source_versions_for_rebuild,
     persist_wiki_build,
     set_personal_wiki_scope,
+    supersede_personal_wiki_for_rebuild,
+    update_full_wiki_rebuild_summary,
 )
-
-from shared.contracts import FeatureRequest, FeatureResult
 
 type DictRow = dict[str, Any]
 type WikiClassifier = Callable[..., WikiClassification]
 type WikiBuildRunner = Callable[..., Awaitable[dict[str, object]]]
+type WikiRelationLinker = Callable[..., WikiClassification]
+
+logger = logging.getLogger("agent.wiki_builder")
+
+
+@dataclass(frozen=True, slots=True)
+class FullWikiRebuildResult:
+    """전체 원본을 재처리해 활성화한 Wiki 재구성 결과."""
+
+    persisted: PersistedWikiBuild
+    source_count: int
+    quality: WikiQualityReport
+    embedding_count: int
+    superseded_document_count: int
 
 
 async def build_incremental_wiki(
@@ -78,6 +114,14 @@ async def build_incremental_wiki(
             connection,
             namespace_key=source.namespace_key,
         )
+        onboarding_anchor_keys = await list_onboarding_wiki_anchor_keys(
+            connection, namespace_key=source.namespace_key
+        )
+        node_embeddings = await list_wiki_node_embeddings(
+            connection,
+            namespace_key=source.namespace_key,
+            model_name="text-embedding-3-small",
+        )
 
     classification, classification_model = await to_thread(
         classify_wiki_source,
@@ -108,6 +152,52 @@ async def build_incremental_wiki(
         existing_entities=existing_entities,
         existing_concepts=existing_concepts,
     )
+    relation_model = "deterministic:onboarding-anchor-v1"
+    if source.source_type != "onboarding_seed":
+        candidate_vectors = {
+            WikiNodeIdentity(item.document_kind, item.document_key): item.embedding
+            for item in node_embeddings
+        }
+        query_texts = [
+            f"{entity.name}\n{entity.description}".strip()
+            for entity in classification.entities
+        ] + [
+            f"{concept.title}\n{concept.definition}".strip()
+            for concept in classification.concepts
+        ]
+        query_vectors: dict[str, tuple[float, ...]] = {}
+        if query_texts and candidate_vectors:
+            try:
+                embedded = await to_thread(
+                    generate_relation_query_embeddings,
+                    query_texts,
+                    model="text-embedding-3-small",
+                )
+                query_vectors = {
+                    f"N{index}": vector
+                    for index, vector in enumerate(embedded, start=1)
+                }
+            except Exception as error:  # noqa: BLE001 - 비Vector 폴백 보존
+                logger.warning("Wiki 관계 Query Embedding 실패: %s", error)
+        candidates = build_relation_candidate_sets(
+            classification=classification,
+            existing_entries=[*existing_entities, *existing_concepts],
+            existing_relations=existing_relations,
+            onboarding_anchor_ids=[
+                WikiNodeIdentity(kind, key) for kind, key in onboarding_anchor_keys
+            ],
+            query_embeddings=query_vectors,
+            candidate_embeddings=candidate_vectors,
+        )
+        classification = await to_thread(
+            link_wiki_relations,
+            source_title=source.title,
+            source_content=source.raw_content,
+            classification=classification,
+            candidates_by_node=candidates,
+            model=model,
+        )
+        relation_model = model
     timestamp = generated_at or datetime.now(UTC).isoformat()
     plan = build_wiki_plan(
         source_title=source.title,
@@ -119,7 +209,10 @@ async def build_incremental_wiki(
         existing_entities=existing_entities,
         existing_concepts=existing_concepts,
         generated_at=timestamp,
-        model=f"{classification_model};identity={identity_resolution.model}",
+        model=(
+            f"{classification_model};identity={identity_resolution.model};"
+            f"relation={relation_model}"
+        ),
         existing_relations=existing_relations,
     )
     async with connection.transaction():
@@ -130,6 +223,22 @@ async def build_incremental_wiki(
             plan=plan,
             job_id=job_id,
         )
+    changed_version_ids = [
+        document.document_version_id
+        for document in persisted.affected_documents
+        if document.document_kind in {"entity", "concept"}
+        and document.action in {"create", "created", "update", "updated"}
+    ]
+    if changed_version_ids:
+        try:
+            await wba_011(
+                connection,
+                namespace_key=source.namespace_key,
+                document_version_ids=changed_version_ids,
+                model="text-embedding-3-small",
+            )
+        except Exception as error:  # noqa: BLE001 - 저장된 Build는 성공으로 유지
+            logger.warning("Wiki 재임베딩 실패: %s", error)
     return persisted, plan
 
 
@@ -164,9 +273,249 @@ async def wba_001(
     )
 
 
-async def wba_002(request: FeatureRequest) -> FeatureResult:
+def _entries_after_plan(
+    existing: list[ExistingWikiEntry],
+    plans: list[WikiDocumentPlan],
+) -> list[ExistingWikiEntry]:
+    """메모리 재구성 상태에 이번 문서 계획을 upsert한다."""
+    merged = {(entry.document_kind, entry.document_key): entry for entry in existing}
+    for plan in plans:
+        merged[(plan.document_kind, plan.document_key)] = ExistingWikiEntry(
+            document_kind=plan.document_kind,
+            document_key=plan.document_key,
+            title=plan.title,
+            domain=plan.domain,
+            summary=plan.summary,
+            metadata=plan.metadata,
+        )
+    return list(merged.values())
+
+
+def _relations_for_next_source(
+    relations: list[WikiRelationPlan],
+) -> list[WikiRelationPlan]:
+    """이전 원본 관계의 '현재 Build 관측' 표식을 제거해 근거 오귀속을 막는다."""
+    return [
+        replace(
+            relation,
+            metadata={
+                key: value
+                for key, value in relation.metadata.items()
+                if key != "observed_in_current_build"
+            },
+        )
+        for relation in relations
+    ]
+
+
+def _combine_rebuild_results(
+    results: list[PersistedWikiBuild],
+) -> PersistedWikiBuild:
+    """원본별 저장 결과를 최종 현재 문서만 담은 Full Rebuild 결과로 합친다."""
+    if not results:
+        raise ValueError("Full Wiki Rebuild 저장 결과가 없습니다.")
+    final_documents = {
+        document.document_id: document
+        for result in results
+        for document in result.affected_documents
+    }
+    latest = results[-1]
+    return replace(
+        latest,
+        affected_documents=list(final_documents.values()),
+        superseded_relation_count=sum(
+            result.superseded_relation_count for result in results
+        ),
+    )
+
+
+async def rebuild_full_wiki(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    job_id: str,
+    model: str = "gpt-4.1-mini",
+    classifier: WikiClassifier = classify_source_for_wiki,
+    linker: WikiRelationLinker = link_wiki_relations,
+    generated_at: str | None = None,
+) -> FullWikiRebuildResult:
+    """사용자 원본 전체를 메모리에서 재분류한 뒤 Wiki를 원자적으로 교체한다.
+
+    LLM 호출·identity·관계 Linker·Lint는 기존 Wiki를 변경하지 않고 먼저
+    완료한다. 모든 계획이 통과한 뒤에만 하나의 DB Transaction에서 기존
+    파생 Wiki를 supersede하고 새 Snapshot을 저장하므로, 중간 실패는 기존
+    활성 Wiki를 손상시키지 않는다.
+    """
+    if not user_id or not job_id:
+        raise ValueError("WBA-002에 user_id와 job_id가 필요합니다.")
+    async with connection.transaction():
+        await set_personal_wiki_scope(connection, user_id=user_id)
+        sources = await list_user_source_versions_for_rebuild(
+            connection, user_id=user_id
+        )
+    if not sources:
+        raise ValueError("전체 Wiki를 재구성할 활성 원본이 없습니다.")
+
+    existing_entities: list[ExistingWikiEntry] = []
+    existing_concepts: list[ExistingWikiEntry] = []
+    existing_relations: list[WikiRelationPlan] = []
+    onboarding_anchors: list[WikiNodeIdentity] = []
+    staged: list[tuple[UserSourceDocumentForAgent, WikiBuildPlan]] = []
+    timestamp = generated_at or datetime.now(UTC).isoformat()
+
+    for source in sources:
+        classification, classification_model = await to_thread(
+            classify_wiki_source,
+            source_type=source.source_type,
+            source_metadata=source.source_metadata,
+            source_title=source.title,
+            source_content=source.raw_content,
+            source_description=source.description,
+            source_tags=source.tags,
+            existing_entities=existing_entities,
+            existing_concepts=existing_concepts,
+            model=model,
+            classifier=classifier,
+        )
+        draft = prepare_wiki_identity_resolution(
+            classification=classification,
+            existing_entities=existing_entities,
+            existing_concepts=existing_concepts,
+        )
+        identity = await to_thread(
+            resolve_wiki_identity_conflicts,
+            draft=draft,
+            source_title=source.title,
+            model=model,
+        )
+        classification = validate_wiki_identity_quality(
+            classification=identity.classification,
+            existing_entities=existing_entities,
+            existing_concepts=existing_concepts,
+        )
+        relation_model = "deterministic:onboarding-anchor-v1"
+        if source.source_type != "onboarding_seed":
+            candidates = build_relation_candidate_sets(
+                classification=classification,
+                existing_entries=[*existing_entities, *existing_concepts],
+                existing_relations=existing_relations,
+                onboarding_anchor_ids=onboarding_anchors,
+            )
+            classification = await to_thread(
+                linker,
+                source_title=source.title,
+                source_content=source.raw_content,
+                classification=classification,
+                candidates_by_node=candidates,
+                model=model,
+            )
+            relation_model = model
+        plan = build_wiki_plan(
+            source_title=source.title,
+            source_url=source.canonical_url,
+            source_tags=source.tags,
+            source_content_hash=source.content_hash,
+            source_size_bytes=len(source.raw_content.encode("utf-8")),
+            classification=classification,
+            existing_entities=existing_entities,
+            existing_concepts=existing_concepts,
+            generated_at=timestamp,
+            model=(
+                f"{classification_model};identity={identity.model};"
+                f"relation={relation_model};rebuild=v1"
+            ),
+            existing_relations=existing_relations,
+        )
+        staged.append((source, plan))
+        existing_entities = _entries_after_plan(existing_entities, plan.entities)
+        existing_concepts = _entries_after_plan(existing_concepts, plan.concepts)
+        existing_relations = _relations_for_next_source(plan.relations)
+        if source.source_type == "onboarding_seed":
+            onboarding_anchors.extend(
+                WikiNodeIdentity("concept", document.document_key)
+                for document in plan.concepts
+            )
+
+    quality = await wba_014(
+        [*existing_entities, *existing_concepts], existing_relations
+    )
+    if not quality.passed:
+        errors = [issue.message for issue in quality.issues if issue.severity == "error"]
+        raise ValueError("Full Wiki Rebuild 품질 게이트 실패: " + "; ".join(errors[:5]))
+
+    persisted_results: list[PersistedWikiBuild] = []
+    async with connection.transaction():
+        await set_personal_wiki_scope(connection, user_id=user_id)
+        superseded_count = await supersede_personal_wiki_for_rebuild(
+            connection, user_id=user_id, job_id=job_id
+        )
+        for source, plan in staged:
+            persisted_results.append(
+                await persist_wiki_build(
+                    connection,
+                    source=source,
+                    plan=plan,
+                    job_id=job_id,
+                )
+            )
+        affected_document_count = len(
+            {
+                document.document_id
+                for result in persisted_results
+                for document in result.affected_documents
+            }
+        )
+        await update_full_wiki_rebuild_summary(
+            connection,
+            user_id=user_id,
+            wiki_version_id=persisted_results[-1].wiki_version_id,
+            source_count=len(sources),
+            affected_document_count=affected_document_count,
+            superseded_document_count=superseded_count,
+        )
+
+    persisted = _combine_rebuild_results(persisted_results)
+    version_ids = [
+        document.document_version_id
+        for document in persisted.affected_documents
+        if document.document_kind in {"entity", "concept"}
+        and document.action in {"create", "created", "update", "updated"}
+    ]
+    embedding_count = 0
+    if version_ids:
+        try:
+            embedding_count = await wba_011(
+                connection,
+                namespace_key=f"user/{user_id}",
+                document_version_ids=version_ids,
+                model="text-embedding-3-small",
+            )
+        except Exception as error:  # noqa: BLE001 - Wiki 교체는 이미 완료
+            logger.warning("Full Wiki Rebuild 재임베딩 실패: %s", error)
+    return FullWikiRebuildResult(
+        persisted=persisted,
+        source_count=len(sources),
+        quality=quality,
+        embedding_count=embedding_count,
+        superseded_document_count=superseded_count,
+    )
+
+
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
+async def wba_002(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    job_id: str,
+    model: str = "gpt-4.1-mini",
+) -> FullWikiRebuildResult:
     """[WBA-002] Full Wiki Rebuild.
 
     전체 개인 Wiki를 재분류하고 재구성한다.
     """
-    raise NotImplementedError("[WBA-002] 기능 구현이 필요합니다.")
+    return await rebuild_full_wiki(
+        connection,
+        user_id=user_id,
+        job_id=job_id,
+        model=model,
+    )
