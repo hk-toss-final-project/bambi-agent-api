@@ -201,7 +201,7 @@ def test_wiki_top_nodes_api_requires_database_service(client: TestClient) -> Non
 
 def test_wiki_graph_page_contains_local_interactive_graph(client: TestClient) -> None:
     """시각화 페이지가 외부 CDN 없이 검색·필터·상세 Graph UI를 포함한다."""
-    response = client.get("/wiki-graph?user_id=mock-clipping-user")
+    response = client.get("/wiki-graph?user_id=test-user")
 
     assert response.status_code == 200
     assert "Report Builder Wiki Graph" in response.text
@@ -213,11 +213,21 @@ def test_wiki_graph_page_contains_local_interactive_graph(client: TestClient) ->
     assert "https://cdn" not in response.text
 
 
+def test_wiki_graph_page_has_no_dummy_user_default(client: TestClient) -> None:
+    """사용자 ID를 생략하면 제거된 더미 사용자를 자동 조회하지 않는다."""
+    response = client.get("/wiki-graph")
+
+    assert response.status_code == 200
+    assert 'data-user-id=""' in response.text
+    assert "mock-clipping-user" not in response.text
+    assert "if (initialUserId) loadGraph(initialUserId);" in response.text
+
+
 def test_wiki_graph_page_reuses_and_applies_persisted_bearer_token(
     client: TestClient,
 ) -> None:
     """Graph 화면이 저장 토큰과 Swagger 인증을 읽어 Authorization에 적용한다."""
-    response = client.get("/wiki-graph?user_id=mock-clipping-user")
+    response = client.get("/wiki-graph?user_id=test-user")
 
     assert response.status_code == 200
     assert '"report-builder-agent-api-token"' in response.text
@@ -229,7 +239,7 @@ def test_wiki_graph_page_reuses_and_applies_persisted_bearer_token(
 
 def test_wiki_graph_page_hides_completed_loading_status(client: TestClient) -> None:
     """로딩 완료 시 status 레이어의 display 규칙이 hidden 속성을 덮어쓰지 않는다."""
-    response = client.get("/wiki-graph?user_id=mock-clipping-user")
+    response = client.get("/wiki-graph?user_id=test-user")
 
     assert response.status_code == 200
     assert ".status[hidden] { display: none !important; }" in response.text

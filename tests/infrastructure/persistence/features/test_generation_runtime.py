@@ -864,7 +864,7 @@ def test_snapshot_row_mapping_tolerates_snapshots_saved_before_new_fields() -> N
 
 
 def test_snapshot_save_payload_preserves_interest_bundle_fields() -> None:
-    """개발 Seed 저장 경로도 범주 메타데이터를 JSON Payload에서 누락하지 않는다."""
+    """생성 결과 저장 경로가 범주 메타데이터를 JSON Payload에서 누락하지 않는다."""
     from app.schemas.mvp import PublishSnapshotResponse
     from infrastructure.persistence.postgres_publish_snapshots import (
         PostgresPublishSnapshotRepository,

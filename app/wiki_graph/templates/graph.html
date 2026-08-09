@@ -722,8 +722,9 @@
       [entityFilter, conceptFilter, orphanFilter].forEach(input => input.addEventListener("change", () => buildVisibleGraph(false)));
       document.getElementById("user-form").addEventListener("submit", event => { event.preventDefault(); const userId = document.getElementById("user-id").value.trim(); if (userId) loadGraph(userId); });
       window.addEventListener("resize", () => { if (state.nodes.length) fitGraph(); });
-      const initialUserId = document.body.dataset.userId || "mock-clipping-user";
-      document.getElementById("user-id").value = initialUserId; initializeAuthentication(); applyTransform(); loadGraph(initialUserId);
+      const initialUserId = document.body.dataset.userId;
+      document.getElementById("user-id").value = initialUserId; initializeAuthentication(); applyTransform();
+      if (initialUserId) loadGraph(initialUserId);
     })();
   </script>
 </body>

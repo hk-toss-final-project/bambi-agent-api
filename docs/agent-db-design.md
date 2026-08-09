@@ -267,13 +267,13 @@ MVP의 실시간·대량 발행 경로는 Agent API가 agent-db를 직접 노출
 초기화와 검증 절차는 `database/README.md`를 따릅니다. `scripts/start_agent_db.sh`가
 실행 중인 컨테이너에도 Initializer를 명시적으로 호출하고, Compose `post_start`
 Hook은 컨테이너가 실제로 시작될 때 같은 경로를 실행합니다. 두 경로 모두
-`schema_migrations`에 없는 SQL과 Checksum이 변경된 개발 Seed를 적용합니다.
+`schema_migrations`에 없는 SQL을 적용합니다.
 적용된 Migration 파일은 수정하지 않고 Schema 변경은 반드시 다음 순번
 Migration으로 추가합니다.
 
 현재 단일 VM 배포는 `bambi-build`의 `agent-db-init` one-shot 서비스를 API·Worker
-기동 전에 실행합니다. Agent API 이미지에 포함된 Migration·Seed를
-`AGENT_DATABASE_URL`로 적용하며, 성공한 Seed Checksum은 `audit_logs`에 기록합니다.
+기동 전에 실행합니다. Agent API 이미지에 포함된 Migration을
+`AGENT_DATABASE_URL`로 적용합니다.
 Application Startup에서는 초기화를 실행하지 않습니다.
 
 `0006_rename_report_builder_contracts.sql`은 기존 생성 Job 유형과 콘텐츠 생성

@@ -14,10 +14,10 @@ router = APIRouter()
 async def wiki_graph_page(
     request: Request,
     user_id: Annotated[
-        str,
+        str | None,
         Query(min_length=1, max_length=128, description="그래프로 조회할 사용자 ID"),
-    ] = "mock-clipping-user",
+    ] = None,
 ) -> str:
     """Obsidian 스타일 개인 Wiki 관계 Graph 페이지를 반환한다."""
     settings = request.app.state.container.settings
-    return render_wiki_graph_page(settings.api_prefix, user_id)
+    return render_wiki_graph_page(settings.api_prefix, user_id or "")

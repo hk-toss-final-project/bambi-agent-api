@@ -614,13 +614,13 @@ class PublishBatchAckRequest(ImmutableSchema):
                     "worker_id": "service-worker-01",
                     "items": [
                         {
-                            "content_id": "mock-content-001",
+                            "content_id": "example-content-001",
                             "version": 1,
                             "snapshot_hash": "d3b07384d113edec49eaa6238ad5ff00d3b07384d113edec49eaa6238ad5ff00",
                             "status": "published",
                         },
                         {
-                            "content_id": "mock-content-002",
+                            "content_id": "example-content-002",
                             "version": 1,
                             "snapshot_hash": "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
                             "status": "failed",

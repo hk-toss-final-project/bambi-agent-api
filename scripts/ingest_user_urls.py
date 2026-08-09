@@ -12,9 +12,9 @@ wiki_source_events에 failed 상태와 오류로 기록한다.
 WIKI_BUILD_MAX_WAIT_MINUTES)으로 미룬다. Worker는 그 시각 이후에만 Job을
 Claim해 개인 Wiki 문서로 반영한다.
 
-기본 입력은 dummy/urls/url.txt이며 --url을 지정하면 해당 URL만 수집한다.
+사용자 ID와 수집할 URL 또는 URL 목록 파일을 명시적으로 전달해야 한다.
 
-실행: uv run python scripts/ingest_user_urls.py [--user-id <id>] [--url <url> ...]
+실행: uv run python scripts/ingest_user_urls.py --user-id <id> --url <url>
 """
 
 from __future__ import annotations
@@ -45,11 +45,6 @@ from infrastructure.sources.connectors.api import JinaReadError, fetch_url_via_j
 from scripts.user_url_file import load_user_urls
 
 type DictRow = dict[str, Any]
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_URL_FILE = PROJECT_ROOT / "dummy" / "urls" / "url.txt"
-DEFAULT_USER_ID = "mock-clipping-user"
-
 
 def make_source_event_id(url: str) -> str:
     """URL로 재실행해도 같은 값이 나오는 멱등 이벤트 식별자를 만든다."""
@@ -196,18 +191,18 @@ async def run(
 def main() -> int:
     """CLI 인자를 해석하고 URL 수집을 실행한다."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--user-id", default=DEFAULT_USER_ID)
-    parser.add_argument(
+    parser.add_argument("--user-id", required=True)
+    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument(
         "--url",
         action="append",
         dest="urls",
-        help="수집할 URL. 생략하면 --url-file의 목록을 사용한다.",
+        help="수집할 URL. 여러 번 지정할 수 있다.",
     )
-    parser.add_argument(
+    source_group.add_argument(
         "--url-file",
         type=Path,
-        default=DEFAULT_URL_FILE,
-        help="--url을 생략했을 때 읽을 URL 목록 파일.",
+        help="수집할 URL 목록 파일.",
     )
     args = parser.parse_args()
 

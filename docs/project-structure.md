@@ -27,7 +27,6 @@ report-builder-agent-api/
 ├── mcp_server/             # MVP 이후 MCP Server와 Tool 경계
 ├── shared/                 # 공통 함수 계약과 비기능 정책
 ├── tests/                  # 명세-스캐폴드 정합성과 앱 조립 테스트
-├── bench/                  # 실제 LLM 기능 구현 후 추가할 품질 벤치마크
 ├── docs/                   # 전체 기능 명세, MVP 범위, 구조·DB 설계 문서
 └── compose.yaml            # 로컬 PostgreSQL 17 + pgvector 실행 구성
 ```
@@ -42,7 +41,7 @@ report-builder-agent-api/
 - Worker Job 유형과 CLI: `report_generation`, `--worker report-generation`
 - 개발 API: `POST /internal/v1/dev/users/{user_id}/report-generations`
 - 모델 환경변수: `REPORT_LLM_MODEL`
-- 공유 모델과 Benchmark: `shared/report_models.py`, `bench/report_generation/`
+- 공유 모델: `shared/report_models.py`
 
 기존 DB에 저장된 생성 Job과 `BAMBI-*` 기능 ID는
 `database/migrations/0006_rename_report_builder_contracts.sql`이 새 계약으로
