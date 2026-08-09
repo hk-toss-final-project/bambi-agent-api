@@ -7,6 +7,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MIGRATION_PATH = (
     PROJECT_ROOT / "database" / "migrations" / "0017_wiki_relation_lifecycle.sql"
 )
+SCHEMA_CONTRACT_PATH = (
+    PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
+)
+RLS_CONTRACT_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
 
 
 def _migration() -> str:
@@ -70,3 +74,13 @@ def test_relation_lifecycle_migration_creates_source_support_history() -> None:
     assert "AFTER DELETE ON agent.wiki_relation_supports" in migration
     assert "support.status = 'active'" in migration
     assert "VALUES (17, 'Track Wiki relation provenance supports and lifecycle')" in migration
+
+
+def test_relation_support_is_covered_by_schema_and_rls_contracts() -> None:
+    """관계 support 테이블을 필수 스키마와 사용자 격리 계약에서 검증한다."""
+    schema_contract = SCHEMA_CONTRACT_PATH.read_text(encoding="utf-8")
+    rls_contract = RLS_CONTRACT_PATH.read_text(encoding="utf-8")
+
+    assert "'wiki_relation_supports'" in schema_contract
+    assert "GRANT SELECT, DELETE ON agent.wiki_relation_supports" in rls_contract
+    assert "system scope expected 2 Wiki relation supports" in rls_contract

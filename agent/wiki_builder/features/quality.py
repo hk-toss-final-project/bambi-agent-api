@@ -37,9 +37,7 @@ _RELATION_KIND_PAIRS: dict[str, frozenset[tuple[str, str]]] = {
     "applies_concept": frozenset({("entity", "concept")}),
     "related_concept": frozenset({("concept", "concept")}),
     "alias_of": frozenset({("entity", "entity"), ("concept", "concept")}),
-    "instance_of": frozenset(
-        {("entity", "concept"), ("concept", "concept")}
-    ),
+    "instance_of": frozenset({("entity", "concept")}),
     "subtopic_of": frozenset({("concept", "concept")}),
     "part_of": frozenset(
         {

@@ -1,11 +1,10 @@
 # LLM Wiki Builder P0~P3 개선 설계와 구현 상태
 
-> 기준일: 2026-08-07
+> 기준일: 2026-08-09
 > 범위: 개인 Wiki의 노드 추출, canonical identity, 관계 후보 회수·판정,
 > 관계 이력, 품질 검증, 전체 재구성, Embedding 후보 검색과 Graph 검색 확장
 > 상태 표기: **연결됨**은 운영 Build 경로에서 호출됨, **구현됨(미연결)**은
-> 테스트 가능한 모듈은 있으나 운영 호출 경로가 아직 없음, **미실측**은 실제 LLM
-> 벤치마크 결과가 없음을 뜻한다.
+> 테스트 가능한 모듈은 있으나 운영 호출 경로가 아직 없음을 뜻한다.
 
 ## 1. 개선 목표
 
@@ -52,7 +51,7 @@ load_source
 
 ### 구현
 
-- `bench/wiki_builder/dataset.jsonl`에 20개 회귀 사례가 있다.
+- `bench/wiki_builder/dataset.jsonl`에 28개 회귀 사례가 있다.
 - 부분 관계 누락, 온보딩 날씨 Anchor, 공동 출현 오연결 금지, canonical 병합,
   standalone 처리, stale support 대체와 degree 안정성 사례를 포함한다.
 - `bench/wiki_builder/run.py`는 노드 추출 → identity → 하이브리드 후보 → Relation
@@ -64,11 +63,24 @@ load_source
   맞지 않으면 비용 계산과 LLM 호출 전에 중단한다.
 - `--confirm-cost`가 없으면 실제 LLM 호출 전에 중단한다.
 
-### 현재 한계
+### 2026-08-09 실측
 
-실제 LLM 벤치마크는 아직 실행하지 않았다. 따라서 이 변경으로 관계 품질이
-정량적으로 개선됐다고 단정하지 않는다. 단위 테스트는 계약 회귀를 막지만 모델 품질
-실측을 대신하지 않는다. 실제 실행에는
+`gpt-4.1-mini`로 28건을 실행한 최종 결과는 20건 통과(71.43%), 관계 recall
+83.33%(15/18), precision 100%(15/15), unsupported edge 0건이다. Canonical merge,
+node disposition, stale edge, degree 안정성, provenance 필드는 평가 대상에서 모두
+100%였다. 평균 지연은 14.517초, 입력 68,897·출력 26,072 토큰, 저장소 단가 기준
+비용은 $0.069274였다. 상세 결과는
+`bench/wiki_builder/results/2026-08-09_gpt-4.1-mini.md`에 보존한다.
+
+Ontology 경계 보완 전 결과도
+`bench/wiki_builder/results/2026-08-09_gpt-4.1-mini_pre-ontology.md`에 보존한다.
+그 실행은 17/28, recall 63.16%, precision 92.31%였다. 다만 두 실행 사이에 기존
+온보딩 후보를 신규 추출 노드처럼 채점하던 오류와 중복 추론 Edge 정답도 함께
+수정했으므로, 전체 차이를 프롬프트 효과만으로 해석하지 않는다.
+
+남은 고정 위험은 복합 기상 사례에서 `태풍 -> 날씨 / subtopic_of` 한 관계를
+놓친 점과 일부 노드 추출·role 판정 실패다. 후보 점수만으로 이 Edge를 강제 생성하지
+않고 실제 사용자 데이터로 recall을 계속 관측한다. 재실행에는
 `bench/wiki_builder/relation_state_fixture.json`을 명시해야 한다.
 
 ## 4. P1 — 후보 회수와 별도 Relation Linker
@@ -110,8 +122,8 @@ Embedding은 `text-embedding-3-small` 1536차원 Chunk Vector를 문서 단위�
 | Legacy | `applies_concept` | Entity가 Concept를 적용·사용 |
 | Legacy | `related_concept` | Concept 사이의 기존 포괄 관계 |
 | Identity | `alias_of` | 같은 대상의 표기·별칭 관계 |
-| Semantic | `instance_of` | 상위 유형의 인스턴스 |
-| Semantic | `subtopic_of` | 더 넓은 주제의 하위 주제 |
+| Semantic | `instance_of` | 구체 Entity가 상위 Concept 유형의 인스턴스 |
+| Semantic | `subtopic_of` | Concept가 더 넓은 Concept의 하위 주제 |
 | Semantic | `part_of` | 대상·개념의 구성 부분 |
 | Semantic | `located_in` | 장소에 위치함 |
 | Semantic | `occurs_in` | 사건·현상이 장소에서 발생함 |
@@ -220,10 +232,10 @@ support Snapshot을 읽어 이 Gate를 실행한다. 통과하면 bounded PPR, �
 
 | 단계 | 현재 상태 | 남은 작업 |
 |---|---|---|
-| P0 회귀 데이터·채점기 | 구현됨, 실제 LLM 미실측 | 비용 승인 후 20건 1회 실행·결과 기록 |
-| P1 후보 회수·Relation Linker | Incremental Build 연결됨 | 실제 데이터 precision·recall 측정 |
-| P1 온보딩 Anchor | 후속 일반 Build 후보로 연결됨 | 운영 사용자 회귀 확인 |
-| P2 provenance·lifecycle | Migration·저장 동기화 구현됨 | 배포 DB Migration·삭제/갱신 통합 검증 |
+| P0 회귀 데이터·채점기 | 28건 실측 완료, recall 83.33%·precision 100% | 실패 사례와 운영 데이터 recall 추적 |
+| P1 후보 회수·Relation Linker | Incremental Build 연결·실측됨 | 복합 taxonomy 누락 관계 개선 |
+| P1 온보딩 Anchor | 후속 일반 Build 연결·폭염→날씨 실측 통과 | 운영 사용자 회귀 확인 |
+| P2 provenance·lifecycle | Migration·저장 동기화·로컬 DB 계약 검증 완료 | 배포 DB Migration·삭제/갱신 통합 검증 |
 | P2 WBA-014 Lint | Incremental·Full Rebuild에 연결됨 | 운영 임계값 관측과 조정 |
 | P2 WBA-002 Full Rebuild | facade 구현, 운영 route 미연결 | API/Job/Worker route와 DB E2E |
 | P3 WBA-011 Embedding | Build 후 best-effort 연결됨 | Provider 실패 재처리 운영 경로 |

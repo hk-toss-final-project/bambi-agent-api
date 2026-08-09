@@ -191,6 +191,7 @@ def test_migration_contains_all_agent_db_feature_tables() -> None:
         "wiki_document_versions",
         "wiki_document_sources",
         "wiki_document_relations",
+        "wiki_relation_supports",
         "wiki_chunks",
         "wiki_embeddings",
         "wiki_versions",

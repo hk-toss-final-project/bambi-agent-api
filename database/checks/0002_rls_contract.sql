@@ -11,6 +11,7 @@ GRANT SELECT, DELETE ON agent.wiki_documents TO agent_rls_contract_role;
 GRANT SELECT, DELETE ON agent.user_source_documents TO agent_rls_contract_role;
 GRANT SELECT, DELETE ON agent.global_source_documents TO agent_rls_contract_role;
 GRANT SELECT, DELETE ON agent.wiki_document_relations TO agent_rls_contract_role;
+GRANT SELECT, DELETE ON agent.wiki_relation_supports TO agent_rls_contract_role;
 GRANT SELECT, DELETE ON agent.wiki_version_documents TO agent_rls_contract_role;
 
 INSERT INTO agent.user_context_snapshots (
@@ -140,6 +141,87 @@ VALUES
     ('rls-user-a', 'user/rls-user-a', 'url', 'https://rls-contract.invalid/source-a', repeat('d', 64)),
     ('rls-user-b', 'user/rls-user-b', 'url', 'https://rls-contract.invalid/source-b', repeat('e', 64));
 
+INSERT INTO agent.user_source_document_versions (
+    source_document_id,
+    namespace_key,
+    version,
+    title,
+    raw_content,
+    content_hash
+)
+SELECT
+    source.id,
+    source.namespace_key,
+    1,
+    'RLS contract source',
+    '# RLS contract source',
+    CASE source.user_id
+        WHEN 'rls-user-a' THEN repeat('j', 64)
+        ELSE repeat('k', 64)
+    END
+FROM agent.user_source_documents AS source
+WHERE source.user_id IN ('rls-user-a', 'rls-user-b');
+
+INSERT INTO agent.agent_jobs (
+    feature_id,
+    job_type,
+    user_id,
+    idempotency_key,
+    status,
+    progress,
+    completed_at
+)
+VALUES
+    (
+        'WBA-001',
+        'personal_wiki_build',
+        'rls-user-a',
+        'rls-contract-rls-user-a',
+        'completed',
+        100,
+        clock_timestamp()
+    ),
+    (
+        'WBA-001',
+        'personal_wiki_build',
+        'rls-user-b',
+        'rls-contract-rls-user-b',
+        'completed',
+        100,
+        clock_timestamp()
+    );
+
+INSERT INTO agent.wiki_relation_supports (
+    relation_id,
+    namespace_key,
+    source_document_version_id,
+    build_job_id,
+    provenance_kind,
+    confidence,
+    review_status,
+    evidence
+)
+SELECT
+    relation.id,
+    relation.namespace_key,
+    source_version.id,
+    job.id,
+    'source_explicit',
+    0.95,
+    'accepted',
+    'RLS contract relation evidence'
+FROM agent.wiki_document_relations AS relation
+JOIN agent.wiki_documents AS source_document
+  ON source_document.id = relation.source_document_id
+ AND source_document.namespace_key = relation.namespace_key
+JOIN agent.user_source_document_versions AS source_version
+  ON source_version.namespace_key = relation.namespace_key
+JOIN agent.agent_jobs AS job
+  ON job.user_id = source_document.user_id
+ AND job.idempotency_key = 'rls-contract-' || source_document.user_id
+WHERE source_document.user_id IN ('rls-user-a', 'rls-user-b')
+  AND source_document.document_key = 'orders';
+
 INSERT INTO agent.global_source_documents (
     canonical_url,
     url_key,
@@ -181,15 +263,21 @@ DECLARE
     deleted_rows integer;
 BEGIN
     SELECT count(*) INTO visible_relations
-    FROM agent.wiki_document_relations
-    WHERE relation_type = 'applies_concept';
+    FROM agent.wiki_document_relations AS relation
+    JOIN agent.wiki_documents AS source
+      ON source.id = relation.source_document_id
+     AND source.namespace_key = relation.namespace_key
+    WHERE relation.relation_type = 'applies_concept'
+      AND source.user_id IN ('rls-user-a', 'rls-user-b')
+      AND source.document_key = 'orders';
 
     IF visible_relations <> 1 THEN
         RAISE EXCEPTION 'user scope expected 1 Wiki relation but saw %', visible_relations;
     END IF;
 
     SELECT count(*) INTO visible_version_documents
-    FROM agent.wiki_version_documents;
+    FROM agent.wiki_version_documents
+    WHERE namespace_key IN ('user/rls-user-a', 'user/rls-user-b');
 
     IF visible_version_documents <> 1 THEN
         RAISE EXCEPTION 'user scope expected 1 Wiki version document but saw %', visible_version_documents;
@@ -201,6 +289,21 @@ BEGIN
 
     IF deleted_rows <> 0 THEN
         RAISE EXCEPTION 'user scope deleted % other-user Wiki relations', deleted_rows;
+    END IF;
+
+    SELECT count(*) INTO visible_relations
+    FROM agent.wiki_relation_supports;
+
+    IF visible_relations <> 1 THEN
+        RAISE EXCEPTION 'user scope expected 1 Wiki relation support but saw %', visible_relations;
+    END IF;
+
+    DELETE FROM agent.wiki_relation_supports
+    WHERE namespace_key = 'user/rls-user-b';
+    GET DIAGNOSTICS deleted_rows = ROW_COUNT;
+
+    IF deleted_rows <> 0 THEN
+        RAISE EXCEPTION 'user scope deleted % other-user Wiki relation supports', deleted_rows;
     END IF;
 
     DELETE FROM agent.wiki_version_documents
@@ -296,18 +399,32 @@ BEGIN
     END IF;
 
     SELECT count(*) INTO visible_rows
-    FROM agent.wiki_document_relations
-    WHERE relation_type = 'applies_concept';
+    FROM agent.wiki_document_relations AS relation
+    JOIN agent.wiki_documents AS source
+      ON source.id = relation.source_document_id
+     AND source.namespace_key = relation.namespace_key
+    WHERE relation.relation_type = 'applies_concept'
+      AND source.user_id IN ('rls-user-a', 'rls-user-b')
+      AND source.document_key = 'orders';
 
     IF visible_rows <> 2 THEN
         RAISE EXCEPTION 'system scope expected 2 Wiki relations but saw %', visible_rows;
     END IF;
 
     SELECT count(*) INTO visible_rows
-    FROM agent.wiki_version_documents;
+    FROM agent.wiki_version_documents
+    WHERE namespace_key IN ('user/rls-user-a', 'user/rls-user-b');
 
     IF visible_rows <> 2 THEN
         RAISE EXCEPTION 'system scope expected 2 Wiki version documents but saw %', visible_rows;
+    END IF;
+
+    SELECT count(*) INTO visible_rows
+    FROM agent.wiki_relation_supports
+    WHERE namespace_key IN ('user/rls-user-a', 'user/rls-user-b');
+
+    IF visible_rows <> 2 THEN
+        RAISE EXCEPTION 'system scope expected 2 Wiki relation supports but saw %', visible_rows;
     END IF;
 
     SELECT count(*) INTO visible_rows

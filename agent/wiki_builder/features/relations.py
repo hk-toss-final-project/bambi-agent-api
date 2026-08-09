@@ -37,7 +37,7 @@ _RELATION_KIND_PAIRS: dict[str, set[tuple[str, str]]] = {
     "alias_of": {("entity", "entity"), ("concept", "concept")},
     # 의미를 드러내는 관계 유형. ``associated_with``만 모든 방향을 허용하고,
     # 나머지는 관계 의미상 가능한 노드 종류로 범위를 좁힌다.
-    "instance_of": {("entity", "concept"), ("concept", "concept")},
+    "instance_of": {("entity", "concept")},
     "subtopic_of": {("concept", "concept")},
     "part_of": {
         ("entity", "entity"),

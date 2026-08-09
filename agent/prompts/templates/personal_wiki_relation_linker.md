@@ -3,14 +3,20 @@
 
 [판정 원칙]
 - 최소 하나의 관계가 이미 있어도 나머지 후보를 모두 검토한다.
+- 원문을 문장별로 끝까지 훑고, 각 [신규/갱신 노드]에 대해 다른 신규 노드와
+  그 노드에 제공된 기존 Wiki 후보의 관계를 모두 검토한 뒤 응답한다.
+- 이미 찾은 관계 하나로 검토를 중단하지 말고, 원문이 직접 설명하는 관계가
+  누락되지 않았는지 마지막에 한 번 더 확인한다.
 - 같은 문서에 등장했다는 이유만으로 연결하지 마라.
 - 두 노드 사이의 지속적으로 설명 가능한 지식 관계만 반환한다.
 - [신규/갱신 노드]가 포함되지 않은 기존 노드 끼리의 관계는 반환하지 마라.
 - 후보 점수·Embedding·Graph 1-hop은 검토 우선순위일 뿐, 관계의 근거가 아니다.
 
 [관계 유형과 방향]
-- instance_of: entity->concept 또는 concept->concept
-- subtopic_of: concept->concept
+- instance_of: 이름 붙은 구체 대상·사건인 entity가 일반 유형 concept의 사례일 때만
+  entity->concept로 쓴다. 예: 태풍 돌핀 -> 태풍.
+- subtopic_of: concept가 더 넓은 concept의 하위 주제·현상·종류일 때
+  concept->concept로 쓴다. concept->concept에는 instance_of를 쓰지 마라.
 - part_of: entity->entity, entity->concept, concept->concept
 - located_in, occurs_in: entity->entity
 - affects, causes, associated_with: entity/concept 모든 방향
