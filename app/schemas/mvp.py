@@ -297,6 +297,26 @@ class WikiDocumentDeletionResponse(ImmutableSchema):
     request_id: str = Field(description="요청 추적 ID")
 
 
+class PersonalWikiResetResponse(ImmutableSchema):
+    """개인 LLM Wiki 계정 단위 초기화 결과."""
+
+    user_id: str = Field(description="Wiki를 초기화한 사용자 ID")
+    reset_document_count: int = Field(ge=0, description="비활성화한 Wiki 문서 수")
+    reset_relation_count: int = Field(ge=0, description="비활성화한 Wiki 관계 수")
+    unsearchable_chunk_count: int = Field(
+        ge=0, description="검색에서 제외한 Wiki Chunk 수"
+    )
+    retired_wiki_version_count: int = Field(
+        ge=0, description="종료한 Wiki Build Snapshot 수"
+    )
+    retired_interest_profile_count: int = Field(
+        ge=0, description="종료한 관심사 Profile 수"
+    )
+    cancelled_job_count: int = Field(ge=0, description="취소한 Wiki Build Job 수")
+    reset_at: datetime = Field(description="초기화 완료 시각")
+    request_id: str = Field(description="요청 추적 ID")
+
+
 # 한 리포트가 묶을 수 있는 주제 수 상한. 주제마다 조사(검색·수집)를 따로 돌리므로
 # 개수가 곧 생성 시간이다. Worker lease(600초) 안에 끝나야 같은 Job이 죽은 것으로
 # 판정돼 재실행되지 않는다.

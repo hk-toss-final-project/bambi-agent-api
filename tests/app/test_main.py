@@ -129,6 +129,7 @@ def test_openapi_contains_fastapi_mvp_operations(client: TestClient) -> None:
         "svc_013",
         "svc_014",
         "pwiki_003",
+        "pwiki_013",
         "int_001_get",
         "int_011_rebuild",
         "wba_015_delete",

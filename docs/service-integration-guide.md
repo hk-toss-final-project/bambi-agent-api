@@ -169,6 +169,7 @@ Agent는 접수 시 관심사가 현재 활성 Profile에 속하고 차단되지
 | `GET /users/{user_id}/wiki/documents` (+`/{document_id}`) | Wiki 문서 목록·상세(Markdown 포함) |
 | `GET /users/{user_id}/wiki/graph` | Entity·Concept 관계 그래프 (Node·Edge·통계) |
 | `GET /users/{user_id}/wiki/graph/top-nodes?limit=10` | 연결 많은 순 상위 Node (rank·degree 포함 경량 응답) |
+| `DELETE /users/{user_id}/wiki` | 원본을 보존한 개인 LLM Wiki 계정 단위 초기화 (동기·멱등) |
 | `GET /users/{user_id}/interests` | 활성 관심 키워드 (topic·score·evidence) |
 | `POST /users/{user_id}/interest-profiles/rebuild` | 관심 키워드 수동 재계산 (Wiki Build 완료 시 자동 재계산되므로 새로고침·복구용) |
 | `GET /users/{user_id}/generated-contents` (+`/{candidate_id}`) | 생성 콘텐츠 목록·상세(본문·Citation) |
@@ -210,6 +211,17 @@ Agent는 접수 시 관심사가 현재 활성 Profile에 속하고 차단되지
   소유**이며 Agent는 실행만 합니다. 같은 개념이 새 클리핑으로 재등장하면 새
   문서로 되살아납니다(D1 잠정: 기본 부활 — 억제(tombstone) 옵션은 팀 결정 후).
   관심사 반영이 급하면 `POST .../interest-profiles/rebuild`를 이어서 호출하세요.
+
+### 3.9 개인 LLM Wiki 초기화 (2026-08-10 구현)
+
+- **계정 초기화** (`DELETE .../wiki`): 해당 사용자의 활성 Wiki 문서·관계·Chunk
+  검색·Build Snapshot·관심사 Profile을 비활성화하고 대기·실행 중인 Wiki Build를
+  취소합니다(동기 200, 반복 호출 멱등).
+- `user_source_documents`, `user_source_document_versions`, 기존 Source Event는
+  보존합니다. 따라서 초기화는 사용자가 저장한 원본 삭제가 아니며 새 입력이나 전체
+  재구성으로 Wiki를 다시 만들 수 있습니다.
+- 확인 UX와 사용자 인증은 Service가 소유합니다. Agent는 전달된 `user_id`의 Namespace만
+  초기화하고 처리 건수를 반환합니다.
 
 ## 4. service-worker가 구현할 것 — 발행 폴링 루프
 

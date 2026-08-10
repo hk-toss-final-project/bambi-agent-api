@@ -111,6 +111,20 @@ class _FakeWikiDocumentRepository:
             "unsearchable_chunk_count": 2,
         }
 
+    async def reset_wiki(
+        self, user_id: str, *, request_id: str
+    ) -> Mapping[str, object]:
+        """개인 LLM Wiki 초기화 결과를 반환한다."""
+        return {
+            "reset_document_count": 3,
+            "reset_relation_count": 2,
+            "unsearchable_chunk_count": 5,
+            "retired_wiki_version_count": 1,
+            "retired_interest_profile_count": 1,
+            "cancelled_job_count": 1,
+            "reset_at": datetime(2026, 8, 10, tzinfo=UTC),
+        }
+
     @staticmethod
     def _summary() -> dict[str, object]:
         """목록과 상세가 공유하는 Wiki 문서 요약을 반환한다."""
@@ -207,3 +221,15 @@ def test_wiki_document_deletion_returns_404_for_unknown_document() -> None:
 
     assert response.status_code == 404
     assert response.json()["code"] == "WIKI_DOCUMENT_NOT_FOUND"
+
+
+def test_personal_wiki_reset_returns_account_scoped_counts() -> None:
+    """개인 Wiki 초기화가 사용자 ID와 종류별 반영 건수를 반환하는지 검증한다."""
+    with _client() as client:
+        response = client.delete("/internal/v1/users/user-1/wiki")
+
+    assert response.status_code == 200
+    assert response.json()["user_id"] == "user-1"
+    assert response.json()["reset_document_count"] == 3
+    assert response.json()["unsearchable_chunk_count"] == 5
+    assert response.json()["cancelled_job_count"] == 1

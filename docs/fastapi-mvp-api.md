@@ -37,6 +37,7 @@
 | `GET` | `/internal/v1/jobs/{job_id}` | `SVC-013` | `200` | Job 상태와 진행률을 조회합니다. |
 | `GET` | `/internal/v1/jobs/{job_id}/result` | `SVC-014` | `200` | 완료된 Job 결과를 조회합니다. 미완료 시 `409`를 반환합니다. |
 | `GET` | `/internal/v1/users/{user_id}/wiki/graph` | `PWIKI-003` | `200` | 현재 개인 Wiki 문서와 관계 Graph를 조회합니다. |
+| `DELETE` | `/internal/v1/users/{user_id}/wiki` | `PWIKI-013` | `200` | 사용자 원본을 보존한 채 개인 LLM Wiki 파생 데이터를 초기화합니다. |
 
 ### 개인 Wiki Graph 조회
 
@@ -59,6 +60,20 @@ Swagger `Authorize`에 영속 저장된 `InternalBearer` 토큰을 재사용하�
 인증란에서 입력한 토큰을 브라우저 `localStorage`에 저장합니다. 서버 Secret은 HTML이나
 URL에 포함하지 않습니다. DB 연결이 준비되지 않은 Runtime은 Graph API에
 `SERVICE_NOT_READY`를 반환합니다.
+
+### 개인 LLM Wiki 초기화
+
+`DELETE /internal/v1/users/{user_id}/wiki`는 사용자 원본과 원본 Version을 보존한 채
+현재 활성 Wiki 문서·관계·Chunk 검색·Build Snapshot·관심사 Profile을 계정 단위로
+비활성화합니다. 대기·실행 중인 `personal_wiki_build` Job도 취소하며, 이미 실행 중인
+Worker가 초기화 뒤 결과를 저장하려 하면 DB Trigger가 취소 상태를 확인해 Transaction을
+거부합니다. 같은 사용자의 반복 호출은 성공하며 이미 빈 Wiki에서는 모든 반영 건수가 0입니다.
+
+응답은 `reset_document_count`, `reset_relation_count`,
+`unsearchable_chunk_count`, `retired_wiki_version_count`,
+`retired_interest_profile_count`, `cancelled_job_count`, `reset_at`,
+`request_id`를 반환합니다. 초기화 뒤 새 원본 입력이나 명시적 전체 재구성으로 Wiki를 다시
+만들 수 있습니다.
 
 ### 웹 클리핑 저장 계약
 

@@ -18,6 +18,7 @@ from infrastructure.persistence.api import (
     delete_wiki_document_and_record_event,
     load_interest_documents_for_user,
     load_recent_feedback_signals_for_user,
+    reset_personal_wiki,
     save_interest_profile_for_user,
 )
 from infrastructure.sources.connectors.api import LatestArticle
@@ -594,6 +595,17 @@ class PostgresWikiGraphRepository:
                 source_event_id=source_event_id,
                 occurred_at=occurred_at,
                 memo=memo,
+            )
+
+    async def reset_wiki(
+        self, user_id: str, *, request_id: str
+    ) -> Mapping[str, object]:
+        """사용자 원본을 보존하고 개인 LLM Wiki 파생 상태를 초기화한다."""
+        async with self._pool.connection() as connection:
+            return await reset_personal_wiki(
+                connection,
+                user_id=user_id,
+                request_id=request_id,
             )
 
     async def list_interests(self, user_id: str) -> Mapping[str, object] | None:
