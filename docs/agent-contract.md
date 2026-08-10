@@ -198,30 +198,114 @@
 
   - `content_type`과 다른 축이다. `content_type`=콘텐츠 종류(기본 `interest_news_card`), `report_type`=생성 맥락.
   - 생략하면 `""`. 이전에 저장된 Snapshot도 `""`로 읽힌다.
-- **특정 관심분야 리포트 (`INTEREST_BUNDLE`, 2026-08-07):**
-  `POST /generations`에 `generation_scope="INTEREST_BUNDLE"`과 현재 활성
-  `user_interests.id` UUID인 `interest_id`를 보낸다. 온보딩
-  `selected_category_ids`·`selected_topic_ids`와 다른 ID 공간이다. Agent는 활성·
-  비차단 상태를 검증하고 관심사 루트와 Wiki 1홉 노드 최대 2개를 접수 시점 Job에
-  고정한다. `topic`·`topics`를 Service가 조립하지 않는다. 발행 Snapshot은
-  `generation_scope`·`source_interest_id`·`interest_profile_id`·
-  `bundle_keywords`로 실제 생성 범위를 돌려준다.
-  - **`generation_scope` 와 `report_type` 은 별개 축이다** (2026-08-07 정우석 확정).
-    `report_type`=생성 유형(누가 왜 걸었나), `generation_scope`=**검색 범위**(얼마나 넓게 찾나).
-    아침 브리핑을 `INTEREST_BUNDLE`로 넓혀도 **`report_type` 은 `MORNING_BRIEFING` 그대로**다 —
-    리포트 개수가 늘어나는 게 아니라, 지금 "위키 태그 1등 하나만 검색"하던 것을 연결 키워드까지
-    보게 해 **여전히 1건**을 만드는 구조이기 때문이다. 새 `report_type` 값을 만들지 않는다.
-  - **`interest_id` = Service `GET /api/wiki/tags` 응답의 `tagId`** — 별도 조회 API가 필요 없다.
-    Service 는 이미 이 값을 받고 있다. 2026-07-29 명명 결정으로 agent 필드 `interest_id`·`topic` 을
-    `tagId`·`tag` 로 리네임해 내려주고 있어 이름만 달라 보일 뿐 같은 값이다
-    (`WikiTag.tagId` = `@JsonAlias("interest_id")`).
+- **⭐ 아침 브리핑·온디맨드 둘 다 `topics[]` 로 간다 (2026-08-07 저녁 이송우·김기용 확정)**
 
-    | agent 필드 | Service 노출 이름 | 비고 |
-    |---|---|---|
-    | `interest_id` | `tagId` | `INTEREST_BUNDLE` 의 `interest_id` 로 그대로 넣으면 된다 |
-    | `topic` | `tag` | 온보딩에서 사용자가 고르는 "topic"과는 다른 개념이라 리네임했다 |
+  `generation_scope`는 `SINGLE_TOPIC`(기본) 그대로 두고 `topics` 배열만 채운다.
+  **두 경로 모두 주제 3개**이고, 다른 건 **누가 3개를 고르느냐**뿐이다.
 
-    ⚠️ 온보딩 `selected_category_ids`·`selected_topic_ids` 와는 **다른 ID 공간**이다(위 본문 참고).
+  | 경로 | 주제 3개를 고르는 주체 | 보내는 것 |
+  |---|---|---|
+  | 아침 브리핑 | **사용자** (설정에서 미리 골라 저장) | `topic="오늘의 관심사 브리핑"` + `topics=[사용자가 고른 3개]` |
+  | 온디맨드 | **시스템** (위키 태그 점수 상위 3개 자동) | `topic`=대표 문구 + `topics=[상위 3개]` |
+
+  ⚠️ **이 표는 07-31~08-07 낮 계약과 아침·온디맨드가 서로 뒤바뀌어 있다.** 그때는 아침이 자동,
+  온디맨드가 사용자 선택이었다. 옛 코드·문서를 보고 반대로 구현하지 않도록 여기 못 박는다.
+
+  - **⚠️ `topics`를 채우면 `topic` 의 의미가 바뀐다.** 평소 `topic` 은 agent 의 **실제 검색어**지만
+    (2026-08-05 항목 참고), `topics` 가 있으면 `topic` 은 **카드 제목·`generation_topic` 표시용**이 되고
+    본문이 다루는 주제는 `topics` 목록이 결정한다. 두 규칙이 정반대라 헷갈리기 쉬우니 여기 못 박는다.
+    그래서 고정 문구를 `topic` 에 넣어도 된다 — 그 문구로 검색하지 않는다.
+  - **🚨 그래서 `topics` 가 비면 Service 는 요청 자체를 보내지 않는다.** `topic` 만 남는 순간 그 고정
+    문구가 **다시 실제 검색어가 되어** 엉뚱한 기사를 물어온다(2026-08-05 유림 확인). 사용자가 아침
+    관심사를 아직 고르지 않았을 때가 정확히 이 상황이라 실제로 발생한다. Service 가 건너뛴다.
+  - **⭐ 아침 브리핑 `topics` 폴백 3단계 (2026-08-08, 황유림 지적으로 확정)**
+
+    위 규칙만 두면 **선택 화면이 나오기 전에는 아무도 안 골랐으므로 아침 브리핑이 전면 중단된다.**
+    화면이 나온 뒤에도 설정을 건드리지 않은 사용자는 계속 못 받는다. 그래서 Service 는 이 순서로 채운다.
+
+    1. **사용자가 미리 고른 3개** — 선택 화면·저장소가 생긴 뒤
+    2. 없으면 **사용자 등록 관심사**(온보딩에서 고른 것 + 직접 추가한 것) 최근 3개
+       (`InterestRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc`)
+    3. 그것도 없으면 **건너뛴다**
+
+    - **2단계에 위키 태그 상위 3개를 쓰지 않는다.** 저장한 글에서 뽑힌 파편이 상위를 차지하기
+      때문이다(agent-api #21 — 폭염 기사 1건으로 관심사 상위가 `서울`·`온열질환`·`질병관리청`이 되고
+      아침 브리핑이 `서울` 로 나갔다). **아침은 사용자가 결과를 검토하지 않고 그냥 받는 경로라
+      파편이 가장 위험한 자리다.** 등록 관심사는 사용자가 직접 고른 값이라 파편이 섞이지 않는다.
+    - 08-08 유림님 필터(도구·출처로만 등장한 노드를 관심사 후보에서 제외)가 배포됐지만
+      **기존 위키에는 아직 적용되지 않아** 재빌드 전까지 이 판단은 그대로 유효하다.
+    - **`topics[]` 가 UUID 가 아니라 이름 문자열이라 이 폴백이 가능하다.** 온보딩 관심사는 위키 태그와
+      **ID 공간이 다르지만**(아래 참고) 이름은 그대로 쓸 수 있다. `INTEREST_BUNDLE` 이었다면 불가능했다.
+    - 이 폴백 덕분에 **선택 화면은 아침 발행의 blocker 가 아니다.** 화면이 없어도 아침은 정상 발행된다.
+  - **펜딩("처리중" 슬롯) 제목은 `topic` 이 아니라 `topics[0]` 을 저장한다.** `topic` 은 고정 문구라
+    그대로 저장하면 **모든 사용자 슬롯이 같은 문구**가 되어 무엇을 만드는 중인지 안 보인다.
+    요청 바디에는 고정 문구를 보내되, `generation_pendings.topic` 에는 실제 첫 주제를 넣는다.
+  - `topics` 는 **최대 5개**, 각 항목 500자 이하. **순서가 곧 리포트 안 섹션 순서**다.
+  - 비우거나 안 보내면 기존과 똑같이 `topic` 하나짜리 단일 주제 리포트다(회귀 없음).
+  - 주제마다 조사를 따로 돌리므로 **개수에 비례해 생성 시간이 늘어난다.** Worker lease(600초) 안에
+    끝나야 하고, 사람 수 × 주제 수만큼 워커 처리량이 필요하다(3주제 전환 시 워커 증설 = 우석 몫).
+  - `report_type` 은 **`MORNING_BRIEFING`/`ON_DEMAND` 그대로**다. 주제를 여러 개 묶어도 리포트는
+    **여전히 1건**이라 생성 유형이 달라지지 않는다. 새 `report_type` 값을 만들지 않는다.
+  - **📌 서술 형식이 두 경로에서 갈린다 — 가르는 값은 `report_type` 이다.**
+
+    | `report_type` | 서술 형식 |
+    |---|---|
+    | `MORNING_BRIEFING` | 주제 3개를 **독립 섹션으로 나열**(번호 매김). 섹션 간 연결을 만들지 않는다 |
+    | `ON_DEMAND` | 주제 간 **연결 관계를 분석해 하나로 통합 서술** |
+
+    Service 는 이미 `report_type` 을 보내고 있어 **새 플래그를 만들 필요가 없다.** 다만 현재 이 값은
+    저장·에코만 되고 생성 파이프라인까지 내려가지 않으므로(`agent/`·`domain/` 에 없음),
+    **agent 쪽 배선이 필요하다**(김기용).
+
+  - **❓ 미결 — 온디맨드의 `topic` 대표 문구가 정해지지 않았다.** 아침은 `"오늘의 관심사 브리핑"` 으로
+    정해졌지만 온디맨드는 사용자가 "지금 생성"을 누른 맥락이라 같은 문구가 어색하다. 이 값은
+    **카드 제목 재료로 사용자에게 보이므로** 아무거나 넣으면 안 된다. 정해지면 이 줄을 지운다.
+
+- **특정 관심분야 리포트 (`INTEREST_BUNDLE`) — 채택하지 않음 (2026-08-07)**
+
+  agent 에는 구현돼 있다. `generation_scope="INTEREST_BUNDLE"` + 활성 `user_interests.id` UUID인
+  `interest_id`를 보내면, agent 가 관심사 루트와 Wiki 1홉 노드 최대 2개를 접수 시점 Job에 고정하고
+  발행 Snapshot에 `source_interest_id`·`interest_profile_id`·`bundle_keywords`로 실제 범위를 돌려준다.
+
+  - **Service 는 쓰지 않는다. 아침·온디맨드 둘 다 위 `topics[]` 로 간다.** 08-07 하루에 세 번 뒤집혔다 —
+    13:34 채택 → 14:34 철회 → 17:15 재채택(아침·온디맨드 모두) → **19:00 최종 철회**. 마지막 철회 사유가
+    아래 두 가지이고, 재논의 때 같은 자리로 돌아오지 않도록 남긴다.
+  - **🔴 저장한 `interest_id` 는 반드시 썩는다 — 재채택이 막힌 결정적 이유.** 관심 Profile 은 재계산할
+    때마다 **기존 active 를 retired 로 내리고 새 Profile 을 만든다**(`interest_profiles.py`).
+    `user_interests` 가 `profile_id` 에 CASCADE 로 묶이고 PK 가 `gen_random_uuid()` 라
+    **재계산 때마다 모든 `interest_id` 가 새로 발급된다.** 사용자가 "미리 골라 저장"한 UUID 는
+    다음 재계산에 retired 를 가리켜 **409 `ACTIVE_INTEREST_REQUIRED` 로 조용히 실패한다.**
+    → 사용자 선택은 **UUID 가 아니라 키워드 이름으로 저장해야** 하고, 그러면 `topics[]` 가 정답이다.
+  - **🔴 "상위 3개"를 보낼 필드가 없다.** `interest_id` 는 **단수 1개**이고 `topics` 는 동시 전송 금지다.
+    3개를 쓰려면 `interest_ids: list[UUID]` 신설이 필요한데, `topics[]` 로 가면 그 작업이 통째로 없어진다.
+  - **⚠️ `INTEREST_BUNDLE` 의 "연결 노드"는 점수 상위가 아니다.** 루트의 **근거 문서에서 양방향 1홉으로
+    연결된** 노드를 가져온다(`interest_bundles.list_related_nodes`). 점수 2·3위가 루트와 문서를
+    공유하지 않으면 아예 안 들어온다. 그래서 "관심사 상위 3개를 함께 다룬다"는 제품 정의와 맞지 않는다.
+    온디맨드의 "주제 간 연결"은 **수집한 기사 내용에서 LLM 이 찾는 것**으로 정의됐다(08-07 김기용).
+  - **둘은 동시에 못 보낸다** — agent 스키마가 `INTEREST_BUNDLE에서는 topics를 함께 보낼 수 없습니다`
+    로 거부한다(`app/schemas/mvp.py` `model_validator`). 그래서 택일이었다.
+  - **방향이 다르다.** `topics[]` 는 관심사 **여러 개를 한 장에** 묶고, `INTEREST_BUNDLE` 은 관심사
+    **하나를 연결 키워드까지 깊게** 판다. 아침 브리핑 제품 정의("밤사이 쌓인 소식을 아침 5분에")가
+    전자라서 `topics[]` 를 골랐다.
+  - **결과 통제권도 다르다.** `INTEREST_BUNDLE` 의 이웃 키워드는 사용자가 고르는 게 아니라 위키
+    관계(LLM이 추출해 둔 것)에서 자동으로 딸려오고, 프롬프트가 이웃을 독립 섹션으로 나누지 않아
+    본문에 녹아든다 → 무관한 주제가 섞여도 눈에 잘 안 띈다. 사용자가 결과를 검토하지 않고 그냥
+    받는 자동 리포트에서는 이 예측 불가능성이 더 위험하다(2026-08-07 김기용 분석).
+  - 프리즈 이후 재논의 대상으로 남긴다. 그때 필요한 `interest_id` 는 아래 대응표를 보면 된다.
+
+- **`interest_id` = Service `GET /api/wiki/tags` 응답의 `tagId`** — 별도 조회 API가 필요 없다.
+  Service 는 이미 이 값을 받고 있다. 2026-07-29 명명 결정으로 agent 필드 `interest_id`·`topic` 을
+  `tagId`·`tag` 로 리네임해 내려주고 있어 이름만 달라 보일 뿐 같은 값이다
+  (`WikiTag.tagId` = `@JsonAlias("interest_id")`).
+
+  | agent 필드 | Service 노출 이름 | 비고 |
+  |---|---|---|
+  | `interest_id` | `tagId` | `INTEREST_BUNDLE` 을 쓰게 되면 이 값을 그대로 넣으면 된다 |
+  | `topic` | `tag` | 온보딩에서 사용자가 고르는 "topic"과는 다른 개념이라 리네임했다 |
+
+  ⚠️ 온보딩 `selected_category_ids`·`selected_topic_ids` 와는 **다른 ID 공간**이다.
+  `topics[]` 에 넣는 값은 이 id 가 아니라 **태그 이름(`tag`)** 이다 — 아침(사용자가 고른 이름)도,
+  온디맨드(`topTags(3)` 으로 뽑은 상위 3개 이름)도 마찬가지다. UUID 는 어느 경로에도 들어가지 않는다.
 - **온보딩 첫 리포트 = agent 자체 경로 (`ONBOARDING`)**
   - 위 시드(WSE-014)가 끝나면 **agent가 스스로** 첫 리포트 생성을 건다. **Service 트리거가 아니다** — `POST /generations` 호출이 없다.
   - 그래서 이 경로의 Snapshot은 `report_type`을 **agent가 `ONBOARDING`으로 채운다**(Service가 실어 보낼 값이 없으므로).
