@@ -80,6 +80,13 @@ Embedding은 `text-embedding-3-small` 1536차원 Chunk Vector를 문서 단위�
 
 - Linker는 신규·갱신 노드 전체와 후보 노드를 한 번에 보고 관계를 판정한다.
 - 모든 Edge는 신규·갱신 노드를 적어도 하나 포함해야 한다.
+- canonical identity가 신규·갱신 노드와 같은 기존 후보는 별도 `X` 참조로 다시
+  노출하지 않는다. 신규 노드 포함 여부는 하나의 역참조가 아니라 canonical identity
+  집합으로 검사해, 다른 신규 노드의 후보가 같은 identity를 가리켜도 누락하지 않는다.
+- 기존 후보 `X`는 실제 후보 회수에서 연결된 신규 노드 `N`과의 관계에만 사용할 수
+  있다. `source_explicit` 관계라면 후보 제목·key·별칭 중 하나가 원본 제목 또는
+  evidence에 명시돼야 하며, 다른 신규 노드의 후보를 교차 참조하거나 원문에 없는
+  endpoint를 고른 관계는 저장 전에 제외하고 Job 경고에 남긴다.
 - `source_explicit` 0.70, `semantic_inference` 0.78, `user_declared` 0.90,
   `system_rule` 0.90의 Linker 최소 confidence 기준을 적용한다. 저장 전 WBA-014가
   같은 provenance별 하한을 다시 검증하므로 Linker와 Build Gate의 기준이 어긋나지

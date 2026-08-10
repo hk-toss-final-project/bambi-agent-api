@@ -211,6 +211,199 @@ def test_linker_keeps_relations_between_matched_incoming_candidate_duplicates() 
     assert all(item.disposition == "merge" for item in result.node_dispositions)
 
 
+def test_linker_rejects_candidate_outside_the_incoming_retrieval_scope() -> None:
+    """다른 신규 노드용으로 회수한 기존 후보를 교차 연결하지 않는다."""
+    source = "사토시 나카모토와 모바일 운전면허증을 각각 소개한다."
+    classification = WikiClassification(
+        entities=[
+            EntityClassification(name="사토시 나카모토"),
+            EntityClassification(name="비탈릭 부테린"),
+        ]
+    )
+    bitcoin = _candidate("entity", "a-bitcoin", "비트코인", "가상화폐")
+    mobile_license = _candidate(
+        "entity",
+        "b-mobile-license",
+        "모바일 운전면허증",
+        "전자 신분증",
+    )
+
+    def completion(_system: str, _user: str, *, model: str) -> str:
+        """N2 전용 X2 후보를 N1에 잘못 연결하는 가짜 LLM이다."""
+        return json.dumps(
+            {
+                "relations": [
+                    {
+                        "source_ref": "N1",
+                        "target_ref": "X2",
+                        "relation_type": "associated_with",
+                        "evidence": source,
+                        "provenance_kind": "source_explicit",
+                        "confidence": 0.95,
+                        "review_status": "accepted",
+                    }
+                ],
+                "dispositions": [],
+            },
+            ensure_ascii=False,
+        )
+
+    result = link_wiki_relations(
+        source_title="인물과 전자 신분증",
+        source_content=source,
+        classification=classification,
+        candidates_by_node={"N1": [bitcoin], "N2": [mobile_license]},
+        model="test-model",
+        completion=completion,
+    )
+
+    assert result.relations == []
+    assert any("N1의 회수 후보가 아니어" in item for item in result.relation_warnings)
+
+
+def test_linker_rejects_ungrounded_source_explicit_candidate_endpoint() -> None:
+    """원본 제목·인용에 없는 기존 후보를 source_explicit endpoint로 저장하지 않는다."""
+    source = "사토시 나카모토가 비트코인을 만들었다."
+    classification = WikiClassification(
+        entities=[EntityClassification(name="사토시 나카모토")]
+    )
+    mobile_license = _candidate(
+        "entity",
+        "mobile-license",
+        "모바일 운전면허증",
+        "전자 신분증",
+    )
+
+    def completion(_system: str, _user: str, *, model: str) -> str:
+        """원문에 없는 모바일 운전면허증을 endpoint로 고르는 가짜 LLM이다."""
+        return json.dumps(
+            {
+                "relations": [
+                    {
+                        "source_ref": "N1",
+                        "target_ref": "X1",
+                        "relation_type": "associated_with",
+                        "evidence": source,
+                        "provenance_kind": "source_explicit",
+                        "confidence": 0.95,
+                        "review_status": "accepted",
+                    }
+                ],
+                "dispositions": [],
+            },
+            ensure_ascii=False,
+        )
+
+    result = link_wiki_relations(
+        source_title="비트코인 이야기",
+        source_content=source,
+        classification=classification,
+        candidates_by_node={"N1": [mobile_license]},
+        model="test-model",
+        completion=completion,
+    )
+
+    assert result.relations == []
+    assert any(
+        "원본 제목·evidence에 명시되지 않아" in item
+        for item in result.relation_warnings
+    )
+
+
+def test_linker_accepts_grounded_source_explicit_candidate_endpoint() -> None:
+    """원본 인용에 명시된 기존 후보 endpoint의 직접 관계는 유지한다."""
+    source = "사토시 나카모토가 비트코인을 만들었다."
+    classification = WikiClassification(
+        entities=[EntityClassification(name="사토시 나카모토")]
+    )
+    bitcoin = _candidate(
+        "entity",
+        "bitcoin",
+        "비트코인",
+        "블록체인 기반 가상화폐",
+    )
+
+    def completion(_system: str, _user: str, *, model: str) -> str:
+        """원문에 명시된 비트코인 endpoint를 반환하는 가짜 LLM이다."""
+        return json.dumps(
+            {
+                "relations": [
+                    {
+                        "source_ref": "N1",
+                        "target_ref": "X1",
+                        "relation_type": "associated_with",
+                        "evidence": source,
+                        "provenance_kind": "source_explicit",
+                        "confidence": 0.95,
+                        "review_status": "accepted",
+                    }
+                ],
+                "dispositions": [],
+            },
+            ensure_ascii=False,
+        )
+
+    result = link_wiki_relations(
+        source_title="비트코인 이야기",
+        source_content=source,
+        classification=classification,
+        candidates_by_node={"N1": [bitcoin]},
+        model="test-model",
+        completion=completion,
+    )
+
+    assert len(result.relations) == 1
+    assert result.relations[0].target_matched_key == "bitcoin"
+
+
+def test_linker_does_not_ground_short_ascii_surface_inside_another_word() -> None:
+    """짧은 영문 후보가 다른 영단어의 일부라는 이유로 원문 근거가 되지 않는다."""
+    source = "Blockchain is a distributed ledger."
+    classification = WikiClassification(
+        entities=[EntityClassification(name="Blockchain")]
+    )
+    artificial_intelligence = _candidate(
+        "entity",
+        "ai",
+        "AI",
+        "Artificial intelligence",
+    )
+
+    def completion(_system: str, _user: str, *, model: str) -> str:
+        """blockchain 안의 ai 문자열을 AI endpoint로 잘못 고르는 가짜 LLM이다."""
+        return json.dumps(
+            {
+                "relations": [
+                    {
+                        "source_ref": "N1",
+                        "target_ref": "X1",
+                        "relation_type": "associated_with",
+                        "evidence": source,
+                        "provenance_kind": "source_explicit",
+                        "confidence": 0.95,
+                        "review_status": "accepted",
+                    }
+                ],
+                "dispositions": [],
+            }
+        )
+
+    result = link_wiki_relations(
+        source_title="Blockchain",
+        source_content=source,
+        classification=classification,
+        candidates_by_node={"N1": [artificial_intelligence]},
+        model="test-model",
+        completion=completion,
+    )
+
+    assert result.relations == []
+    assert any(
+        "원본 제목·evidence에 명시되지 않아" in item
+        for item in result.relation_warnings
+    )
+
+
 def test_linker_always_replaces_partial_extraction_relations_with_full_review() -> None:
     """추출 결과에 Edge가 일부 있어도 Linker 검토를 생략하지 않는다."""
     source = "폭염은 열대야를 일으키고 온열질환에 영향을 준다."
