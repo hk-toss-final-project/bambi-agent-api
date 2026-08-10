@@ -1064,8 +1064,8 @@ def test_research_failure_falls_back_to_fixed_collection_path(
         order.append("research")
         raise RuntimeError("도구 호출 실패")
 
-    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[str]:
-        """고정 경로의 개인 Wiki 검색을 대체한다."""
+    async def fake_global_search(connection: Any, **kwargs: Any) -> list[str]:
+        """Reader 실패 폴백의 Global 전용 검색을 대체한다."""
         order.append("load_context")
         return ["context-1"]
 
@@ -1085,7 +1085,7 @@ def test_research_failure_falls_back_to_fixed_collection_path(
 
     monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: True)
     monkeypatch.setattr(agent_graph, "research_context", broken_research)
-    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "search_global_documents", fake_global_search)
     monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
     monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect)
 
@@ -1281,8 +1281,8 @@ def test_legacy_path_skips_live_collection_when_researcher_already_tried(
         order.append("research")
         return ResearchOutcome(documents=(), collected_live=True)
 
-    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[str]:
-        """고정 경로의 개인 Wiki 검색을 대체한다."""
+    async def fake_global_search(connection: Any, **kwargs: Any) -> list[str]:
+        """빈 Reader 결과 뒤 Global 전용 검색을 대체한다."""
         order.append("load_context")
         return ["context-1"]
 
@@ -1302,7 +1302,7 @@ def test_legacy_path_skips_live_collection_when_researcher_already_tried(
 
     monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: True)
     monkeypatch.setattr(agent_graph, "research_context", empty_research)
-    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "search_global_documents", fake_global_search)
     monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
     monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect)
 

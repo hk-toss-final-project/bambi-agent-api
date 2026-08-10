@@ -39,12 +39,14 @@ from agent.report_builder.api import (
     is_pool_relevant,
     is_pool_sufficient,
     merge_context_documents,
+    navigation_packet_documents,
     research_agent_enabled,
     research_context,
     review_report,
     select_personal_documents,
     select_pool_documents,
     select_generation_context,
+    search_global_documents,
 )
 from agent.change_history.api import change_history_available, chg_001
 from agent.state import ReportGenerationState, PersonalWikiBuildState
@@ -68,6 +70,7 @@ from agent.wiki_builder.api import (
 )
 from domain.interests.api import int_011
 from domain.personal_wiki.documents.api import pwiki_002
+from domain.personal_wiki.navigation.api import wnav_006
 from domain.personal_wiki.retrieval.api import prag_003, prag_006, prag_007
 from infrastructure.persistence.api import (
     ConnectionInterestProfileRepository,
@@ -84,6 +87,7 @@ from infrastructure.persistence.api import (
     list_user_source_versions_for_rebuild,
     load_global_document_freshness,
     load_pinned_wiki_context,
+    persist_report_navigation_snapshot,
     retire_personal_wiki_without_sources,
     set_personal_wiki_scope,
     save_custom_topic_contexts,
@@ -1077,23 +1081,27 @@ def _bundle_search_keywords(bundle: dict[str, object] | None) -> list[str]:
     ]
 
 
-def _interest_bundle_keywords(state: ReportGenerationState) -> list[str]:
-    """Job에 고정된 관심사 범주 검색 키워드를 루트 우선으로 반환한다."""
-    if state.get("generation_scope") != "INTEREST_BUNDLE":
+def _bundle_wiki_version_ids(bundle: dict[str, object] | None) -> list[str]:
+    """관심사 Bundle에서 루트·이웃 Wiki Page Version ID를 순서대로 꺼낸다."""
+    if not bundle:
         return []
-    bundle = state.get("interest_bundle") or {}
-    raw_keywords = bundle.get("keywords") if isinstance(bundle, dict) else None
-    candidates = [state["topic"], *(raw_keywords or [])]
-    keywords: list[str] = []
+    root = bundle.get("root")
+    root_documents = root.get("documents") if isinstance(root, dict) else ()
+    raw_items = [
+        *(root_documents or ()),
+        *(bundle.get("neighbors") or ()),
+    ]
+    version_ids: list[str] = []
     seen: set[str] = set()
-    for raw_keyword in candidates:
-        keyword = str(raw_keyword).strip()
-        marker = keyword.casefold()
-        if not keyword or marker in seen:
+    for raw in raw_items:
+        if not isinstance(raw, dict):
             continue
-        seen.add(marker)
-        keywords.append(keyword)
-    return keywords
+        version_id = str(raw.get("document_version_id") or "").strip()
+        if not version_id or version_id in seen:
+            continue
+        seen.add(version_id)
+        version_ids.append(version_id)
+    return version_ids[:6]
 
 
 def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
@@ -1105,9 +1113,9 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
     async def research(state: ReportGenerationState) -> dict[str, Any]:
         """조사원 에이전트가 도구를 골라 가며 근거 자료를 모은다.
 
-        LLM이 search_pool·collect_live 중 무엇을 어떤 검색어로 부를지 스스로
-        정한다. 실패하거나 한 건도 못 모으면 빈 목록을 돌려주고, load_context가
-        기존 고정 경로로 되돌아간다 — 조사가 안 됐다고 생성까지 막지는 않는다.
+        LLM이 Navigator의 wiki_search·wiki_read로 개인 Wiki Seed를 고르고,
+        search_pool로 Global 자료를 찾는다. 실패하거나 한 건도 못 모으면 빈
+        목록을 돌려주고 load_context가 기존 고정 경로로 되돌아간다.
 
         주제가 여럿이면(아침 요약처럼 상위 관심사를 묶는 경우) 주제마다 조사를
         따로 돌린다. 한 번에 합쳐 검색하면 서로 무관한 주제가 섞여 어느 쪽도
@@ -1120,7 +1128,6 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         notes: list[str] = []
         calls: list[dict[str, object]] = []
         collected_live = False
-        bundle_keywords = _interest_bundle_keywords(state)
         for topic in topics:
             intents[topic] = await to_thread(
                 resolve_topic_intent, topic, state["user_id"]
@@ -1134,9 +1141,25 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                     "user_id": state["user_id"],
                     "topic_intent": intents[topic],
                     "model": state["model"],
+                    "wiki_version_id": state.get("wiki_version_id"),
+                    "job_id": state["job_id"],
                 }
-                if bundle_keywords and topic == state["topic"]:
-                    research_kwargs["planned_queries"] = bundle_keywords[1:]
+                navigation_snapshot = (
+                    state.get("wiki_navigation_snapshots") or {}
+                ).get(topic)
+                if navigation_snapshot:
+                    research_kwargs["navigation_snapshot"] = navigation_snapshot
+                topic_bundle = _topic_bundle(state, topic)
+                bundle_keywords = _bundle_search_keywords(topic_bundle)
+                if bundle_keywords:
+                    research_kwargs["planned_queries"] = [
+                        keyword
+                        for keyword in bundle_keywords
+                        if keyword.casefold() != topic.casefold()
+                    ]
+                planned_versions = _bundle_wiki_version_ids(topic_bundle)
+                if planned_versions:
+                    research_kwargs["planned_wiki_version_ids"] = planned_versions
                 outcome = await research_context(connection, **research_kwargs)
             except Exception:
                 # 주제 하나가 실패해도 나머지 주제는 계속 조사한다. 실패한 주제는
@@ -1215,6 +1238,35 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         )
         return list(expansion.keywords)
 
+    async def load_bundle_navigation_context(
+        state: ReportGenerationState,
+        *,
+        topic: str,
+        bundle: dict[str, object] | None,
+    ) -> list[Any]:
+        """관심사 Bundle의 고정 Version을 Navigator Packet으로 읽는다."""
+        version_ids = _bundle_wiki_version_ids(bundle)
+        if not version_ids:
+            return []
+        packet = await wnav_006(
+            connection,
+            user_id=state["user_id"],
+            query=topic,
+            selected_document_version_ids=version_ids,
+            wiki_version_id=state.get("wiki_version_id"),
+            max_depth=1,
+            max_pages=6,
+            max_chunks=12,
+        )
+        await persist_report_navigation_snapshot(
+            connection,
+            user_id=state["user_id"],
+            job_id=state["job_id"],
+            topic=topic,
+            packets=[packet],
+        )
+        return navigation_packet_documents(packet, user_id=state["user_id"])
+
     async def load_context(state: ReportGenerationState) -> dict[str, Any]:
         """조사원이 모은 자료를 생성용 Context로 다듬는다.
 
@@ -1227,17 +1279,27 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         topics = _report_topics(state)
         if len(topics) > 1:
             return await _load_multi_topic_contexts(state, topics)
+        researched = list(state.get("research_documents") or [])
         topic_bundle = _topic_bundle(state, state["topic"])
+        navigator_used = any(
+            str(getattr(document, "context_role", "")).startswith("wiki_navigator_")
+            for document in researched
+        )
         pinned_wiki = (
-            await load_pinned_wiki_context(
-                connection,
-                user_id=state["user_id"],
-                interest_bundle=topic_bundle,
+            (
+                await load_bundle_navigation_context(
+                    state, topic=state["topic"], bundle=topic_bundle
+                )
+                if not researched and research_agent_enabled()
+                else await load_pinned_wiki_context(
+                    connection,
+                    user_id=state["user_id"],
+                    interest_bundle=topic_bundle,
+                )
             )
-            if topic_bundle
+            if topic_bundle and not navigator_used
             else []
         )
-        researched = list(state.get("research_documents") or [])
         if researched:
             logger.info(
                 "조사원 자료 사용: topic=%s %d건, 고정 Wiki %d건 (도구 호출 %d회)",
@@ -1254,15 +1316,13 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             return await _finalize_contexts(state, research_contexts)
         bundle_keywords = _bundle_search_keywords(topic_bundle)
         search_queries = bundle_keywords or [state["topic"]]
-        query_embeddings = await to_thread(embed_wiki_queries, search_queries)
-        async with connection.transaction():
-            await set_personal_wiki_scope(connection, user_id=state["user_id"])
+        if research_agent_enabled():
             search_groups = [
-                await prag_003(
+                await search_global_documents(
                     connection,
                     user_id=state["user_id"],
                     query=query,
-                    query_embedding=query_embeddings.get(query),
+                    topic_intent=str(state.get("topic_intent") or "news"),
                 )
                 for query in search_queries
             ]
@@ -1272,17 +1332,35 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 if len(groups) > 1
                 else list(groups[0])
             )
-            # 풀 문서의 신선도는 같은 조회 Transaction에서 함께 읽는다 — Scope가
-            # 이미 설정돼 있고, 왕복을 늘리지 않는다.
-            # 참조 ID가 없는 형태(테스트 더미 등)도 그대로 통과시킨다
-            # (select_generation_context와 같은 관용 규칙).
-            pool_freshness = await load_global_document_freshness(
-                connection,
-                [
-                    str(getattr(document, "document_version_id", "") or "")
-                    for document in hybrid
-                ],
-            )
+            pool_freshness: dict[str, Any] = {}
+        else:
+            query_embeddings = await to_thread(embed_wiki_queries, search_queries)
+            async with connection.transaction():
+                await set_personal_wiki_scope(connection, user_id=state["user_id"])
+                search_groups = [
+                    await prag_003(
+                        connection,
+                        user_id=state["user_id"],
+                        query=query,
+                        query_embedding=query_embeddings.get(query),
+                    )
+                    for query in search_queries
+                ]
+                groups = (
+                    [pinned_wiki, *search_groups] if pinned_wiki else search_groups
+                )
+                hybrid = (
+                    merge_context_documents(*groups)
+                    if len(groups) > 1
+                    else list(groups[0])
+                )
+                pool_freshness = await load_global_document_freshness(
+                    connection,
+                    [
+                        str(getattr(document, "document_version_id", "") or "")
+                        for document in hybrid
+                    ],
+                )
         # prag_003은 개인 Wiki와 Global 풀을 함께 검색한다. 풀에 **확실히 쓸 만한**
         # 자료가 있으면 실시간 수집을 생략한다. 목적은 속도가 아니라 셋이다.
         #
@@ -1434,23 +1512,29 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             return researched, False
         topic_bundle = _topic_bundle(state, topic)
         pinned_wiki = (
-            await load_pinned_wiki_context(
-                connection, user_id=state["user_id"], interest_bundle=topic_bundle
+            (
+                await load_bundle_navigation_context(
+                    state, topic=topic, bundle=topic_bundle
+                )
+                if research_agent_enabled()
+                else await load_pinned_wiki_context(
+                    connection, user_id=state["user_id"], interest_bundle=topic_bundle
+                )
             )
             if topic_bundle
             else []
         )
         bundle_keywords = _bundle_search_keywords(topic_bundle)
         search_queries = bundle_keywords or [topic]
-        query_embeddings = await to_thread(embed_wiki_queries, search_queries)
-        async with connection.transaction():
-            await set_personal_wiki_scope(connection, user_id=state["user_id"])
+        if research_agent_enabled():
             search_groups = [
-                await prag_003(
+                await search_global_documents(
                     connection,
                     user_id=state["user_id"],
                     query=query,
-                    query_embedding=query_embeddings.get(query),
+                    topic_intent=str(
+                        (state.get("topic_intents") or {}).get(topic) or "news"
+                    ),
                 )
                 for query in search_queries
             ]
@@ -1460,13 +1544,35 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 if len(groups) > 1
                 else list(groups[0])
             )
-            pool_freshness = await load_global_document_freshness(
-                connection,
-                [
-                    str(getattr(document, "document_version_id", "") or "")
-                    for document in hybrid
-                ],
-            )
+            pool_freshness: dict[str, Any] = {}
+        else:
+            query_embeddings = await to_thread(embed_wiki_queries, search_queries)
+            async with connection.transaction():
+                await set_personal_wiki_scope(connection, user_id=state["user_id"])
+                search_groups = [
+                    await prag_003(
+                        connection,
+                        user_id=state["user_id"],
+                        query=query,
+                        query_embedding=query_embeddings.get(query),
+                    )
+                    for query in search_queries
+                ]
+                groups = (
+                    [pinned_wiki, *search_groups] if pinned_wiki else search_groups
+                )
+                hybrid = (
+                    merge_context_documents(*groups)
+                    if len(groups) > 1
+                    else list(groups[0])
+                )
+                pool_freshness = await load_global_document_freshness(
+                    connection,
+                    [
+                        str(getattr(document, "document_version_id", "") or "")
+                        for document in hybrid
+                    ],
+                )
         intents = state.get("topic_intents") or {}
         topic_intent = str(intents.get(topic) or "news")
         # 단일 주제 경로와 같은 하한을 쓴다. 여기에만 하한이 없으면 0점짜리
@@ -1883,6 +1989,8 @@ async def run_report_generation(
     generation_scope: str = "SINGLE_TOPIC",
     interest_bundle: dict[str, object] | None = None,
     topic_interest_bundles: dict[str, dict[str, object]] | None = None,
+    wiki_version_id: str | None = None,
+    wiki_navigation_snapshots: dict[str, dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Report Builder Generation 그래프를 실행하고 저장 결과 Payload를 반환한다.
 
@@ -1893,6 +2001,8 @@ async def run_report_generation(
             꺼짐이며, 꺼진 실행은 지금까지와 완전히 같은 경로를 탄다.
         topic_interest_bundles: SINGLE_TOPIC/topics 요청에서 접수 시 활성
             관심사와 매칭된 주제의 INT-012 스냅샷(키: 주제 문자열).
+        wiki_version_id: Job 접수 시 고정한 활성 Wiki Build UUID
+        wiki_navigation_snapshots: 첫 Reader 실행이 Topic별로 고정한 Packet Metadata
     """
     graph = build_report_generation_graph(connection)
     state = await graph.ainvoke(
@@ -1905,6 +2015,8 @@ async def run_report_generation(
             "generation_scope": generation_scope,
             "interest_bundle": dict(interest_bundle or {}),
             "topic_interest_bundles": dict(topic_interest_bundles or {}),
+            "wiki_version_id": wiki_version_id,
+            "wiki_navigation_snapshots": dict(wiki_navigation_snapshots or {}),
             "content_type": content_type,
             "language": language,
             "model": model,

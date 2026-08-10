@@ -15,6 +15,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from shared.wiki_models import InterestCandidate, WikiClassification
 from agent.wiki_builder.api import wba_018
+from domain.personal_wiki.navigation.api import wnav_001, wnav_006
 from domain.personal_wiki.source_events.api import wse_010
 from infrastructure.persistence.api import (
     delete_wiki_document_and_record_event,
@@ -26,6 +27,7 @@ from infrastructure.persistence.api import (
     save_mcp_source_submission,
 )
 from infrastructure.sources.connectors.api import LatestArticle
+from shared.wiki_navigation_models import WikiNavigationPacket
 
 
 type DictRow = dict[str, Any]
@@ -133,6 +135,41 @@ class PostgresWikiGraphRepository:
     async def shutdown(self) -> None:
         """Graph 조회용 PostgreSQL 연결 Pool을 종료한다."""
         await self._pool.close()
+
+    async def navigate_wiki(
+        self,
+        user_id: str,
+        *,
+        query: str,
+        selected_document_version_ids: Sequence[str],
+        wiki_version_id: str | None,
+        candidate_limit: int,
+        max_depth: int,
+        max_pages: int,
+        max_chunks: int,
+        query_embedding: Sequence[float] | None,
+    ) -> WikiNavigationPacket:
+        """하나의 Pool Connection으로 후보를 찾고 선택 Page를 탐색한다."""
+        async with self._pool.connection() as connection:
+            candidates = await wnav_001(
+                connection,
+                user_id=user_id,
+                query=query,
+                wiki_version_id=wiki_version_id,
+                limit=candidate_limit,
+                query_embedding=query_embedding,
+            )
+            return await wnav_006(
+                connection,
+                user_id=user_id,
+                query=query,
+                selected_document_version_ids=selected_document_version_ids,
+                candidates=candidates,
+                wiki_version_id=wiki_version_id,
+                max_depth=max_depth,
+                max_pages=max_pages,
+                max_chunks=max_chunks,
+            )
 
     async def get_graph(self, user_id: str) -> Mapping[str, object]:
         """현재 사용자 Namespace의 Wiki Node·Edge와 집계를 반환한다."""

@@ -13,6 +13,7 @@ from app.dependencies import (
     get_generated_content_service,
     get_wiki_document_service,
     get_wiki_graph_service,
+    get_wiki_navigator_service,
     get_mcp_api_key_service,
 )
 from app.schemas.collection_schedules import (
@@ -63,6 +64,7 @@ from app.schemas.wiki import (
     WikiGraphResponse,
     WikiTopNodesResponse,
 )
+from app.schemas.wiki_navigation import WikiNavigateRequest, WikiNavigateResponse
 from app.security.internal_auth.api import require_service_api_access
 from app.routers.service.api import (
     svc_001,
@@ -79,6 +81,7 @@ from app.routers.service.api import (
 from app.services.collection_schedules import CollectionScheduleService
 from app.services.mvp import AgentApiMvpService
 from app.services.wiki_graph import WikiGraphService
+from app.services.wiki_navigator import WikiNavigatorService
 from app.services.wiki_documents import WikiDocumentService
 from app.services.interests import InterestService
 from app.services.generated_content import GeneratedContentService
@@ -333,6 +336,21 @@ async def get_personal_wiki_graph(
 ) -> WikiGraphResponse:
     """[PWIKI-003] 현재 Entity·Concept 문서와 관계 Graph를 조회한다."""
     return await service.get_graph(user_id, _request_id(request))
+
+
+@router.post(
+    "/users/{user_id}/wiki/navigate",
+    response_model=WikiNavigateResponse,
+    operation_id="wnav_006",
+    summary="개인 LLM Wiki 탐색",
+)
+async def navigate_personal_wiki(
+    user_id: UserId,
+    payload: WikiNavigateRequest,
+    service: WikiNavigatorService = Depends(get_wiki_navigator_service),
+) -> WikiNavigateResponse:
+    """[WNAV-006] 후보 또는 선택 Page의 출처 포함 Context Packet을 반환한다."""
+    return await service.navigate(user_id, payload)
 
 
 @router.delete(

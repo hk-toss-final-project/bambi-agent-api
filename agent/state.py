@@ -62,6 +62,12 @@ class ReportGenerationState(TypedDict):
     # 이 dict에 그 주제의 INT-012 스냅샷을 담는다(키: 주제 문자열). 매칭 안 된
     # 주제는 키 자체가 없다 — interest-bundle-report-design.md §9.
     topic_interest_bundles: NotRequired[dict[str, dict[str, object]]]
+    # Job 접수 시점에 고정한 활성 Wiki Build UUID. Navigator의 Locate·Read가
+    # 재시도 중 현재 Head로 이동하지 않게 한다.
+    wiki_version_id: NotRequired[str | None]
+    # 첫 Reader 실행이 Topic별로 고정한 Page Version·관계·Source. 같은 Job의
+    # 재시도는 새 Seed를 고르지 않고 이 Snapshot을 재사용한다.
+    wiki_navigation_snapshots: NotRequired[dict[str, dict[str, object]]]
     content_type: str
     language: str
     model: str

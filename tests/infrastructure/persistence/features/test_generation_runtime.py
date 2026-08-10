@@ -12,9 +12,15 @@ from infrastructure.persistence.features.generation_runtime import (
     load_personal_wiki_vector_context,
     load_pinned_wiki_context,
     persist_report_generation,
+    persist_report_navigation_snapshot,
     upsert_user_context_snapshot,
 )
 from shared.report_models import GeneratedReportContent, ReportContextDocument
+from shared.wiki_navigation_models import (
+    WikiNavigationPacket,
+    WikiNavigationPage,
+    WikiNavigationSource,
+)
 
 
 class _FakeCursor:
@@ -207,6 +213,110 @@ def test_enqueue_defaults_change_history_toggle_to_off() -> None:
     _, insert_params = connection.executed[2]
     assert insert_params is not None
     assert insert_params[2].obj["change_history_enabled"] is False
+
+
+def test_enqueue_captures_active_wiki_build_for_navigation() -> None:
+    """Job 접수 시점의 활성 Wiki Build UUID를 Payload에 고정한다."""
+    connection = _FakeConnection(
+        [
+            [
+                {
+                    "id": "context-1",
+                    "plan": "free",
+                    "preferred_language": "ko",
+                    "wiki_version_id": "wiki-build-9",
+                }
+            ],
+            [],
+            [{"id": "job-1"}],
+            [{"id": "request-1"}],
+        ]
+    )
+
+    asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-wiki-snapshot",
+            topic="삼성전자",
+            content_type="interest_news_card",
+            language="ko",
+            request_id="request-1",
+        )
+    )
+
+    context_sql, _ = connection.executed[0]
+    _, job_params = connection.executed[2]
+    assert "FROM agent.wiki_versions AS wiki" in context_sql
+    assert job_params is not None
+    assert job_params[2].obj["wiki_version_id"] == "wiki-build-9"
+
+
+def test_navigation_snapshot_persists_selected_versions_and_saved_at() -> None:
+    """첫 Reader Packet의 Page·Source 시각을 Topic별 Job Payload에 저장한다."""
+    now = datetime(2026, 8, 10, 9, 30, tzinfo=UTC)
+    packet = WikiNavigationPacket(
+        query="최근 삼성전자 관심",
+        wiki_version_id="wiki-build-9",
+        candidates=(),
+        pages=(
+            WikiNavigationPage(
+                document_id="doc-samsung",
+                document_version_id="version-samsung",
+                document_kind="entity",
+                document_key="삼성전자",
+                file_path="entities/삼성전자.md",
+                title="삼성전자",
+                aliases=(),
+                summary="반도체 기업",
+                markdown="# 삼성전자",
+                version=2,
+                updated_at=now,
+                role="seed",
+            ),
+        ),
+        relations=(),
+        sources=(
+            WikiNavigationSource(
+                wiki_document_version_id="version-samsung",
+                source_document_id="source-1",
+                source_document_version_id="source-version-1",
+                source_type="web_clipping",
+                title="삼성전자 저장 글",
+                url="https://example.com/samsung",
+                relation_type="derived_from",
+                saved_at=now,
+                saved_at_source="event_occurred_at",
+                stored_at=now,
+                published_at=None,
+                clipped_on=None,
+            ),
+        ),
+        trace=(),
+    )
+    connection = _FakeConnection([[], [{"id": "job-1"}]])
+
+    asyncio.run(
+        persist_report_navigation_snapshot(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            topic="삼성전자",
+            packets=[packet],
+        )
+    )
+
+    sql, params = connection.executed[1]
+    assert "wiki_navigation_snapshots" in sql
+    assert params is not None and params[0] == "삼성전자"
+    snapshot = params[1].obj
+    assert snapshot["selected_document_version_ids"] == ["version-samsung"]
+    assert snapshot["sources"][0]["saved_at"] == now.isoformat()
+    assert snapshot["budget"] == {
+        "max_depth": 1,
+        "max_pages": 6,
+        "max_chunks": 12,
+    }
 
 
 def test_enqueue_stores_report_type_for_the_publish_snapshot() -> None:
@@ -835,6 +945,46 @@ def test_report_context_exposes_version_time_and_retrieval_role() -> None:
 
     assert contexts[0].context_role == "keyword_retrieval"
     assert contexts[0].source_updated_at == str(updated_at)
+
+
+def test_global_report_context_does_not_query_personal_wiki() -> None:
+    """Reader의 Global 저장 검색 SQL에는 개인 Wiki Table이 포함되지 않는다."""
+    from infrastructure.persistence.features.generation_runtime import (
+        load_global_report_context,
+    )
+
+    updated_at = datetime(2026, 8, 10, 10, 0, tzinfo=UTC)
+    connection = _FakeConnection(
+        [
+            [
+                {
+                    "document_version_id": "gsrc:article-1",
+                    "chunk_id": "gsrc:article-1",
+                    "namespace_key": "global",
+                    "title": "삼성전자 반도체 기사",
+                    "content": "Global 수집 본문",
+                    "url": "https://example.com/article-1",
+                    "score": 1.1,
+                    "source_updated_at": updated_at,
+                }
+            ]
+        ]
+    )
+
+    contexts = asyncio.run(
+        load_global_report_context(
+            connection,  # type: ignore[arg-type]
+            query="삼성전자",
+        )
+    )
+
+    sql, params = connection.executed[0]
+    assert "agent.global_source_documents" in sql
+    assert "agent.wiki_chunks" not in sql
+    assert "agent.wiki_documents" not in sql
+    assert sql.count("%s") == len(params or ())
+    assert contexts[0].namespace_key == "global"
+    assert contexts[0].context_role == "global_retrieval"
 
 
 def test_report_context_gives_topic_bonus_through_collection_target() -> None:

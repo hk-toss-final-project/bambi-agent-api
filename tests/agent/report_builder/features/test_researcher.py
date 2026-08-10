@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -16,11 +17,20 @@ from agent.llm.api import ToolLoopResult
 from agent.report_builder.features import researcher
 from agent.report_builder.features.researcher import (
     DocumentCollector,
+    WikiNavigationSession,
     build_research_tools,
+    load_navigation_snapshot_packet,
     merge_context_documents,
     research_context,
 )
 from shared.report_models import ReportContextDocument
+from shared.wiki_navigation_models import (
+    WikiNavigationCandidate,
+    WikiNavigationExcerpt,
+    WikiNavigationPacket,
+    WikiNavigationPage,
+    WikiNavigationSource,
+)
 
 
 def _document(
@@ -71,10 +81,18 @@ def _patch_db(
         """발행 시각 조회를 생략한다."""
         return {}
 
+    async def fake_global_search(
+        connection, *, user_id, query, topic_intent="news"
+    ):
+        """Reader의 Global 전용 검색 결과와 검색어를 기록한다."""
+        queries.append(query)
+        return [document for document in hybrid if document.namespace_key == "global"]
+
     monkeypatch.setattr(researcher, "prag_003", fake_prag_003)
     monkeypatch.setattr(researcher, "embed_wiki_queries", lambda queries: {})
     monkeypatch.setattr(researcher, "set_personal_wiki_scope", fake_scope)
     monkeypatch.setattr(researcher, "load_global_document_freshness", fake_freshness)
+    monkeypatch.setattr(researcher, "search_global_documents", fake_global_search)
     monkeypatch.setattr(
         researcher, "select_pool_documents", lambda docs, **kwargs: list(docs)
     )
@@ -134,6 +152,262 @@ def test_search_pool_tool_deduplicates_across_calls(
 
     assert len(collector.documents) == 1
     assert second == "결과 없음."
+
+
+def test_wiki_search_exposes_all_thirty_candidates_without_degree_cutoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reader가 연결 수와 무관하게 30번째 후보까지 직접 볼 수 있다."""
+    collector = DocumentCollector()
+    session = WikiNavigationSession()
+    connection = _FakeConnection()
+    now = datetime(2026, 8, 10, tzinfo=UTC)
+    candidates = [
+        WikiNavigationCandidate(
+            document_id=f"doc-{index}",
+            document_version_id=f"version-{index}",
+            document_kind="entity",
+            document_key=f"key-{index}",
+            file_path=f"entities/{index}.md",
+            title="DBeaver" if index == 1 else ("삼성전자" if index == 30 else f"후보 {index}"),
+            aliases=(),
+            summary=f"후보 {index} 요약",
+            updated_at=now,
+            keyword_rank=index,
+            rrf_score=1.0 / (60 + index),
+        )
+        for index in range(1, 31)
+    ]
+    calls: list[tuple[object, int]] = []
+
+    async def fake_wnav_001(connection_arg, **kwargs):
+        """같은 Connection과 후보 상한을 기록하고 30개를 반환한다."""
+        calls.append((connection_arg, kwargs["limit"]))
+        return candidates
+
+    monkeypatch.setattr(researcher, "wnav_001", fake_wnav_001)
+    monkeypatch.setattr(researcher, "embed_wiki_queries", lambda queries: {})
+    tools = build_research_tools(
+        connection,  # type: ignore[arg-type]
+        user_id="user-1",
+        topic_intent="news",
+        collector=collector,
+        navigation_session=session,
+    )
+
+    observation = asyncio.run(
+        {tool.name: tool for tool in tools}["wiki_search"].run(query="삼성전자")
+    )
+
+    assert calls == [(connection, 30)]
+    assert len(session.candidates) == 30
+    assert "[version-1] DBeaver" in observation
+    assert "[version-30] 삼성전자" in observation
+    assert "degree" not in observation
+
+
+def test_wiki_read_uses_selected_version_and_includes_saved_at(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reader가 고른 후보만 같은 Connection으로 읽고 저장 시각을 Context에 싣는다."""
+    collector = DocumentCollector()
+    session = WikiNavigationSession()
+    connection = _FakeConnection()
+    now = datetime(2026, 8, 10, 9, 30, tzinfo=UTC)
+    candidate = WikiNavigationCandidate(
+        document_id="doc-samsung",
+        document_version_id="version-samsung",
+        document_kind="entity",
+        document_key="삼성전자",
+        file_path="entities/삼성전자.md",
+        title="삼성전자",
+        aliases=(),
+        summary="반도체 기업",
+        updated_at=now,
+        keyword_rank=30,
+        rrf_score=0.01,
+    )
+    selected_calls: list[tuple[object, tuple[str, ...], str | None]] = []
+
+    async def fake_wnav_001(connection_arg, **kwargs):
+        """Reader 선택용 후보 한 건을 반환한다."""
+        return [candidate]
+
+    async def fake_wnav_006(connection_arg, **kwargs):
+        """선택 Version과 Wiki Build를 기록하고 Source 포함 Packet을 반환한다."""
+        selected_calls.append(
+            (
+                connection_arg,
+                tuple(kwargs["selected_document_version_ids"]),
+                kwargs["wiki_version_id"],
+            )
+        )
+        page = WikiNavigationPage(
+            document_id=candidate.document_id,
+            document_version_id=candidate.document_version_id,
+            document_kind=candidate.document_kind,
+            document_key=candidate.document_key,
+            file_path=candidate.file_path,
+            title=candidate.title,
+            aliases=(),
+            summary=candidate.summary,
+            markdown="# 삼성전자",
+            version=2,
+            updated_at=now,
+            role="seed",
+            excerpts=(
+                WikiNavigationExcerpt(
+                    chunk_id="chunk-samsung",
+                    chunk_index=0,
+                    content="사용자는 삼성전자 반도체에 관심을 보였다.",
+                ),
+            ),
+        )
+        source = WikiNavigationSource(
+            wiki_document_version_id=candidate.document_version_id,
+            source_document_id="source-1",
+            source_document_version_id="source-version-1",
+            source_type="web_clipping",
+            title="삼성전자 저장 글",
+            url="https://example.com/samsung",
+            relation_type="derived_from",
+            saved_at=now,
+            saved_at_source="event_occurred_at",
+            stored_at=now,
+            published_at=None,
+            clipped_on=None,
+        )
+        return WikiNavigationPacket(
+            query=kwargs["query"],
+            wiki_version_id=kwargs["wiki_version_id"],
+            candidates=(candidate,),
+            pages=(page,),
+            relations=(),
+            sources=(source,),
+            trace=(),
+        )
+
+    monkeypatch.setattr(researcher, "wnav_001", fake_wnav_001)
+    monkeypatch.setattr(researcher, "wnav_006", fake_wnav_006)
+    monkeypatch.setattr(researcher, "embed_wiki_queries", lambda queries: {})
+    tools = {
+        tool.name: tool
+        for tool in build_research_tools(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            topic_intent="news",
+            collector=collector,
+            navigation_session=session,
+            wiki_version_id="wiki-build-7",
+        )
+    }
+
+    asyncio.run(tools["wiki_search"].run(query="최근 삼성전자 관심"))
+    observation = asyncio.run(
+        tools["wiki_read"].run(document_version_ids=["version-samsung"])
+    )
+
+    assert selected_calls == [
+        (connection, ("version-samsung",), "wiki-build-7")
+    ]
+    assert len(session.packets) == 1
+    assert len(collector.documents) == 1
+    assert "saved_at=2026-08-10T09:30:00+00:00" in collector.documents[0].content
+    assert collector.documents[0].context_role == "wiki_navigator_seed"
+    assert "저장 Source 1건" in observation
+
+
+def test_retry_restores_exact_page_and_source_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """같은 Job 재시도는 새 Seed 선택 없이 저장된 Page·Source를 복원한다."""
+    connection = _FakeConnection()
+    now = datetime(2026, 8, 10, 9, 30, tzinfo=UTC)
+    calls: list[tuple[object, tuple[str, ...], str | None]] = []
+
+    async def fake_wnav_002(connection_arg, **kwargs):
+        """Snapshot에 고정된 정확한 Version ID 조회를 기록한다."""
+        calls.append(
+            (
+                connection_arg,
+                tuple(kwargs["document_version_ids"]),
+                kwargs["wiki_version_id"],
+            )
+        )
+        return [
+            WikiNavigationPage(
+                document_id="doc-samsung",
+                document_version_id="version-samsung",
+                document_kind="entity",
+                document_key="삼성전자",
+                file_path="entities/삼성전자.md",
+                title="삼성전자",
+                aliases=(),
+                summary="반도체 기업",
+                markdown="# 삼성전자",
+                version=2,
+                updated_at=now,
+                role="seed",
+            )
+        ]
+
+    monkeypatch.setattr(researcher, "wnav_002", fake_wnav_002)
+    snapshot = {
+        "query": "최근 삼성전자 관심",
+        "wiki_version_id": "wiki-build-9",
+        "pages": [
+            {"document_version_id": "version-samsung", "role": "seed"}
+        ],
+        "relations": [],
+        "sources": [
+            {
+                "wiki_document_version_id": "version-samsung",
+                "source_document_id": "source-1",
+                "source_document_version_id": "source-version-1",
+                "source_type": "web_clipping",
+                "title": "삼성전자 저장 글",
+                "url": "https://example.com/samsung",
+                "relation_type": "derived_from",
+                "saved_at": now.isoformat(),
+                "saved_at_source": "event_occurred_at",
+                "stored_at": now.isoformat(),
+                "published_at": None,
+                "clipped_on": None,
+            }
+        ],
+        "truncated": False,
+    }
+
+    packet = asyncio.run(
+        load_navigation_snapshot_packet(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            topic="삼성전자",
+            snapshot=snapshot,
+        )
+    )
+
+    assert calls == [
+        (connection, ("version-samsung",), "wiki-build-9")
+    ]
+    assert packet.pages[0].document_version_id == "version-samsung"
+    assert packet.sources[0].saved_at == now
+    assert packet.wiki_version_id == "wiki-build-9"
+
+
+def test_retry_tools_do_not_expose_new_wiki_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """고정 Snapshot 재시도에서는 Reader가 Wiki 후보를 다시 고르지 않는다."""
+    tools = build_research_tools(
+        _FakeConnection(),  # type: ignore[arg-type]
+        user_id="user-1",
+        topic_intent="news",
+        collector=DocumentCollector(),
+        allow_wiki_navigation=False,
+    )
+
+    assert [tool.name for tool in tools] == ["search_pool"]
 
 
 def test_merge_context_documents_renumbers_references_and_deduplicates() -> None:
@@ -251,7 +525,7 @@ def test_live_collection_is_not_exposed_as_a_tool(
     """
     tools = _tools(monkeypatch, DocumentCollector(), [])
 
-    assert list(tools) == ["search_pool"]
+    assert list(tools) == ["wiki_search", "wiki_read", "search_pool"]
 
 
 def _run_research(
@@ -391,7 +665,8 @@ def test_research_prompt_focuses_on_search_only() -> None:
     문구를 두 번 고쳐도 과호출이 과소호출로 바뀔 뿐이었다(2026-07-31 벤치마크).
     그 판정은 is_pool_sufficient가 맡는다.
     """
-    assert "주제어 하나로만 찾지 마라" in researcher.SYSTEM_PROMPT
+    assert "wiki_search" in researcher.SYSTEM_PROMPT
+    assert "wiki_read" in researcher.SYSTEM_PROMPT
     assert "collect_live" not in researcher.SYSTEM_PROMPT
 
 
@@ -412,13 +687,9 @@ def test_personal_wiki_documents_do_not_count_toward_sufficiency(
     outcome, collected = _run_research(monkeypatch, found)
 
     assert collected == ["코스피"]
-    # 판정에서만 빼고, 근거로는 그대로 남긴다.
+    # search_pool은 개인 Wiki를 반환하지 않는다. 개인 Wiki는 Navigator 도구로만
+    # 읽으므로 이 실행에는 실시간 문서만 남는다.
     assert [document.title for document in outcome.documents] == [
-        "위키 1",
-        "위키 2",
-        "위키 3",
-        "위키 4",
-        "위키 5",
         "새 기사",
     ]
 

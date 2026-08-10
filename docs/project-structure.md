@@ -4,7 +4,7 @@
 
 ## 스캐폴드 원칙
 
-- 전체 기능 625개는 기능 ID를 소문자로 바꾼 비동기 함수와 1:1로 연결됩니다. 예: `REPORT-009` → `report_009(...)`.
+- 전체 기능 631개는 기능 ID를 소문자로 바꾼 비동기 함수와 1:1로 연결됩니다. 예: `REPORT-009` → `report_009(...)`.
 - 미구현 스캐폴드 함수는 공통 `FeatureRequest → FeatureResult` 계약과 명시적인 `NotImplementedError`를 유지합니다. 구현된 함수는 기능에 맞는 typed 시그니처·반환값과 `Protocol` 기반 의존성을 사용합니다.
 - MVP 체크리스트 완료 58개와 별도 구현된 `SCH-009`는 실행 가능하며, 나머지 566개는 명시적인 미구현 스텁입니다.
 - 각 기능 영역의 `api.py`는 구현을 포함하지 않는 공개 facade이며, `features/` 아래 응집도 기준으로 분리된 구현 모듈의 함수를 import하고 `__all__`로 노출합니다.
@@ -82,6 +82,7 @@ domain/personal_wiki/documents/
 | 5 | User Personal LLM Wiki | `PWIKI` | `domain/personal_wiki/documents/api.py` |
 | 6 | 개인 Wiki Chunk 및 Embedding | `PWE` | `domain/personal_wiki/embeddings/api.py` |
 | 7 | 개인 Wiki 검색 및 RAG | `PRAG` | `domain/personal_wiki/retrieval/api.py` |
+| 7-1 | LLM Wiki Navigator | `WNAV` | `domain/personal_wiki/navigation/api.py` |
 | 8 | 사용자 관심사 분류 | `INT` | `domain/interests/api.py` |
 | 9 | Personal Wiki Builder Agent | `WBA` | `agent/wiki_builder/api.py` |
 | 10 | Global Source 관리 | `GS` | `infrastructure/sources/management/api.py` |

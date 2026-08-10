@@ -11,3 +11,13 @@ uv run python bench/custom_topic_context/run.py \
   --input-cost-per-million <현재 단가> \
   --output-cost-per-million <현재 단가>
 ```
+
+Report Builder Reader의 Navigator Tool 선택은 다음처럼 먼저 상한을 확인합니다.
+
+```bash
+uv run python bench/wiki_navigation/run.py --estimate-only
+uv run python bench/wiki_navigation/run.py \
+  --model gpt-4.1-mini \
+  --input-cost-per-million <현재 단가> \
+  --output-cost-per-million <현재 단가>
+```

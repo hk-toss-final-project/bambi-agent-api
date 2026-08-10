@@ -19,7 +19,7 @@
 > 동작하는지 기준으로 판정했다. 표기: `[x]` 구현 완료, `[x] ⚠️` 핵심 동작은 되지만 제약 있음,
 > `[ ] ❌` 미구현, `[ ] ➖` Agent API 범위 아님(service-worker 책임).
 >
-> **집계: 완료 101 · 부분 6 · 미구현 4 · 범위 외 3 (총 114)**
+> **집계: 완료 107 · 부분 6 · 미구현 4 · 범위 외 3 (총 120)**
 
 ### 내부 API 인증
 
@@ -82,6 +82,12 @@
 - [x] `PRAG-004` 검색 결과 Reranking — 순위 기반 RRF로 개인 Wiki Chunk 중복을 제거·재정렬하고 기존 점수는 하류 품질 판정을 위해 보존
 - [x] `PRAG-006` 개인 Wiki Context 구성 — Report Builder 입력 Context(P1, P2 참조) 조립
 - [x] `PRAG-007` Citation 연결 — `citations`에 문서 Version·Chunk 연결
+- [x] `WNAV-001` Wiki Page 후보 Locate — 제목·별칭·Keyword·Vector 순위를 degree 없이 결합해 최대 30개 후보 반환
+- [x] `WNAV-002` Wiki Page Version Read — 호출자가 선택한 정확한 Page Version과 Chunk 조회
+- [x] `WNAV-003` Wiki Link Traverse — active Support와 provenance별 confidence Gate를 통과한 관계를 최대 2홉 순회
+- [x] `WNAV-004` Wiki Source Read — 사용자 원본과 `saved_at`·`stored_at`·게시 시각 조회
+- [x] `WNAV-005` Wiki Context Packet 구성 — Page·관계·Source·Trace를 답변 없는 Packet으로 조립
+- [x] `WNAV-006` Wiki Navigation — Consumer가 선택한 Seed를 Connection 기반으로 읽고 제한적 관계 탐색
 
 ### DB 기반 관심사 분류
 
@@ -235,6 +241,12 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | PRAG-004 | 검색 결과 Reranking | Keyword·Vector 순위를 결정적으로 결합한다. |
 | PRAG-006 | 개인 Wiki Context 구성 | LLM 입력에 사용할 개인 Wiki Context를 구성한다. |
 | PRAG-007 | Citation 연결 | 생성 결과와 참조한 개인 Wiki 문서를 연결한다. |
+| WNAV-001 | Wiki Page 후보 Locate | Logical Index에서 최대 30개 Page 후보를 회수한다. |
+| WNAV-002 | Wiki Page Version Read | 선택한 정확한 Wiki Page Version과 Chunk를 읽는다. |
+| WNAV-003 | Wiki Link Traverse | 검증된 관계를 제한적으로 순회한다. |
+| WNAV-004 | Wiki Source Read | Wiki Page의 원본과 저장·게시 시각을 읽는다. |
+| WNAV-005 | Wiki Context Packet 구성 | 읽은 Wiki 자료를 답변 없는 Packet으로 조립한다. |
+| WNAV-006 | Wiki Navigation | 선택 Seed에서 Locate 이후 Read·Traverse를 수행한다. |
 
 ### 개인 Wiki Graph 조회
 

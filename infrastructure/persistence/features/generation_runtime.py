@@ -25,6 +25,7 @@ from infrastructure.persistence.features.interest_bundles import (
 logger = logging.getLogger(__name__)
 from infrastructure.persistence.features.personal_wiki import set_personal_wiki_scope
 from shared.report_models import ReportContextDocument, GeneratedReportContent
+from shared.wiki_navigation_models import WikiNavigationPacket
 
 type DictRow = dict[str, Any]
 
@@ -77,6 +78,144 @@ class PersistedGenerationSubmission:
 
     job_id: str
     generation_request_id: str
+
+
+def _navigation_packet_snapshot(
+    packets: Sequence[WikiNavigationPacket],
+) -> dict[str, object]:
+    """Reader가 읽은 Packet들을 Job Payload용 JSON 값으로 직렬화한다."""
+    pages = []
+    relations = []
+    sources = []
+    selected_versions: list[str] = []
+    seen_pages: set[str] = set()
+    seen_relations: set[str] = set()
+    seen_sources: set[str] = set()
+    for packet in packets:
+        for page in packet.pages:
+            if page.document_version_id in seen_pages:
+                continue
+            seen_pages.add(page.document_version_id)
+            pages.append(
+                {
+                    "document_version_id": page.document_version_id,
+                    "role": page.role,
+                }
+            )
+            if page.role == "seed":
+                selected_versions.append(page.document_version_id)
+        for relation in packet.relations:
+            if relation.relation_id in seen_relations:
+                continue
+            seen_relations.add(relation.relation_id)
+            relations.append(
+                {
+                    "relation_id": relation.relation_id,
+                    "source_document_id": relation.source_document_id,
+                    "target_document_id": relation.target_document_id,
+                    "relation_type": relation.relation_type,
+                    "confidence": relation.confidence,
+                    "provenance_kind": relation.provenance_kind,
+                    "review_status": relation.review_status,
+                    "rationale": relation.rationale,
+                    "traversal_direction": relation.traversal_direction,
+                    "hops": relation.hops,
+                    "supports": [
+                        {
+                            "source_document_version_id": (
+                                support.source_document_version_id
+                            ),
+                            "provenance_kind": support.provenance_kind,
+                            "confidence": support.confidence,
+                            "review_status": support.review_status,
+                            "evidence": support.evidence,
+                            "rationale": support.rationale,
+                        }
+                        for support in relation.supports
+                    ],
+                }
+            )
+        for source in packet.sources:
+            source_key = (
+                f"{source.wiki_document_version_id}:"
+                f"{source.source_document_version_id}"
+            )
+            if source_key in seen_sources:
+                continue
+            seen_sources.add(source_key)
+            sources.append(
+                {
+                    "wiki_document_version_id": source.wiki_document_version_id,
+                    "source_document_id": source.source_document_id,
+                    "source_document_version_id": source.source_document_version_id,
+                    "source_type": source.source_type,
+                    "title": source.title,
+                    "url": source.url,
+                    "relation_type": source.relation_type,
+                    "saved_at": source.saved_at.isoformat(),
+                    "saved_at_source": source.saved_at_source,
+                    "stored_at": source.stored_at.isoformat(),
+                    "published_at": (
+                        source.published_at.isoformat()
+                        if source.published_at is not None
+                        else None
+                    ),
+                    "clipped_on": (
+                        source.clipped_on.isoformat()
+                        if source.clipped_on is not None
+                        else None
+                    ),
+                }
+            )
+    latest = packets[-1]
+    return {
+        "query": latest.query,
+        "wiki_version_id": latest.wiki_version_id,
+        "selected_document_version_ids": selected_versions,
+        "pages": pages,
+        "relations": relations,
+        "sources": sources,
+        "budget": {"max_depth": 1, "max_pages": 6, "max_chunks": 12},
+        "truncated": any(packet.truncated for packet in packets),
+    }
+
+
+async def persist_report_navigation_snapshot(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    job_id: str,
+    topic: str,
+    packets: Sequence[WikiNavigationPacket],
+) -> None:
+    """첫 Reader 선택·관계·Source를 Topic별 Job Payload에 고정한다."""
+    if not packets:
+        return
+    snapshot = _navigation_packet_snapshot(packets)
+    async with connection.transaction():
+        await set_personal_wiki_scope(connection, user_id=user_id)
+        cursor = await connection.execute(
+            """
+            UPDATE agent.agent_jobs
+            SET payload = jsonb_set(
+                    payload,
+                    '{wiki_navigation_snapshots}',
+                    COALESCE(payload -> 'wiki_navigation_snapshots', '{}'::jsonb)
+                    || jsonb_build_object(%s, %s::jsonb),
+                    true
+                ),
+                updated_at = clock_timestamp()
+            WHERE id = %s
+              AND user_id = %s
+              AND job_type = 'report_generation'
+            RETURNING id
+            """,
+            (topic, Jsonb(snapshot), job_id, user_id),
+        )
+        if await cursor.fetchone() is None:
+            raise RuntimeError(
+                f"Navigator Snapshot을 저장할 Report Job을 찾을 수 없습니다: {job_id}"
+            )
 
 
 def _pinned_wiki_snapshots(
@@ -408,10 +547,21 @@ async def enqueue_report_generation_job(
     """
     context_cursor = await connection.execute(
         """
-        SELECT id, plan, preferred_language
-        FROM agent.user_context_snapshots
-        WHERE user_id = %s AND deleted_at IS NULL
-        ORDER BY context_version DESC
+        SELECT
+            context.id,
+            context.plan,
+            context.preferred_language,
+            (
+                SELECT wiki.id::text
+                FROM agent.wiki_versions AS wiki
+                WHERE wiki.user_id = context.user_id
+                  AND wiki.status = 'active'
+                ORDER BY wiki.version DESC
+                LIMIT 1
+            ) AS wiki_version_id
+        FROM agent.user_context_snapshots AS context
+        WHERE context.user_id = %s AND context.deleted_at IS NULL
+        ORDER BY context.context_version DESC
         LIMIT 1
         """,
         (user_id,),
@@ -475,6 +625,13 @@ async def enqueue_report_generation_job(
         "interest_bundle": interest_bundle,
         # INT-013으로 활성 관심사와 매칭된 주제만 담는다. 없으면 빈 dict.
         "topic_interest_bundles": topic_interest_bundles,
+        # 접수 시점의 Logical Index·Page Version 범위를 고정한다. None이면 Wiki가
+        # 비어 있던 요청이며 Reader는 빈 Packet/Global 폴백으로 진행한다.
+        "wiki_version_id": (
+            str(context["wiki_version_id"])
+            if context.get("wiki_version_id") is not None
+            else None
+        ),
         "content_type": content_type,
         "report_type": report_type,
         "language": resolved_language,
@@ -949,6 +1106,118 @@ async def load_report_context(
             )
         )
     return contexts
+
+
+async def load_global_report_context(
+    connection: AsyncConnection[DictRow],
+    *,
+    query: str,
+    top_k: int = 5,
+) -> list[ReportContextDocument]:
+    """Global 수집 캐시만 Keyword·Trigram으로 검색한다.
+
+    Reader Agent가 개인 Wiki는 Navigator로만 읽도록 개인 Wiki CTE를 포함하지
+    않는다. 검색 결과가 없을 때도 개인 Wiki가 아니라 최신 Global 문서만 0점
+    후보로 반환해 기존 풀 신선도·관련성 Gate가 폴백 여부를 결정하게 한다.
+
+    Args:
+        connection: 호출자가 Report Graph 전체에서 재사용하는 DB 연결
+        query: Global 저장 자료에서 찾을 검색어
+        top_k: 반환할 Global 문서 상한
+
+    Returns:
+        Global Namespace의 검색 Context 목록
+    """
+    if not query.strip():
+        raise ValueError("Global 저장 자료 검색에 query가 필요합니다.")
+    if not 1 <= top_k <= 20:
+        raise ValueError("Global 저장 자료 검색 top_k는 1에서 20 사이여야 합니다.")
+    cursor = await connection.execute(
+        """
+        WITH scored AS (
+            SELECT
+                'gsrc:' || cache.id AS document_version_id,
+                'gsrc:' || cache.id AS chunk_id,
+                'global' AS namespace_key,
+                cache.title,
+                cache.markdown AS content,
+                COALESCE(cache.resolved_url, cache.canonical_url) AS url,
+                cache.updated_at AS source_updated_at,
+                CASE WHEN topic_match.exact THEN 1.0 ELSE 0.0 END +
+                GREATEST(
+                    similarity(COALESCE(cache.search_body, cache.markdown), %s),
+                    ts_rank(cache.search_vector, plainto_tsquery('simple', %s))
+                ) AS score
+            FROM agent.global_source_documents AS cache
+            CROSS JOIN LATERAL (
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM agent.global_source_document_topics AS mapped
+                    LEFT JOIN agent.interest_collection_targets AS target
+                      ON target.target_key = mapped.target_key
+                    WHERE mapped.global_source_document_id = cache.id
+                      AND (
+                            lower(btrim(mapped.search_query)) = lower(btrim(%s))
+                            OR lower(btrim(target.query)) = lower(btrim(%s))
+                      )
+                ) AS exact
+            ) AS topic_match
+            WHERE cache.content_status = 'fetched'
+              AND cache.markdown IS NOT NULL
+              AND (
+                    topic_match.exact
+                    OR similarity(COALESCE(cache.search_body, cache.markdown), %s) > 0.05
+                    OR cache.search_vector @@ plainto_tsquery('simple', %s)
+              )
+        )
+        SELECT *
+        FROM scored
+        ORDER BY score DESC, document_version_id
+        LIMIT %s
+        """,
+        (query, query, query, query, query, query, top_k),
+    )
+    rows = await cursor.fetchall()
+    if not rows:
+        fallback_cursor = await connection.execute(
+            """
+            SELECT
+                'gsrc:' || cache.id AS document_version_id,
+                'gsrc:' || cache.id AS chunk_id,
+                'global' AS namespace_key,
+                cache.title,
+                cache.markdown AS content,
+                COALESCE(cache.resolved_url, cache.canonical_url) AS url,
+                cache.updated_at AS source_updated_at,
+                0::float AS score
+            FROM agent.global_source_documents AS cache
+            WHERE cache.content_status = 'fetched'
+              AND cache.markdown IS NOT NULL
+            ORDER BY cache.updated_at DESC, cache.id
+            LIMIT %s
+            """,
+            (top_k,),
+        )
+        rows = await fallback_cursor.fetchall()
+    return [
+        ReportContextDocument(
+            reference=f"G{index}",
+            document_version_id=str(row["document_version_id"]),
+            chunk_id=str(row["chunk_id"]),
+            namespace_key="global",
+            title=str(row["title"]),
+            content=str(row["content"]),
+            url=str(row["url"]) if row.get("url") else None,
+            score=float(row["score"]),
+            context_role="global_retrieval",
+            source_updated_at=(
+                str(row["source_updated_at"])
+                if row.get("source_updated_at") is not None
+                else None
+            ),
+        )
+        for index, row in enumerate(rows, start=1)
+    ]
 
 
 def _uuid_or_none(value: str) -> str | None:

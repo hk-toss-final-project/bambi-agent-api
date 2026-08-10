@@ -151,6 +151,19 @@ class AgentWorkflowService:
                 if isinstance(raw_topic_interest_bundles, dict)
                 else {}
             )
+            wiki_version_id = (
+                str(job.payload.get("wiki_version_id") or "").strip() or None
+            )
+            raw_navigation_snapshots = job.payload.get("wiki_navigation_snapshots")
+            wiki_navigation_snapshots = (
+                {
+                    str(key): dict(value)
+                    for key, value in raw_navigation_snapshots.items()
+                    if isinstance(value, dict)
+                }
+                if isinstance(raw_navigation_snapshots, dict)
+                else {}
+            )
             async with self._repository.acquire_connection() as connection:
                 feature_result = await report_001(
                     FeatureRequest(
@@ -172,6 +185,8 @@ class AgentWorkflowService:
                                 generation_scope=generation_scope,
                                 interest_bundle=interest_bundle,
                                 topic_interest_bundles=topic_interest_bundles,
+                                wiki_version_id=wiki_version_id,
+                                wiki_navigation_snapshots=wiki_navigation_snapshots,
                             )
                         },
                     )
