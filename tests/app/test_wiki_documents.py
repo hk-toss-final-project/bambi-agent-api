@@ -119,6 +119,9 @@ class _FakeWikiDocumentRepository:
             "reset_document_count": 3,
             "reset_relation_count": 2,
             "unsearchable_chunk_count": 5,
+            "deleted_source_document_count": 4,
+            "deleted_source_version_count": 6,
+            "redacted_source_event_count": 4,
             "retired_wiki_version_count": 1,
             "retired_interest_profile_count": 1,
             "cancelled_job_count": 1,
@@ -232,4 +235,7 @@ def test_personal_wiki_reset_returns_account_scoped_counts() -> None:
     assert response.json()["user_id"] == "user-1"
     assert response.json()["reset_document_count"] == 3
     assert response.json()["unsearchable_chunk_count"] == 5
+    assert response.json()["deleted_source_document_count"] == 4
+    assert response.json()["deleted_source_version_count"] == 6
+    assert response.json()["redacted_source_event_count"] == 4
     assert response.json()["cancelled_job_count"] == 1
