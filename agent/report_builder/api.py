@@ -3,6 +3,13 @@
 구현 모듈의 기능 함수를 안정적인 import 경로로 다시 노출한다.
 """
 
+from .features.briefing_topics import (
+    DEFAULT_BRIEFING_TOPIC_COUNT,
+    BriefingTopicSelection,
+    InterestCandidate,
+    InterestContext,
+    select_briefing_topics,
+)
 from .features.orchestration import report_001, report_002
 from .features.context import report_003, report_012
 from .features.retrieval import report_004, report_005, report_006
