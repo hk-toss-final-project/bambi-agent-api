@@ -16,6 +16,12 @@ class PersonalWikiBuildState(TypedDict):
     existing_relations: NotRequired[list[object]]
     onboarding_anchor_keys: NotRequired[list[tuple[str, str]]]
     node_embeddings: NotRequired[list[object]]
+    taxonomy_contexts: NotRequired[list[object]]
+    cached_custom_contexts: NotRequired[list[object]]
+    onboarding_contexts: NotRequired[list[object]]
+    generated_custom_contexts: NotRequired[list[object]]
+    onboarding_context_model: NotRequired[str]
+    onboarding_context_warnings: NotRequired[list[str]]
     classification: NotRequired[object]
     classification_model: NotRequired[str]
     resolution_draft: NotRequired[object]
@@ -34,6 +40,7 @@ class PersonalWikiBuildState(TypedDict):
     persisted: NotRequired[object]
     embedding_count: NotRequired[int]
     embedding_warning: NotRequired[str | None]
+    custom_context_cache_count: NotRequired[int]
     result: NotRequired[dict[str, object]]
 
 

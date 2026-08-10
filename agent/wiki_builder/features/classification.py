@@ -22,6 +22,7 @@ from agent.wiki_builder.models import (
     WikiClassification,
     WikiRelationClassification,
 )
+from shared.onboarding_context_models import OnboardingTopicContext
 
 _MAX_SOURCE_CHARS = 8000
 _ENTITY_SUBTYPES = {
@@ -44,8 +45,6 @@ _CONCEPT_SUBTYPES = {
 }
 ONBOARDING_CLASSIFIER_MODEL = "deterministic:onboarding-seed-v1"
 
-_ONBOARDING_COMPOUND_SEPARATOR = re.compile(r"\s*·\s*")
-
 type WikiClassifier = Callable[..., WikiClassification]
 
 _PROMPT_PATH = Path(__file__).parents[2] / "prompts" / "templates" / "personal_wiki_classifier.md"
@@ -67,19 +66,82 @@ def _unique(items: Iterable[str]) -> list[str]:
 
 def classify_onboarding_seed_for_wiki(
     source_metadata: Mapping[str, object],
+    *,
+    resolved_contexts: Sequence[OnboardingTopicContext] = (),
 ) -> WikiClassification:
-    """온보딩에서 선택한 관심 주제를 LLM 없이 Concept 후보로 변환한다."""
+    """해석된 온보딩 컨텍스트를 Entity·Concept 후보로 결정론 변환한다."""
+    if resolved_contexts:
+        names_by_topic_id = {
+            context.topic_id: context.canonical_name
+            for context in resolved_contexts
+            if context.topic_id
+        }
+        entities: list[EntityClassification] = []
+        concepts: list[ConceptClassification] = []
+        for context in resolved_contexts:
+            provenance: dict[str, object] = {
+                "onboarding_context": {
+                    "taxonomy_version": context.taxonomy_version,
+                    "topic_id": context.topic_id,
+                    "content_version": context.content_version,
+                    "resolution_kind": context.resolution_kind,
+                    "confidence": context.confidence,
+                    "original_keyword": context.original_keyword,
+                    "locale": context.locale,
+                    "context_signature": context.context_signature,
+                    "model_name": context.model_name,
+                    "prompt_version": context.prompt_version,
+                    **context.metadata,
+                }
+            }
+            related_concepts = _unique(
+                names_by_topic_id[topic_id]
+                for topic_id in context.related_topic_ids
+                if topic_id in names_by_topic_id
+            )
+            if context.node_kind == "entity":
+                entities.append(
+                    EntityClassification(
+                        name=context.canonical_name,
+                        subtype=context.subtype,
+                        description=context.definition,
+                        aliases=list(context.aliases),
+                        related_concepts=related_concepts,
+                        matched_existing_key=context.matched_existing_key,
+                        context_metadata=provenance,
+                    )
+                )
+            else:
+                concepts.append(
+                    ConceptClassification(
+                        title=context.canonical_name,
+                        subtype=context.subtype,
+                        definition=context.definition,
+                        key_characteristics=list(context.key_characteristics),
+                        applications=list(context.applications),
+                        aliases=list(context.aliases),
+                        related_concepts=related_concepts,
+                        matched_existing_key=context.matched_existing_key,
+                        context_metadata=provenance,
+                    )
+                )
+        return WikiClassification(
+            source_summary=(
+                "사용자가 온보딩에서 직접 선택하거나 입력한 관심 주제: "
+                + ", ".join(context.original_keyword for context in resolved_contexts)
+            ),
+            entities=entities,
+            concepts=concepts,
+        )
+
+    # 이전 Version의 시드도 재구성할 수 있게 label 전체를 하나의 Topic으로
+    # 취급한다. `AI·머신러닝`처럼 가운데점이 있는 정식 명칭을 쪼개지 않는다.
     raw_labels = source_metadata.get("labels")
     if not isinstance(raw_labels, list):
         raise ValueError("온보딩 시드 metadata.labels가 문자열 목록이어야 합니다.")
     source_labels = _unique(item for item in raw_labels if isinstance(item, str))
     if not source_labels:
         raise ValueError("온보딩 시드에 유효한 관심 주제 label이 없습니다.")
-    labels = _unique(
-        atomic_label
-        for source_label in source_labels
-        for atomic_label in _ONBOARDING_COMPOUND_SEPARATOR.split(source_label)
-    )
     return WikiClassification(
         source_summary=(
             "사용자가 온보딩에서 직접 선택한 관심 주제: "
@@ -91,7 +153,7 @@ def classify_onboarding_seed_for_wiki(
                 subtype="term",
                 definition=f"사용자가 온보딩에서 직접 선택한 관심 주제: {label}",
             )
-            for label in labels
+            for label in source_labels
         ],
     )
 
@@ -416,6 +478,10 @@ def _merge_entity(
             current.matched_existing_key or incoming.matched_existing_key
         ),
         is_alias=current.is_alias or incoming.is_alias,
+        context_metadata={
+            **current.context_metadata,
+            **incoming.context_metadata,
+        },
     )
 
 
@@ -442,6 +508,10 @@ def _merge_concept(
             current.matched_existing_key or incoming.matched_existing_key
         ),
         overlaps_existing=current.overlaps_existing or incoming.overlaps_existing,
+        context_metadata={
+            **current.context_metadata,
+            **incoming.context_metadata,
+        },
     )
 
 
@@ -571,11 +641,15 @@ def classify_wiki_source(
     source_tags: Sequence[str] = (),
     model: str = "gpt-4.1-mini",
     classifier: WikiClassifier = classify_source_for_wiki,
+    onboarding_contexts: Sequence[OnboardingTopicContext] = (),
 ) -> tuple[WikiClassification, str]:
     """원본 유형에 맞는 분류 결과와 Build 기록용 모델 표식을 반환한다."""
     if source_type == "onboarding_seed":
         return (
-            classify_onboarding_seed_for_wiki(source_metadata),
+            classify_onboarding_seed_for_wiki(
+                source_metadata,
+                resolved_contexts=onboarding_contexts,
+            ),
             ONBOARDING_CLASSIFIER_MODEL,
         )
     return (

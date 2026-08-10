@@ -56,6 +56,61 @@ def _fake_onboarding_source() -> SimpleNamespace:
     return source
 
 
+def test_changed_onboarding_seed_runs_full_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """두 번째 온보딩 Version은 이전 시드 전용 노드를 제거하도록 전체 재구성한다."""
+    source = _fake_onboarding_source()
+    source.version = 2
+    source.head_current_version = 2
+    rebuilt = SimpleNamespace(
+        persisted=_fake_persisted(),
+        source_count=3,
+        superseded_document_count=2,
+        embedding_count=1,
+        quality=SimpleNamespace(metrics={"error_count": 0}, issues=[]),
+    )
+    calls: list[str] = []
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """테스트에서 DB Scope 설정을 생략한다."""
+        return None
+
+    async def fake_source(connection: Any, **kwargs: Any) -> SimpleNamespace:
+        """현재 Head가 두 번째 Version인 온보딩 원본을 반환한다."""
+        return source
+
+    async def fake_rebuild(connection: Any, **kwargs: Any) -> SimpleNamespace:
+        """Full Rebuild 호출과 Job 인자를 기록한다."""
+        calls.append("rebuild")
+        assert kwargs["job_id"] == "job-2"
+        return rebuilt
+
+    async def fake_recalculate(connection: Any, *, user_id: str) -> None:
+        """관심사 재계산 후속 훅을 기록한다."""
+        calls.append("recalculate")
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(
+        agent_graph, "get_user_source_document_version_for_agent", fake_source
+    )
+    monkeypatch.setattr(agent_graph, "rebuild_full_wiki", fake_rebuild)
+    monkeypatch.setattr(agent_graph, "_recalculate_interest_profile", fake_recalculate)
+
+    result = asyncio.run(
+        agent_graph.run_personal_wiki_build(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            source_document_version_id="source-version-2",
+            job_id="job-2",
+        )
+    )
+
+    assert calls == ["rebuild", "recalculate"]
+    assert result["full_rebuild"] is True
+    assert result["superseded_document_count"] == 2
+
+
 def _graph_snapshot_relation(
     source_key: str,
     source_title: str,
@@ -365,8 +420,7 @@ def test_run_personal_wiki_build_materializes_onboarding_labels_without_llm(
 
     classification = captured["classification"]
     assert [concept.title for concept in classification.concepts] == [
-        "AI",
-        "머신러닝",
+        "AI·머신러닝",
         "반도체",
     ]
     assert captured["model"] == (

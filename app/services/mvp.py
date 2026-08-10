@@ -354,6 +354,7 @@ class AgentApiMvpService:
                 interest_taxonomy_version=stored.interest_taxonomy_version,
                 selected_category_ids=stored.selected_category_ids,
                 selected_topic_ids=stored.selected_topic_ids,
+                preferred_language=stored.preferred_language,
             )
             if seed is None:
                 return

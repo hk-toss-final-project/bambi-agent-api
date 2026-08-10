@@ -57,13 +57,17 @@ flowchart LR
   관심사 프로필과 달리 재계산으로 지워지지 않도록 버전 관리되는
   `agent.user_context_snapshots.attributes`에 함께 보존한다.
 - **콜드스타트 관심사 시드 (WSE-014, 자동)**: `signup_interests`가 있으면 이 컨텍스트
-  수신 시 Agent가 온보딩 선택을 시드 Markdown으로 합성해 `onboarding_seed` 원본과
-  Personal Wiki Build Job으로 **자동 접수**한다. Builder는 저장된 `labels`를 LLM 없이
-  결정적으로 Concept로 만들고, 이후 기존 Build·Snapshot·INT-011 경로를 재사용한다.
+  수신 시 Agent가 온보딩 선택을 시드 Markdown으로 합성해 사용자별 단일 활성
+  `onboarding_seed` 원본 Head의 Version과 Personal Wiki Build Job으로 **자동 접수**한다.
+  정식 `selected_topic_ids`는 Agent DB의 결정론적 정의·특징·활용으로 Wiki를 만들고,
+  `category=null` 그룹의 Topic은 추가 키워드로 보아 taxonomy 별칭→기존 Wiki→서명
+  캐시→LLM 일반론→결정론 폴백 순으로 해석한다. 이후 기존 Build·Snapshot·INT-011
+  경로를 재사용한다.
   따라서 합성 문서 제목은 Wiki 노드가 되지 않는다. 빌드가 끝나면 기존 INT-011 훅이
   관심사 프로필을 파생시켜, 아무것도 저장하지 않은 신규 사용자도 관심사가 비지 않는다.
   Service의 추가 호출은 필요 없다. 이 접수는 컨텍스트 저장과 분리된 best-effort이며,
-  선택 내용 기반 멱등이라 같은 온보딩이 반복 전달돼도 시드는 한 번만 만들어진다.
+  같은 선택은 현재 Version을 재사용하고, 선택이 바뀌면 같은 Head의 다음 Version과
+  Full Rebuild로 이전 시드만 근거로 한 노드를 제거한다.
 - **가입 즉시 웰컴 리포트 (Service 트리거)**: "가입하자마자 리포트 1개"는 생성 트리거라
   MVP 결정(2026-07-20)상 **Service 소유**다. Service가 온보딩 완료 직후
   `POST /internal/v1/users/{user_id}/generations`를 아래 값으로 1회 호출한다.

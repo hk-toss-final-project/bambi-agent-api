@@ -231,6 +231,134 @@ async def _upsert_user_source_version(
     return source_document_id, source_document_version_id, source_version
 
 
+async def _upsert_onboarding_seed_version(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    namespace_key: str,
+    source_event_row_id: str,
+    title: str,
+    content: str,
+    content_hash: str,
+    metadata: dict[str, object],
+) -> tuple[str, str, int]:
+    """사용자별 단일 활성 온보딩 Head에 선택 변경 Version을 누적한다."""
+    await connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"{namespace_key}:onboarding-seed",),
+    )
+    head_cursor = await connection.execute(
+        """
+        SELECT id
+        FROM agent.user_source_documents
+        WHERE namespace_key = %s
+          AND source_type = 'onboarding_seed'
+          AND status = 'active'
+          AND deleted_at IS NULL
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+        FOR UPDATE
+        """,
+        (namespace_key,),
+    )
+    head = await head_cursor.fetchone()
+    if head is None:
+        insert_cursor = await connection.execute(
+            """
+            INSERT INTO agent.user_source_documents (
+                user_id,
+                namespace_key,
+                source_type,
+                canonical_url,
+                current_version,
+                content_hash,
+                metadata
+            ) VALUES (%s, %s, 'onboarding_seed', NULL, 1, %s, %s)
+            RETURNING id
+            """,
+            (
+                user_id,
+                namespace_key,
+                content_hash,
+                Jsonb({"ingested_by": "onboarding-seed"}),
+            ),
+        )
+        head = await insert_cursor.fetchone()
+    source_document_id = str(head["id"])
+
+    version_cursor = await connection.execute(
+        """
+        SELECT id, version, content_hash
+        FROM agent.user_source_document_versions
+        WHERE source_document_id = %s
+        ORDER BY version DESC
+        LIMIT 1
+        FOR UPDATE
+        """,
+        (source_document_id,),
+    )
+    latest = await version_cursor.fetchone()
+    if latest is not None and latest["content_hash"] == content_hash:
+        return source_document_id, str(latest["id"]), int(latest["version"])
+
+    source_version = int(latest["version"]) + 1 if latest else 1
+    saved_cursor = await connection.execute(
+        """
+        INSERT INTO agent.user_source_document_versions (
+            source_document_id,
+            namespace_key,
+            source_event_id,
+            version,
+            title,
+            clipped_on,
+            tags,
+            raw_content,
+            content_format,
+            content_hash,
+            source_metadata
+        ) VALUES (
+            %s, %s, %s, %s, %s, CURRENT_DATE, '{}', %s, 'markdown', %s, %s
+        )
+        RETURNING id
+        """,
+        (
+            source_document_id,
+            namespace_key,
+            source_event_row_id,
+            source_version,
+            title,
+            content,
+            content_hash,
+            Jsonb({"origin": "onboarding_seed", **metadata}),
+        ),
+    )
+    saved = await saved_cursor.fetchone()
+    await connection.execute(
+        """
+        UPDATE agent.user_source_documents
+        SET
+            current_version = %s,
+            content_hash = %s,
+            metadata = metadata || %s,
+            updated_at = clock_timestamp()
+        WHERE id = %s
+        """,
+        (
+            source_version,
+            content_hash,
+            Jsonb(
+                {
+                    "context_contract_version": metadata.get(
+                        "context_contract_version", 1
+                    )
+                }
+            ),
+            source_document_id,
+        ),
+    )
+    return source_document_id, str(saved["id"]), source_version
+
+
 async def save_web_clipping_and_enqueue(
     connection: AsyncConnection[DictRow],
     *,
@@ -408,23 +536,15 @@ async def save_onboarding_seed_and_enqueue(
         source_document_id,
         source_document_version_id,
         source_version,
-    ) = await _upsert_user_source_version(
+    ) = await _upsert_onboarding_seed_version(
         connection,
         user_id=user_id,
         namespace_key=namespace_key,
-        source_type="onboarding_seed",
-        canonical_url=None,
         source_event_row_id=source_event_row_id,
         title=title,
-        author=None,
-        published_at=None,
-        clipped_on=None,
-        description=None,
-        tags=[],
         content=content,
         content_hash=content_hash,
-        head_metadata={"ingested_by": "onboarding-seed"},
-        version_metadata={"origin": "onboarding_seed", **metadata},
+        metadata=metadata,
     )
 
     enqueued = await enqueue_personal_wiki_build_job(

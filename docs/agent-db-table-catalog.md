@@ -1,6 +1,6 @@
 # Agent DB 테이블 카탈로그
 
-> 기준: 2026-07-22. 물리 스키마와 데이터 계약의 최종 기준은
+> 기준: 2026-08-10. 물리 스키마와 데이터 계약의 최종 기준은
 > database/migrations/0001_initial.sql,
 > database/migrations/0002_publish_snapshot_batches.sql,
 > database/migrations/0003_web_clipping_markdown.sql,
@@ -8,7 +8,8 @@
 > database/migrations/0005_structure_llm_wiki_documents.sql,
 > database/migrations/0006_rename_report_builder_contracts.sql,
 > database/migrations/0008_extract_global_source_cache.sql,
-> database/migrations/0017_wiki_relation_lifecycle.sql입니다.
+> database/migrations/0017_wiki_relation_lifecycle.sql,
+> database/migrations/0019_onboarding_topic_contexts.sql입니다.
 
 이 문서는 Agent DB 테이블을 영역과 데이터 성격으로 분류하고, 각 테이블의
 책임, 핵심 관계·제약, RLS 적용 여부와 현재 애플리케이션 연결 상태를 정리합니다.
@@ -66,6 +67,7 @@ user_context_snapshots와 agent_jobs 대신 인메모리 저장소를 사용합�
 | 사용자 원본 | wiki_source_events, user_source_documents, user_source_document_versions |
 | 지식 문서·검색 공용 | wiki_documents, wiki_document_versions, wiki_document_sources, wiki_document_relations, wiki_relation_supports, wiki_chunks, wiki_embeddings |
 | Personal Wiki | wiki_versions, wiki_version_documents |
+| 온보딩 컨텍스트 | onboarding_topic_contexts, user_custom_topic_contexts |
 | 사용자 관심사 | user_interest_profiles, user_interests, interest_evidence |
 | Global Source·Discovery | global_sources, global_collection_runs, global_source_documents, global_trends, global_trend_documents, discovery_candidates |
 | 콘텐츠 생성 | generation_requests, generation_runs, generated_content_candidates, citations, content_assets |
@@ -88,6 +90,8 @@ Report Builder 계약으로 이전합니다. 0008은 Global 수집 원문을 Wik
 캐시 출처 컬럼을 더합니다.
 0017은 관계 Head에 provenance·confidence·review·lifecycle과 Model·Prompt trace를
 추가하고 원본 Version·Build별 근거 이력 테이블 wiki_relation_supports를 추가합니다.
+0019는 44개 정식 Topic의 결정론적 Wiki 컨텍스트와 사용자 추가 키워드의
+서명 기반 캐시를 추가하고 사용자별 활성 온보딩 시드 Head를 하나로 제한합니다.
 
 ## 3. 설정
 
@@ -147,6 +151,8 @@ Personal LLM Wiki의 신규 문서는 document_kind으로 entity, concept, schem
 | user_source_document_versions | Version/Raw | Frontmatter, Markdown 원문 또는 외부 Object URI를 버전별 보존 | source_document_id + version Unique, raw_content 또는 object_uri 필수 | 적용 | Schema only |
 | wiki_versions | Snapshot/Version | 사용자 Wiki 전체 Build 버전과 문서·Chunk 수 보존 | user_id + version Unique, Personal Namespace 강제, 사용자별 active 1개 | 적용 | Schema only |
 | wiki_version_documents | Snapshot Relation | Wiki Build를 구성한 정확한 문서 Version과 당시 Vault 경로 보존 | Build+문서 Version PK, Build+파일 경로 Unique, 동일 Namespace FK | 적용 | Schema only |
+| onboarding_topic_contexts | Master/Version | taxonomy Topic별 결정론적 정의·특징·활용·별칭 관리 | taxonomy_version + topic_id + locale PK, content_version 양수, enabled 필터 | 읽기 허용·쓰기 system | PostgreSQL 연결 |
+| user_custom_topic_contexts | Cache/Version | 사용자 추가 키워드의 구조화 컨텍스트와 LLM·폴백 추적 캐시 | 사용자+정규화 키워드+locale+서명별 active Unique, 사용자 RLS | 적용 | PostgreSQL 연결 |
 
 웹 클리핑의 title, author, published, created, description, tags와 Markdown 본문은
 user_source_document_versions에, source URL은 user_source_documents.canonical_url에
@@ -264,6 +270,7 @@ API·Worker 기동 전 one-shot 서비스로 실행합니다.
     wiki_source_events
       → user_source_documents
       → user_source_document_versions
+      → onboarding_topic_contexts / user_custom_topic_contexts
       → agent_jobs(personal_wiki_build)
       → wiki_documents
       → wiki_document_versions

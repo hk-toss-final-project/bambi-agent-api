@@ -71,6 +71,11 @@ from .features.identity_resolution import (
     resolve_wiki_identity_conflicts,
     validate_wiki_identity_quality,
 )
+from .features.onboarding_contexts import (
+    CUSTOM_TOPIC_PROMPT_VERSION,
+    ONBOARDING_CONTEXT_MODEL,
+    resolve_onboarding_contexts,
+)
 
 __all__ = [
     "wba_001",
@@ -131,4 +136,7 @@ __all__ = [
     "prepare_wiki_identity_resolution",
     "resolve_wiki_identity_conflicts",
     "validate_wiki_identity_quality",
+    "CUSTOM_TOPIC_PROMPT_VERSION",
+    "ONBOARDING_CONTEXT_MODEL",
+    "resolve_onboarding_contexts",
 ]

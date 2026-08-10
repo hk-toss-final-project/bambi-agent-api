@@ -249,8 +249,8 @@ def test_build_incremental_wiki_materializes_onboarding_labels_without_llm(
     )
 
     assert persisted.wiki_version_id == "wiki-onboarding"
-    assert [concept.title for concept in plan.concepts] == ["AI", "머신러닝", "반도체"]
-    assert len({concept.normalized_content for concept in plan.concepts}) == 3
+    assert [concept.title for concept in plan.concepts] == ["AI·머신러닝", "반도체"]
+    assert len({concept.normalized_content for concept in plan.concepts}) == 2
     assert plan.entities == []
     assert all(concept.title not in {"온보딩", "온보딩 관심 주제 시드"} for concept in plan.concepts)
     assert connection.transaction_count == 2

@@ -1,10 +1,11 @@
 # Agent DB 컬럼 사전
 
-> 기준: 2026-07-28. 44개 테이블을 0001_initial.sql,
+> 기준: 2026-08-10. 49개 테이블을 0001_initial.sql,
 > 0002_publish_snapshot_batches.sql, 0003_web_clipping_markdown.sql,
 > 0004_separate_user_sources_from_llm_wiki.sql,
 > 0005_structure_llm_wiki_documents.sql,
-> 0008_extract_global_source_cache.sql 기준으로 정리했습니다. 컬럼을 추가하지
+> 0008_extract_global_source_cache.sql,
+> 0019_onboarding_topic_contexts.sql 기준으로 정리했습니다. 컬럼을 추가하지
 > 않고 생성 Job 값을 이전하는 0006_rename_report_builder_contracts.sql도 반영합니다.
 
 이 문서는 Agent DB의 모든 테이블과 컬럼을 물리 Schema 수준에서 설명합니다.
@@ -987,6 +988,58 @@ Provider 호출의 Token, 비용, 지연, 추적 정보를 사용량 단위로 �
 | succeeded | boolean | 필수 | 작업 성공 여부 |
 | details | jsonb | 자동, 빈 Object | 변경 전후 값, 실패 사유 등 Audit 상세 |
 | created_at | timestamptz | 자동 | Audit Event 발생 시각 |
+
+### onboarding_topic_contexts
+
+온보딩 정식 Topic을 Wiki 노드로 만들 때 사용할 결정론적 컨텍스트를 버전 관리합니다.
+
+| 컬럼 | 타입 | 필수·기본값 | 설명 |
+|---|---|---|---|
+| taxonomy_version | text | 필수, PK | Service가 동기화한 관심사 taxonomy 버전 |
+| topic_id | text | 필수, PK | taxonomy 안의 안정적인 Topic ID |
+| locale | text | 자동, ko-KR, PK | 컨텍스트 작성 언어·지역 |
+| canonical_name | text | 필수 | Wiki 제목으로 사용할 표준 Topic 명칭 |
+| node_kind | text | 자동, concept | entity 또는 concept |
+| subtype | text | 자동, field | Wiki 노드 세부 유형 |
+| definition | text | 필수 | 시간에 덜 민감한 일반론적 정의 |
+| key_characteristics | jsonb | 자동, 빈 Array | 핵심 특징 목록 |
+| applications | jsonb | 자동, 빈 Array | 활용·탐색 관점 목록 |
+| aliases | jsonb | 자동, 빈 Array | 별칭과 다른 표기 목록 |
+| related_topic_ids | jsonb | 자동, 빈 Array | 연관된 정식 Topic ID 목록 |
+| content_version | integer | 자동, 1 | 같은 taxonomy 안 컨텍스트 내용 버전 |
+| enabled | boolean | 자동, true | 신규 Build에 사용할지 여부 |
+| created_at | timestamptz | 자동 | 컨텍스트 생성 시각 |
+| updated_at | timestamptz | 자동 | 마지막 변경 시각 |
+
+### user_custom_topic_contexts
+
+사용자가 직접 입력한 키워드를 구조화한 결과와 재사용 서명을 보존합니다.
+
+| 컬럼 | 타입 | 필수·기본값 | 설명 |
+|---|---|---|---|
+| id | uuid | 자동, PK | 사용자 키워드 컨텍스트 식별자 |
+| user_id | text | 필수 | 컨텍스트 소유 사용자 |
+| original_keyword | text | 필수 | 사용자가 입력한 원문 표기 |
+| normalized_keyword | text | 필수 | exact match와 캐시에 쓰는 정규화 표기 |
+| locale | text | 자동, ko | 생성 언어 |
+| context_signature | text | 필수 | keyword·taxonomy·locale·Prompt의 64자 Hash |
+| canonical_name | text | 필수 | Wiki 제목에 사용할 표준 표기 |
+| node_kind | text | 필수 | entity 또는 concept |
+| subtype | text | 필수 | Wiki 노드 세부 유형 |
+| definition | text | 필수 | 일반론적 배경 설명 |
+| key_characteristics | jsonb | 자동, 빈 Array | 핵심 특징 목록 |
+| applications | jsonb | 자동, 빈 Array | 활용·탐색 관점 목록 |
+| aliases | jsonb | 자동, 빈 Array | 별칭 목록 |
+| search_terms | jsonb | 자동, 빈 Array | 후속 검색어 목록 |
+| possible_meanings | jsonb | 자동, 빈 Array | 모호한 키워드의 가능한 의미 목록 |
+| resolution_kind | text | 필수 | taxonomy_alias, existing_wiki, llm_generated, generic_fallback |
+| confidence | numeric(5,4) | 필수 | 해석 신뢰도 0~1 |
+| model_name | text | 선택 | LLM을 사용했을 때 Model 이름 |
+| prompt_version | text | 선택 | 생성 규칙의 Prompt 버전 |
+| status | text | 자동, active | active 또는 superseded |
+| metadata | jsonb | 자동, 빈 Object | 폴백 원인 등 확장 추적 정보 |
+| created_at | timestamptz | 자동 | 캐시 생성 시각 |
+| updated_at | timestamptz | 자동 | 캐시 갱신·대체 시각 |
 
 ### schema_migrations
 

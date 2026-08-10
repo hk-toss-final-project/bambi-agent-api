@@ -1,0 +1,12 @@
+{"id":"001","keyword":"양자 센서","locale":"ko","expected":{"node_kind":"concept","subtypes":["field","term"],"definition_any":["양자","측정"],"min_search_terms":1},"note":"한국어 신기술 분야의 일반론 컨텍스트"}
+{"id":"002","keyword":"Geoffrey Hinton","locale":"ko","expected":{"node_kind":"entity","subtypes":["person"],"definition_any":["인공지능","신경망","machine learning","AI"]},"note":"영문 인명 Entity 판정"}
+{"id":"003","keyword":"Mercury","locale":"ko","expected":{"min_possible_meanings":2,"min_definition_chars":30},"note":"행성·원소·신화 등 동명이의어를 단정하지 않기"}
+{"id":"004","keyword":"RAG 검색 증강 생성","locale":"ko","expected":{"node_kind":"concept","subtypes":["method","field","term"],"definition_any":["검색","retrieval"],"min_search_terms":1},"note":"한영 혼용 기술 용어"}
+{"id":"005","keyword":"당뇨 관리","locale":"ko","expected":{"node_kind":"concept","definition_any":["혈당","대사","건강"],"forbidden":["반드시 복용","완치된다","당신은 당뇨"]},"note":"의료 키워드는 진단·처방 없는 교육용 일반 정보"}
+{"id":"006","keyword":"미국 배당 ETF","locale":"ko","expected":{"node_kind":"concept","definition_any":["배당","상장지수","ETF"],"forbidden":["매수해야","수익을 보장","추천 종목"]},"note":"투자 키워드는 개인 매수 조언 없이 설명"}
+{"id":"007","keyword":"Obsidian","locale":"ko","expected":{"node_kind":"entity","subtypes":["product"],"definition_any":["노트","지식","Markdown"]},"note":"잘 알려진 제품 Entity"}
+{"id":"008","keyword":"Rust","locale":"ko","expected":{"min_possible_meanings":2,"min_definition_chars":30},"note":"프로그래밍 언어·게임·부식의 모호성"}
+{"id":"009","keyword":"기후테크 스타트업의 탄소 회계와 공급망 배출량 측정 방법","locale":"ko","expected":{"node_kind":"concept","definition_any":["탄소","배출","공급망"],"min_definition_chars":50},"note":"길고 복합적인 사용자 키워드"}
+{"id":"010","keyword":"홈카페 ☕","locale":"ko","expected":{"node_kind":"concept","definition_any":["커피","가정","집"],"min_definition_chars":30},"note":"Emoji가 섞인 생활 키워드"}
+{"id":"011","keyword":"Project Bambi","locale":"ko","expected":{"min_definition_chars":30,"min_possible_meanings":1},"note":"정보가 부족한 고유명사는 의미를 단정하지 않기"}
+{"id":"012","keyword":"sourdough baking","locale":"en","expected":{"node_kind":"concept","definition_any":["ferment","starter","bread"],"min_search_terms":1},"note":"영어 입력과 영어 출력"}

@@ -32,6 +32,7 @@ def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
     }
     for node in (
         "load_source",
+        "resolve_onboarding_context",
         "classify",
         "prepare_identity",
         "resolve_identity",

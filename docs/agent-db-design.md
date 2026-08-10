@@ -1,6 +1,6 @@
 # Agent DB PostgreSQL 설계
 
-테이블 44개의 영역·성격·관계·RLS·런타임 연결 상태는
+테이블 49개의 영역·성격·관계·RLS·런타임 연결 상태는
 [Agent DB 테이블 카탈로그](agent-db-table-catalog.md)에서 확인합니다.
 각 컬럼의 타입·필수 여부·기본값·의미는
 [Agent DB 컬럼 사전](agent-db-column-dictionary.md)에서 확인합니다.
@@ -64,6 +64,8 @@ erDiagram
     AGENT_JOBS ||--o{ AGENT_JOB_ATTEMPTS : "retries"
     WIKI_SOURCE_EVENTS ||--o{ USER_SOURCE_DOCUMENT_VERSIONS : "ingests"
     USER_SOURCE_DOCUMENTS ||--o{ USER_SOURCE_DOCUMENT_VERSIONS : "versions"
+    USER_CONTEXT_SNAPSHOTS }o--o{ ONBOARDING_TOPIC_CONTEXTS : "selects topic"
+    USER_CONTEXT_SNAPSHOTS ||--o{ USER_CUSTOM_TOPIC_CONTEXTS : "caches keyword"
     USER_SOURCE_DOCUMENT_VERSIONS }o--o{ WIKI_DOCUMENT_VERSIONS : "source of"
     WIKI_DOCUMENTS ||--o{ WIKI_DOCUMENT_VERSIONS : "versions"
     WIKI_DOCUMENTS ||--o{ WIKI_DOCUMENT_RELATIONS : "source"
@@ -87,7 +89,7 @@ erDiagram
 | 기능 ID | 책임 | Table |
 |---|---|---|
 | DB-001 | 사용자 컨텍스트 저장 | `user_context_snapshots` |
-| DB-002 | Wiki Source Event·사용자 원본 저장 | `wiki_source_events`, `user_source_documents`, `user_source_document_versions` |
+| DB-002 | Wiki Source Event·사용자 원본·온보딩 컨텍스트 저장 | `wiki_source_events`, `user_source_documents`, `user_source_document_versions`, `onboarding_topic_contexts`, `user_custom_topic_contexts` |
 | DB-003 | 개인 LLM Wiki 문서 저장과 원본·문서 관계 추적 | `wiki_documents`, `wiki_document_versions`, `wiki_document_sources`, `wiki_document_relations`, `wiki_relation_supports` |
 | DB-004 | 개인 Wiki Chunk 저장 | `wiki_chunks` |
 | DB-005 | 개인 Wiki Embedding 저장 | `wiki_embeddings` |

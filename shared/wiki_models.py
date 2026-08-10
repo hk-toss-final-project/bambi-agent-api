@@ -37,6 +37,8 @@ class EntityClassification:
     # 이 노드가 원문에서 맡은 역할. 관심사 후보를 고를 때 쓴다.
     # subject만 관심사가 되고 tool·source·mention은 제외된다.
     role: str = "subject"
+    # 결정론적 온보딩 컨텍스트처럼 분류 근거를 문서 Metadata까지 전달한다.
+    context_metadata: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +58,7 @@ class ConceptClassification:
     overlaps_existing: bool = False
     # EntityClassification.role과 같은 의미다.
     role: str = "subject"
+    context_metadata: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

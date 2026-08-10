@@ -128,6 +128,11 @@ from .features.interest_taxonomy import (
     sync_wiki_interest_collection_targets,
     upsert_interest_taxonomy_snapshot,
 )
+from .features.onboarding_contexts import (
+    list_cached_custom_topic_contexts,
+    list_onboarding_topic_contexts,
+    save_custom_topic_contexts,
+)
 from .features.events import db_027
 from .features.api_keys import db_028
 from .features.usage import db_029
@@ -186,6 +191,9 @@ __all__ = [
     "list_wiki_graph_relation_snapshot",
     "list_wiki_node_embeddings",
     "list_user_source_versions_for_rebuild",
+    "list_onboarding_topic_contexts",
+    "list_cached_custom_topic_contexts",
+    "save_custom_topic_contexts",
     "supersede_personal_wiki_for_rebuild",
     "update_full_wiki_rebuild_summary",
     "save_fetched_url_and_enqueue",

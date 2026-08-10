@@ -79,3 +79,21 @@ def test_wse_014_handles_mixed_korean_english_and_multiple_groups() -> None:
     assert seed is not None
     assert "## Tech" in seed.content and "## 문화" in seed.content
     assert set(seed.topics) == {"반도체", "AI chip", "K-pop"}
+
+
+def test_wse_014_marks_categoryless_topics_as_custom_context_inputs() -> None:
+    """Category가 없는 사용자 추가 키워드만 별도 해석 입력으로 기록한다."""
+    seed = _run(
+        signup_interests=[
+            {"category": "기술", "topics": ["AI·머신러닝"]},
+            {"category": None, "topics": ["양자 센서", "AI·머신러닝"]},
+        ],
+        interest_taxonomy_version="1.0.0-draft",
+        selected_topic_ids=["ai_ml"],
+        preferred_language="ko",
+    )
+
+    assert seed is not None
+    assert seed.metadata["custom_labels"] == ["양자 센서", "AI·머신러닝"]
+    assert seed.metadata["preferred_language"] == "ko"
+    assert seed.metadata["context_contract_version"] == 1
