@@ -37,7 +37,7 @@
 | `GET` | `/internal/v1/jobs/{job_id}` | `SVC-013` | `200` | Job 상태와 진행률을 조회합니다. |
 | `GET` | `/internal/v1/jobs/{job_id}/result` | `SVC-014` | `200` | 완료된 Job 결과를 조회합니다. 미완료 시 `409`를 반환합니다. |
 | `GET` | `/internal/v1/users/{user_id}/wiki/graph` | `PWIKI-003` | `200` | 현재 개인 Wiki 문서와 관계 Graph를 조회합니다. |
-| `DELETE` | `/internal/v1/users/{user_id}/wiki` | `PWIKI-013` | `200` | 사용자 원본을 보존한 채 개인 LLM Wiki 파생 데이터를 초기화합니다. |
+| `DELETE` | `/internal/v1/users/{user_id}/wiki` | `PWIKI-013` | `200` | 사용자 원본을 영구 삭제하고 개인 LLM Wiki 파생 데이터를 초기화합니다. |
 
 ### 개인 Wiki Graph 조회
 
@@ -63,14 +63,17 @@ URL에 포함하지 않습니다. DB 연결이 준비되지 않은 Runtime은 Gr
 
 ### 개인 LLM Wiki 초기화
 
-`DELETE /internal/v1/users/{user_id}/wiki`는 사용자 원본과 원본 Version을 보존한 채
-현재 활성 Wiki 문서·관계·Chunk 검색·Build Snapshot·관심사 Profile을 계정 단위로
-비활성화합니다. 대기·실행 중인 `personal_wiki_build` Job도 취소하며, 이미 실행 중인
+`DELETE /internal/v1/users/{user_id}/wiki`는 사용자 원본과 원본 Version을 영구 삭제하고
+기존 Source Event의 URL·콘텐츠 ID·Object URI·Payload·오류 메시지를 비식별화합니다.
+현재 활성 Wiki 문서·관계·Chunk 검색·Build Snapshot·관심사 Profile도 계정 단위로
+비활성화합니다. 대기·실행 중인 `personal_wiki_build` Job을 취소하며, 이미 실행 중인
 Worker가 초기화 뒤 결과를 저장하려 하면 DB Trigger가 취소 상태를 확인해 Transaction을
-거부합니다. 같은 사용자의 반복 호출은 성공하며 이미 빈 Wiki에서는 모든 반영 건수가 0입니다.
+거부합니다. 공유 Global Source Cache는 삭제하지 않습니다. 같은 사용자의 반복 호출은
+성공하며 이미 빈 Wiki에서는 모든 반영 건수가 0입니다.
 
 응답은 `reset_document_count`, `reset_relation_count`,
-`unsearchable_chunk_count`, `retired_wiki_version_count`,
+`unsearchable_chunk_count`, `deleted_source_document_count`,
+`deleted_source_version_count`, `redacted_source_event_count`, `retired_wiki_version_count`,
 `retired_interest_profile_count`, `cancelled_job_count`, `reset_at`,
 `request_id`를 반환합니다. 초기화 뒤 새 원본 입력이나 명시적 전체 재구성으로 Wiki를 다시
 만들 수 있습니다.

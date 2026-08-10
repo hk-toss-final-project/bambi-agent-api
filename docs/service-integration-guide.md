@@ -221,9 +221,9 @@ Agent는 접수 시 관심사가 현재 활성 Profile에 속하고 차단되지
 - **계정 초기화** (`DELETE .../wiki`): 해당 사용자의 활성 Wiki 문서·관계·Chunk
   검색·Build Snapshot·관심사 Profile을 비활성화하고 대기·실행 중인 Wiki Build를
   취소합니다(동기 200, 반복 호출 멱등).
-- `user_source_documents`, `user_source_document_versions`, 기존 Source Event는
-  보존합니다. 따라서 초기화는 사용자가 저장한 원본 삭제가 아니며 새 입력이나 전체
-  재구성으로 Wiki를 다시 만들 수 있습니다.
+- `user_source_documents`, `user_source_document_versions`는 영구 삭제하고 기존
+  Source Event는 멱등 식별자만 남긴 채 개인정보 Payload를 비식별화합니다. 공유
+  `global_source_documents` Cache는 다른 사용자도 사용할 수 있으므로 유지합니다.
 - 확인 UX와 사용자 인증은 Service가 소유합니다. Agent는 전달된 `user_id`의 Namespace만
   초기화하고 처리 건수를 반환합니다.
 

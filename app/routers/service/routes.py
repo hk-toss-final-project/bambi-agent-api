@@ -319,7 +319,7 @@ async def reset_personal_wiki(
     request: Request,
     service: WikiDocumentService = Depends(get_wiki_document_service),
 ) -> PersonalWikiResetResponse:
-    """[PWIKI-013] 사용자 원본을 보존하고 개인 LLM Wiki를 초기화한다."""
+    """[PWIKI-013] 사용자 원본을 영구 삭제하고 개인 LLM Wiki를 초기화한다."""
     return await service.reset_wiki(user_id, request_id=_request_id(request))
 
 

@@ -66,7 +66,7 @@
 - [x] `PWIKI-003` 개인 Wiki 문서 조회 — 목록·상세·Build·Graph·연결 상위 Node(top-nodes)
 - [x] `PWIKI-005` 개인 Wiki 문서 삭제 — soft-delete + Chunk 검색 제외 (동기·멱등). 삭제 정책은 Service 소유, `pwiki_005` facade는 영속화 계층 `delete_wiki_document_and_record_event`에 위임 (WBA-015와 동일 실행 경로 공유). D1 잠정: 재등장 시 기본 부활, tombstone 없음
 - [x] `PWIKI-008` Wiki 문서 중복 제거 — 같은 `document_key` Upsert에 더해 Unicode NFKC·대소문자·공백·구두점 제거 표면형으로 기존 title·aliases를 비교한다. 동일 kind 단일 후보는 코드로 병합하고, namespace 충돌·복수 후보만 별도 LLM identity 판정기에 한 번에 전달한다. 판정 응답은 제공된 기존 key와 incoming label만 허용하며 저장 전 canonical 중복 품질 게이트를 통과해야 한다.
-- [x] `PWIKI-013` 개인 Wiki 초기화 — 사용자 원본·Version·기존 Source Event는 보존하고 활성 Wiki 문서·관계·Chunk 검색·Build Snapshot·관심사 Profile을 비활성화한다. 대기·실행 중인 Wiki Build를 취소하고 취소 Job의 지연 저장도 DB Trigger로 차단한다. 계정별 동기·멱등 `DELETE /internal/v1/users/{user_id}/wiki`
+- [x] `PWIKI-013` 개인 Wiki 초기화 — 사용자 원본·Version은 영구 삭제하고 기존 Source Event는 멱등 식별자만 남겨 개인정보 Payload를 비식별화하며 활성 Wiki 문서·관계·Chunk 검색·Build Snapshot·관심사 Profile을 비활성화한다. 대기·실행 중인 Wiki Build를 취소하고 취소 Job의 지연 저장도 DB Trigger로 차단한다. 공유 Global Source Cache는 유지한다. 계정별 동기·멱등 `DELETE /internal/v1/users/{user_id}/wiki`
 - [x] `PWE-001` 개인 Wiki 문서 Chunking
 - [x] `PWE-002` Chunk 저장 — `wiki_chunks` 멱등 Upsert
 - [ ] `PWE-004` Embedding 생성 — ❌ 독립 PWE Feature facade는 아직 스텁이다. 현재 Wiki Build는 `WBA-011` 내부 경로에서 변경 Entity·Concept Chunk의 1536차원 Vector를 생성한다.
@@ -216,7 +216,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | PWIKI-003 | 개인 Wiki 문서 조회 | 사용자의 Wiki 문서 목록과 상세 내용을 조회한다. |
 | PWIKI-005 | 개인 Wiki 문서 삭제 | 사용자가 제거한 데이터를 Wiki 검색 대상에서 제외한다. |
 | PWIKI-008 | Wiki 문서 중복 제거 | 동일하거나 유사한 개인 Wiki 문서를 중복 제거한다. |
-| PWIKI-013 | 개인 Wiki 초기화 | 사용자 원본은 보존하고 개인 LLM Wiki 파생 데이터와 진행 중인 Build를 초기화한다. |
+| PWIKI-013 | 개인 Wiki 초기화 | 사용자 원본·Version과 개인 LLM Wiki 파생 데이터를 제거하고 진행 중인 Build를 초기화한다. |
 | PWE-001 | 개인 Wiki 문서 Chunking | Wiki 문서를 의미 단위 Chunk로 분할한다. |
 | PWE-002 | Chunk 저장 | 생성된 Chunk를 문서 Version과 연결해 PostgreSQL에 저장한다. |
 | PWE-004 | Embedding 생성 | 개인 Wiki Chunk의 Vector를 생성한다. |

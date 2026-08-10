@@ -9,7 +9,7 @@ class PersonalWikiResetWriter(Protocol):
     async def reset_wiki(
         self, user_id: str, *, request_id: str
     ) -> Mapping[str, object]:
-        """사용자의 개인 LLM Wiki 파생 상태를 초기화한다."""
+        """사용자의 개인 LLM Wiki와 입력 원본을 초기화한다."""
         ...
 
 
@@ -20,7 +20,7 @@ async def pwiki_013(
     *,
     request_id: str,
 ) -> Mapping[str, object]:
-    """[PWIKI-013] 사용자 원본을 보존하고 개인 LLM Wiki를 초기화한다."""
+    """[PWIKI-013] 사용자 원본을 영구 삭제하고 개인 LLM Wiki를 초기화한다."""
     if not user_id:
         raise ValueError("PWIKI-013에 user_id가 필요합니다.")
     if not request_id:
