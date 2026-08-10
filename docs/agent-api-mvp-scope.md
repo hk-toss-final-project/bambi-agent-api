@@ -53,6 +53,7 @@
 - [x] `SVC-008` 콘텐츠 생성 요청 — `generation_requests` + `report_generation` Job 멱등 등록, `scheduled_at` 예약 실행 지원
 - [x] `SVC-013` Agent Job 상태 조회
 - [x] `SVC-014` Agent 결과 조회 — 미완료 시 `JOB_RESULT_NOT_READY`
+- [x] `SVC-015` Agent Job 상태 Batch 조회 — Service Worker 활성 작업 최대 100건 단일 조회
 - [x] `WSE-001` 웹 클리핑 이벤트 수신 — `wiki_source_events` + Frontmatter 필드 저장
 - [x] `WSE-010` Wiki 재구성 요청 수신 — MCP `wiki:write` 경로. 요청 형태만 검증·정규화하고, 실제 Job 등록은 `enqueue_wiki_rebuild_for_source`가 기존 `personal_wiki_build` Job·상주 Worker(WORKER-002)로 위임(멱등)
 - [x] `WSE-011` 이벤트 중복 처리 방지 — `user_id + source_event_id` 식별 및 DB Unique·Upsert 적용
@@ -194,6 +195,7 @@ HTML이나 URL에 삽입하지 않습니다. `/system/*` 상태 확인 API는 �
 | SVC-008 | 콘텐츠 생성 요청 | 리포트 생성기의 콘텐츠 생성을 요청한다. |
 | SVC-013 | Agent Job 상태 조회 | 비동기 작업 상태를 조회한다. |
 | SVC-014 | Agent 결과 조회 | 생성 및 처리 결과를 Agent API에서 조회한다. |
+| SVC-015 | Agent Job 상태 Batch 조회 | Service Worker가 활성 작업 여러 건의 상태를 한 번에 조회한다. |
 
 ### 웹 클리핑 수신·영속 저장
 

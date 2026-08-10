@@ -36,6 +36,7 @@ from infrastructure.persistence.api import (
     complete_agent_job,
     fail_agent_job,
     get_agent_job,
+    get_agent_jobs,
     enqueue_report_generation_job,
     list_runnable_agent_jobs,
     register_url_and_enqueue,
@@ -437,6 +438,14 @@ class PostgresAgentJobRepository:
                 await set_system_job_scope(connection)
                 stored = await get_agent_job(connection, job_id=job_id)
         return self._to_job_record(stored) if stored is not None else None
+
+    async def get_jobs(self, job_ids: list[str]) -> list[AgentJobRecord]:
+        """시스템 Scope로 여러 Agent Job 상태를 단일 조회한다."""
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await set_system_job_scope(connection)
+                stored = await get_agent_jobs(connection, job_ids=job_ids)
+        return [self._to_job_record(job) for job in stored]
 
     async def claim_job(
         self, *, job_id: str, worker_id: str, lease_seconds: int

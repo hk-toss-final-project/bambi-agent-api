@@ -98,6 +98,9 @@ def test_openapi_declares_global_internal_bearer_scheme(client: TestClient) -> N
     assert schema["paths"]["/internal/v1/jobs/{job_id}"]["get"]["security"] == [
         {"InternalBearer": []}
     ]
+    assert schema["paths"]["/internal/v1/jobs/statuses"]["post"]["security"] == [
+        {"InternalBearer": []}
+    ]
     assert "security" not in schema["paths"]["/system/live"]["get"]
 
 

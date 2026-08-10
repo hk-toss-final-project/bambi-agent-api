@@ -18,6 +18,7 @@ from app.schemas.mvp import (
     FeedbackSignalsResponse,
     GenerationRequest,
     JobResultResponse,
+    JobStatusBatchResponse,
     JobStatus,
     JobStatusResponse,
     SignupInterest,
@@ -422,6 +423,19 @@ class AgentApiMvpService:
         raise AgentApiError(
             status.HTTP_404_NOT_FOUND,
             ErrorDetail(code="JOB_NOT_FOUND", message="Agent Job을 찾을 수 없습니다."),
+        )
+
+    async def get_jobs(self, job_ids: list[str]) -> JobStatusBatchResponse:
+        """요청 순서대로 여러 Agent Job의 상태와 누락 ID를 반환한다."""
+        records = await self._agent_jobs.get_jobs(job_ids)
+        records_by_id = {record.job_id: record for record in records}
+        return JobStatusBatchResponse(
+            items=[
+                self._job_status_response(records_by_id[job_id])
+                for job_id in job_ids
+                if job_id in records_by_id
+            ],
+            missing_job_ids=[job_id for job_id in job_ids if job_id not in records_by_id],
         )
 
     async def get_job_result(self, job_id: str) -> JobResultResponse:

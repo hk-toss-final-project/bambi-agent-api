@@ -483,6 +483,39 @@ class JobStatusResponse(AcceptedJobResponse):
     error_code: str | None = Field(default=None, description="실패 오류 코드")
 
 
+class JobStatusBatchRequest(ImmutableSchema):
+    """Service Worker가 한 번에 조회할 Agent Job 식별자 목록."""
+
+    job_ids: list[str] = Field(
+        min_length=1,
+        max_length=100,
+        description="중복 없는 Agent Job 식별자 목록",
+    )
+
+    @field_validator("job_ids")
+    @classmethod
+    def validate_unique_job_ids(cls, value: list[str]) -> list[str]:
+        """UUID 형식을 확인하고 같은 Job의 Batch 중복 조회를 막는다."""
+        try:
+            for job_id in value:
+                UUID(job_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("job_ids에는 UUID 형식의 Agent Job ID만 넣을 수 있습니다.") from exc
+        if len(value) != len(set(value)):
+            raise ValueError("job_ids에는 중복된 Agent Job ID를 넣을 수 없습니다.")
+        return value
+
+
+class JobStatusBatchResponse(ImmutableSchema):
+    """Agent Job Batch 상태와 조회되지 않은 식별자 목록."""
+
+    items: list[JobStatusResponse] = Field(description="조회된 Job 상태 목록")
+    missing_job_ids: list[str] = Field(
+        default_factory=list,
+        description="Agent DB에서 찾지 못한 Job 식별자 목록",
+    )
+
+
 class JobResultResponse(ImmutableSchema):
     """완료된 Agent Job 결과 응답."""
 

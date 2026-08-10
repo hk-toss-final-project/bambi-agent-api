@@ -334,6 +334,10 @@ class InMemoryAgentJobRepository:
         """저장된 Job 레코드를 반환한다."""
         return self._jobs.get(job_id)
 
+    async def get_jobs(self, job_ids: list[str]) -> list[AgentJobRecord]:
+        """요청 목록에 존재하는 Job 레코드를 반환한다."""
+        return [self._jobs[job_id] for job_id in job_ids if job_id in self._jobs]
+
     async def claim_job(
         self, *, job_id: str, worker_id: str, lease_seconds: int
     ) -> ClaimedJobRecord | None:

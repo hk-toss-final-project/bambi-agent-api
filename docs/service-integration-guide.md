@@ -163,6 +163,11 @@ Agent는 접수 시 관심사가 현재 활성 Profile에 속하고 차단되지
 |---|---|
 | `GET /internal/v1/jobs/{job_id}` | 상태(`queued`/`running`/`completed`/`failed`/`cancelled`)와 진행률 |
 | `GET /internal/v1/jobs/{job_id}/result` | 완료 결과. 미완료 시 `409 JOB_RESULT_NOT_READY` |
+| `POST /internal/v1/jobs/statuses` | 활성 Job 최대 100건의 상태 Batch 조회. 누락 ID는 `missing_job_ids`로 반환 |
+
+Service Worker는 사용자별 활성 작업을 5초 주기로 확인할 때 단건 GET을 반복하지 않고
+Batch 상태 조회를 사용합니다. URL 원천 Job이 완료되면 해당 Job의 결과를 한 번 조회해
+`wiki_build_job_id`로 후속 Wiki Build Job 추적을 이어갑니다.
 
 ### 3.6 조회 API (화면 데이터)
 

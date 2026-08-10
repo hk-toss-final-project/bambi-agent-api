@@ -10,7 +10,7 @@ from .features.summarization import svc_009
 from .features.translation import svc_010
 from .features.recommendation import svc_011
 from .features.admin import svc_012
-from .features.jobs import svc_013, svc_014
+from .features.jobs import svc_013, svc_014, svc_015
 
 __all__ = [
     "svc_001",
@@ -27,4 +27,5 @@ __all__ = [
     "svc_012",
     "svc_013",
     "svc_014",
+    "svc_015",
 ]
