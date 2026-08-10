@@ -244,52 +244,30 @@ def test_int_001_ignores_rows_without_identity() -> None:
     assert [candidate.topic for candidate in candidates] == ["정상 노드"]
 
 
-def test_int_001_drops_nodes_that_were_never_a_subject() -> None:
-    """글이 다룬 주제가 아니라 스쳐 간 노드는 관심 후보에서 뺀다.
+def test_int_001_keeps_nodes_regardless_of_their_role_judgment() -> None:
+    """역할 판정을 근거로 관심 후보에서 빼지 않는다.
 
-    2026-08-07 실측: DBeaver Community·pgAdmin 4·OpenWiki(도구), "기술노트with
-    알렉"(출처), "API 키 발급"(절차)이 관심사 상위권을 차지했다. 글을 많이
-    저장할수록 이런 노드가 연결 수를 얻어 위로 올라온다.
+    2026-08-10 실측: 판정으로 걸러내자 DBeaver·pgAdmin·OpenWiki(도구)와 함께
+    삼성전자·SK하이닉스·마이크론이 사라졌다. 기업은 뉴스에서 주제가 아니라
+    행위자로 언급되는 경우가 많은데, 사용자는 그 기업 소식을 받고 싶어 한다.
+    같은 검증에서 정작 도구인 Obsidian은 2위로 남았다 — 방향이 뒤집힌 것이다.
+
+    애초에 불만은 "도구가 후보에 있다"가 아니라 "도구가 1위라 리포트 주제가
+    된다"였다. 명단이 아니라 순위 문제이므로 후보에서는 빼지 않는다. 판정은
+    Wiki에 계속 기록되며(빌드 시점에만 만들 수 있다) 순위 계산에 쓸 수 있다.
     """
     candidates = asyncio.run(
         int_001(
             [
                 _node("doc-1", "DBeaver Community", degree=9.0, interest_subject=False),
-                _node("doc-2", "PostgreSQL 인덱스", degree=3.0, interest_subject=True),
+                _node("doc-2", "삼성전자", degree=5.0, interest_subject=False),
+                _node("doc-3", "PostgreSQL 인덱스", degree=3.0, interest_subject=True),
             ]
         )
     )
 
-    assert [candidate.topic for candidate in candidates] == ["PostgreSQL 인덱스"]
-
-
-def test_int_001_keeps_nodes_built_before_the_role_judgment() -> None:
-    """역할 판정이 없던 시절 노드는 그대로 후보로 남긴다.
-
-    표시가 없다고 걸러내면 다시 Build되기 전까지 기존 사용자의 관심사가 통째로
-    사라진다. 판정이 붙은 노드부터 걸러진다.
-    """
-    candidates = asyncio.run(
-        int_001(
-            [
-                _node("doc-1", "코스피", degree=5.0),
-                _node("doc-2", "환율", degree=3.0),
-            ]
-        )
-    )
-
-    assert [candidate.topic for candidate in candidates] == ["코스피", "환율"]
-
-
-def test_int_001_keeps_a_node_that_was_a_subject_at_least_once() -> None:
-    """어느 글에서든 한 번 주제였으면 남긴다.
-
-    같은 노드가 글마다 역할이 다르다. DBeaver를 소개하는 글에서는 주제고,
-    DBeaver로 튜닝하는 글에서는 도구다. 사용자가 그 대상을 다룬 글을 저장한
-    적이 있다는 뜻이므로 관심 후보로 인정한다.
-    """
-    candidates = asyncio.run(
-        int_001([_node("doc-1", "DBeaver", degree=4.0, interest_subject=True)])
-    )
-
-    assert [candidate.topic for candidate in candidates] == ["DBeaver"]
+    assert [candidate.topic for candidate in candidates] == [
+        "DBeaver Community",
+        "삼성전자",
+        "PostgreSQL 인덱스",
+    ]
