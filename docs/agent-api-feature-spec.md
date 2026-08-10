@@ -605,6 +605,7 @@ REPORT-004·005·006·009에 전달한다.
 | SVC-012 | 관리자 설정 변경 요청 | Prompt, Model, Source 설정 변경을 요청한다. |
 | SVC-013 | Agent Job 상태 조회 | 비동기 작업 상태를 조회한다. |
 | SVC-014 | Agent 결과 조회 | 생성 및 처리 결과를 Agent API에서 조회한다. |
+| SVC-015 | Agent Job 상태 Batch 조회 | Service Worker가 활성 작업 여러 건의 상태를 한 번에 조회한다. |
 
 ## 32. Service Worker 연동
 

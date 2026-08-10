@@ -264,6 +264,52 @@ def test_generation_job_result_flow(
     assert completed.json()["result"] == {"content_id": "content-1"}
 
 
+def test_job_status_batch_preserves_order_and_reports_missing_jobs(
+    client: TestClient,
+) -> None:
+    """Batch 상태 조회가 요청 순서를 지키고 없는 Job을 분리하는지 검증한다."""
+    first = client.post(
+        "/internal/v1/users/user-1/wiki-sources/clippings",
+        json={
+            "source_event_id": "clip-batch-1",
+            "url": "https://example.com/one",
+            "title": "첫 번째",
+            "content": "첫 번째 본문",
+        },
+    ).json()["job_id"]
+    second = client.post(
+        "/internal/v1/users/user-1/wiki-sources/clippings",
+        json={
+            "source_event_id": "clip-batch-2",
+            "url": "https://example.com/two",
+            "title": "두 번째",
+            "content": "두 번째 본문",
+        },
+    ).json()["job_id"]
+    missing = "00000000-0000-0000-0000-000000000000"
+
+    response = client.post(
+        "/internal/v1/jobs/statuses",
+        json={"job_ids": [second, missing, first]},
+    )
+
+    assert response.status_code == 200
+    assert [item["job_id"] for item in response.json()["items"]] == [second, first]
+    assert response.json()["missing_job_ids"] == [missing]
+
+
+def test_job_status_batch_rejects_duplicate_ids(client: TestClient) -> None:
+    """같은 Job ID를 한 Batch에 두 번 넣으면 입력 오류로 거절하는지 검증한다."""
+    job_id = "00000000-0000-0000-0000-000000000001"
+
+    response = client.post(
+        "/internal/v1/jobs/statuses",
+        json={"job_ids": [job_id, job_id]},
+    )
+
+    assert response.status_code == 422
+
+
 def test_generation_request_forwards_report_type_to_the_repository(
     client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
 ) -> None:

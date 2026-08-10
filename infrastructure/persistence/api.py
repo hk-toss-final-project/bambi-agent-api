@@ -88,6 +88,7 @@ from .features.jobs import (
     enqueue_url_collection_job,
     fail_agent_job,
     get_agent_job,
+    get_agent_jobs,
     list_runnable_agent_jobs,
     release_user_wiki_build_jobs,
     set_system_job_scope,
@@ -204,4 +205,5 @@ __all__ = [
     "save_fetched_url_and_enqueue",
     "sync_wiki_relation_supports",
     "reset_personal_wiki",
+    "get_agent_jobs",
 ]

@@ -1,6 +1,7 @@
 """Personal Wiki Worker의 PostgreSQL Job Claim·완료 기록을 검증한다."""
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -19,6 +20,7 @@ from infrastructure.persistence.features.jobs import (
     enqueue_global_collection_run_job,
     enqueue_personal_wiki_build_job,
     fail_agent_job,
+    get_agent_jobs,
     release_user_wiki_build_jobs,
 )
 
@@ -54,6 +56,42 @@ class _FakeConnection:
         self.executed.append((query, params))
         rows = self._responses.pop(0) if self._responses else []
         return _FakeCursor(rows)
+
+
+def test_get_agent_jobs_uses_one_query_for_the_batch() -> None:
+    """Job 상태 Batch가 ID 개수와 무관하게 단일 SQL로 조회되는지 검증한다."""
+    now = datetime.now(UTC)
+    connection = _FakeConnection(
+        [[
+            {
+                "id": "00000000-0000-0000-0000-000000000001",
+                "user_id": "user-1",
+                "feature_id": "SVC-008",
+                "job_type": "report_generation",
+                "idempotency_key": "generation-1",
+                "status": "running",
+                "progress": 5,
+                "request_id": "request-1",
+                "payload": {},
+                "result": None,
+                "error_code": None,
+                "created_at": now,
+                "updated_at": now,
+                "completed_at": None,
+            }
+        ]]
+    )
+    job_ids = [
+        "00000000-0000-0000-0000-000000000001",
+        "00000000-0000-0000-0000-000000000002",
+    ]
+
+    jobs = asyncio.run(get_agent_jobs(connection, job_ids=job_ids))  # type: ignore[arg-type]
+
+    assert [job.job_id for job in jobs] == [job_ids[0]]
+    assert len(connection.executed) == 1
+    assert "id = ANY(%s::uuid[])" in connection.executed[0][0]
+    assert connection.executed[0][1] == (job_ids,)
 
 
 def test_claim_personal_wiki_jobs_uses_skip_locked_and_records_attempt() -> None:

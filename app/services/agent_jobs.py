@@ -212,6 +212,10 @@ class AgentJobRepository(Protocol):
         """Agent Job의 현재 저장 상태를 반환한다."""
         ...
 
+    async def get_jobs(self, job_ids: list[str]) -> list[AgentJobRecord]:
+        """여러 Agent Job의 현재 저장 상태를 한 번에 반환한다."""
+        ...
+
     async def claim_job(
         self, *, job_id: str, worker_id: str, lease_seconds: int
     ) -> ClaimedJobRecord | None:

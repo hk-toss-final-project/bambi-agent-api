@@ -307,6 +307,42 @@ async def get_agent_job(
     row = await cursor.fetchone()
     if row is None:
         return None
+    return _stored_agent_job(row)
+
+
+async def get_agent_jobs(
+    connection: AsyncConnection[DictRow], *, job_ids: list[str]
+) -> list[StoredAgentJob]:
+    """Job ID 목록의 현재 상태를 단일 SQL로 조회한다."""
+    if not job_ids:
+        return []
+    cursor = await connection.execute(
+        """
+        SELECT
+            id,
+            user_id,
+            feature_id,
+            job_type,
+            idempotency_key,
+            status,
+            progress,
+            COALESCE(request_id, '') AS request_id,
+            payload,
+            result,
+            error_code,
+            created_at,
+            updated_at,
+            completed_at
+        FROM agent.agent_jobs
+        WHERE id = ANY(%s::uuid[])
+        """,
+        (job_ids,),
+    )
+    return [_stored_agent_job(row) for row in await cursor.fetchall()]
+
+
+def _stored_agent_job(row: DictRow) -> StoredAgentJob:
+    """PostgreSQL Row를 Agent Job 저장 레코드로 변환한다."""
     return StoredAgentJob(
         job_id=str(row["id"]),
         user_id=row["user_id"] or "",

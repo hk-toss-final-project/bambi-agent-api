@@ -38,6 +38,8 @@ from app.schemas.mvp import (
     FeedbackSignalsResponse,
     GenerationRequest,
     JobResultResponse,
+    JobStatusBatchRequest,
+    JobStatusBatchResponse,
     JobStatusResponse,
     PersonalWikiResetResponse,
     UrlWikiSourceRequest,
@@ -70,6 +72,7 @@ from app.routers.service.api import (
     svc_008,
     svc_013,
     svc_014,
+    svc_015,
 )
 from app.services.collection_schedules import CollectionScheduleService
 from app.services.mvp import AgentApiMvpService
@@ -501,6 +504,20 @@ async def get_job_status(
 ) -> JobStatusResponse:
     """[SVC-013] Agent Job의 현재 상태와 진행률을 조회한다."""
     return await svc_013(service, job_id)
+
+
+@router.post(
+    "/jobs/statuses",
+    response_model=JobStatusBatchResponse,
+    operation_id="svc_015",
+    summary="Agent Job 상태 Batch 조회",
+)
+async def get_job_statuses(
+    payload: JobStatusBatchRequest,
+    service: AgentApiMvpService = Depends(get_mvp_service),
+) -> JobStatusBatchResponse:
+    """[SVC-015] 활성 Agent Job 여러 건의 현재 상태를 한 번에 조회한다."""
+    return await svc_015(service, payload.job_ids)
 
 
 @router.get(
