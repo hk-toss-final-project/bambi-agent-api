@@ -229,6 +229,17 @@ class ContentMarkRequest(WikiSourceRequestBase):
     content_id: str = Field(min_length=1, max_length=128, description="생성 콘텐츠 ID")
 
 
+class ContentMarkDeletionRequest(WikiSourceRequestBase):
+    """북마크 원본 연결을 해제하고 개인 Wiki 재구성을 요청하는 모델."""
+
+    marked_source_event_id: str = Field(
+        min_length=1,
+        max_length=128,
+        description="북마크 저장 때 사용한 source_event_id",
+    )
+    content_id: str = Field(min_length=1, max_length=128, description="생성 콘텐츠 ID")
+
+
 class FeedbackSignalItem(ImmutableSchema):
     """관심사 점수에 반영할 행동 신호 한 건."""
 

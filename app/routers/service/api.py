@@ -4,7 +4,15 @@
 """
 
 from .features.context import svc_001
-from .features.wiki import svc_002, svc_003, svc_004, svc_005, svc_006, svc_007
+from .features.wiki import (
+    svc_002,
+    svc_003,
+    svc_004,
+    svc_004_delete,
+    svc_005,
+    svc_006,
+    svc_007,
+)
 from .features.generation import svc_008
 from .features.summarization import svc_009
 from .features.translation import svc_010
@@ -17,6 +25,7 @@ __all__ = [
     "svc_002",
     "svc_003",
     "svc_004",
+    "svc_004_delete",
     "svc_005",
     "svc_006",
     "svc_007",

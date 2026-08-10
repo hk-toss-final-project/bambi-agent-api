@@ -13,7 +13,11 @@ from uuid import uuid4
 
 from fastapi import status
 
-from agent.graph import run_report_generation, run_personal_wiki_build
+from agent.graph import (
+    run_report_generation,
+    run_personal_wiki_build,
+    run_personal_wiki_rebuild,
+)
 from agent.report_builder.api import report_001
 from agent.wiki_builder.api import wba_001
 from app.config import Settings
@@ -59,6 +63,7 @@ class AgentWorkflowService:
         *,
         url_fetcher: UrlFetcher = fetch_url_via_jina,
         wiki_runner: WikiRunner = run_personal_wiki_build,
+        wiki_rebuild_runner: WikiRunner = run_personal_wiki_rebuild,
         report_runner: ReportRunner = run_report_generation,
     ) -> None:
         """Job 저장소, 모델 설정, URL 수집기와 그래프 실행기를 주입한다."""
@@ -66,6 +71,7 @@ class AgentWorkflowService:
         self._settings = settings
         self._url_fetcher = url_fetcher
         self._wiki_runner = wiki_runner
+        self._wiki_rebuild_runner = wiki_rebuild_runner
         self._report_runner = report_runner
 
     async def _dispatch(self, job: ClaimedJobRecord) -> tuple[str, dict[str, object]]:
@@ -84,6 +90,15 @@ class AgentWorkflowService:
             )
             return "url_collection", result
         if job.job_type == "personal_wiki_build":
+            if job.payload.get("mode") == "full_rebuild":
+                async with self._repository.acquire_connection() as connection:
+                    result = await self._wiki_rebuild_runner(
+                        connection,
+                        user_id=job.user_id,
+                        job_id=job.job_id,
+                        model=self._settings.wiki_llm_model,
+                    )
+                return "wiki_rebuild", result
             source_version_id = str(
                 job.payload.get("source_document_version_id") or ""
             )

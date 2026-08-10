@@ -35,6 +35,7 @@ from .features.personal_wiki import (
     persist_wiki_build,
     persist_wiki_embeddings,
     register_user_url_source,
+    retire_personal_wiki_without_sources,
     save_user_url_document_version,
     set_personal_wiki_scope,
     sync_wiki_relation_supports,
@@ -85,6 +86,7 @@ from .features.jobs import (
     defer_user_wiki_build_jobs,
     enqueue_global_collection_run_job,
     enqueue_personal_wiki_build_job,
+    enqueue_personal_wiki_rebuild_job,
     enqueue_url_collection_job,
     fail_agent_job,
     get_agent_job,
@@ -94,10 +96,12 @@ from .features.jobs import (
     set_system_job_scope,
 )
 from .features.source_ingestion import (
+    ContentMarkBindingNotFoundError,
     GeneratedContentNotFoundError,
     PersistedMcpSourceSubmission,
     PersistedSourceSubmission,
     db_002,
+    deactivate_content_mark_and_enqueue_rebuild,
     enqueue_wiki_rebuild_for_source,
     register_url_and_enqueue,
     save_content_mark_and_enqueue,

@@ -11,9 +11,11 @@ from infrastructure.persistence.features.jobs import EnqueuedWikiBuildJob
 from infrastructure.persistence.features.personal_wiki import SavedUserSourceVersion
 from infrastructure.persistence.features.personal_wiki import UserSourceDocumentForAgent
 from infrastructure.persistence.features.source_ingestion import (
+    ContentMarkBindingNotFoundError,
     PersistedMcpSourceSubmission,
     PersistedSourceSubmission,
     _upsert_onboarding_seed_version,
+    deactivate_content_mark_and_enqueue_rebuild,
     enqueue_wiki_rebuild_for_source,
     save_fetched_url_and_enqueue,
     save_mcp_source_submission,
@@ -121,6 +123,7 @@ def test_save_web_clipping_persists_frontmatter_and_wiki_job() -> None:
             None,
             {"id": "source-version-1"},
             None,
+            None,
             {"id": "job-1"},
             None,
         ]
@@ -164,7 +167,10 @@ def test_save_web_clipping_persists_frontmatter_and_wiki_job() -> None:
         ["ai", "wiki"],
         "# Markdown 본문",
     )
-    job_sql, job_params = connection.executed[6]
+    binding_sql, binding_params = connection.executed[6]
+    assert "agent.user_source_bindings" in binding_sql
+    assert binding_params[-1] == "event-1"
+    job_sql, job_params = connection.executed[7]
     assert "'personal_wiki_build'" in job_sql
     assert job_params is not None
     assert job_params[0] == "SVC-002"
@@ -250,7 +256,7 @@ def test_save_mcp_source_submission_persists_without_enqueueing_job() -> None:
         source_version=1,
         source_event_row_id="event-1",
     )
-    assert len(connection.executed) == 6
+    assert len(connection.executed) == 7
     event_sql, _event_params = connection.executed[0]
     assert "'mcp_submission'" in event_sql
     version_sql, _version_params = connection.executed[4]
@@ -287,7 +293,7 @@ def test_save_mcp_source_submission_reuses_same_version_for_identical_content() 
     )
 
     assert result.source_document_version_id == "source-version-1"
-    assert len(connection.executed) == 3
+    assert len(connection.executed) == 4
     assert not any(
         "INSERT INTO agent.user_source_document_versions" in sql
         for sql, _ in connection.executed
@@ -490,6 +496,7 @@ def test_save_content_mark_bookmarks_report_regardless_of_author() -> None:
             None,
             {"id": "source-version-1"},
             None,
+            None,
             {"id": "job-1"},
             None,
         ]
@@ -532,7 +539,10 @@ def test_save_content_mark_bookmarks_report_regardless_of_author() -> None:
     version_metadata = version_params[12].obj
     assert version_metadata["author_user_id"] == "author-2"
     assert version_metadata["bookmarked_by"] == "user-1"
-    job_sql, job_params = connection.executed[7]
+    binding_sql, binding_params = connection.executed[7]
+    assert "agent.user_source_bindings" in binding_sql
+    assert binding_params[-1] == "event-1"
+    job_sql, job_params = connection.executed[8]
     assert "'personal_wiki_build'" in job_sql
     assert job_params[0] == "SVC-004"
 
@@ -562,3 +572,74 @@ def test_save_content_mark_rejects_unknown_candidate() -> None:
         )
 
     assert len(connection.executed) == 1
+
+
+def test_deactivate_content_mark_removes_last_binding_and_enqueues_full_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """마지막 북마크 연결 해제는 원본 Head를 내리고 전체 재빌드를 등록한다."""
+    connection = _SequencedConnection(
+        [
+            None,
+            {
+                "id": "binding-1",
+                "source_document_id": "source-1",
+                "source_document_version_id": "version-1",
+            },
+            {"id": "delete-event-1"},
+            None,
+            {"active_count": 0},
+            None,
+        ]
+    )
+    enqueued: dict[str, Any] = {}
+
+    async def fake_enqueue(connection: Any, **kwargs: Any) -> EnqueuedWikiBuildJob:
+        """전체 재빌드 등록 인자를 기록한다."""
+        enqueued.update(kwargs)
+        return EnqueuedWikiBuildJob(job_id="rebuild-job-1", created=True)
+
+    monkeypatch.setattr(
+        source_ingestion, "enqueue_personal_wiki_rebuild_job", fake_enqueue
+    )
+    result = asyncio.run(
+        deactivate_content_mark_and_enqueue_rebuild(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            source_event_id="unmark-1",
+            marked_source_event_id="mark-1",
+            content_id="content-1",
+            occurred_at=None,
+            memo=None,
+            request_id="request-1",
+        )
+    )
+
+    assert result.job_id == "rebuild-job-1"
+    assert result.source_document_id == "source-1"
+    sql = "\n".join(query for query, _params in connection.executed)
+    assert "UPDATE agent.user_source_bindings" in sql
+    assert "UPDATE agent.user_source_documents" in sql
+    assert enqueued["removed_source_document_id"] == "source-1"
+    assert enqueued["source_event_row_id"] == "delete-event-1"
+
+
+def test_deactivate_content_mark_rejects_missing_active_binding() -> None:
+    """이미 없거나 다른 콘텐츠의 북마크 연결은 해제하지 않는다."""
+    connection = _SequencedConnection([None, None])
+
+    with pytest.raises(ContentMarkBindingNotFoundError):
+        asyncio.run(
+            deactivate_content_mark_and_enqueue_rebuild(
+                connection,  # type: ignore[arg-type]
+                user_id="user-1",
+                source_event_id="unmark-1",
+                marked_source_event_id="mark-missing",
+                content_id="content-1",
+                occurred_at=None,
+                memo=None,
+                request_id="request-1",
+            )
+        )
+
+    assert len(connection.executed) == 2

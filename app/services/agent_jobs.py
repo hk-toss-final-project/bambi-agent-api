@@ -166,6 +166,20 @@ class AgentJobRepository(Protocol):
         """위키마킹한 생성 콘텐츠를 원본 Version으로 물질화하고 Build Job을 저장한다."""
         ...
 
+    async def delete_content_mark(
+        self,
+        *,
+        user_id: str,
+        source_event_id: str,
+        marked_source_event_id: str,
+        content_id: str,
+        occurred_at: datetime | None,
+        memo: str | None,
+        request_id: str,
+    ) -> SubmittedSourceJob:
+        """북마크 원본 연결을 비활성화하고 전체 Wiki 재구성 Job을 저장한다."""
+        ...
+
     async def submit_onboarding_seed(
         self,
         *,

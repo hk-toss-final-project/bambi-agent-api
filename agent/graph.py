@@ -81,8 +81,10 @@ from infrastructure.persistence.api import (
     list_related_wiki_keywords,
     list_wiki_graph_relation_snapshot,
     list_wiki_node_embeddings,
+    list_user_source_versions_for_rebuild,
     load_global_document_freshness,
     load_pinned_wiki_context,
+    retire_personal_wiki_without_sources,
     set_personal_wiki_scope,
     save_custom_topic_contexts,
     sync_wiki_interest_collection_targets,
@@ -741,6 +743,75 @@ async def run_personal_wiki_build(
     )
     await _recalculate_interest_profile(connection, user_id=user_id)
     return dict(state["result"])
+
+
+def _full_rebuild_payload(rebuilt: Any) -> dict[str, object]:
+    """전체 Wiki 재구성 결과를 Job 결과 Payload로 변환한다."""
+    persisted = rebuilt.persisted
+    return {
+        "wiki_version_id": persisted.wiki_version_id,
+        "wiki_version": persisted.wiki_version,
+        "chunk_count": persisted.chunk_count,
+        "stored_relation_count": persisted.stored_relation_count,
+        "full_rebuild": True,
+        "source_count": rebuilt.source_count,
+        "superseded_document_count": rebuilt.superseded_document_count,
+        "embedding_count": rebuilt.embedding_count,
+        "quality": {
+            "metrics": dict(rebuilt.quality.metrics),
+            "warnings": [
+                issue.message
+                for issue in rebuilt.quality.issues
+                if issue.severity == "warning"
+            ],
+        },
+        "affected_documents": [
+            {
+                "document_id": document.document_id,
+                "document_version_id": document.document_version_id,
+                "document_kind": document.document_kind,
+                "document_key": document.document_key,
+                "file_path": document.file_path,
+                "version": document.version,
+                "action": document.action,
+            }
+            for document in persisted.affected_documents
+        ],
+    }
+
+
+async def run_personal_wiki_rebuild(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    job_id: str,
+    model: str = "gpt-4.1-mini",
+) -> dict[str, object]:
+    """남은 활성 원본 전체로 Wiki를 재구성하고 빈 원본 상태도 안전하게 반영한다."""
+    async with connection.transaction():
+        await set_personal_wiki_scope(connection, user_id=user_id)
+        sources = await list_user_source_versions_for_rebuild(
+            connection, user_id=user_id
+        )
+    if not sources:
+        async with connection.transaction():
+            await set_personal_wiki_scope(connection, user_id=user_id)
+            retired = await retire_personal_wiki_without_sources(
+                connection, user_id=user_id, job_id=job_id
+            )
+        return {
+            "full_rebuild": True,
+            "source_count": 0,
+            "affected_documents": [],
+            "stored_relation_count": 0,
+            "embedding_count": 0,
+            **retired,
+        }
+    rebuilt = await rebuild_full_wiki(
+        connection, user_id=user_id, job_id=job_id, model=model
+    )
+    await _recalculate_interest_profile(connection, user_id=user_id)
+    return _full_rebuild_payload(rebuilt)
 
 
 # 한 주제에 최소한 이만큼은 근거를 남긴다. 주제 수로 균등 분배만 하면 주제가

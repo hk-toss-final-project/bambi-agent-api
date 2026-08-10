@@ -103,6 +103,28 @@ class _FakeAgentRepository:
         return "failed"
 
 
+class _FullRebuildRepository(_FakeAgentRepository):
+    """북마크 해제용 full_rebuild Payload를 반환하는 저장소 대역."""
+
+    def __init__(self) -> None:
+        """Personal Wiki Build Job으로 초기화한다."""
+        super().__init__("personal_wiki_build")
+
+    async def claim_job(
+        self, *, job_id: str, worker_id: str, lease_seconds: int
+    ) -> ClaimedJobRecord | None:
+        """원본 Version 없이 전체 재구성 모드로 점유한다."""
+        return ClaimedJobRecord(
+            job_id=job_id,
+            user_id="user-1",
+            feature_id="SVC-004",
+            job_type="personal_wiki_build",
+            attempt_number=1,
+            max_attempts=3,
+            payload={"mode": "full_rebuild"},
+        )
+
+
 def _fetch_url(_: str) -> JinaReadResult:
     """외부 호출 없이 결정적인 Jina 수집 결과를 반환한다."""
     return JinaReadResult(
@@ -157,6 +179,24 @@ def test_run_wiki_job_invokes_wiki_graph_runner() -> None:
     assert call["source_document_version_id"] == "source-version-1"
     assert call["user_id"] == "user-1"
     assert call["job_id"] == "job-1"
+
+
+def test_run_full_rebuild_job_uses_rebuild_runner_without_source_version() -> None:
+    """북마크 해제 Job은 단일 원본 ID 없이 전체 재구성 러너를 호출한다."""
+    repository = _FullRebuildRepository()
+    runner = _RecordingRunner({"full_rebuild": True, "source_count": 1})
+    service = AgentWorkflowService(
+        repository,  # type: ignore[arg-type]
+        Settings(environment="test", dev_agent_timeout_seconds=30),
+        wiki_rebuild_runner=runner,
+    )
+
+    response = asyncio.run(service.run_job("job-1"))
+
+    assert response.status == "completed"
+    assert response.stages[0].name == "wiki_rebuild"
+    assert runner.calls[0]["user_id"] == "user-1"
+    assert "source_document_version_id" not in runner.calls[0]
 
 
 def test_run_report_job_invokes_generation_graph_runner() -> None:

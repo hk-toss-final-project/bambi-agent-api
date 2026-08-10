@@ -434,6 +434,50 @@ def test_content_mark_rejects_unknown_generated_content(client: TestClient) -> N
     assert response.json()["code"] == "GENERATED_CONTENT_NOT_FOUND"
 
 
+def test_content_mark_deletion_enqueues_idempotent_full_rebuild(
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
+) -> None:
+    """북마크 해제가 저장 이벤트 연결을 끊고 멱등 재구성 Job을 접수하는지 검증한다."""
+    agent_jobs_fake.register_generated_content("user-1", "content-1")
+    added = client.post(
+        "/internal/v1/users/user-1/wiki-sources/content-marks",
+        json={"source_event_id": "mark-1", "content_id": "content-1"},
+    )
+    assert added.status_code == 202
+
+    payload = {
+        "source_event_id": "unmark-1",
+        "marked_source_event_id": "mark-1",
+        "content_id": "content-1",
+    }
+    first = client.post(
+        "/internal/v1/users/user-1/wiki-sources/content-marks/deletions", json=payload
+    )
+    duplicate = client.post(
+        "/internal/v1/users/user-1/wiki-sources/content-marks/deletions", json=payload
+    )
+
+    assert first.status_code == 202
+    assert first.json()["feature_id"] == "SVC-004"
+    assert duplicate.status_code == 202
+    assert duplicate.json()["job_id"] == first.json()["job_id"]
+
+
+def test_content_mark_deletion_rejects_unknown_binding(client: TestClient) -> None:
+    """활성 북마크 연결이 없는 해제 요청은 404를 반환하는지 검증한다."""
+    response = client.post(
+        "/internal/v1/users/user-1/wiki-sources/content-marks/deletions",
+        json={
+            "source_event_id": "unmark-missing",
+            "marked_source_event_id": "mark-missing",
+            "content_id": "content-1",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "CONTENT_MARK_SOURCE_NOT_FOUND"
+
+
 def test_generation_requires_user_context(client: TestClient) -> None:
     """컨텍스트가 없는 사용자의 생성 요청은 409로 거부되는지 검증한다."""
     rejected = client.post(

@@ -628,6 +628,90 @@ class EnqueuedWikiBuildJob:
     created: bool
 
 
+async def enqueue_personal_wiki_rebuild_job(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    source_event_id: str,
+    source_event_row_id: str,
+    removed_source_document_id: str,
+    request_id: str | None = None,
+) -> EnqueuedWikiBuildJob:
+    """활성 원본 전체를 다시 읽는 Personal Wiki Full Rebuild Job을 멱등 등록한다.
+
+    기존 Worker와 상태 조회 계약을 재사용하기 위해 Job 유형은
+    ``personal_wiki_build``를 유지하고 Payload의 ``mode``로 전체 재빌드를 구분한다.
+    """
+    payload = {
+        "mode": "full_rebuild",
+        "source_event_id": source_event_id,
+        "source_event_row_id": source_event_row_id,
+        "removed_source_document_id": removed_source_document_id,
+    }
+    creation = await job_001(
+        feature_id="SVC-004",
+        job_type="personal_wiki_build",
+        user_id=user_id,
+        idempotency_parts=[source_event_id, "full-rebuild"],
+        payload=payload,
+        request_id=request_id,
+    )
+    cursor = await connection.execute(
+        """
+        INSERT INTO agent.agent_jobs (
+            feature_id,
+            job_type,
+            user_id,
+            idempotency_key,
+            status,
+            progress,
+            payload,
+            retryable,
+            request_id
+        ) VALUES (%s, 'personal_wiki_build', %s, %s, 'queued', 0, %s, true, %s)
+        ON CONFLICT (feature_id, COALESCE(user_id, ''), idempotency_key)
+        DO NOTHING
+        RETURNING id
+        """,
+        (
+            creation.feature_id,
+            creation.user_id,
+            creation.idempotency_key,
+            Jsonb(creation.payload),
+            creation.request_id,
+        ),
+    )
+    row = await cursor.fetchone()
+    created = row is not None
+    if row is None:
+        cursor = await connection.execute(
+            """
+            SELECT id
+            FROM agent.agent_jobs
+            WHERE feature_id = %s
+              AND COALESCE(user_id, '') = %s
+              AND idempotency_key = %s
+            """,
+            (creation.feature_id, creation.user_id, creation.idempotency_key),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise RuntimeError(
+                "멱등 충돌한 Personal Wiki Rebuild Job을 찾을 수 없습니다: "
+                f"{creation.idempotency_key}"
+            )
+    job_id = str(row["id"])
+    await connection.execute(
+        """
+        UPDATE agent.wiki_source_events
+        SET job_id = %s
+        WHERE id = %s
+        """,
+        (job_id, source_event_row_id),
+    )
+    return EnqueuedWikiBuildJob(job_id=job_id, created=created)
+
+
 async def enqueue_personal_wiki_build_job(
     connection: AsyncConnection[DictRow],
     *,
