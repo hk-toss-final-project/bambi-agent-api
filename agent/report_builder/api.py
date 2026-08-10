@@ -32,8 +32,10 @@ from .features.critic import CriticVerdict, critic_enabled, review_report
 from .features.researcher import (
     ResearchOutcome,
     merge_context_documents,
+    navigation_packet_documents,
     research_agent_enabled,
     research_context,
+    search_global_documents,
 )
 from .features.wiki_retrieval import embed_wiki_queries
 from .features.generation import (
@@ -79,5 +81,7 @@ __all__ = [
     "report_020",
     "report_021",
     "merge_context_documents",
+    "navigation_packet_documents",
+    "search_global_documents",
     "embed_wiki_queries",
 ]

@@ -155,3 +155,30 @@ def test_worker_passes_interest_bundle_snapshot_to_the_graph(
 
     assert captured["generation_scope"] == "INTEREST_BUNDLE"
     assert captured["interest_bundle"] == bundle
+
+
+def test_worker_passes_wiki_navigation_snapshot_to_the_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """재시도 Worker가 첫 Reader의 Wiki 선택 Snapshot을 그래프에 전달한다."""
+    snapshot = {
+        "query": "삼성전자",
+        "wiki_version_id": "wiki-build-9",
+        "selected_document_version_ids": ["version-samsung"],
+        "pages": [
+            {"document_version_id": "version-samsung", "role": "seed"}
+        ],
+    }
+    captured = _run_worker_job(
+        monkeypatch,
+        {
+            "topic": "삼성전자",
+            "content_type": "interest_news_card",
+            "language": "ko",
+            "wiki_version_id": "wiki-build-9",
+            "wiki_navigation_snapshots": {"삼성전자": snapshot},
+        },
+    )
+
+    assert captured["wiki_version_id"] == "wiki-build-9"
+    assert captured["wiki_navigation_snapshots"] == {"삼성전자": snapshot}

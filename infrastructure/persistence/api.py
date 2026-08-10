@@ -117,10 +117,12 @@ from .features.generation_runtime import (
     UserContextRequiredError,
     enqueue_report_generation_job,
     load_global_document_freshness,
+    load_global_report_context,
     load_personal_wiki_vector_context,
     load_pinned_wiki_context,
     load_report_context,
     persist_report_generation,
+    persist_report_navigation_snapshot,
     upsert_user_context_snapshot,
 )
 from .features.wiki_navigation import (
