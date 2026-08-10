@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import partial
 from datetime import UTC, datetime
 from typing import Any
@@ -45,6 +45,7 @@ from .collection import (
     sch_004,
 )
 from .management import sch_021
+from .wiki import sch_010
 from workers.api import run_global_content_fetch_batch
 
 type DictRow = dict[str, Any]
@@ -71,6 +72,9 @@ PROVIDER_SCHEDULES: dict[str, Callable[..., Any]] = {
 # 본문 수집 단계를 결과 목록에서 가리키는 이름. Provider 이름이 아니라 "본문을
 # 어떻게 읽었는가"를 나타내므로 수집 Provider와 겹치지 않는 값을 쓴다.
 CONTENT_FETCH_STEP = "content-fetch"
+
+# 관심사 주기 재계산 단계를 결과 목록에서 가리키는 이름.
+INTEREST_RECALCULATION_STEP = "interest-recalculation"
 
 # 수동 실행이 큐에 넣는 수집 Job의 유형. 수동 실행 API는 이 Job만 등록하고 바로
 # 응답하며, 실제 수집은 Scheduler tick이 이 Job을 집어 처리한다.
@@ -140,6 +144,10 @@ class CollectionScheduler:
     # 수동 실행 Job Lease 유지 시간(초). taxonomy 수집이 수 분 걸릴 수 있어 최대
     # 값(1시간)을 쓴다 — 수집이 끝나기 전에 Lease가 풀려 중복 처리되지 않게 한다.
     manual_run_lease_seconds: int = 3600
+    # tick마다 관심사를 다시 계산할 사용자 수. 0이면 재계산 단계를 건너뛴다.
+    interest_recalculation_limit: int = 0
+    # 관심사 Profile을 다시 계산하기까지 기다리는 시간(시간).
+    interest_recalculation_stale_hours: float = 24.0
 
     async def run_once(
         self, *, now: datetime | None = None, force: bool = False
@@ -191,8 +199,62 @@ class CollectionScheduler:
                     )
         finally:
             await connection.close()
+        results.extend(await self.recalculate_stale_interests(now=moment))
         results.extend(await self.fetch_pending_content())
         return results
+
+    async def recalculate_stale_interests(
+        self, *, now: datetime | None = None
+    ) -> list[CollectionScheduleResult]:
+        """관심사 Profile이 오래된 사용자를 골라 다시 계산한다(SCH-010).
+
+        관심사 점수는 계산 시각 기준으로 최신성을 감쇠시키므로, 이 단계가 없으면
+        저장 활동이 멈춘 사용자의 점수가 마지막 Wiki Build 시점에 고정된다.
+        재계산은 Build와 달리 LLM을 호출하지 않아 tick 안에서 돌려도 값싸다.
+
+        대상 선정이 `calculated_at` 기준이라 같은 사용자를 한 주기에 두 번 잡지
+        않는다. 이 단계의 실패는 수집 tick을 멈추지 않는다.
+
+        Args:
+            now: 판정 기준 시각 (미지정 시 현재 UTC)
+
+        Returns:
+            처리한 사용자가 있으면 결과 한 건, 없으면 빈 목록
+        """
+        if self.interest_recalculation_limit <= 0:
+            return []
+        connection: AsyncConnection[DictRow] = await AsyncConnection.connect(
+            self.database_url,
+            row_factory=dict_row,
+        )
+        try:
+            recalculated = await sch_010(
+                connection,
+                stale_after_hours=self.interest_recalculation_stale_hours,
+                limit=self.interest_recalculation_limit,
+                now=now,
+            )
+        except Exception as error:  # noqa: BLE001 - 다음 tick에서 다시 시도한다
+            return [
+                CollectionScheduleResult(
+                    provider=INTEREST_RECALCULATION_STEP,
+                    source_key=None,
+                    status="skipped",
+                    reason=f"관심사 재계산 실패: {error}",
+                )
+            ]
+        finally:
+            await connection.close()
+        if not recalculated:
+            return []
+        return [
+            CollectionScheduleResult(
+                provider=INTEREST_RECALCULATION_STEP,
+                source_key=None,
+                status="completed",
+                results=[asdict(item) for item in recalculated],
+            )
+        ]
 
     async def drain_manual_collection_runs(
         self, *, now: datetime | None = None
@@ -415,6 +477,10 @@ def build_scheduler(settings: Settings | None = None) -> CollectionScheduler:
         credentials=build_collection_credentials(resolved),
         tick_seconds=resolved.collection_scheduler_tick_seconds,
         content_fetch_limit=resolved.collection_content_fetch_limit,
+        interest_recalculation_limit=resolved.interest_recalculation_limit,
+        interest_recalculation_stale_hours=(
+            resolved.interest_recalculation_stale_hours
+        ),
     )
 
 

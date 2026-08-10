@@ -21,7 +21,12 @@ from .features.collection import (
     sch_008,
     split_collection_budget,
 )
-from .features.wiki import WikiScheduleResult, sch_009, sch_010
+from .features.wiki import (
+    InterestRecalculationResult,
+    WikiScheduleResult,
+    sch_009,
+    sch_010,
+)
 from .features.runtime import (
     CONTENT_FETCH_STEP,
     PROVIDER_SCHEDULES,
@@ -56,6 +61,7 @@ __all__ = [
     "CollectionScheduleView",
     "CollectionScheduler",
     "UnknownCollectionScheduleError",
+    "InterestRecalculationResult",
     "WikiScheduleResult",
     "build_collection_credentials",
     "build_scheduler",

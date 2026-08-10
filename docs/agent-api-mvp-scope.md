@@ -113,6 +113,7 @@
 - [x] `SCH-002` Naver API 수집 스케줄 — 독립 Scheduler 프로세스(`scheduler/main.py`)가 tick마다 `agent.global_sources`의 `schedule_cron`·`keywords`를 읽어 실행 차례가 된 Source만 수집 Worker(WORKER-001)로 넘긴다. 판정 순서는 ① Cron 도달 ② 키워드 존재 ③ `quota_policy.daily_max_runs`
 - [x] `SCH-003` GDELT 수집 스케줄 — SCH-002와 동일한 판정·실행 규칙
 - [x] `SCH-004` NewsAPI 수집 스케줄 — 수집 Worker에 `newsapi` Provider(COL-004) 연결 포함. 무료 플랜 호출 한도(일 100회)가 낮아 기본 Provider 목록에서는 제외하고 `quota_policy.daily_max_runs`와 함께 쓴다. (참고: MVP 목록 외 `SCH-009` Wiki Build 조용 시간 트리거는 구현됨)
+- [x] `SCH-010` 사용자 관심사 재계산 — Scheduler tick마다 활성 Wiki가 있고 관심사 Profile이 `INTEREST_RECALCULATION_STALE_HOURS`(기본 24시간)보다 오래된 사용자를 오래된 순서로 최대 `INTEREST_RECALCULATION_LIMIT`(기본 20)명 골라 INT-011을 다시 돌리고, 상위 관심사를 창고 수집 대상으로 갱신한다. 관심사 점수(INT-005)는 계산 시각 기준으로 최신성을 감쇠시키므로 이 단계가 없으면 저장이 멈춘 사용자의 점수가 마지막 Build 시점에 고정된다. 대상 선정이 `calculated_at` 기준이라 별도 처리 이력 없이 같은 주기 중복 실행을 막는다. 재계산은 LLM을 호출하지 않으며, 사용자 한 명의 실패는 나머지와 수집 tick을 막지 않는다
 - [x] `SCH-017` 스케줄 등록 — `POST /internal/v1/collection-schedules` (멱등 Upsert, Cron·키워드 검증)
 - [x] `SCH-018` 스케줄 수정 — `PATCH /internal/v1/collection-schedules/{source_key}` (부분 수정, 다음 tick부터 반영)
 - [x] `SCH-019` 스케줄 중지 — `POST .../{source_key}/pause` (설정 보존, status만 paused)
@@ -345,6 +346,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | SCH-002 | Naver API 수집 스케줄 | Naver API 수집 작업을 정기 등록한다. |
 | SCH-003 | GDELT 수집 스케줄 | GDELT 수집 작업을 정기 등록한다. |
 | SCH-004 | NewsAPI 수집 스케줄 | NewsAPI 수집 작업을 정기 등록한다. |
+| SCH-010 | 사용자 관심사 재계산 | 관심사 Profile이 오래된 사용자를 정기적으로 다시 계산한다. |
 | SCH-017 | 스케줄 등록 | 새로운 정기 작업을 등록한다. |
 | SCH-018 | 스케줄 수정 | 기존 작업의 실행 주기를 변경한다. |
 | SCH-019 | 스케줄 중지 | 정기 작업 실행을 일시 중지한다. |

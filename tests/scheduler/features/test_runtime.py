@@ -19,6 +19,7 @@ from app.config import Settings
 from scheduler.api import (
     CollectionCredentials,
     CollectionScheduleResult,
+    InterestRecalculationResult,
     build_scheduler,
     run_collection_scheduler_loop,
 )
@@ -459,3 +460,95 @@ def test_run_once_drains_manual_collection_run(
     # 결과 목록에도 수동 실행 단계가 완료로 남는다.
     manual = [item for item in results if item.provider == runtime.MANUAL_RUN_STEP]
     assert manual and manual[0].status == "completed"
+
+
+def _patch_interest_recalculation(
+    monkeypatch: pytest.MonkeyPatch, results: list[Any] | Exception
+) -> list[dict[str, Any]]:
+    """SCH-010 호출 인자를 기록하고 고정 결과를 돌려주도록 교체한다."""
+    calls: list[dict[str, Any]] = []
+
+    async def _fake_sch_010(_connection: Any, **kwargs: Any) -> list[Any]:
+        """재계산 호출 인자를 기록하고 고정 결과를 돌려준다."""
+        calls.append(kwargs)
+        if isinstance(results, Exception):
+            raise results
+        return results
+
+    monkeypatch.setattr(runtime, "sch_010", _fake_sch_010)
+    return calls
+
+
+def test_run_once_recalculates_stale_interests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """tick이 수집을 끝낸 뒤 오래된 관심사 Profile을 다시 계산하는지 검증한다.
+
+    이 단계가 없으면 저장이 멈춘 사용자의 관심사 점수가 마지막 Build 시점에
+    고정돼 최신성 감쇠가 영영 반영되지 않는다.
+    """
+    connection = _FakeConnection()
+    _patch_connection(monkeypatch, connection)
+    _patch_content_fetch(monkeypatch)
+    recalculated = InterestRecalculationResult(
+        user_id="user-1", status="completed", version=5, interest_count=2
+    )
+    calls = _patch_interest_recalculation(monkeypatch, [recalculated])
+    monkeypatch.setattr(runtime, "PROVIDER_SCHEDULES", {"naver": _completed("naver")})
+
+    settings = _settings(
+        interest_recalculation_limit=9,
+        interest_recalculation_stale_hours=6.0,
+    )
+    results = asyncio.run(build_scheduler(settings).run_once(now=_NOW))
+
+    assert calls == [{"stale_after_hours": 6.0, "limit": 9, "now": _NOW}]
+    step = next(
+        item
+        for item in results
+        if item.provider == runtime.INTEREST_RECALCULATION_STEP
+    )
+    assert step.status == "completed"
+    assert step.results[0]["user_id"] == "user-1"
+    assert step.results[0]["version"] == 5
+
+
+def test_run_once_skips_interest_recalculation_when_limit_is_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """재계산 사용자 수를 0으로 끄면 SCH-010을 아예 부르지 않는지 검증한다."""
+    connection = _FakeConnection()
+    _patch_connection(monkeypatch, connection)
+    _patch_content_fetch(monkeypatch)
+    calls = _patch_interest_recalculation(monkeypatch, [])
+    monkeypatch.setattr(runtime, "PROVIDER_SCHEDULES", {"naver": _completed("naver")})
+
+    settings = _settings(interest_recalculation_limit=0)
+    results = asyncio.run(build_scheduler(settings).run_once(now=_NOW))
+
+    assert calls == []
+    assert [result.provider for result in results] == ["naver"]
+
+
+def test_run_once_isolates_interest_recalculation_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """관심사 재계산이 실패해도 수집 결과와 tick이 살아남는지 검증한다."""
+    connection = _FakeConnection()
+    _patch_connection(monkeypatch, connection)
+    _patch_content_fetch(monkeypatch)
+    _patch_interest_recalculation(monkeypatch, RuntimeError("관심사 DB 장애"))
+    monkeypatch.setattr(runtime, "PROVIDER_SCHEDULES", {"naver": _completed("naver")})
+
+    settings = _settings(interest_recalculation_limit=5)
+    results = asyncio.run(build_scheduler(settings).run_once(now=_NOW))
+
+    naver = next(item for item in results if item.provider == "naver")
+    assert naver.status == "completed"
+    step = next(
+        item
+        for item in results
+        if item.provider == runtime.INTEREST_RECALCULATION_STEP
+    )
+    assert step.status == "skipped"
+    assert "관심사 DB 장애" in (step.reason or "")

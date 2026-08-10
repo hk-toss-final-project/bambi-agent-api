@@ -8,15 +8,75 @@ PostgresWikiGraphRepository(자체 Pool 소유)와 Wiki Build 완료 재계산 �
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
+from infrastructure.persistence.features.jobs import set_system_job_scope
 from infrastructure.persistence.features.personal_wiki import set_personal_wiki_scope
 from shared.wiki_models import InterestCandidate
 
 type DictRow = dict[str, Any]
+
+
+async def list_users_for_interest_recalculation(
+    connection: AsyncConnection[DictRow],
+    *,
+    stale_after_hours: float,
+    limit: int,
+    now: datetime | None = None,
+) -> list[str]:
+    """관심사 Profile이 오래된 활성 Wiki 사용자를 오래된 순서로 조회한다.
+
+    관심사 점수(INT-005)는 계산 시각 기준으로 최신성을 감쇠시키므로, 재계산이
+    돌지 않으면 감쇠가 영원히 반영되지 않는다. 이 조회는 그 재계산 대상을
+    고르며, `calculated_at`이 기준 시각보다 오래된 사용자만 넘겨 같은 사용자를
+    한 주기에 두 번 처리하지 않게 한다(별도 처리 이력 테이블 불필요).
+
+    Args:
+        connection: 이미 열린 agent-db 커넥션 (조회 Transaction은 내부에서 연다)
+        stale_after_hours: 이 시간이 지난 Profile만 재계산 대상으로 본다
+        limit: 한 번에 가져올 최대 사용자 수
+        now: 판정 기준 시각 (미지정 시 현재 UTC)
+
+    Returns:
+        재계산이 가장 시급한 순서(오래된 Profile 우선)의 사용자 ID 목록
+
+    Raises:
+        ValueError: stale_after_hours가 음수이거나 limit이 1 미만인 경우
+    """
+    if stale_after_hours < 0:
+        raise ValueError("stale_after_hours는 0 이상이어야 합니다.")
+    if limit < 1:
+        raise ValueError("limit은 1 이상이어야 합니다.")
+    moment = now or datetime.now(UTC)
+    cutoff = moment - timedelta(hours=stale_after_hours)
+    async with connection.transaction():
+        await set_system_job_scope(connection)
+        cursor = await connection.execute(
+            # 활성 Profile은 사용자당 최대 1건(uq_user_interest_profiles_active)이라
+            # LEFT JOIN이 Row를 늘리지 않는다. Profile이 아예 없는 사용자가 가장
+            # 시급하므로 NULLS FIRST로 앞세운다.
+            """
+            SELECT wiki.user_id
+            FROM agent.wiki_versions AS wiki
+            LEFT JOIN agent.user_interest_profiles AS profile
+                   ON profile.user_id = wiki.user_id
+                  AND profile.status = 'active'
+            WHERE wiki.status = 'active'
+              AND (
+                    profile.calculated_at IS NULL
+                 OR profile.calculated_at < %s
+              )
+            ORDER BY profile.calculated_at ASC NULLS FIRST, wiki.user_id ASC
+            LIMIT %s
+            """,
+            (cutoff, limit),
+        )
+        rows = await cursor.fetchall()
+    return [str(row["user_id"]) for row in rows]
 
 
 def _onboarding_seed_labels(rows: Sequence[DictRow]) -> list[str]:

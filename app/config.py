@@ -140,6 +140,25 @@ class Settings(BaseModel):
             "동시 내려받기 수는 GLOBAL_CONTENT_FETCH_CONCURRENCY가 따로 정한다"
         ),
     )
+    interest_recalculation_limit: int = Field(
+        default=20,
+        ge=0,
+        le=200,
+        description=(
+            "Scheduler tick마다 관심사를 다시 계산할 사용자 수 (0이면 끔). "
+            "관심사 점수는 계산 시각 기준으로 감쇠하므로 이 값이 0이면 저장이 "
+            "멈춘 사용자의 점수가 마지막 Build 시점에 고정된다"
+        ),
+    )
+    interest_recalculation_stale_hours: float = Field(
+        default=24.0,
+        ge=0.0,
+        le=720.0,
+        description=(
+            "관심사 Profile을 다시 계산하기까지 기다리는 시간(시간). "
+            "이 시간이 지난 Profile만 재계산 대상이 된다"
+        ),
+    )
 
     @property
     def dev_agent_api_enabled(self) -> bool:
@@ -165,6 +184,12 @@ def _integer_env(name: str, default: int) -> int:
     """환경변수의 정수 문자열을 설정 값으로 변환한다."""
     value = os.getenv(name)
     return int(value) if value is not None else default
+
+
+def _float_env(name: str, default: float) -> float:
+    """환경변수의 실수 문자열을 설정 값으로 변환한다."""
+    value = os.getenv(name)
+    return float(value) if value is not None else default
 
 
 def load_settings() -> Settings:
@@ -225,5 +250,11 @@ def load_settings() -> Settings:
         ),
         collection_content_fetch_limit=_integer_env(
             "COLLECTION_CONTENT_FETCH_LIMIT", 5
+        ),
+        interest_recalculation_limit=_integer_env(
+            "INTEREST_RECALCULATION_LIMIT", 20
+        ),
+        interest_recalculation_stale_hours=_float_env(
+            "INTEREST_RECALCULATION_STALE_HOURS", 24.0
         ),
     )
