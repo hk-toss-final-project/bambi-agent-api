@@ -131,7 +131,7 @@ def pool_max_age_days(topic_intent: str) -> int:
     return POOL_MAX_AGE_DAYS_NEWS
 
 
-def score_cutoff(best_score: float) -> float:
+def score_cutoff(best_score: float, *, ratio: float | None = None) -> float:
     """이번 풀 검색의 점수 컷을 계산한다 (절대 하한과 상대 비율 중 큰 값).
 
     두 기준이 각각 다른 실패를 막는다. 상대 비율은 "최고점에 한참 못 미치는 문서"를
@@ -139,11 +139,15 @@ def score_cutoff(best_score: float) -> float:
 
     Args:
         best_score: 이번 검색에서 관측된 최고 점수
+        ratio: 상대 비율. 0을 주면 절대 하한만 쓴다. 여러 주제를 묶는 리포트처럼
+            주제마다 근거 몫이 몇 건뿐인 경우가 그렇다 — 후보가 적으면 상대 비율이
+            최고점 하나만 남기고 나머지를 통째로 잘라낸다.
 
     Returns:
         이 값 미만인 문서는 근거로 쓰지 않는다.
     """
-    return max(POOL_SCORE_FLOOR, max(0.0, best_score) * POOL_SCORE_RATIO)
+    effective_ratio = POOL_SCORE_RATIO if ratio is None else max(0.0, ratio)
+    return max(POOL_SCORE_FLOOR, max(0.0, best_score) * effective_ratio)
 
 
 def select_pool_documents(
@@ -152,6 +156,7 @@ def select_pool_documents(
     published_at: Mapping[str, datetime] | None = None,
     topic_intent: str = "news",
     now: datetime | None = None,
+    score_ratio: float | None = None,
 ) -> list[ReportContextDocument]:
     """풀(global) 문서 중 근거로 쓸 만한 것만 골라 점수 내림차순으로 반환한다.
 
@@ -164,6 +169,7 @@ def select_pool_documents(
             건너뛴다(발행일을 모르는 문서를 그 이유만으로 버리지 않는다).
         topic_intent: 토픽 성격("news"|"evergreen"). 신선도 하한을 정한다.
         now: 기준 시각(테스트 주입용)
+        score_ratio: 점수 컷의 상대 비율. 0을 주면 절대 하한만 적용한다.
 
     Returns:
         컷오프와 신선도를 통과한 풀 문서 목록
@@ -176,7 +182,9 @@ def select_pool_documents(
     if not pool:
         return []
 
-    cutoff = score_cutoff(max(float(getattr(d, "score", 0.0)) for d in pool))
+    cutoff = score_cutoff(
+        max(float(getattr(d, "score", 0.0)) for d in pool), ratio=score_ratio
+    )
     reference = now or datetime.now(UTC)
     horizon = reference - timedelta(days=pool_max_age_days(topic_intent))
     ages = published_at or {}

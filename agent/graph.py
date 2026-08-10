@@ -1327,8 +1327,15 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         topic_intent = str(intents.get(topic) or "news")
         # 단일 주제 경로와 같은 하한을 쓴다. 여기에만 하한이 없으면 0점짜리
         # Wiki 목차 조각이 근거로 들어온다.
+        # 주제마다 근거 몫이 몇 건뿐이라 상대 비율(최고점의 75%)을 쓰지 않는다.
+        # 후보가 적으면 그 컷이 최고점 하나만 남기고 나머지를 통째로 잘라낸다
+        # (2026-08-10 실측: 단일 주제 '환율'은 창고에서 근거 3건을 붙였는데 여러
+        # 주제 경로에서는 0건이었다). 절대 하한과 신선도는 그대로 적용한다.
         pool_documents = select_pool_documents(
-            hybrid, published_at=pool_freshness, topic_intent=topic_intent
+            hybrid,
+            published_at=pool_freshness,
+            topic_intent=topic_intent,
+            score_ratio=0.0,
         )
         return [*select_personal_documents(hybrid), *pool_documents]
 

@@ -396,3 +396,36 @@ def test_pool_relevance_falls_back_to_collecting_when_embedding_fails(
 
     assert pool_context.pool_topic_similarity("프로야구", documents) == 0.0
     assert pool_context.is_pool_relevant("프로야구", documents) is False
+
+
+def test_score_cutoff_can_drop_the_relative_ratio() -> None:
+    """비율 0을 주면 절대 하한만 남는다.
+
+    여러 주제를 묶는 리포트는 주제마다 근거 몫이 몇 건뿐이라, 상대 비율이 최고점
+    하나만 남기고 나머지를 통째로 잘라낸다.
+    """
+    assert score_cutoff(0.4, ratio=0.0) == pool_context.POOL_SCORE_FLOOR
+    # 비율을 주지 않으면 기존 기준 그대로다.
+    assert score_cutoff(0.4) == 0.4 * pool_context.POOL_SCORE_RATIO
+
+
+def test_per_topic_selection_keeps_documents_below_the_relative_cut() -> None:
+    """비율을 끄면 최고점에 못 미치는 문서도 근거로 남는다.
+
+    2026-08-10 실측: 같은 시각에 단일 주제 '환율'은 창고에서 근거 3건을 붙였는데
+    여러 주제 경로에서는 0건이었다. 주제별 몫이 4건뿐인데 상대 비율(최고점의 75%)이
+    그대로 걸려 후보가 통째로 잘렸다.
+    """
+    documents = [
+        _document("G1", 0.40),
+        _document("G2", 0.20),
+        _document("G3", 0.10),
+    ]
+
+    strict = select_pool_documents(documents)
+    relaxed = select_pool_documents(documents, score_ratio=0.0)
+
+    # 기존 기준에서는 최고점 하나만 남는다(0.40 × 0.75 = 0.30 컷).
+    assert [document.reference for document in strict] == ["G1"]
+    # 절대 하한(0.05)만 적용하면 셋 다 남는다.
+    assert [document.reference for document in relaxed] == ["G1", "G2", "G3"]
