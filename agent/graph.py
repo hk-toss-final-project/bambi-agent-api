@@ -1344,6 +1344,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         quota = max(_MIN_TOPIC_CONTEXT_DOCUMENTS, _MAX_REPORT_CONTEXTS // len(topics))
         merged: list[Any] = []
         seen: set[str] = set()
+        covered: list[str] = []
         for topic in topics:
             documents = await _topic_documents(state, topic)
             finalized = await _finalize_contexts(state, documents, max_documents=quota)
@@ -1355,12 +1356,23 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 seen.add(key)
                 merged.append(context)
                 picked += 1
+            if picked:
+                covered.append(topic)
             logger.info(
                 "주제별 근거 배정: topic=%s 몫=%d건 확보=%d건", topic, quota, picked
             )
         if not merged:
             raise RuntimeError("여러 주제 리포트에 쓸 근거를 한 건도 모으지 못했습니다.")
-        return {"contexts": merged}
+        if len(covered) < len(topics):
+            # 근거를 한 건도 못 구한 주제는 생성 프롬프트에서 뺀다. 남겨 두면
+            # "소주제를 순서대로 빠짐없이 다루라"는 지시 때문에 근거 없는 일반론으로
+            # 그 섹션을 채운다(2026-08-10 실측: '환율' 섹션이 "구체적인 정보는
+            # 제공되지 않았습니다. 그러나 변동성이 높아지고 있는 상황이므로..."가 됐다).
+            logger.info(
+                "근거 없는 주제를 생성에서 제외: %s",
+                ", ".join(topic for topic in topics if topic not in covered),
+            )
+        return {"contexts": merged, "covered_topics": covered}
 
     async def _finalize_contexts(
         state: ReportGenerationState,
@@ -1415,7 +1427,8 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         started = monotonic()
         generation_kwargs: dict[str, Any] = {
             "topic": state["topic"],
-            "topics": _report_topics(state),
+            # 근거를 못 구한 주제는 빼고 넘긴다(load_context가 추린다).
+            "topics": state.get("covered_topics") or _report_topics(state),
             "content_type": state["content_type"],
             "language": state["language"],
             "contexts": state["contexts"],

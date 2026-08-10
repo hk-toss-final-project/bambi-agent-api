@@ -1337,6 +1337,65 @@ def test_multi_topic_report_gathers_evidence_per_topic(
     assert result == {"content_candidate_id": "candidate-1"}
 
 
+def test_multi_topic_report_drops_topics_without_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """근거를 한 건도 못 구한 주제는 생성 프롬프트에서 뺀다.
+
+    남겨 두면 "소주제를 순서대로 빠짐없이 다루라"는 지시 때문에 LLM이 근거 없는
+    일반론으로 그 섹션을 채운다(2026-08-10 실측: '환율' 섹션이 "구체적인 정보는
+    제공되지 않았습니다. 그러나 변동성이 높아지고 있는 상황이므로..."가 됐다).
+    """
+    generated_with: dict[str, Any] = {}
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """DB 사용자 Scope 설정을 생략한다."""
+        return None
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[str]:
+        """'환율'만 검색 결과가 없는 상황을 만든다."""
+        query = kwargs["query"]
+        return [] if query == "환율" else [f"context-{query}"]
+
+    async def fake_prag_006(contexts: list[str]) -> list[str]:
+        """검색 Context를 변경 없이 반환한다."""
+        return contexts
+
+    def fake_generate(**kwargs: Any) -> str:
+        """생성 입력을 붙잡아 두고 고정 콘텐츠를 반환한다."""
+        generated_with.update(kwargs)
+        return "generated"
+
+    async def fake_prag_007(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """저장 호출을 고정 결과로 대체한다."""
+        return {"content_candidate_id": "candidate-1"}
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
+    monkeypatch.setattr(agent_graph, "generate_report_content_with_quality", fake_generate)
+    monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
+    _disable_research(monkeypatch)
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 관심사 요약",
+            topics=["반도체", "환율", "프로야구"],
+            content_type="interest_news_card",
+            language="ko",
+            model="test-model",
+        )
+    )
+
+    # 근거가 붙은 두 주제만 프롬프트로 간다.
+    assert generated_with["topics"] == ["반도체", "프로야구"]
+    assert generated_with["contexts"] == ["context-반도체", "context-프로야구"]
+
+
 def test_single_topic_report_keeps_the_existing_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

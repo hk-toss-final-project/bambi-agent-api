@@ -74,6 +74,9 @@ class ReportGenerationState(TypedDict):
     # 주제마다 근거 몫을 배정하려면 어느 문서가 어느 주제 것인지 알아야 한다.
     topic_intents: NotRequired[dict[str, str]]
     research_documents_by_topic: NotRequired[dict[str, list[object]]]
+    # 근거를 실제로 확보한 주제만. 생성 프롬프트에는 이 목록만 넘긴다 —
+    # 근거 없는 주제를 남기면 LLM이 그 섹션을 일반론으로 채운다.
+    covered_topics: NotRequired[list[str]]
     contexts: NotRequired[list[object]]
     # 변경점(Delta) 추적 토글. 요청이 켜서 보낼 때만 True이며, 기본값은 꺼짐이라
     # 이 키가 없으면 기존 generate 경로로 그대로 간다(회귀 0).
