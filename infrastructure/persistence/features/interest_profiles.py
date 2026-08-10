@@ -175,6 +175,9 @@ async def load_interest_documents_for_user(
              AND document.namespace_key = version.namespace_key
             WHERE document.namespace_key = %s
               AND document.source_type = 'onboarding_seed'
+              AND document.status = 'active'
+              AND document.deleted_at IS NULL
+              AND version.version = document.current_version
             ORDER BY version.created_at DESC
             """,
             (namespace_key,),

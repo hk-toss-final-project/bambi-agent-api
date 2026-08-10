@@ -75,6 +75,7 @@ def test_list_wiki_node_embeddings_averages_current_chunk_vectors() -> None:
     query, params = connection.executed[0]
     assert "embedding.embedding::text" in query
     assert "version.version = document.current_version" in query
+    assert "document.status = 'active'" in query
     assert params == ("text-embedding-3-small", "user/56")
 
 
@@ -276,8 +277,9 @@ def test_get_user_source_document_version_for_agent_maps_row() -> None:
         content_format="markdown",
         content_hash="a" * 64,
         object_uri=None,
-        source_metadata={"clipper": "obsidian"},
-    )
+            source_metadata={"clipper": "obsidian"},
+            head_current_version=2,
+        )
     query, params = connection.executed[0]
     assert "agent.user_source_document_versions" in query
     assert "agent.user_source_documents" in query

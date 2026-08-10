@@ -11,6 +11,7 @@ from infrastructure.persistence.features.jobs import EnqueuedWikiBuildJob
 from infrastructure.persistence.features.personal_wiki import SavedUserSourceVersion
 from infrastructure.persistence.features.source_ingestion import (
     PersistedSourceSubmission,
+    _upsert_onboarding_seed_version,
     save_fetched_url_and_enqueue,
     save_web_clipping_and_enqueue,
 )
@@ -38,6 +39,72 @@ class _SequencedConnection:
         """SQL과 Parameter를 기록하고 다음 Row를 반환한다."""
         self.executed.append((query, params))
         return _FakeCursor(self._rows.pop(0) if self._rows else None)
+
+
+def test_onboarding_selection_change_appends_version_to_single_active_head() -> None:
+    """선택 변경은 새 Source Head가 아니라 기존 활성 Head의 다음 Version이 된다."""
+    connection = _SequencedConnection(
+        [
+            None,  # advisory lock
+            {"id": "onboarding-head-1"},
+            {"id": "seed-v1", "version": 1, "content_hash": "a" * 64},
+            {"id": "seed-v2"},
+            None,  # Head current_version 갱신
+        ]
+    )
+
+    result = asyncio.run(
+        _upsert_onboarding_seed_version(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            namespace_key="user/user-1",
+            source_event_row_id="event-v2",
+            title="온보딩 관심 주제 시드",
+            content="# 변경된 선택",
+            content_hash="b" * 64,
+            metadata={"context_contract_version": 1},
+        )
+    )
+
+    assert result == ("onboarding-head-1", "seed-v2", 2)
+    sql = "\n".join(query for query, _params in connection.executed)
+    assert "source_type = 'onboarding_seed'" in sql
+    assert "status = 'active'" in sql
+    assert "INSERT INTO agent.user_source_document_versions" in sql
+    assert "INSERT INTO agent.user_source_documents" not in sql
+    update_query, update_params = connection.executed[-1]
+    assert "current_version = %s" in update_query
+    assert update_params[0:2] == (2, "b" * 64)
+
+
+def test_same_onboarding_selection_reuses_current_version() -> None:
+    """같은 시드 본문 재전송은 Version Row를 추가하지 않는다."""
+    connection = _SequencedConnection(
+        [
+            None,
+            {"id": "onboarding-head-1"},
+            {"id": "seed-v2", "version": 2, "content_hash": "b" * 64},
+        ]
+    )
+
+    result = asyncio.run(
+        _upsert_onboarding_seed_version(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            namespace_key="user/user-1",
+            source_event_row_id="event-v2",
+            title="온보딩 관심 주제 시드",
+            content="# 같은 선택",
+            content_hash="b" * 64,
+            metadata={"context_contract_version": 1},
+        )
+    )
+
+    assert result == ("onboarding-head-1", "seed-v2", 2)
+    assert not any(
+        "INSERT INTO agent.user_source_document_versions" in query
+        for query, _params in connection.executed
+    )
 
 
 def test_save_web_clipping_persists_frontmatter_and_wiki_job() -> None:

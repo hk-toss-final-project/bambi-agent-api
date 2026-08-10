@@ -58,6 +58,8 @@ from agent.wiki_builder.api import (
     generate_relation_query_embeddings,
     link_wiki_relations,
     prepare_wiki_identity_resolution,
+    rebuild_full_wiki,
+    resolve_onboarding_contexts,
     resolve_wiki_identity_conflicts,
     validate_wiki_identity_quality,
     wba_003,
@@ -73,6 +75,8 @@ from infrastructure.persistence.api import (
     get_user_source_document_version_for_agent,
     list_existing_wiki_entries,
     list_existing_wiki_relations,
+    list_cached_custom_topic_contexts,
+    list_onboarding_topic_contexts,
     list_onboarding_wiki_anchor_keys,
     list_related_wiki_keywords,
     list_wiki_graph_relation_snapshot,
@@ -80,6 +84,7 @@ from infrastructure.persistence.api import (
     load_global_document_freshness,
     load_pinned_wiki_context,
     set_personal_wiki_scope,
+    save_custom_topic_contexts,
     sync_wiki_interest_collection_targets,
 )
 from agent.assistant.api import resolve_topic_intent
@@ -98,7 +103,8 @@ REVIEW_MAX_REVISIONS = 1
 def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
     """Personal Wiki Build 노드와 엣지를 조립해 컴파일된 그래프를 반환한다.
 
-    load_source → classify → prepare_identity → (필요 시 resolve_identity) →
+    load_source → resolve_onboarding_context → classify → prepare_identity →
+    (필요 시 resolve_identity) →
     quality_gate → recall_candidates → link_relations → plan → validate_plan →
     persist → embed → finalize 순서로 추출·관계 판정을 분리한다. Embedding은
     기존 노드 후보 recall에만 쓰고, Edge는 원문 근거와 신뢰도를 검증한
@@ -111,11 +117,13 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
         source_version_id = state["source_document_version_id"]
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=user_id)
-            source = await get_user_source_document_version_for_agent(
-                connection,
-                user_id=user_id,
-                source_document_version_id=source_version_id,
-            )
+            source = state.get("source")
+            if source is None:
+                source = await get_user_source_document_version_for_agent(
+                    connection,
+                    user_id=user_id,
+                    source_document_version_id=source_version_id,
+                )
             if source is None:
                 raise ValueError(
                     f"개인 Wiki 원본 Version을 찾을 수 없습니다: {source_version_id}"
@@ -141,6 +149,33 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
                 namespace_key=source.namespace_key,
                 model_name="text-embedding-3-small",
             )
+            taxonomy_contexts = []
+            cached_custom_contexts = []
+            if source.source_type == "onboarding_seed":
+                taxonomy_version = str(
+                    source.source_metadata.get("interest_taxonomy_version") or ""
+                ).strip()
+                raw_custom_labels = source.source_metadata.get("custom_labels", [])
+                custom_labels = (
+                    [str(item) for item in raw_custom_labels]
+                    if isinstance(raw_custom_labels, list)
+                    else []
+                )
+                preferred_language = str(
+                    source.source_metadata.get("preferred_language") or "ko"
+                )
+                if taxonomy_version:
+                    taxonomy_contexts = await list_onboarding_topic_contexts(
+                        connection,
+                        taxonomy_version=taxonomy_version,
+                        locale="ko-KR",
+                    )
+                cached_custom_contexts = await list_cached_custom_topic_contexts(
+                    connection,
+                    user_id=user_id,
+                    keywords=custom_labels,
+                    locale=preferred_language,
+                )
         return {
             "source": source,
             "existing_entities": existing_entities,
@@ -148,6 +183,58 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
             "existing_relations": existing_relations,
             "onboarding_anchor_keys": onboarding_anchor_keys,
             "node_embeddings": node_embeddings,
+            "taxonomy_contexts": taxonomy_contexts,
+            "cached_custom_contexts": cached_custom_contexts,
+        }
+
+    async def resolve_onboarding_context(
+        state: PersonalWikiBuildState,
+    ) -> dict[str, Any]:
+        """정식 Topic은 DB에서, 사용자 키워드는 캐시·LLM·폴백으로 해석한다."""
+        source = state["source"]
+        if source.source_type != "onboarding_seed":
+            return {
+                "onboarding_contexts": [],
+                "generated_custom_contexts": [],
+                "onboarding_context_model": "not-applicable",
+                "onboarding_context_warnings": [],
+            }
+        metadata = source.source_metadata
+        raw_topic_ids = metadata.get("selected_topic_ids", [])
+        raw_custom_labels = metadata.get("custom_labels", [])
+        selected_topic_ids = (
+            [str(item) for item in raw_topic_ids]
+            if isinstance(raw_topic_ids, list)
+            else []
+        )
+        custom_labels = (
+            [str(item) for item in raw_custom_labels]
+            if isinstance(raw_custom_labels, list)
+            else []
+        )
+        taxonomy_version = str(
+            metadata.get("interest_taxonomy_version") or ""
+        ).strip() or None
+        preferred_language = str(metadata.get("preferred_language") or "ko")
+        resolution = await to_thread(
+            resolve_onboarding_contexts,
+            selected_topic_ids=selected_topic_ids,
+            custom_keywords=custom_labels,
+            taxonomy_version=taxonomy_version,
+            locale=preferred_language,
+            taxonomy_contexts=state.get("taxonomy_contexts", []),
+            cached_contexts=state.get("cached_custom_contexts", []),
+            existing_entries=[
+                *state["existing_entities"],
+                *state["existing_concepts"],
+            ],
+            model=state["model"],
+        )
+        return {
+            "onboarding_contexts": list(resolution.contexts),
+            "generated_custom_contexts": list(resolution.generated_contexts),
+            "onboarding_context_model": resolution.model_trace,
+            "onboarding_context_warnings": list(resolution.warnings),
         }
 
     async def classify(state: PersonalWikiBuildState) -> dict[str, Any]:
@@ -165,6 +252,7 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
             existing_concepts=state["existing_concepts"],
             model=state["model"],
             classifier=classify_source_for_wiki,
+            onboarding_contexts=state.get("onboarding_contexts", []),
         )
         return {
             "classification": classification,
@@ -323,8 +411,14 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
     async def plan(state: PersonalWikiBuildState) -> dict[str, Any]:
         """분류 결과와 기존 Wiki 상태로 Build 계획을 만든다."""
         source = state["source"]
+        classification_trace = state.get("classification_model", state["model"])
+        if state.get("onboarding_contexts"):
+            classification_trace = (
+                f"{classification_trace};context="
+                f"{state.get('onboarding_context_model', 'unknown')}"
+            )
         model_trace = (
-            f"{state.get('classification_model', state['model'])};"
+            f"{classification_trace};"
             f"identity={state['identity_resolution_model']};"
             f"relation={state.get('relation_linker_model', state['model'])}"
         )
@@ -380,13 +474,21 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
         """계획된 문서·관계·Chunk·Build Snapshot을 저장 Transaction으로 기록한다."""
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=state["user_id"])
+            custom_context_cache_count = await save_custom_topic_contexts(
+                connection,
+                user_id=state["user_id"],
+                contexts=state.get("generated_custom_contexts", []),
+            )
             persisted = await pwiki_002(
                 connection,
                 source=state["source"],
                 plan=state["plan"],
                 job_id=state["job_id"],
             )
-        return {"persisted": persisted}
+        return {
+            "persisted": persisted,
+            "custom_context_cache_count": custom_context_cache_count,
+        }
 
     async def embed(state: PersonalWikiBuildState) -> dict[str, Any]:
         """변경된 Entity·Concept Chunk를 Vector로 갱신해 다음 Build 후보 검색에 쓴다."""
@@ -451,6 +553,12 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
                 },
                 "embedding_count": state.get("embedding_count", 0),
                 "embedding_warning": state.get("embedding_warning"),
+                "onboarding_context": {
+                    "model": state.get("onboarding_context_model", "not-applicable"),
+                    "resolved_count": len(state.get("onboarding_contexts", [])),
+                    "cached_count": state.get("custom_context_cache_count", 0),
+                    "warnings": state.get("onboarding_context_warnings", []),
+                },
                 "identity_resolution": {
                     "model": state["identity_resolution_model"],
                     "resolved_conflict_count": state["identity_conflict_count"],
@@ -479,6 +587,7 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
 
     graph = StateGraph(PersonalWikiBuildState)
     graph.add_node("load_source", load_source)
+    graph.add_node("resolve_onboarding_context", resolve_onboarding_context)
     graph.add_node("classify", classify)
     graph.add_node("prepare_identity", prepare_identity)
     graph.add_node("resolve_identity", resolve_identity)
@@ -491,7 +600,8 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
     graph.add_node("embed", embed)
     graph.add_node("finalize", finalize)
     graph.set_entry_point("load_source")
-    graph.add_edge("load_source", "classify")
+    graph.add_edge("load_source", "resolve_onboarding_context")
+    graph.add_edge("resolve_onboarding_context", "classify")
     graph.add_edge("classify", "prepare_identity")
     graph.add_conditional_edges(
         "prepare_identity",
@@ -559,6 +669,66 @@ async def run_personal_wiki_build(
     Build 성공 후에는 관심사 프로필을 자동 재계산해(INT-011) 프로필이
     항상 최신 Wiki를 따라가게 한다 — Wiki가 원천, 프로필은 파생물.
     """
+    async with connection.transaction():
+        await set_personal_wiki_scope(connection, user_id=user_id)
+        source = await get_user_source_document_version_for_agent(
+            connection,
+            user_id=user_id,
+            source_document_version_id=source_document_version_id,
+        )
+    if source is None:
+        raise ValueError(
+            f"개인 Wiki 원본 Version을 찾을 수 없습니다: {source_document_version_id}"
+        )
+    if (
+        source.source_type == "onboarding_seed"
+        and (
+            getattr(source, "head_current_version", None)
+            or getattr(source, "version", 1)
+        )
+        > 1
+    ):
+        rebuilt = await rebuild_full_wiki(
+            connection,
+            user_id=user_id,
+            job_id=job_id,
+            model=model,
+        )
+        await _recalculate_interest_profile(connection, user_id=user_id)
+        persisted = rebuilt.persisted
+        return {
+            "source_document_id": source.source_document_id,
+            "source_document_version_id": source.source_document_version_id,
+            "wiki_version_id": persisted.wiki_version_id,
+            "wiki_version": persisted.wiki_version,
+            "chunk_count": persisted.chunk_count,
+            "stored_relation_count": persisted.stored_relation_count,
+            "full_rebuild": True,
+            "source_count": rebuilt.source_count,
+            "superseded_document_count": rebuilt.superseded_document_count,
+            "embedding_count": rebuilt.embedding_count,
+            "quality": {
+                "metrics": dict(rebuilt.quality.metrics),
+                "warnings": [
+                    issue.message
+                    for issue in rebuilt.quality.issues
+                    if issue.severity == "warning"
+                ],
+            },
+            "affected_documents": [
+                {
+                    "document_id": document.document_id,
+                    "document_version_id": document.document_version_id,
+                    "document_kind": document.document_kind,
+                    "document_key": document.document_key,
+                    "file_path": document.file_path,
+                    "version": document.version,
+                    "action": document.action,
+                }
+                for document in persisted.affected_documents
+            ],
+        }
+
     graph = build_personal_wiki_graph(connection)
     state = await graph.ainvoke(
         {
@@ -566,6 +736,7 @@ async def run_personal_wiki_build(
             "source_document_version_id": source_document_version_id,
             "job_id": job_id,
             "model": model,
+            "source": source,
         }
     )
     await _recalculate_interest_profile(connection, user_id=user_id)

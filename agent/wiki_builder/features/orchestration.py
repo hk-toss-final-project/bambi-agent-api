@@ -23,6 +23,7 @@ from agent.wiki_builder.features.identity_resolution import (
     validate_wiki_identity_quality,
 )
 from agent.wiki_builder.features.planning import build_wiki_plan
+from agent.wiki_builder.features.onboarding_contexts import resolve_onboarding_contexts
 from agent.wiki_builder.features.quality import WikiQualityReport, wba_014
 from agent.wiki_builder.features.embeddings import (
     generate_relation_query_embeddings,
@@ -46,10 +47,13 @@ from infrastructure.persistence.api import (
     get_user_source_document_version_for_agent,
     list_existing_wiki_entries,
     list_existing_wiki_relations,
+    list_cached_custom_topic_contexts,
+    list_onboarding_topic_contexts,
     list_onboarding_wiki_anchor_keys,
     list_wiki_node_embeddings,
     list_user_source_versions_for_rebuild,
     persist_wiki_build,
+    save_custom_topic_contexts,
     set_personal_wiki_scope,
     supersede_personal_wiki_for_rebuild,
     update_full_wiki_rebuild_summary,
@@ -122,7 +126,64 @@ async def build_incremental_wiki(
             namespace_key=source.namespace_key,
             model_name="text-embedding-3-small",
         )
+        taxonomy_contexts = []
+        cached_contexts = []
+        if source.source_type == "onboarding_seed":
+            taxonomy_version = str(
+                source.source_metadata.get("interest_taxonomy_version") or ""
+            ).strip()
+            raw_custom_labels = source.source_metadata.get("custom_labels", [])
+            custom_labels = (
+                [str(item) for item in raw_custom_labels]
+                if isinstance(raw_custom_labels, list)
+                else []
+            )
+            if taxonomy_version:
+                taxonomy_contexts = await list_onboarding_topic_contexts(
+                    connection,
+                    taxonomy_version=taxonomy_version,
+                    locale="ko-KR",
+                )
+            cached_contexts = await list_cached_custom_topic_contexts(
+                connection,
+                user_id=user_id,
+                keywords=custom_labels,
+                locale=str(source.source_metadata.get("preferred_language") or "ko"),
+            )
 
+    onboarding_contexts = []
+    generated_custom_contexts = []
+    onboarding_context_model: str | None = None
+    if source.source_type == "onboarding_seed":
+        raw_topic_ids = source.source_metadata.get("selected_topic_ids", [])
+        raw_custom_labels = source.source_metadata.get("custom_labels", [])
+        resolution = await to_thread(
+            resolve_onboarding_contexts,
+            selected_topic_ids=(
+                [str(item) for item in raw_topic_ids]
+                if isinstance(raw_topic_ids, list)
+                else []
+            ),
+            custom_keywords=(
+                [str(item) for item in raw_custom_labels]
+                if isinstance(raw_custom_labels, list)
+                else []
+            ),
+            taxonomy_version=(
+                str(
+                    source.source_metadata.get("interest_taxonomy_version") or ""
+                ).strip()
+                or None
+            ),
+            locale=str(source.source_metadata.get("preferred_language") or "ko"),
+            taxonomy_contexts=taxonomy_contexts,
+            cached_contexts=cached_contexts,
+            existing_entries=[*existing_entities, *existing_concepts],
+            model=model,
+        )
+        onboarding_contexts = list(resolution.contexts)
+        generated_custom_contexts = list(resolution.generated_contexts)
+        onboarding_context_model = resolution.model_trace
     classification, classification_model = await to_thread(
         classify_wiki_source,
         source_type=source.source_type,
@@ -135,6 +196,7 @@ async def build_incremental_wiki(
         existing_concepts=existing_concepts,
         model=model,
         classifier=classifier,
+        onboarding_contexts=onboarding_contexts,
     )
     resolution_draft = prepare_wiki_identity_resolution(
         classification=classification,
@@ -199,6 +261,11 @@ async def build_incremental_wiki(
         )
         relation_model = model
     timestamp = generated_at or datetime.now(UTC).isoformat()
+    classification_trace = classification_model
+    if onboarding_contexts:
+        classification_trace = (
+            f"{classification_trace};context={onboarding_context_model}"
+        )
     plan = build_wiki_plan(
         source_title=source.title,
         source_url=source.canonical_url,
@@ -210,13 +277,18 @@ async def build_incremental_wiki(
         existing_concepts=existing_concepts,
         generated_at=timestamp,
         model=(
-            f"{classification_model};identity={identity_resolution.model};"
+            f"{classification_trace};identity={identity_resolution.model};"
             f"relation={relation_model}"
         ),
         existing_relations=existing_relations,
     )
     async with connection.transaction():
         await set_personal_wiki_scope(connection, user_id=user_id)
+        await save_custom_topic_contexts(
+            connection,
+            user_id=user_id,
+            contexts=generated_custom_contexts,
+        )
         persisted = await persist_wiki_build(
             connection,
             source=source,
@@ -353,6 +425,60 @@ async def rebuild_full_wiki(
         sources = await list_user_source_versions_for_rebuild(
             connection, user_id=user_id
         )
+        has_custom_keywords = any(
+            source.source_type == "onboarding_seed"
+            and isinstance(source.source_metadata.get("custom_labels"), list)
+            and bool(source.source_metadata.get("custom_labels"))
+            for source in sources
+        )
+        resolution_existing_entries = []
+        if has_custom_keywords:
+            resolution_existing_entries = [
+                *(
+                    await list_existing_wiki_entries(
+                        connection, user_id=user_id, document_kind="entity"
+                    )
+                ),
+                *(
+                    await list_existing_wiki_entries(
+                        connection, user_id=user_id, document_kind="concept"
+                    )
+                ),
+            ]
+        onboarding_dependencies: dict[str, tuple[list, list]] = {}
+        for source in sources:
+            if source.source_type != "onboarding_seed":
+                continue
+            metadata = source.source_metadata
+            taxonomy_version = str(
+                metadata.get("interest_taxonomy_version") or ""
+            ).strip()
+            raw_custom_labels = metadata.get("custom_labels", [])
+            custom_labels = (
+                [str(item) for item in raw_custom_labels]
+                if isinstance(raw_custom_labels, list)
+                else []
+            )
+            preferred_language = str(metadata.get("preferred_language") or "ko")
+            taxonomy_contexts = (
+                await list_onboarding_topic_contexts(
+                    connection,
+                    taxonomy_version=taxonomy_version,
+                    locale="ko-KR",
+                )
+                if taxonomy_version
+                else []
+            )
+            cached_contexts = await list_cached_custom_topic_contexts(
+                connection,
+                user_id=user_id,
+                keywords=custom_labels,
+                locale=preferred_language,
+            )
+            onboarding_dependencies[source.source_document_version_id] = (
+                taxonomy_contexts,
+                cached_contexts,
+            )
     if not sources:
         raise ValueError("전체 Wiki를 재구성할 활성 원본이 없습니다.")
 
@@ -361,9 +487,51 @@ async def rebuild_full_wiki(
     existing_relations: list[WikiRelationPlan] = []
     onboarding_anchors: list[WikiNodeIdentity] = []
     staged: list[tuple[UserSourceDocumentForAgent, WikiBuildPlan]] = []
+    generated_custom_contexts = []
     timestamp = generated_at or datetime.now(UTC).isoformat()
 
     for source in sources:
+        onboarding_contexts = []
+        onboarding_context_model: str | None = None
+        if source.source_type == "onboarding_seed":
+            metadata = source.source_metadata
+            raw_topic_ids = metadata.get("selected_topic_ids", [])
+            raw_custom_labels = metadata.get("custom_labels", [])
+            selected_topic_ids = (
+                [str(item) for item in raw_topic_ids]
+                if isinstance(raw_topic_ids, list)
+                else []
+            )
+            custom_labels = (
+                [str(item) for item in raw_custom_labels]
+                if isinstance(raw_custom_labels, list)
+                else []
+            )
+            taxonomy_contexts, cached_contexts = onboarding_dependencies.get(
+                source.source_document_version_id, ([], [])
+            )
+            resolution = await to_thread(
+                resolve_onboarding_contexts,
+                selected_topic_ids=selected_topic_ids,
+                custom_keywords=custom_labels,
+                taxonomy_version=(
+                    str(metadata.get("interest_taxonomy_version") or "").strip()
+                    or None
+                ),
+                locale=str(metadata.get("preferred_language") or "ko"),
+                taxonomy_contexts=taxonomy_contexts,
+                cached_contexts=cached_contexts,
+                existing_entries=resolution_existing_entries,
+                model=model,
+            )
+            # 기존 Wiki는 바로 뒤 Transaction에서 전부 supersede된다. 설명은
+            # 재사용하되, 곧 사라질 Head key로 병합하도록 지시하지 않는다.
+            onboarding_contexts = [
+                replace(context, matched_existing_key=None)
+                for context in resolution.contexts
+            ]
+            generated_custom_contexts.extend(resolution.generated_contexts)
+            onboarding_context_model = resolution.model_trace
         classification, classification_model = await to_thread(
             classify_wiki_source,
             source_type=source.source_type,
@@ -376,6 +544,7 @@ async def rebuild_full_wiki(
             existing_concepts=existing_concepts,
             model=model,
             classifier=classifier,
+            onboarding_contexts=onboarding_contexts,
         )
         draft = prepare_wiki_identity_resolution(
             classification=classification,
@@ -421,7 +590,9 @@ async def rebuild_full_wiki(
             existing_concepts=existing_concepts,
             generated_at=timestamp,
             model=(
-                f"{classification_model};identity={identity.model};"
+                f"{classification_model}"
+                f"{';context=' + onboarding_context_model if onboarding_context_model else ''};"
+                f"identity={identity.model};"
                 f"relation={relation_model};rebuild=v1"
             ),
             existing_relations=existing_relations,
@@ -432,8 +603,16 @@ async def rebuild_full_wiki(
         existing_relations = _relations_for_next_source(plan.relations)
         if source.source_type == "onboarding_seed":
             onboarding_anchors.extend(
-                WikiNodeIdentity("concept", document.document_key)
-                for document in plan.concepts
+                [
+                    *(
+                        WikiNodeIdentity("entity", document.document_key)
+                        for document in plan.entities
+                    ),
+                    *(
+                        WikiNodeIdentity("concept", document.document_key)
+                        for document in plan.concepts
+                    ),
+                ]
             )
 
     quality = await wba_014(
@@ -446,6 +625,11 @@ async def rebuild_full_wiki(
     persisted_results: list[PersistedWikiBuild] = []
     async with connection.transaction():
         await set_personal_wiki_scope(connection, user_id=user_id)
+        await save_custom_topic_contexts(
+            connection,
+            user_id=user_id,
+            contexts=generated_custom_contexts,
+        )
         superseded_count = await supersede_personal_wiki_for_rebuild(
             connection, user_id=user_id, job_id=job_id
         )

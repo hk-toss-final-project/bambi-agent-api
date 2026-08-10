@@ -75,6 +75,12 @@ PERSONAL_WIKI_RESET_MIGRATION_PATH = (
     / "migrations"
     / "0018_personal_wiki_reset.sql"
 )
+ONBOARDING_CONTEXT_MIGRATION_PATH = (
+    PROJECT_ROOT
+    / "database"
+    / "migrations"
+    / "0019_onboarding_topic_contexts.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
@@ -87,6 +93,8 @@ MIGRATION_PATHS = (
     CHANGE_HISTORY_MIGRATION_PATH,
     DUPLICATED_VERSION_REPAIR_MIGRATION_PATH,
     WIKI_RELATION_LIFECYCLE_MIGRATION_PATH,
+    PERSONAL_WIKI_RESET_MIGRATION_PATH,
+    ONBOARDING_CONTEXT_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
@@ -240,6 +248,25 @@ def test_interest_taxonomy_migration_adds_snapshots_targets_and_subscriptions() 
     assert "CREATE TABLE agent.global_source_document_topics" in migration
     assert "'interest-taxonomy-google-news'" in migration
     assert "VALUES (11," in migration
+
+
+def test_onboarding_context_migration_seeds_all_topics_and_custom_cache() -> None:
+    """44개 정식 Topic 컨텍스트·사용자 캐시·단일 활성 시드 Head를 검증한다."""
+    migration = _read(ONBOARDING_CONTEXT_MIGRATION_PATH)
+    topic_ids = re.findall(
+        r"^\('1\.0\.0-draft', '([^']+)'",
+        migration,
+        flags=re.MULTILINE,
+    )
+
+    assert "CREATE TABLE agent.onboarding_topic_contexts" in migration
+    assert "CREATE TABLE agent.user_custom_topic_contexts" in migration
+    assert "uq_user_source_documents_active_onboarding_seed" in migration
+    assert "status = 'superseded'" in migration
+    assert len(topic_ids) == 44
+    assert len(set(topic_ids)) == 44
+    assert "'ai_ml'" in migration and "'pet'" in migration
+    assert "VALUES (19," in migration
 
 
 def test_change_history_migration_adds_delta_facts_idempotently() -> None:

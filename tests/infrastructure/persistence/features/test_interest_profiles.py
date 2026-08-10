@@ -153,6 +153,8 @@ def test_load_interest_documents_collects_onboarding_seed_labels() -> None:
     label_query = connection.executed[3][0]
     assert "source_type = 'onboarding_seed'" in label_query
     assert "source_metadata -> 'labels'" in label_query
+    assert "version.version = document.current_version" in label_query
+    assert "document.status = 'active'" in label_query
 
 
 def test_load_interest_documents_handles_missing_active_wiki() -> None:

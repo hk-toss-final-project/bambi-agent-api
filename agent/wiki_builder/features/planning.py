@@ -199,6 +199,7 @@ def _plan_entities(
             "created": created,
             "updated": generated_date,
             "interest_subject": _interest_subject(old_metadata, candidate.role),
+            **candidate.context_metadata,
         }
         content = render_entity_markdown(
             name=title,
@@ -317,6 +318,7 @@ def _plan_concepts(
             "created": created,
             "updated": generated_date,
             "interest_subject": _interest_subject(old_metadata, candidate.role),
+            **candidate.context_metadata,
         }
         content = render_concept_markdown(
             title=resolved_title,

@@ -25,21 +25,16 @@ def _fake_response(
     )
 
 
-def test_classify_onboarding_seed_materializes_atomic_labels_as_concepts() -> None:
-    """온보딩의 복합 라벨을 원자 주제로 나눠 중복 없는 Concept로 변환한다."""
+def test_classify_legacy_onboarding_seed_preserves_official_compound_label() -> None:
+    """구버전 시드도 정식 복합 명칭을 임의로 쪼개지 않고 Concept로 변환한다."""
     result = llm_wiki.classify_onboarding_seed_for_wiki(
         {"labels": ["AI·머신러닝", "반도체", "AI·머신러닝", " "]}
     )
 
     assert result.entities == []
-    assert [concept.title for concept in result.concepts] == [
-        "AI",
-        "머신러닝",
-        "반도체",
-    ]
+    assert [concept.title for concept in result.concepts] == ["AI·머신러닝", "반도체"]
     assert [concept.definition for concept in result.concepts] == [
-        "사용자가 온보딩에서 직접 선택한 관심 주제: AI",
-        "사용자가 온보딩에서 직접 선택한 관심 주제: 머신러닝",
+        "사용자가 온보딩에서 직접 선택한 관심 주제: AI·머신러닝",
         "사용자가 온보딩에서 직접 선택한 관심 주제: 반도체",
     ]
     assert "AI·머신러닝" in result.source_summary

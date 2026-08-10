@@ -101,6 +101,7 @@ async def wse_014(
     interest_taxonomy_version: str | None = None,
     selected_category_ids: Sequence[str] = (),
     selected_topic_ids: Sequence[str] = (),
+    preferred_language: str = "ko",
 ) -> OnboardingSeedDocument | None:
     """[WSE-014] 온보딩 관심사 시드 수신.
 
@@ -115,12 +116,14 @@ async def wse_014(
         interest_taxonomy_version: 선택 ID를 해석할 관심사 분류체계 버전
         selected_category_ids: 온보딩에서 고른 Category 안정 ID 목록
         selected_topic_ids: 온보딩에서 고른 Topic 안정 ID 목록
+        preferred_language: 사용자 추가 키워드 컨텍스트 생성 언어
 
     Returns:
         합성한 시드 문서. 유효한 선택이 없으면 None.
     """
     groups: list[tuple[str, tuple[str, ...]]] = []
     labels: list[str] = []
+    custom_labels: list[str] = []
     for interest in signup_interests:
         category = str(interest.get("category") or "").strip()
         raw_topics = interest.get("topics")
@@ -133,6 +136,8 @@ async def wse_014(
             continue
         groups.append((category, topics))
         labels.extend(topics or ([category] if category else []))
+        if not category:
+            custom_labels.extend(topics)
     if not groups:
         return None
 
@@ -140,6 +145,8 @@ async def wse_014(
     checksum_source = "|".join(
         [
             interest_taxonomy_version or "",
+            preferred_language,
+            "onboarding-context-v1",
             *(f"{category}>{','.join(topics)}" for category, topics in groups),
             *selected_category_ids,
             *selected_topic_ids,
@@ -174,6 +181,9 @@ async def wse_014(
         "selected_category_ids": list(selected_category_ids),
         "selected_topic_ids": list(selected_topic_ids),
         "labels": labels,
+        "custom_labels": custom_labels,
+        "preferred_language": preferred_language,
+        "context_contract_version": 1,
     }
     return OnboardingSeedDocument(
         source_event_id=source_event_id,

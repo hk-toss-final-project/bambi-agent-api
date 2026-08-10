@@ -204,6 +204,10 @@ def _merge_entities(
             ),
             mentions=_unique([*current.mentions, *incoming.mentions]),
             is_alias=current.is_alias or incoming.is_alias,
+            context_metadata={
+                **current.context_metadata,
+                **incoming.context_metadata,
+            },
         )
     if target is None:
         return current
@@ -254,6 +258,10 @@ def _merge_concepts(
             ),
             mentions=_unique([*current.mentions, *incoming.mentions]),
             overlaps_existing=current.overlaps_existing or incoming.overlaps_existing,
+            context_metadata={
+                **current.context_metadata,
+                **incoming.context_metadata,
+            },
         )
     if target is None:
         return current
@@ -564,6 +572,7 @@ def _to_entity(
         related_entity_names=value.related_entity_names,
         related_concepts=value.related_concepts,
         mentions=value.mentions,
+        context_metadata=value.context_metadata,
     )
 
 
@@ -592,6 +601,7 @@ def _to_concept(
             [*value.aliases, *([value.name] if value.name != canonical_label else [])]
         ),
         mentions=value.mentions,
+        context_metadata=value.context_metadata,
     )
 
 

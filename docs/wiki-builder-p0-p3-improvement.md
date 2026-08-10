@@ -26,6 +26,7 @@
 
 ```text
 load_source
+  → resolve_onboarding_context
   → classify
   → prepare_identity → (모호할 때만 resolve_identity)
   → quality_gate
@@ -38,8 +39,9 @@ load_source
   → finalize
 ```
 
-- 온보딩 시드는 사용자가 직접 고른 라벨이므로 LLM 분류·관계 판정을 호출하지 않고
-  결정적으로 Concept로 저장한다.
+- 온보딩 정식 Topic은 Agent DB의 버전 컨텍스트로 결정적으로 Concept를 만든다.
+  사용자 추가 키워드만 taxonomy 별칭→기존 Wiki→캐시→LLM 일반론→폴백으로
+  해석하며, 이후 분류·관계 판정은 결정론 경로를 사용한다.
 - 이후 일반 클리핑을 처리할 때 온보딩 Concept를 `onboarding_anchor` 후보로 넣는다.
   따라서 `날씨`가 원문에 직접 없어도 `폭염`과의 의미 관계를 Linker가 검토할 수 있다.
 - `link_relations`는 추출 단계에 관계가 일부 있더라도 항상 실행한다. “관계가 0건일

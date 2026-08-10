@@ -178,7 +178,7 @@
 | `signup_interests` | X | 가입 시 고른 관심 카테고리·토픽 | `[{"category","topics":[...]}]`. agent가 `user_context_snapshots.attributes.signup_interests`에 버전과 함께 보존(재계산에 안 지워짐). **있으면 agent가 온보딩 시드(WSE-014)를 자동 접수해 콜드스타트 관심사를 파생** — 아래 참고 |
 
 ### 4.2-1 온보딩 관심사 시드 + 웰컴 리포트 (콜드스타트)
-- **시드 (WSE-014, agent 자동):** `signup_interests`가 있으면 context 수신 시 agent가 선택을 시드 Markdown으로 합성해 `onboarding_seed` 원본·Personal Wiki Build Job으로 **자동 접수**한다. Builder는 `source_metadata.labels`를 LLM 없이 결정적으로 Concept로 만들고 기존 Build·Snapshot 저장 경로를 재사용한다. 빌드 완료 후 INT-011 훅이 관심사 프로필을 파생시킨다. 컨텍스트 저장과 분리된 best-effort이고, 선택 내용 기반 멱등(같은 온보딩 반복 전달 → 시드 1개). Service의 추가 호출 불필요.
+- **시드 (WSE-014, agent 자동):** `signup_interests`가 있으면 context 수신 시 agent가 선택을 시드 Markdown으로 합성해 사용자별 단일 활성 `onboarding_seed` Head의 Version·Personal Wiki Build Job으로 **자동 접수**한다. `selected_topic_ids`는 Agent DB에 미리 관리한 결정론적 정의·특징·활용을 사용하고 정식 복합 명칭을 분해하지 않는다. `category=null` 그룹의 Topic은 사용자 추가 키워드이며 taxonomy 별칭→기존 Wiki→사용자 서명 캐시→LLM 일반론→결정론 폴백 순으로 해석한다. 같은 선택은 현재 Version을 재사용하고 변경된 선택은 다음 Version+Full Rebuild로 이전 시드 전용 노드를 제거한다. 빌드 완료 후 INT-011 훅이 관심사 프로필을 파생시킨다. 컨텍스트 저장과 분리된 best-effort이고 Service의 추가 호출은 불필요하다.
 - **⚠️ `topic` 은 표시용 라벨이 아니라 agent 의 실제 검색어다 (2026-08-05 확인, 실사고 있었음).**
   Service 가 `"오늘의 관심사 뉴스"` 같은 **고정 문구**를 넣었더니 agent 가 그 문구로 검색해
   관심사와 무관한 기사를 물어왔다. 지금은 **사용자의 실제 관심 주제 문자열**(예: `"SK하이닉스"`)을 넣는다.

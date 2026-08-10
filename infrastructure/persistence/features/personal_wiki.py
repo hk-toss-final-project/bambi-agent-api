@@ -141,6 +141,7 @@ class UserSourceDocumentForAgent:
     content_hash: str = ""
     object_uri: str | None = None
     source_metadata: dict[str, Any] = field(default_factory=dict)
+    head_current_version: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,6 +242,7 @@ async def get_user_source_document_version_for_agent(
             document.namespace_key,
             document.source_type,
             document.canonical_url,
+            document.current_version AS head_current_version,
             version.id AS source_document_version_id,
             version.source_event_id,
             version.version,
@@ -261,6 +263,7 @@ async def get_user_source_document_version_for_agent(
          AND document.namespace_key = version.namespace_key
         WHERE version.id = %s
           AND document.user_id = %s
+          AND document.status = 'active'
           AND document.deleted_at IS NULL
         """,
         (source_document_version_id, user_id),
@@ -288,6 +291,7 @@ async def get_user_source_document_version_for_agent(
         content_hash=row["content_hash"],
         object_uri=row["object_uri"],
         source_metadata=dict(row["source_metadata"] or {}),
+        head_current_version=int(row.get("head_current_version", row["version"])),
     )
 
 
@@ -326,6 +330,7 @@ async def list_user_source_versions_for_rebuild(
          AND version.version = document.current_version
         WHERE document.user_id = %s
           AND document.namespace_key = %s
+          AND document.status = 'active'
           AND document.deleted_at IS NULL
           AND version.raw_content IS NOT NULL
         ORDER BY
@@ -362,6 +367,7 @@ async def list_user_source_versions_for_rebuild(
             content_hash=row["content_hash"],
             object_uri=row["object_uri"],
             source_metadata=dict(row["source_metadata"] or {}),
+            head_current_version=int(row["version"]),
         )
         for row in rows
     ]
@@ -747,6 +753,7 @@ async def list_existing_wiki_entries(
          AND version.version = document.current_version
         WHERE document.namespace_key = %s
           AND document.document_kind = %s
+          AND document.status = 'active'
           AND document.deleted_at IS NULL
         ORDER BY document.document_key
         """,
@@ -1859,6 +1866,7 @@ async def persist_wiki_build(
          AND version.namespace_key = document.namespace_key
          AND version.version = document.current_version
         WHERE document.namespace_key = %s
+          AND document.status = 'active'
           AND document.deleted_at IS NULL
         ON CONFLICT DO NOTHING
         """,
@@ -2048,6 +2056,9 @@ async def list_onboarding_wiki_anchor_keys(
           AND document.status = 'active'
           AND document.deleted_at IS NULL
           AND source_document.source_type = 'onboarding_seed'
+          AND source_document.status = 'active'
+          AND source_document.deleted_at IS NULL
+          AND source_version.version = source_document.current_version
         ORDER BY document.document_kind, document.document_key
         """,
         (namespace_key,),

@@ -94,7 +94,8 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
             slug="personal-wiki",
             title="Personal Wiki Build",
             description=(
-                "원본 조회(load_source) → 추출 분류(classify) → 표기 정규화와 "
+                "원본 조회(load_source) → 온보딩 컨텍스트 해석"
+                "(resolve_onboarding_context) → 추출 분류(classify) → 표기 정규화와 "
                 "후보 탐색(prepare_identity) → 충돌이 있을 때만 의미 판정"
                 "(resolve_identity) → canonical 중복 품질 검증(quality_gate) → "
                 "하이브리드 관계 후보(recall_candidates) → 관계 판정(link_relations) → "
@@ -109,6 +110,14 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                     description=(
                         "원본 문서 Version과 기존 Entity·Concept·관계를 하나의 조회 "
                         "트랜잭션에서 읽고, 원문이 없으면 실행을 중단합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="resolve_onboarding_context",
+                    title="온보딩 Topic 컨텍스트 해석",
+                    description=(
+                        "정식 Topic은 Agent DB 시드를 읽고, 사용자 추가 키워드는 "
+                        "별칭·기존 Wiki·캐시·LLM·일반론 폴백 순으로 해석합니다."
                     ),
                 ),
                 GraphNodeDescription(
