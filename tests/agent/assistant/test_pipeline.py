@@ -395,3 +395,149 @@ def test_record_history_true_still_writes_history(monkeypatch) -> None:
     pipeline.run_daily(_TOPIC, "minji", reference_now=_NOW)
 
     assert len(history.get_collected_entries("minji", _TOPIC)) > before
+
+
+def _stub_source_collectors(monkeypatch, *, news, youtube, reddit) -> None:
+    """세 소스 수집기를 주입한 함수로 갈아끼운다."""
+    monkeypatch.setattr(pipeline, "_news_documents", lambda q, now: news(q))
+    monkeypatch.setattr(
+        pipeline, "_youtube_documents", lambda q, now, window_hours: youtube(q)
+    )
+    monkeypatch.setattr(
+        pipeline, "_reddit_documents", lambda q, now, window_hours: reddit(q)
+    )
+
+
+def _doc(url: str) -> dict[str, object]:
+    """중복 판정 키만 갖춘 최소 수집 문서를 만든다."""
+    return {"url": url, "url_key": url, "title": url, "text": url}
+
+
+def test_collect_documents_runs_the_three_sources_concurrently(monkeypatch) -> None:
+    """소스 셋(뉴스·YouTube·Reddit)을 동시에 호출한다.
+
+    검색어를 이웃 키워드로 넓히지 못한 이유가 "소요 시간이 검색어 수에 비례"
+    였고, 소스 축은 서로 다른 서비스라 동시에 불러도 Provider별 요청률이 오르지
+    않아 이 축만 넓혔다. 순차로 되돌아가면 확장이 다시 느려지므로 고정한다.
+    """
+    import threading
+
+    started = threading.Barrier(3, timeout=5)
+
+    def collector(name: str):
+        """세 소스가 모두 시작할 때까지 서로 기다린다(순차면 타임아웃)."""
+
+        def run(query: str) -> list[dict[str, object]]:
+            started.wait()
+            return [_doc(f"{name}-{query}")]
+
+        return run
+
+    _stub_source_collectors(
+        monkeypatch,
+        news=collector("news"),
+        youtube=collector("youtube"),
+        reddit=collector("reddit"),
+    )
+
+    docs, failures = pipeline.collect_documents(
+        ["전고체"], now=_NOW, window_hours=72.0
+    )
+
+    assert failures == []
+    assert [doc["url"] for doc in docs] == [
+        "news-전고체",
+        "youtube-전고체",
+        "reddit-전고체",
+    ]
+
+
+def test_collect_documents_keeps_source_order_and_dedup(monkeypatch) -> None:
+    """동시 실행이어도 결과 순서와 '먼저 만난 것이 이긴다'는 중복 규칙이 그대로다.
+
+    ThreadPoolExecutor.map이 입력 순서로 돌려주므로 완료 순서가 결과를 바꾸지
+    않아야 한다. 첫 검색어(원 토픽)의 결과가 살아남는 규칙이 여기 걸려 있다.
+    """
+    _stub_source_collectors(
+        monkeypatch,
+        news=lambda q: [_doc(f"shared"), _doc(f"news-{q}")],
+        youtube=lambda q: [_doc("shared")],
+        reddit=lambda q: [_doc(f"reddit-{q}")],
+    )
+
+    docs, failures = pipeline.collect_documents(
+        ["전고체", "배터리"], now=_NOW, window_hours=72.0
+    )
+
+    assert failures == []
+    # shared는 첫 검색어의 뉴스에서 한 번만 살아남는다.
+    assert [doc["url"] for doc in docs] == [
+        "shared",
+        "news-전고체",
+        "reddit-전고체",
+        "news-배터리",
+        "reddit-배터리",
+    ]
+
+
+def test_collect_documents_isolates_one_failing_source(monkeypatch) -> None:
+    """소스 하나가 죽어도 나머지 문서는 그대로 돌려주고, 실패는 소스당 1건으로 접는다.
+
+    검색어 수만큼 실패가 부풀면 outcomes.classify가 멀쩡한 실행을
+    PROVIDER_FAILURE로 오판한다.
+    """
+
+    def broken(query: str) -> list[dict[str, object]]:
+        raise RuntimeError("provider down")
+
+    _stub_source_collectors(
+        monkeypatch,
+        news=lambda q: [_doc(f"news-{q}")],
+        youtube=broken,
+        reddit=lambda q: [_doc(f"reddit-{q}")],
+    )
+
+    docs, failures = pipeline.collect_documents(
+        ["전고체", "배터리"], now=_NOW, window_hours=72.0
+    )
+
+    assert [doc["url"] for doc in docs] == [
+        "news-전고체",
+        "reddit-전고체",
+        "news-배터리",
+        "reddit-배터리",
+    ]
+    assert len(failures) == 1
+    assert failures[0]["source"] == "YouTube"
+    assert "provider down" in failures[0]["error"]
+
+
+def test_collect_documents_falls_back_to_sequential_when_switched_off(
+    monkeypatch,
+) -> None:
+    """동시 수집을 1로 내리면 스레드 없이 순차 실행한다(되돌리는 스위치)."""
+    threads: list[str] = []
+
+    def collector(name: str):
+        """실행된 스레드 이름을 기록한다."""
+
+        def run(query: str) -> list[dict[str, object]]:
+            import threading
+
+            threads.append(threading.current_thread().name)
+            return [_doc(f"{name}-{query}")]
+
+        return run
+
+    _stub_source_collectors(
+        monkeypatch,
+        news=collector("news"),
+        youtube=collector("youtube"),
+        reddit=collector("reddit"),
+    )
+    monkeypatch.setattr(pipeline.config, "source_collect_concurrency", lambda: 1)
+
+    docs, _ = pipeline.collect_documents(["전고체"], now=_NOW, window_hours=72.0)
+
+    assert len(docs) == 3
+    assert len(set(threads)) == 1  # 전부 호출자 스레드에서 실행됐다

@@ -4,9 +4,13 @@
 공통 LatestArticle 모델로 정규화한다.
 """
 
+import asyncio
 import html
 import logging
+import os
 import re
+import threading
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -19,6 +23,86 @@ import httpx
 logger = logging.getLogger("infrastructure.sources.connectors.latest")
 
 _HTML_TAG = re.compile(r"<[^>]+>")
+
+
+def _env_float(name: str, default: float) -> float:
+    """환경변수를 실수로 읽는다. 없거나 형식이 잘못되면 기본값을 반환한다."""
+    try:
+        return float(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+
+
+# ── GDELT 호출 간격 제어 ────────────────────────────────────────────────────
+# GDELT는 인증 없는 공개 API라 호출 빈도를 스스로 제한한다. 429 본문이 조건을
+# 직접 알려준다: "Please limit requests to one every 5 seconds".
+#
+# 2026-08-10 실측:
+#
+#   ① **한 번 걸리면 오래 간다.** 5초·30초·60초·120초·240초 뒤 재호출이 전부
+#      429였다. 다음 호출을 기다리는 것으로는 풀리지 않는다.
+#   ② 응답은 성공이든 429든 10~17초가 걸린다.
+#
+# 그래서 대응이 두 겹이다. 평소에는 최소 간격을 지켜 429를 만들지 않고, 그래도
+# 걸리면 쿨다운 동안 호출을 건너뛴다. Provider 실패 격리가 이미 있어 건너뛰어도
+# naver·google_news 수집은 그대로 완료된다.
+#
+# ⚠️ **이 제어는 수집을 빠르게 하지 않는다. 속도를 기대하고 손대지 마라.**
+# 같은 조건에서 쿨다운만 켜고 끄며 두 번씩 재보니 차이가 없었다
+# (OFF 94.7초 vs ON 94.6초, 검색어 3개 기준). GDELT는 뉴스 소스 안에서
+# naver·google_news와 **동시에** 호출되므로(feeds.fetch_provider_entries),
+# 10초를 쓰든 건너뛰든 28초짜리 다른 Provider 뒤에 가려 임계 경로가 아니다
+# (격리 실측: 전체 32.8초 / gdelt 제외 28.9초 / gdelt만 10.2초).
+#
+# 그럼에도 두는 이유는 셋이다. (a) 공개 API가 명시한 조건을 지키는 것,
+# (b) 한 번 걸리면 몇 분간 GDELT 자료를 통째로 잃으므로 애초에 안 걸리는 편이
+# 낫다는 것, (c) 429를 request_failed가 아니라 rate_limited로 구분해 로그에서
+# "외부 장애"와 "우리가 너무 자주 불렀음"이 섞이지 않게 하는 것이다.
+#
+# 상태는 프로세스 전역이다. Provider 객체가 호출마다 새로 만들어지고
+# (_build_provider), 수집이 스레드로 나뉘어 돌기 때문이다(pipeline.collect_documents).
+# 여러 Worker 프로세스가 같은 IP를 쓰면 이 제어만으로는 부족하다.
+GDELT_MIN_INTERVAL_SECONDS: float = _env_float("GDELT_MIN_INTERVAL_SECONDS", 5.0)
+GDELT_COOLDOWN_SECONDS: float = _env_float("GDELT_COOLDOWN_SECONDS", 300.0)
+
+_gdelt_lock = threading.Lock()
+_gdelt_next_call_at: float = 0.0
+_gdelt_cooldown_until: float = 0.0
+
+
+def reset_gdelt_rate_limit_state() -> None:
+    """GDELT 호출 간격·쿨다운 상태를 초기화한다 (테스트 격리용)."""
+    global _gdelt_next_call_at, _gdelt_cooldown_until
+    with _gdelt_lock:
+        _gdelt_next_call_at = 0.0
+        _gdelt_cooldown_until = 0.0
+
+
+def _reserve_gdelt_slot() -> float:
+    """다음 GDELT 호출 자리를 잡고 대기할 시간(초)을 돌려준다.
+
+    쿨다운 중이면 호출하지 않는다는 뜻으로 -1.0을 돌려준다. 자리를 잡는 즉시
+    다음 호출 가능 시각을 밀어 두므로, 여러 스레드가 동시에 들어와도 실제
+    호출은 최소 간격만큼 벌어진다.
+
+    Returns:
+        대기할 초. 쿨다운 중이면 -1.0.
+    """
+    global _gdelt_next_call_at
+    now = time.monotonic()
+    with _gdelt_lock:
+        if now < _gdelt_cooldown_until:
+            return -1.0
+        wait = max(0.0, _gdelt_next_call_at - now)
+        _gdelt_next_call_at = now + wait + GDELT_MIN_INTERVAL_SECONDS
+        return wait
+
+
+def _start_gdelt_cooldown() -> None:
+    """429를 받은 시점부터 쿨다운을 건다."""
+    global _gdelt_cooldown_until
+    with _gdelt_lock:
+        _gdelt_cooldown_until = time.monotonic() + GDELT_COOLDOWN_SECONDS
 
 
 class LatestProviderError(RuntimeError):
@@ -254,7 +338,24 @@ class GdeltNewsProvider:
     async def search(
         self, *, query: str, limit: int, language: str | None
     ) -> list[LatestArticle]:
-        """GDELT DOC API에서 최신 기사 목록을 검색한다."""
+        """GDELT DOC API에서 최신 기사 목록을 검색한다.
+
+        호출 전에 프로세스 전역 간격 제어를 통과해야 한다(GDELT_MIN_INTERVAL_SECONDS
+        주석 참고). 429를 받으면 쿨다운을 걸어, 어차피 실패할 뒤이은 호출이 12초씩
+        낭비하지 않게 한다.
+
+        Raises:
+            LatestProviderError: 쿨다운 중(`rate_limited`)이거나 요청이 실패했을 때
+        """
+        wait = _reserve_gdelt_slot()
+        if wait < 0:
+            raise LatestProviderError(
+                self.name,
+                "rate_limited",
+                "GDELT 호출 제한(429) 쿨다운 중이라 이번 수집은 건너뜁니다.",
+            )
+        if wait > 0:
+            await asyncio.sleep(wait)
         params = {
             "query": query,
             "mode": "ArtList",
@@ -270,6 +371,19 @@ class GdeltNewsProvider:
                     f"{self._base_url}/api/v2/doc/doc",
                     params=params,
                 )
+                # 429는 다른 실패와 다르게 다룬다. 재시도해도 몇 분간 계속
+                # 429이므로(실측) 쿨다운을 걸어 호출 자체를 멈춘다.
+                if response.status_code == 429:
+                    _start_gdelt_cooldown()
+                    logger.warning(
+                        "GDELT 호출 제한(429). %.0f초 동안 GDELT 수집을 건너뜁니다.",
+                        GDELT_COOLDOWN_SECONDS,
+                    )
+                    raise LatestProviderError(
+                        self.name,
+                        "rate_limited",
+                        "GDELT 호출 제한(429)에 걸려 이번 수집을 건너뜁니다.",
+                    )
                 response.raise_for_status()
                 payload = response.json()
         except (httpx.HTTPError, ValueError) as error:

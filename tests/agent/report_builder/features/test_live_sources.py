@@ -225,3 +225,19 @@ def test_확장이_꺼져_있으면_이웃을_조회하지_않는다(monkeypatch
     monkeypatch.setenv("REPORT_QUERY_EXPANSION_LIMIT", "0")
 
     assert live_sources.related_keyword_fetch_limit() == 0
+
+
+def test_기본_확장_상한은_이웃_셋이다(monkeypatch) -> None:
+    """온디맨드가 "고른 주제 하나 + Wiki 연결 상위 태그 3개"를 엮는 경로다.
+
+    2026-08-10 계약으로 온디맨드가 단일 주제 + Wiki 이웃 확장으로 확정됐다.
+    기본값이 도로 2로 내려가면 태그가 하나 모자란 리포트가 조용히 나간다.
+    """
+    monkeypatch.delenv("REPORT_QUERY_EXPANSION_LIMIT", raising=False)
+    captured = _capture_assistant_call(monkeypatch)
+
+    live_sources.collect_live_context(
+        "코스피", "minji", related_keywords=["이웃1", "이웃2", "이웃3", "이웃4"]
+    )
+
+    assert captured["extra_queries"] == ["이웃1", "이웃2", "이웃3"]

@@ -4,6 +4,7 @@ import asyncio
 import json
 
 import httpx
+import pytest
 
 from infrastructure.sources.connectors.api import (
     GdeltNewsProvider,
@@ -11,6 +12,8 @@ from infrastructure.sources.connectors.api import (
     NaverNewsProvider,
     NewsApiProvider,
 )
+from infrastructure.sources.connectors.features import latest
+from infrastructure.sources.connectors.features.latest import LatestProviderError
 
 
 def _transport(payload: dict[str, object]) -> httpx.MockTransport:
@@ -270,3 +273,115 @@ def test_naver_provider_propagates_failure() -> None:
 
     with pytest.raises(LatestProviderError):
         asyncio.run(provider.search(query="AI", limit=5, language="ko"))
+
+
+# ── GDELT 호출 제한 대응 ────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _reset_gdelt_state():
+    """테스트마다 GDELT 간격·쿨다운 상태를 초기화한다.
+
+    상태가 프로세스 전역이라 초기화하지 않으면 앞선 테스트가 남긴 다음 호출
+    시각 때문에 뒤 테스트가 실제로 5초를 잔다.
+    """
+    latest.reset_gdelt_rate_limit_state()
+    yield
+    latest.reset_gdelt_rate_limit_state()
+
+
+def _counting_transport(
+    status_code: int, payload: dict[str, object], calls: list[str]
+) -> httpx.MockTransport:
+    """요청 URL을 기록하면서 지정 상태 코드를 돌려주는 Transport를 만든다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """호출을 기록하고 고정 응답을 반환한다."""
+        calls.append(str(request.url))
+        return httpx.Response(
+            status_code, content=json.dumps(payload).encode(), request=request
+        )
+
+    return httpx.MockTransport(handler)
+
+
+def test_gdelt_429_raises_rate_limited_instead_of_generic_failure() -> None:
+    """429는 일반 실패가 아니라 rate_limited로 구분한다.
+
+    재시도해도 몇 분간 계속 429라(2026-08-10 실측: 5·30·60·120·240초 후 전부 429)
+    "잠시 후 재시도"와 다르게 다뤄야 한다.
+    """
+    calls: list[str] = []
+    provider = GdeltNewsProvider(
+        transport=_counting_transport(429, {"articles": []}, calls)
+    )
+
+    with pytest.raises(LatestProviderError) as caught:
+        asyncio.run(provider.search(query="agent", limit=5, language="en"))
+
+    assert caught.value.error_code == "rate_limited"
+    assert len(calls) == 1
+
+
+def test_gdelt_skips_calls_during_cooldown_after_429() -> None:
+    """429 이후 쿨다운 동안에는 요청을 아예 보내지 않는다.
+
+    재시도해도 몇 분간 계속 429라(실측) 부를수록 GDELT를 더 오래 잃는다.
+    수집 시간을 줄이려는 것이 아니다 — GDELT는 다른 Provider와 동시에 호출돼
+    임계 경로가 아니다(latest.GDELT_MIN_INTERVAL_SECONDS 주석 참고).
+    """
+    calls: list[str] = []
+    provider = GdeltNewsProvider(
+        transport=_counting_transport(429, {"articles": []}, calls)
+    )
+
+    for _ in range(3):
+        with pytest.raises(LatestProviderError) as caught:
+            asyncio.run(provider.search(query="agent", limit=5, language="en"))
+        assert caught.value.error_code == "rate_limited"
+
+    # 첫 호출만 실제로 나가고 나머지는 쿨다운에 막힌다.
+    assert len(calls) == 1
+
+
+def test_gdelt_cooldown_expires_and_allows_calls_again(monkeypatch) -> None:
+    """쿨다운이 끝나면 다시 호출한다 — 영구 차단이 아니다."""
+    calls: list[str] = []
+    monkeypatch.setattr(latest, "GDELT_COOLDOWN_SECONDS", 0.0)
+    monkeypatch.setattr(latest, "GDELT_MIN_INTERVAL_SECONDS", 0.0)
+    provider = GdeltNewsProvider(
+        transport=_counting_transport(429, {"articles": []}, calls)
+    )
+
+    for _ in range(2):
+        with pytest.raises(LatestProviderError):
+            asyncio.run(provider.search(query="agent", limit=5, language="en"))
+
+    assert len(calls) == 2
+
+
+def test_gdelt_spaces_successive_calls_by_the_minimum_interval(monkeypatch) -> None:
+    """연속 호출 사이에 최소 간격을 둔다.
+
+    429 본문이 요구하는 조건이다 — "Please limit requests to one every 5 seconds".
+    간격을 지켜 429를 애초에 만들지 않는 것이 쿨다운보다 앞선 방어선이다.
+    """
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        """실제로 자지 않고 대기 시간만 기록한다."""
+        slept.append(seconds)
+
+    monkeypatch.setattr(latest, "GDELT_MIN_INTERVAL_SECONDS", 5.0)
+    monkeypatch.setattr(latest.asyncio, "sleep", fake_sleep)
+    calls: list[str] = []
+    provider = GdeltNewsProvider(
+        transport=_counting_transport(200, {"articles": []}, calls)
+    )
+
+    asyncio.run(provider.search(query="agent", limit=5, language="en"))
+    asyncio.run(provider.search(query="agent", limit=5, language="en"))
+
+    assert len(calls) == 2
+    # 첫 호출은 기다리지 않고, 두 번째만 간격을 채운다.
+    assert slept and slept[-1] > 0

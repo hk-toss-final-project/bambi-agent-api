@@ -57,6 +57,25 @@ MIN_DOC_CHARS: int = _env_int("MIN_DOC_CHARS", 15)
 # 주간 트렌드 폴백에서 최근 며칠 수집분을 볼지.
 WEEKLY_TREND_DAYS: int = _env_int("WEEKLY_TREND_DAYS", 7)
 
+# 검색어 하나의 소스(뉴스·YouTube·Reddit)를 동시에 부를 최대 수.
+#
+# **소스 축만 넓힌다. 검색어 축은 순차로 둔다.** 셋은 서로 다른 서비스라 동시에
+# 불러도 Provider별 요청률이 오르지 않는다(뉴스 1묶음·YouTube 1건·Reddit 1건).
+# 반면 검색어 여러 개를 동시에 던지면 같은 Naver·GDELT에 요청이 배로 몰린다 —
+# 과거 GDELT 429가 "연속 호출 rate limit"이었으므로 그 축은 건드리지 않는다.
+#
+# 뉴스 소스는 내부에서 이미 Provider 3개를 동시 호출한다(feeds.fetch_provider_entries).
+# 여기서 넓히는 것은 그 바깥의 소스 축이다.
+#
+# **효과는 15%다. 그 이상을 기대하지 마라.** 2026-08-10 실측(검색어 3개, 순서
+# 교차 2라운드): 순차 110.5초 → 병렬 93.5초. 병렬 시간은 max(뉴스, YouTube,
+# Reddit)인데 뉴스가 전체의 85% 가까이를 차지해 나머지 둘을 겹쳐도 뉴스만큼은
+# 반드시 기다린다. 수집을 더 줄이려면 소스 축이 아니라 뉴스 안(Provider 지연·
+# GDELT 429)을 봐야 한다.
+#
+# 1로 두면 순차 실행(기존 동작)으로 돌아간다 — 장애 시 되돌리는 스위치다.
+SOURCE_COLLECT_CONCURRENCY: int = _env_int("SOURCE_COLLECT_CONCURRENCY", 3)
+
 # ── 저장 경로 ────────────────────────────────────────────────────────────
 # 이력 파일(수집·보고·시청·기사)을 저장할 디렉터리. PostgreSQL을 쓸 수 없을 때의
 # 폴백 경로다(저장소 선택은 storage.py 참고). ASSISTANT_DATA_DIR 환경변수로 옮길 수 있다.
@@ -80,6 +99,18 @@ def collect_window_days() -> int:
     값이 갱신되지 않으므로, 외부에는 이 함수로 노출한다.
     """
     return COLLECT_WINDOW_DAYS
+
+
+def source_collect_concurrency() -> int:
+    """소스 축 동시 수집 수를 반환한다. 1 미만이면 1(순차)로 맞춘다.
+
+    collect_window_days와 같은 이유로 상수가 아니라 함수로 노출한다 —
+    환경변수 오버라이드가 호출자 쪽에 반영되게 하기 위함이다.
+
+    Returns:
+        동시에 부를 소스 수. 1이면 기존 순차 실행.
+    """
+    return max(1, SOURCE_COLLECT_CONCURRENCY)
 
 
 def collect_window_hours(intent: str = "news") -> float:

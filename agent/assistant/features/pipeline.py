@@ -18,7 +18,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 from agent.assistant.features import (
@@ -192,6 +193,19 @@ def collect_documents(
     죽었나"를 SOURCE_COUNT(3)와 비교하므로, 검색어 수만큼 부풀면 멀쩡한 실행이
     PROVIDER_FAILURE로 오판된다.
 
+    **소스 셋은 동시에 부르고, 검색어는 순차로 돈다.** 소스 축은 서로 다른
+    서비스라 동시에 불러도 Provider별 요청률이 오르지 않지만, 검색어 축까지
+    넓히면 같은 Naver·GDELT에 요청이 배로 몰린다(과거 GDELT 429가 "연속 호출
+    rate limit"이었다). 그래서 검색어 축은 순차로 둔다.
+
+    ⚠️ **이 동시 실행으로 "검색어 수 비례"가 사라지지는 않는다.** 2026-08-10
+    실측에서 검색어 3개는 1개의 2.96배(31.1초 → 92.0초)였고, 병렬화가 준 것은
+    15%뿐이다(110.5초 → 93.5초). 상세는 config.SOURCE_COLLECT_CONCURRENCY 주석.
+
+    동시 실행은 결과 순서를 바꾸지 않는다. `ThreadPoolExecutor.map`이 입력 순서
+    그대로 돌려주므로 중복 제거의 "먼저 만난 검색어·소스가 이긴다"는 규칙이
+    순차 실행과 동일하게 유지된다.
+
     Returns:
         (문서 목록, 실패 목록[{source, error}])
     """
@@ -199,21 +213,18 @@ def collect_documents(
     failures: list[dict[str, str]] = []
     seen_keys: set[str] = set()
     failed_sources: set[str] = set()
+    concurrency = config.source_collect_concurrency()
     for query in queries:
         collectors = (
             ("뉴스", lambda q=query: _news_documents(q, now)),
             ("YouTube", lambda q=query: _youtube_documents(q, now, window_hours)),
             ("Reddit", lambda q=query: _reddit_documents(q, now, window_hours)),
         )
-        for label, collector in collectors:
-            try:
-                collected = collector()
-            except Exception as error:
+        for label, collected, error in _collect_sources(collectors, concurrency):
+            if error:
                 if label not in failed_sources:
                     failed_sources.add(label)
-                    failures.append(
-                        {"source": label, "error": f"{type(error).__name__}: {error}"}
-                    )
+                    failures.append({"source": label, "error": error})
                 continue
             for doc in collected:
                 key = str(doc.get("url_key") or doc.get("url") or "").strip()
@@ -223,6 +234,51 @@ def collect_documents(
                     seen_keys.add(key)
                 docs.append(doc)
     return docs, failures
+
+
+def _collect_one_source(
+    label: str, collector: Callable[[], list[dict[str, object]]]
+) -> tuple[str, list[dict[str, object]], str]:
+    """소스 하나를 수집하고 실패를 예외 대신 값으로 돌려준다.
+
+    동시 실행에서 예외를 그대로 올리면 다른 소스의 결과까지 잃는다. 호출자가
+    소스별로 격리 처리할 수 있도록 (라벨, 문서, 오류문구) 형태로 평탄화한다.
+
+    Args:
+        label: 소스 표시 이름 (뉴스·YouTube·Reddit)
+        collector: 인자 없이 문서 목록을 돌려주는 수집 함수
+
+    Returns:
+        (라벨, 수집 문서, 오류 문구). 성공이면 오류 문구가 빈 문자열이다.
+    """
+    try:
+        return label, list(collector()), ""
+    except Exception as error:  # noqa: BLE001 — 소스 실패를 값으로 옮기는 경계다
+        return label, [], f"{type(error).__name__}: {error}"
+
+
+def _collect_sources(
+    collectors: Sequence[tuple[str, Callable[[], list[dict[str, object]]]]],
+    concurrency: int,
+) -> list[tuple[str, list[dict[str, object]], str]]:
+    """소스 수집기들을 동시에 실행하고 입력 순서대로 결과를 돌려준다.
+
+    concurrency가 1이면 스레드를 만들지 않고 그대로 순차 실행한다 — 되돌리는
+    스위치가 실제로 예전 실행 경로를 타게 하기 위함이다.
+
+    Args:
+        collectors: (라벨, 수집 함수) 목록
+        concurrency: 동시에 실행할 최대 수
+
+    Returns:
+        입력과 같은 순서의 (라벨, 문서, 오류 문구) 목록
+    """
+    if concurrency <= 1 or len(collectors) <= 1:
+        return [_collect_one_source(label, run) for label, run in collectors]
+    with ThreadPoolExecutor(max_workers=min(concurrency, len(collectors))) as pool:
+        return list(
+            pool.map(lambda item: _collect_one_source(*item), collectors)
+        )
 
 
 def _resolve_dates(
