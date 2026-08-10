@@ -1,0 +1,20 @@
+{"topic": "로또", "expected": "news", "note": "회차마다 갱신. concept으로 저장돼 90일 통과했던 실제 사고"}
+{"topic": "반도체", "expected": "news", "note": "개념형 명사지만 사용자는 시황을 원함"}
+{"topic": "환율", "expected": "news", "note": "매일 바뀜"}
+{"topic": "코스피", "expected": "news", "note": "매일 바뀜"}
+{"topic": "프로야구", "expected": "news", "note": "시즌·경기 결과"}
+{"topic": "수면", "expected": "news", "note": "user 57 위키에 concept으로 저장돼 있던 주제"}
+{"topic": "삼성전자", "expected": "news", "note": "기업"}
+{"topic": "도널드 트럼프", "expected": "news", "note": "인물"}
+{"topic": "전기차 보조금", "expected": "news", "note": "정책"}
+{"topic": "인덱스 튜닝", "expected": "evergreen", "note": "방법론"}
+{"topic": "제텔카스텐", "expected": "evergreen", "note": "방법론"}
+{"topic": "도메인 주도 설계", "expected": "evergreen", "note": "설계 원칙"}
+{"topic": "이진 탐색", "expected": "evergreen", "note": "알고리즘"}
+{"topic": "정다각형 작도", "expected": "evergreen", "note": "수학"}
+{"topic": "LLM 파인튜닝", "expected": "news", "note": "기법이지만 동향이 빠르게 바뀜"}
+{"topic": "쿠버네티스", "expected": "evergreen", "note": "플랫폼 개념. 기초는 오래 유효"}
+{"topic": "DDD(Domain-Driven Design)", "expected": "evergreen", "note": "괄호 표기"}
+{"topic": "Anthropic", "expected": "news", "note": "조직"}
+{"topic": "서킷 브레이커", "expected": "evergreen", "note": "증시 제도 개념. 사건이 아니라 제도"}
+{"topic": "2025 정규시즌", "expected": "news", "note": "특정 시즌"}
