@@ -20,10 +20,19 @@ from mcp_server.server.api import (
     McpOAuthTokenVerifier,
 )
 from mcp_server.tools.api import (
+    ClaudeConceptInput,
+    ClaudeEntityInput,
+    ClaudeRelationInput,
+    RebuildTriggerOutput,
+    SourceAddOutput,
+    StructuredEntrySaveOutput,
     WikiFetchOutput,
     WikiSearchOutput,
     mcptool_001,
     mcptool_002,
+    mcptool_003,
+    mcptool_013,
+    mcptool_014,
 )
 
 
@@ -72,7 +81,7 @@ def build_mcp_server(settings: Settings, container: AppContainer) -> MCPServer:
         limit: Annotated[int, Field(ge=1, le=20)] = 10,
     ) -> WikiSearchOutput:
         """검색어와 일치하는 개인 Wiki 문서 요약을 반환한다."""
-        user_id = _authenticated_user_id()
+        user_id = _authenticated_user_id("wiki:read")
         reader = _wiki_reader(container)
         return await mcptool_001(
             reader,
@@ -91,9 +100,91 @@ def build_mcp_server(settings: Settings, container: AppContainer) -> MCPServer:
         ctx: Context,
     ) -> WikiFetchOutput:
         """인증 사용자 Namespace의 Wiki 문서 Markdown을 반환한다."""
-        user_id = _authenticated_user_id()
+        user_id = _authenticated_user_id("wiki:read")
         reader = _wiki_reader(container)
         return await mcptool_002(reader, user_id=user_id, document_id=id)
+
+    @server.tool(
+        name="add_source",
+        title="개인 LLM Wiki Source 추가",
+        description=(
+            "API Key 소유자의 개인 Wiki에 원본을 저장합니다. Entity·Concept은 "
+            "만들지 않으므로, 반영하려면 이어서 구조화 문서를 저장하거나 "
+            "재빌드를 요청하세요."
+        ),
+    )
+    async def add_source(
+        title: Annotated[str, Field(min_length=1, max_length=200)],
+        content: Annotated[str, Field(min_length=1, max_length=200_000)],
+        ctx: Context,
+        tags: Annotated[list[str] | None, Field(max_length=20)] = None,
+        memo: Annotated[str | None, Field(max_length=2000)] = None,
+    ) -> SourceAddOutput:
+        """인증 사용자 Namespace에 원본을 Build Job 없이 저장한다."""
+        user_id = _authenticated_user_id("wiki:write")
+        writer = _wiki_writer(container)
+        return await mcptool_003(
+            writer,
+            user_id=user_id,
+            title=title,
+            content=content,
+            tags=tags or [],
+            memo=memo,
+            occurred_at=None,
+        )
+
+    @server.tool(
+        name="save_structured_entry",
+        title="개인 LLM Wiki 구조화 문서 저장",
+        description=(
+            "add_source로 저장한 원본을 근거로, Claude가 분류한 entity/concept과 "
+            "관계를 검증 후 개인 Wiki에 반영합니다. 서버 LLM 분류 호출 없이 "
+            "기존 Build 파이프라인의 중복 판정·품질 게이트를 그대로 통과해야 합니다."
+        ),
+    )
+    async def save_structured_entry(
+        source_document_version_id: Annotated[str, Field(min_length=1)],
+        ctx: Context,
+        entities: Annotated[list[ClaudeEntityInput] | None, Field()] = None,
+        concepts: Annotated[list[ClaudeConceptInput] | None, Field()] = None,
+        relations: Annotated[list[ClaudeRelationInput] | None, Field()] = None,
+        source_summary: Annotated[str, Field(max_length=2000)] = "",
+    ) -> StructuredEntrySaveOutput:
+        """인증 사용자 Namespace에 Claude 분류 결과를 검증 후 저장한다."""
+        user_id = _authenticated_user_id("wiki:write")
+        writer = _wiki_writer(container)
+        return await mcptool_013(
+            writer,
+            user_id=user_id,
+            source_document_version_id=source_document_version_id,
+            entities=entities or [],
+            concepts=concepts or [],
+            relations=relations or [],
+            source_summary=source_summary,
+        )
+
+    @server.tool(
+        name="trigger_rebuild",
+        title="개인 LLM Wiki 재빌드 요청",
+        description=(
+            "add_source로 저장한 원본을 서버 LLM 파이프라인으로 재구성하도록 "
+            "요청합니다. Claude가 직접 구조화 문서를 저장하지 못했을 때 쓰는 "
+            "폴백 경로입니다."
+        ),
+    )
+    async def trigger_rebuild(
+        source_document_version_id: Annotated[str, Field(min_length=1)],
+        ctx: Context,
+    ) -> RebuildTriggerOutput:
+        """인증 사용자 Namespace의 원본을 서버 LLM 재빌드 Queue에 등록한다."""
+        user_id = _authenticated_user_id("wiki:write")
+        trigger = _wiki_writer(container)
+        return await mcptool_014(
+            trigger,
+            user_id=user_id,
+            source_document_version_id=source_document_version_id,
+            request_id=None,
+        )
 
     return server
 
@@ -121,16 +212,23 @@ def _transport_security(settings: Settings) -> TransportSecuritySettings:
     )
 
 
-def _authenticated_user_id() -> str:
-    """MCP SDK 인증 Context에서 Personal Wiki 사용자 ID를 반환한다."""
+def _authenticated_user_id(required_scope: str) -> str:
+    """MCP SDK 인증 Context에서 지정한 Scope를 가진 Personal Wiki 사용자 ID를 반환한다."""
     token = get_access_token()
-    if token is None or token.subject is None or "wiki:read" not in token.scopes:
+    if token is None or token.subject is None or required_scope not in token.scopes:
         raise PermissionError("Personal Wiki 인증 정보가 없습니다.")
     return token.subject
 
 
 def _wiki_reader(container: AppContainer) -> object:
-    """MCP Tool이 사용할 Personal Wiki 저장소를 반환한다."""
+    """MCP Tool이 사용할 Personal Wiki 읽기 저장소를 반환한다."""
+    if container.wiki_graph_repository is None:
+        raise RuntimeError("Personal Wiki 저장소가 준비되지 않았습니다.")
+    return container.wiki_graph_repository
+
+
+def _wiki_writer(container: AppContainer) -> object:
+    """MCP Tool이 사용할 Personal Wiki 쓰기 저장소를 반환한다."""
     if container.wiki_graph_repository is None:
         raise RuntimeError("Personal Wiki 저장소가 준비되지 않았습니다.")
     return container.wiki_graph_repository

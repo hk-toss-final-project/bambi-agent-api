@@ -7,12 +7,14 @@ import pytest
 
 from infrastructure.persistence.features.jobs import (
     ClaimedAgentJob,
+    CompletedAgentJobAnchor,
     EnqueuedCollectionRunJob,
     EnqueuedWikiBuildJob,
     claim_agent_job_by_id,
     claim_personal_wiki_jobs,
     claim_runnable_agent_jobs,
     complete_agent_job,
+    create_completed_agent_job,
     defer_user_wiki_build_jobs,
     enqueue_global_collection_run_job,
     enqueue_personal_wiki_build_job,
@@ -270,6 +272,32 @@ def test_enqueue_personal_wiki_build_job_creates_queued_job() -> None:
     event_sql, event_params = connection.executed[1]
     assert "agent.wiki_source_events" in event_sql
     assert event_params == ("job-1", "event-1")
+
+
+def test_create_completed_agent_job_inserts_already_completed_row() -> None:
+    """즉시 완료 Job이 queued 상태 없이 바로 completed로 저장되는지 검증한다."""
+    connection = _FakeConnection([[{"id": "job-mcp-write-1"}]])
+
+    anchor = asyncio.run(
+        create_completed_agent_job(
+            connection,  # type: ignore[arg-type]
+            feature_id="WBA-018",
+            job_type="personal_wiki_mcp_write",
+            user_id="user-1",
+            payload={"source_document_version_id": "source-version-1"},
+            request_id=None,
+        )
+    )
+
+    assert anchor == CompletedAgentJobAnchor(job_id="job-mcp-write-1")
+    assert len(connection.executed) == 1
+    insert_sql, insert_params = connection.executed[0]
+    assert "'completed'" in insert_sql
+    assert "'queued'" not in insert_sql
+    assert insert_params is not None
+    assert insert_params[0] == "WBA-018"
+    assert insert_params[1] == "personal_wiki_mcp_write"
+    assert insert_params[2] == "user-1"
 
 
 def test_enqueue_personal_wiki_build_job_reuses_existing_job() -> None:

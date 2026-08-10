@@ -15,6 +15,7 @@ from agent.wiki_builder.models import (
     WikiNodeDisposition,
     WikiRelationClassification,
 )
+from infrastructure.persistence.features.jobs import CompletedAgentJobAnchor
 from infrastructure.persistence.features.personal_wiki import (
     PersistedWikiBuild,
     PersistedWikiDocument,
@@ -417,6 +418,124 @@ def test_rebuild_full_wiki_stages_all_llm_work_before_atomic_replacement(
     assert result.superseded_document_count == 5
     assert result.quality.passed is True
     assert result.embedding_count == 2
+
+
+def test_wba_018_persists_claude_classification_without_source_llm_call(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Claude 분류 결과가 원문 분류·관계 Linker LLM 호출 없이 저장되는지 검증한다."""
+    connection = _FakeConnection()
+    captured: dict[str, Any] = {}
+
+    async def fake_scope(_connection: object, *, user_id: str) -> None:
+        """RLS Scope 설정 호출을 기록한다."""
+        captured.setdefault("scopes", []).append(user_id)
+
+    async def fake_source(_connection: object, **kwargs: object) -> UserSourceDocumentForAgent:
+        """고정된 클리핑 원본을 반환한다."""
+        return _source()
+
+    async def fake_existing(_connection: object, **kwargs: object) -> list[object]:
+        """빈 기존 Wiki 목록을 반환한다."""
+        return []
+
+    async def fake_job(_connection: object, **kwargs: object) -> CompletedAgentJobAnchor:
+        """즉시 완료 처리된 Job 식별자를 기록하고 반환한다."""
+        captured["job_kwargs"] = kwargs
+        return CompletedAgentJobAnchor(job_id="job-mcp-write-1")
+
+    async def fake_persist(_connection: object, **kwargs: object) -> PersistedWikiBuild:
+        """전달된 Job ID와 계획을 기록하고 고정된 저장 결과를 반환한다."""
+        captured["persist_job_id"] = kwargs["job_id"]
+        captured["plan"] = kwargs["plan"]
+        return PersistedWikiBuild(
+            wiki_version_id="wiki-claude-1",
+            wiki_version=1,
+            affected_documents=[
+                PersistedWikiDocument(
+                    document_id="doc-1",
+                    document_version_id="version-1",
+                    document_kind="entity",
+                    document_key="obsidian",
+                    file_path="entities/obsidian.md",
+                    version=1,
+                    action="create",
+                )
+            ],
+            chunk_count=1,
+        )
+
+    async def fake_embedding(_connection: object, **kwargs: object) -> int:
+        """재임베딩 호출 인자를 기록한다."""
+        captured["embedding_kwargs"] = kwargs
+        return 1
+
+    monkeypatch.setattr(orchestration, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(
+        orchestration, "get_user_source_document_version_for_agent", fake_source
+    )
+    monkeypatch.setattr(orchestration, "list_existing_wiki_entries", fake_existing)
+    monkeypatch.setattr(orchestration, "list_existing_wiki_relations", fake_existing)
+    monkeypatch.setattr(orchestration, "create_completed_agent_job", fake_job)
+    monkeypatch.setattr(orchestration, "persist_wiki_build", fake_persist)
+    monkeypatch.setattr(orchestration, "wba_011", fake_embedding)
+
+    classification = WikiClassification(
+        source_summary="Claude가 요약한 내용",
+        entities=[
+            EntityClassification(
+                name="Obsidian",
+                subtype="product",
+                description="Claude가 정리한 설명",
+            )
+        ],
+        concepts=[
+            ConceptClassification(
+                title="PKM",
+                subtype="method",
+                definition="Claude가 정리한 정의",
+            )
+        ],
+    )
+
+    persisted, quality = asyncio.run(
+        orchestration.wba_018(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            source_document_version_id="source-version-1",
+            classification=classification,
+        )
+    )
+
+    assert persisted.wiki_version_id == "wiki-claude-1"
+    assert quality.passed is True
+    assert captured["persist_job_id"] == "job-mcp-write-1"
+    assert captured["job_kwargs"]["feature_id"] == "WBA-018"
+    assert captured["job_kwargs"]["job_type"] == "personal_wiki_mcp_write"
+    assert captured["plan"].entities[0].document_key == "obsidian"
+    assert captured["plan"].concepts[0].document_key == "pkm"
+    assert captured["embedding_kwargs"]["document_version_ids"] == ["version-1"]
+    assert connection.transaction_count == 2
+
+
+def test_wba_018_rejects_missing_source_document_version_id() -> None:
+    """source_document_version_id가 비어 있으면 저장을 시도하지 않고 거부한다."""
+    connection = _FakeConnection()
+
+    try:
+        asyncio.run(
+            orchestration.wba_018(
+                connection,  # type: ignore[arg-type]
+                user_id="user-1",
+                source_document_version_id="",
+                classification=WikiClassification(),
+            )
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("빈 source_document_version_id는 거부되어야 합니다.")
+    assert connection.transaction_count == 0
 
 
 def test_combine_rebuild_results_keeps_only_latest_document_version() -> None:

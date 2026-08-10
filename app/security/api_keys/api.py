@@ -11,6 +11,7 @@ from .features.authorization import (
     key_014,
 )
 from .features.lifecycle import (
+    ALLOWED_API_KEY_SCOPES,
     ApiKeyLifecycleRepository,
     IssuedApiKey,
     key_001,
@@ -25,6 +26,7 @@ from .features.quotas import key_010, key_011, key_012
 from .features.security import GeneratedApiKey, key_008, parse_api_key_prefix
 
 __all__ = [
+    "ALLOWED_API_KEY_SCOPES",
     "key_001",
     "key_002",
     "key_003",

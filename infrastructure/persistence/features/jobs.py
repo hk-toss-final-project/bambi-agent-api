@@ -4,9 +4,11 @@ Personal Wiki Worker가 PostgreSQL Job을 Lease로 점유하고, 각 시도의
 결과와 최종 Job 상태를 멱등적으로 기록하는 DB-026 구현이다.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
@@ -15,6 +17,65 @@ from domain.jobs.api import job_001, job_006, job_010
 from domain.personal_wiki.source_events.api import wse_013
 
 type DictRow = dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class CompletedAgentJobAnchor:
+    """Queue를 거치지 않고 즉시 완료 처리된 Agent Job의 식별자."""
+
+    job_id: str
+
+
+async def create_completed_agent_job(
+    connection: AsyncConnection[DictRow],
+    *,
+    feature_id: str,
+    job_type: str,
+    user_id: str,
+    payload: Mapping[str, object],
+    request_id: str | None,
+) -> CompletedAgentJobAnchor:
+    """이미 동기로 끝난 처리가 FK(built_by_job_id 등)를 남기도록 Job Row를 만든다.
+
+    `status`를 처음부터 `completed`로 저장하므로 Queue 조회(`status = 'queued'`)는
+    이 Row를 절대 집어가지 않는다. MCP Write처럼 Worker Queue를 거치지 않고
+    바로 처리를 끝낸 경로에서만 사용한다.
+    """
+    creation = await job_001(
+        feature_id=feature_id,
+        job_type=job_type,
+        user_id=user_id,
+        idempotency_parts=[job_type, str(uuid4())],
+        payload=dict(payload),
+        request_id=request_id,
+    )
+    cursor = await connection.execute(
+        """
+        INSERT INTO agent.agent_jobs (
+            feature_id,
+            job_type,
+            user_id,
+            idempotency_key,
+            status,
+            progress,
+            payload,
+            retryable,
+            request_id,
+            completed_at
+        ) VALUES (%s, %s, %s, %s, 'completed', 100, %s, false, %s, clock_timestamp())
+        RETURNING id
+        """,
+        (
+            creation.feature_id,
+            creation.job_type,
+            creation.user_id,
+            creation.idempotency_key,
+            Jsonb(creation.payload),
+            creation.request_id,
+        ),
+    )
+    row = await cursor.fetchone()
+    return CompletedAgentJobAnchor(job_id=str(row["id"]))
 
 
 @dataclass(frozen=True, slots=True)

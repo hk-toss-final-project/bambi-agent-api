@@ -11,6 +11,10 @@ class McpApiKeyCreateRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=64, description="사용자가 구분할 Key 이름")
     expires_at: datetime | None = Field(default=None, description="선택 만료 시각")
+    enable_write: bool = Field(
+        default=False,
+        description="Personal Wiki 쓰기(wiki:write) Scope도 함께 부여할지 여부",
+    )
 
     @field_validator("name")
     @classmethod

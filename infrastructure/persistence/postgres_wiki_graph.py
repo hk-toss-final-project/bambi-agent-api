@@ -13,13 +13,17 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
-from shared.wiki_models import InterestCandidate
+from shared.wiki_models import InterestCandidate, WikiClassification
+from agent.wiki_builder.api import wba_018
+from domain.personal_wiki.source_events.api import wse_010
 from infrastructure.persistence.api import (
     delete_wiki_document_and_record_event,
+    enqueue_wiki_rebuild_for_source,
     load_interest_documents_for_user,
     load_recent_feedback_signals_for_user,
     reset_personal_wiki,
     save_interest_profile_for_user,
+    save_mcp_source_submission,
 )
 from infrastructure.sources.connectors.api import LatestArticle
 
@@ -607,6 +611,75 @@ class PostgresWikiGraphRepository:
                 user_id=user_id,
                 request_id=request_id,
             )
+
+    async def add_source(
+        self,
+        user_id: str,
+        *,
+        title: str,
+        content: str,
+        tags: Sequence[str],
+        memo: str | None,
+        occurred_at: datetime | None,
+    ) -> Mapping[str, object]:
+        """MCP Write 도구로 받은 원본을 Build Job 없이 저장만 한다."""
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await self._set_user_scope(connection, user_id=user_id)
+                persisted = await save_mcp_source_submission(
+                    connection,
+                    user_id=user_id,
+                    title=title,
+                    content=content,
+                    tags=list(tags),
+                    memo=memo,
+                    occurred_at=occurred_at,
+                )
+        return {
+            "source_document_id": persisted.source_document_id,
+            "source_document_version_id": persisted.source_document_version_id,
+            "source_version": persisted.source_version,
+        }
+
+    async def save_structured_entry(
+        self,
+        user_id: str,
+        *,
+        source_document_version_id: str,
+        classification: WikiClassification,
+        model: str,
+    ) -> Mapping[str, object]:
+        """Claude가 MCP로 보낸 분류 결과를 기존 Build 파이프라인으로 검증·저장한다."""
+        async with self._pool.connection() as connection:
+            persisted, quality = await wba_018(
+                connection,
+                user_id=user_id,
+                source_document_version_id=source_document_version_id,
+                classification=classification,
+                model=model,
+            )
+        return {
+            "wiki_version_id": persisted.wiki_version_id,
+            "affected_document_count": len(persisted.affected_documents),
+            "quality_passed": quality.passed,
+            "quality_warning_count": int(quality.metrics.get("warning_count", 0)),
+        }
+
+    async def trigger_rebuild(
+        self, user_id: str, *, source_document_version_id: str, request_id: str | None
+    ) -> Mapping[str, object]:
+        """저장된 원본 Version을 서버 LLM 파이프라인으로 재구성하도록 Job을 등록한다."""
+        request = await wse_010(source_document_version_id)
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await self._set_user_scope(connection, user_id=user_id)
+                enqueued = await enqueue_wiki_rebuild_for_source(
+                    connection,
+                    user_id=user_id,
+                    source_document_version_id=request.source_document_version_id,
+                    request_id=request_id,
+                )
+        return {"job_id": enqueued.job_id, "job_created": enqueued.created}
 
     async def list_interests(self, user_id: str) -> Mapping[str, object] | None:
         """사용자의 활성 관심 Profile과 Topic·근거 문서 목록을 조회한다."""

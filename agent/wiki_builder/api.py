@@ -6,9 +6,11 @@
 from .features.orchestration import (
     FullWikiRebuildResult,
     build_incremental_wiki,
+    persist_claude_authored_wiki_entry,
     rebuild_full_wiki,
     wba_001,
     wba_002,
+    wba_018,
 )
 from .features.documents import wba_003, wba_004, wba_005
 from .features.interests import wba_006, wba_007
@@ -95,8 +97,10 @@ __all__ = [
     "wba_015",
     "wba_016",
     "wba_017",
+    "wba_018",
     "FullWikiRebuildResult",
     "build_incremental_wiki",
+    "persist_claude_authored_wiki_entry",
     "rebuild_full_wiki",
     "generate_relation_query_embeddings",
     "generate_wiki_embeddings",

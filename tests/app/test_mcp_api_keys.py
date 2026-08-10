@@ -46,6 +46,18 @@ def test_mcp_api_key_create_list_and_revoke_routes() -> None:
     assert revoked.json()["status"] == "revoked"
 
 
+def test_mcp_api_key_create_can_request_write_scope() -> None:
+    """enable_write 요청 시 발급된 Key에 wiki:write Scope가 포함된다."""
+    with _client() as client:
+        created = client.post(
+            "/internal/v1/users/42/mcp-api-keys",
+            json={"name": "Claude Write", "enable_write": True},
+        )
+
+    assert created.status_code == 201
+    assert created.json()["scopes"] == ["wiki:read", "wiki:write"]
+
+
 def test_mcp_api_key_rejects_blank_name_and_past_expiration() -> None:
     """공백 이름과 과거 만료 시각을 요청 검증 단계에서 거부한다."""
     with _client() as client:

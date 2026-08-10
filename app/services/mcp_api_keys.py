@@ -31,13 +31,15 @@ class McpApiKeyService:
         *,
         request_id: str,
     ) -> McpApiKeyCreateResponse:
-        """사용자 Wiki 읽기 전용 MCP API Key를 발급한다."""
+        """사용자 Wiki MCP API Key를 발급한다. 요청 시 쓰기 Scope도 함께 부여한다."""
+        scopes = ("wiki:read", "wiki:write") if payload.enable_write else None
         issued = await key_001(
             self._repository,
             principal_id=user_id,
             name=payload.name,
             expires_at=payload.expires_at,
             request_id=request_id,
+            scopes=scopes,
         )
         response = self._response(issued.record)
         return McpApiKeyCreateResponse(

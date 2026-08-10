@@ -117,3 +117,39 @@ async def _assert_key_authentication_rejects_invalid_keys() -> None:
         request_id="request-3",
     )
     assert await key_014(repository, raw_key=issued.raw_key, now=now) is None
+
+
+def test_key_issue_can_grant_write_scope_and_rejects_unknown_scope() -> None:
+    """wiki:write 요청 시 wiki:read를 함께 부여하고, 허용 밖 Scope는 거부한다."""
+    asyncio.run(_assert_key_issue_scope_handling())
+
+
+async def _assert_key_issue_scope_handling() -> None:
+    """비동기 Scope 정규화·검증 시나리오를 실행한다."""
+    repository = _FakeApiKeyRepository()
+    now = datetime(2026, 8, 6, tzinfo=UTC)
+
+    write_issued = await key_001(
+        repository,
+        principal_id="42",
+        name="Claude Write",
+        expires_at=now + timedelta(days=90),
+        request_id="request-4",
+        scopes=("wiki:write",),
+    )
+    write_record = repository.records[write_issued.record["key_prefix"]]
+    assert write_record["scopes"] == ("wiki:read", "wiki:write")
+
+    try:
+        await key_001(
+            repository,
+            principal_id="42",
+            name="Bad Scope",
+            expires_at=now + timedelta(days=90),
+            request_id="request-5",
+            scopes=("wiki:delete",),
+        )
+        raised = False
+    except ValueError:
+        raised = True
+    assert raised

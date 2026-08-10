@@ -4,11 +4,22 @@
 """
 
 from .features.personal_wiki import (
+    ClaudeConceptInput,
+    ClaudeEntityInput,
+    ClaudeRelationInput,
+    PersonalWikiMcpEntryWriter,
+    PersonalWikiMcpRebuildTrigger,
+    PersonalWikiMcpWriter,
+    RebuildTriggerOutput,
+    SourceAddOutput,
+    StructuredEntrySaveOutput,
     WikiFetchOutput,
     WikiSearchOutput,
     mcptool_001,
     mcptool_002,
     mcptool_003,
+    mcptool_013,
+    mcptool_014,
 )
 from .features.global_source import mcptool_004, mcptool_011
 from .features.content import (
@@ -34,6 +45,17 @@ __all__ = [
     "mcptool_009",
     "mcptool_010",
     "mcptool_012",
+    "mcptool_013",
+    "mcptool_014",
     "WikiFetchOutput",
     "WikiSearchOutput",
+    "SourceAddOutput",
+    "PersonalWikiMcpWriter",
+    "PersonalWikiMcpEntryWriter",
+    "PersonalWikiMcpRebuildTrigger",
+    "ClaudeEntityInput",
+    "ClaudeConceptInput",
+    "ClaudeRelationInput",
+    "StructuredEntrySaveOutput",
+    "RebuildTriggerOutput",
 ]

@@ -71,11 +71,13 @@ from .features.jobs import (
     ClaimAgentJobsCommand,
     ClaimedAgentJob,
     CompleteAgentJobCommand,
+    CompletedAgentJobAnchor,
     EnqueuedCollectionRunJob,
     EnqueuedWikiBuildJob,
     FailAgentJobCommand,
     StoredAgentJob,
     claim_agent_job_by_id,
+    create_completed_agent_job,
     claim_personal_wiki_jobs,
     claim_runnable_agent_jobs,
     complete_agent_job,
@@ -92,11 +94,14 @@ from .features.jobs import (
 )
 from .features.source_ingestion import (
     GeneratedContentNotFoundError,
+    PersistedMcpSourceSubmission,
     PersistedSourceSubmission,
     db_002,
+    enqueue_wiki_rebuild_for_source,
     register_url_and_enqueue,
     save_content_mark_and_enqueue,
     save_fetched_url_and_enqueue,
+    save_mcp_source_submission,
     save_onboarding_seed_and_enqueue,
     save_web_clipping_and_enqueue,
 )

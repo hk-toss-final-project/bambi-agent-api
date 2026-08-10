@@ -16,13 +16,14 @@ from .features.ingestion import (
     wse_014,
 )
 from .features.deletion import wse_009
-from .features.rebuild import wse_010
+from .features.rebuild import WikiRebuildRequest, wse_010
 from .features.idempotency import wse_011
 from .features.policy import wse_012
 from .features.status import wse_013
 
 __all__ = [
     "OnboardingSeedDocument",
+    "WikiRebuildRequest",
     "wse_001",
     "wse_002",
     "wse_003",

@@ -19,7 +19,7 @@
 > 동작하는지 기준으로 판정했다. 표기: `[x]` 구현 완료, `[x] ⚠️` 핵심 동작은 되지만 제약 있음,
 > `[ ] ❌` 미구현, `[ ] ➖` Agent API 범위 아님(service-worker 책임).
 >
-> **집계: 완료 96 · 부분 6 · 미구현 4 · 범위 외 3 (총 109)**
+> **집계: 완료 101 · 부분 6 · 미구현 4 · 범위 외 3 (총 114)**
 
 ### 내부 API 인증
 
@@ -28,17 +28,20 @@
 
 ### MCP Personal Access Token
 
-- [x] `KEY-001` API Key 발급 — `wiki:read` 고정 Scope의 `bmb_mcp_` Key를 만들고 원문은 최초 응답에서만 노출
+- [x] `KEY-001` API Key 발급 — 기본 `wiki:read` Scope의 `bmb_mcp_` Key를 만들고, 요청 시 `wiki:write`도 함께 부여(항상 `wiki:read`를 동반). 원문은 최초 응답에서만 노출
 - [x] `KEY-002` API Key 조회 — 인증 사용자의 Key 상태·Prefix·사용 시각을 원문과 Hash 없이 조회
 - [x] `KEY-005` API Key 폐기 — 인증 사용자 소유 Key를 멱등하게 영구 폐기
 - [x] `KEY-008` API Key Hash 저장 — SHA-256 Hash와 공개 식별 Prefix만 DB에 저장
-- [x] `KEY-009` API Key Scope 설정 — Personal Wiki 도구는 `wiki:read` Scope만 허용
+- [x] `KEY-009` API Key Scope 설정 — `wiki:read`·`wiki:write` Scope를 검증한다
 - [x] `KEY-014` Personal Wiki 접근 권한 — 검증된 Key의 `principal_id`를 Wiki 사용자 범위로 강제
 - [x] `MCP-003` MCP 인증 — Streamable HTTP 요청의 Bearer API Key를 Agent DB Hash와 검증
-- [x] `MCP-009` MCP Scope 검증 — `wiki:read`가 없는 Key의 Tool 접근 거부
+- [x] `MCP-009` MCP Scope 검증 — 호출한 Tool에 필요한 Scope가 없는 Key의 접근을 거부
 - [x] `MCP-011` MCP 사용자 권한 검증 — Tool 입력으로 user_id를 받지 않고 인증 주체로 Namespace 결정
 - [x] `MCPTOOL-001` Personal Wiki 검색 — 개인 Namespace의 제목·요약·본문 부분 일치, 무관한 최신 문서 fallback 없음
 - [x] `MCPTOOL-002` Personal Wiki 문서 조회 — search가 반환한 ID의 Markdown·출처를 같은 사용자 범위에서 조회
+- [x] `MCPTOOL-003` Personal Wiki Source 추가 — `wiki:write` Scope로 원본을 Build Job 없이 저장만 한다(멱등). Entity·Concept 반영은 별도 저장이나 재빌드 요청이 필요
+- [x] `MCPTOOL-013` Personal Wiki 구조화 문서 저장 — `wiki:write` Scope로 Claude가 분류한 entity/concept/관계를 WBA-018로 검증·저장. 서버 LLM 분류 호출 없이 기존 Build 파이프라인(품질 게이트·중복 판정·재임베딩)을 재사용
+- [x] `MCPTOOL-014` Personal Wiki 재빌드 트리거 — `wiki:write` Scope로 WSE-010을 거쳐 저장된 원본을 기존 `personal_wiki_build` Job·상주 Worker(WORKER-002)로 재구성 요청(폴백 경로, 서버 LLM 비용 발생)
 
 ### Service API 연동
 
@@ -51,6 +54,7 @@
 - [x] `SVC-013` Agent Job 상태 조회
 - [x] `SVC-014` Agent 결과 조회 — 미완료 시 `JOB_RESULT_NOT_READY`
 - [x] `WSE-001` 웹 클리핑 이벤트 수신 — `wiki_source_events` + Frontmatter 필드 저장
+- [x] `WSE-010` Wiki 재구성 요청 수신 — MCP `wiki:write` 경로. 요청 형태만 검증·정규화하고, 실제 Job 등록은 `enqueue_wiki_rebuild_for_source`가 기존 `personal_wiki_build` Job·상주 Worker(WORKER-002)로 위임(멱등)
 - [x] `WSE-011` 이벤트 중복 처리 방지 — `user_id + source_event_id` 식별 및 DB Unique·Upsert 적용
 - [x] `WSE-013` 이벤트 처리 상태 관리 — Claim·완료·실패 시 Source Event 상태 동기화
 - [x] `WSE-014` 온보딩 관심사 시드 수신 — 온보딩 컨텍스트 수신 시 선택 Category·Topic을 시드 Markdown으로 합성해 `onboarding_seed` 원본·Wiki Build Job으로 접수한다. 정식 Topic은 Agent DB의 44개 버전 컨텍스트를 사용하며 `AI·머신러닝` 같은 정식 명칭을 쪼개지 않는다. 사용자 추가 키워드만 taxonomy 별칭→기존 Wiki→서명 캐시→LLM 일반론→결정론 폴백 순으로 해석한다. 선택 변경은 사용자별 단일 활성 Source Head의 다음 Version이며 두 번째 Version부터 Full Rebuild로 이전 시드 전용 노드를 제거한다. 이후 기존 Snapshot·INT-011 경로를 재사용한다. 접수는 컨텍스트 저장과 분리된 best-effort다.
@@ -149,6 +153,7 @@
 - [x] `WBA-011` Wiki 재임베딩 — ⚠️ Incremental Build와 Full Rebuild의 변경 Entity·Concept Chunk를 재임베딩한다. 저장 후 best-effort라 Provider 실패 시 Wiki Build는 유지하며 별도 재시도 Job은 없음
 - [x] `WBA-014` Wiki 품질 검증 — canonical 중복, endpoint·관계 유형, provenance·confidence·review·lifecycle·근거, 고아·모순·과밀 Hub를 결정적으로 검사하고 오류는 저장 전 차단
 - [x] `WBA-015` Wiki 삭제 반영 — delete 이벤트 기록 + 문서 soft-delete + Chunk 검색 제외 (동기·멱등, 2026-07-27 구현. 실행 경로는 삭제 API→Repository이며 wba_015는 커넥션 보유 호출자용 facade. D1 잠정: 재등장 시 기본 부활, tombstone 없음)
+- [x] `WBA-018` Claude 작성 Wiki 항목 저장 — MCP `wiki:write` 경로. 원문 분류·관계 Linker LLM 호출 없이 Claude 분류 결과로 `build_wiki_plan`/`persist_wiki_build`를 그대로 태우고, identity 충돌 해소만 필요 시 최소 LLM 호출. 저장 전 병합 Snapshot 기준 WBA-014 게이트를 통과해야 하며, Worker Queue를 거치지 않으므로 FK용 Agent Job을 `completed` 상태로 직접 생성
 - [x] `JOB-001` Agent Job 생성 — 원본 저장과 같은 Transaction
 - [x] `JOB-002` Agent Job 조회
 - [x] `JOB-006` Agent Job 진행률 관리 — ⚠️ progress 값만 갱신(0→5→100), 단계별(정규화·Chunking·Embedding) 기록 없음
@@ -435,7 +440,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 
 - 내부 호출 주체별 별도 Secret·세부 Scope 권한·요청 서명
 - External Agent API의 생성·번역·추천 기능
-- MCP Server의 생성·수집 도구와 OAuth 인증
+- MCP Server의 나머지 수집 도구(Global Source 검색·수동 수집 등)
 - 번역 및 이미지 생성
 - 별도의 추천 Agent
 - 고급 관심사 Graph

@@ -13,16 +13,31 @@ from psycopg.types.json import Jsonb
 
 from shared.hashing import compute_content_hash
 from infrastructure.persistence.features.jobs import (
+    EnqueuedWikiBuildJob,
     enqueue_personal_wiki_build_job,
     enqueue_url_collection_job,
 )
 from infrastructure.persistence.features.personal_wiki import (
+    get_user_source_document_version_for_agent,
     mark_url_source_event,
     register_user_url_source,
     save_user_url_document_version,
 )
 
 type DictRow = dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class PersistedMcpSourceSubmission:
+    """MCP Write 도구로 저장만 한 원본 Version 식별자.
+
+    Build Job은 등록하지 않는다 — 재빌드는 별도 요청(WSE-010)으로 트리거한다.
+    """
+
+    source_document_id: str
+    source_document_version_id: str
+    source_version: int
+    source_event_row_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -466,6 +481,118 @@ async def save_web_clipping_and_enqueue(
         source_event_row_id=source_event_row_id,
         job_id=enqueued.job_id,
         job_created=enqueued.created,
+    )
+
+
+async def save_mcp_source_submission(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    title: str,
+    content: str,
+    tags: list[str],
+    memo: str | None,
+    occurred_at: datetime | None,
+) -> PersistedMcpSourceSubmission:
+    """MCP Write 도구가 보낸 원본을 Build Job 없이 멱등 저장한다.
+
+    같은 사용자가 같은 본문을 다시 보내면 새 Source Event나 Version을 만들지
+    않는다. Entity·Concept 반영은 이 함수의 책임이 아니며, Claude가 직접
+    구조화 문서를 저장하거나(MCPTOOL-013) 재빌드를 요청(WSE-010)해야 한다.
+    """
+    namespace_key = f"user/{user_id}"
+    content_hash = compute_content_hash(content)
+    source_event_id = f"mcp-write:{content_hash}"
+    event_cursor = await connection.execute(
+        """
+        INSERT INTO agent.wiki_source_events (
+            user_id,
+            source_event_id,
+            source_type,
+            occurred_at,
+            payload,
+            status
+        ) VALUES (
+            %s, %s, 'mcp_submission', COALESCE(%s, clock_timestamp()), %s, 'received'
+        )
+        ON CONFLICT (user_id, source_event_id) DO UPDATE SET
+            payload = EXCLUDED.payload,
+            updated_at = clock_timestamp()
+        RETURNING id
+        """,
+        (
+            user_id,
+            source_event_id,
+            occurred_at,
+            Jsonb(_event_payload(title=title, tags=tags, memo=memo)),
+        ),
+    )
+    event_row = await event_cursor.fetchone()
+    source_event_row_id = str(event_row["id"])
+
+    (
+        source_document_id,
+        source_document_version_id,
+        source_version,
+    ) = await _upsert_user_source_version(
+        connection,
+        user_id=user_id,
+        namespace_key=namespace_key,
+        source_type="mcp_submission",
+        canonical_url=None,
+        source_event_row_id=source_event_row_id,
+        title=title,
+        author=None,
+        published_at=None,
+        clipped_on=None,
+        description=None,
+        tags=tags,
+        content=content,
+        content_hash=content_hash,
+        head_metadata={"ingested_by": "mcp-write-tool"},
+        version_metadata={"origin": "mcp_submission"},
+    )
+    return PersistedMcpSourceSubmission(
+        source_document_id=source_document_id,
+        source_document_version_id=source_document_version_id,
+        source_version=source_version,
+        source_event_row_id=source_event_row_id,
+    )
+
+
+async def enqueue_wiki_rebuild_for_source(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    source_document_version_id: str,
+    request_id: str | None,
+) -> EnqueuedWikiBuildJob:
+    """저장된 원본 Version을 서버 LLM 파이프라인(personal_wiki_build)으로 재구성 요청한다.
+
+    Claude가 구조화 문서를 직접 저장하지 못했을 때(WSE-010)의 폴백 경로다.
+    기존 상주 Worker(WORKER-002)가 그대로 처리하므로 별도 Job 타입을 만들지
+    않는다. 같은 원본·Version을 다시 요청해도 새 Job을 중복 생성하지 않는다.
+    """
+    source = await get_user_source_document_version_for_agent(
+        connection,
+        user_id=user_id,
+        source_document_version_id=source_document_version_id,
+    )
+    if source is None:
+        raise ValueError(
+            f"개인 Wiki 원본 Version을 찾을 수 없습니다: {source_document_version_id}"
+        )
+    if not source.source_event_id:
+        raise ValueError("이 원본에는 재빌드에 필요한 source_event_id가 없습니다.")
+    return await enqueue_personal_wiki_build_job(
+        connection,
+        user_id=user_id,
+        source_document_id=source.source_document_id,
+        source_document_version_id=source.source_document_version_id,
+        source_version=source.version,
+        source_event_id=source.source_event_id,
+        feature_id="MCPTOOL-014",
+        request_id=request_id,
     )
 
 

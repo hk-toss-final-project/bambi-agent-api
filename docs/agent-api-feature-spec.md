@@ -152,6 +152,7 @@
 | WBA-015 | Wiki 삭제 반영 | 삭제된 사용자 원천과 파생 데이터를 제거한다. |
 | WBA-016 | Wiki Build 완료 이벤트 | 개인 Wiki 갱신 완료 사실을 이벤트로 발행한다. |
 | WBA-017 | 외부 데이터 자동 편입 차단 | 자동 수집 자료가 사용자 선택 없이 개인 Wiki에 들어가지 않도록 한다. |
+| WBA-018 | Claude 작성 Wiki 항목 저장 | MCP로 받은 Claude 분류 결과를 기존 Build 파이프라인으로 검증·저장한다. |
 
 ## 10. Global Source 관리
 
@@ -736,6 +737,8 @@ REPORT-004·005·006·009에 전달한다.
 | MCPTOOL-010 | Job 상태 조회 | 비동기 Job의 상태를 조회한다. |
 | MCPTOOL-011 | Global Source 수동 수집 | 권한이 있는 사용자가 Source 수집을 실행한다. |
 | MCPTOOL-012 | Prompt 테스트 | 관리자 권한으로 Prompt를 테스트한다. |
+| MCPTOOL-013 | Personal Wiki 구조화 문서 저장 | Claude가 분류한 entity/concept 항목을 검증 후 개인 Wiki에 저장한다. |
+| MCPTOOL-014 | Personal Wiki 재빌드 트리거 | 저장된 Source를 서버 LLM 파이프라인으로 재구성하도록 요청한다. |
 
 ## 39. Agent DB
 

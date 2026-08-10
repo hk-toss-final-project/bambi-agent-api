@@ -12,6 +12,8 @@ from .security import GeneratedApiKey, key_008
 
 type ApiKeyRecord = Mapping[str, object]
 
+ALLOWED_API_KEY_SCOPES = frozenset({"wiki:read", "wiki:write"})
+
 
 class ApiKeyLifecycleRepository(Protocol):
     """API Key 수명 주기 저장소가 제공해야 하는 최소 계약."""
@@ -56,18 +58,27 @@ async def key_001(
     name: str,
     expires_at: datetime | None,
     request_id: str,
+    scopes: Sequence[str] | None = None,
 ) -> IssuedApiKey:
     """[KEY-001] API Key 발급.
 
-    Personal Wiki 읽기 Scope로 제한된 외부 시스템용 API Key를 생성한다.
+    기본값은 Personal Wiki 읽기(`wiki:read`) Scope만 부여한다. 호출자가
+    `wiki:write`를 명시적으로 요청하면 쓰기 Scope를 추가하되, 쓰기는 항상
+    읽기를 동반하도록 `wiki:read`를 함께 부여한다.
     """
+    normalized = tuple(dict.fromkeys(scopes)) if scopes else ("wiki:read",)
+    unknown = [scope for scope in normalized if scope not in ALLOWED_API_KEY_SCOPES]
+    if unknown:
+        raise ValueError(f"허용하지 않는 API Key Scope입니다: {', '.join(unknown)}")
+    if "wiki:write" in normalized and "wiki:read" not in normalized:
+        normalized = ("wiki:read", *normalized)
     generated: GeneratedApiKey = await key_008()
     record = await repository.create_api_key(
         principal_id=principal_id,
         name=name,
         key_prefix=generated.key_prefix,
         key_hash=generated.key_hash,
-        scopes=("wiki:read",),
+        scopes=normalized,
         expires_at=expires_at,
         request_id=request_id,
     )

@@ -44,6 +44,7 @@ from agent.wiki_builder.models import (
 from infrastructure.persistence.api import (
     PersistedWikiBuild,
     UserSourceDocumentForAgent,
+    create_completed_agent_job,
     get_user_source_document_version_for_agent,
     list_existing_wiki_entries,
     list_existing_wiki_relations,
@@ -701,5 +702,143 @@ async def wba_002(
         connection,
         user_id=user_id,
         job_id=job_id,
+        model=model,
+    )
+
+
+async def persist_claude_authored_wiki_entry(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    source_document_version_id: str,
+    classification: WikiClassification,
+    model: str = "claude-mcp-write",
+    generated_at: str | None = None,
+) -> tuple[PersistedWikiBuild, WikiQualityReport]:
+    """MCP로 받은 Claude 분류 결과를 기존 Build 파이프라인으로 검증·저장한다.
+
+    원문 분류 LLM 호출과 관계 후보 Linker는 건너뛰고 Claude가 보낸 관계를
+    그대로 사용한다. Identity 충돌 해소만 기존 경로를 그대로 타므로, 후보가
+    모호할 때만 최소한의 LLM 호출이 발생한다. 저장 전 병합된 전체 Wiki
+    Snapshot 기준으로 WBA-014 품질 게이트를 통과해야 한다.
+    """
+    async with connection.transaction():
+        await set_personal_wiki_scope(connection, user_id=user_id)
+        source = await get_user_source_document_version_for_agent(
+            connection,
+            user_id=user_id,
+            source_document_version_id=source_document_version_id,
+        )
+        if source is None:
+            raise ValueError(
+                f"개인 Wiki 원본 Version을 찾을 수 없습니다: {source_document_version_id}"
+            )
+        existing_entities = await list_existing_wiki_entries(
+            connection, user_id=user_id, document_kind="entity"
+        )
+        existing_concepts = await list_existing_wiki_entries(
+            connection, user_id=user_id, document_kind="concept"
+        )
+        existing_relations = await list_existing_wiki_relations(
+            connection, namespace_key=source.namespace_key
+        )
+
+    resolution_draft = prepare_wiki_identity_resolution(
+        classification=classification,
+        existing_entities=existing_entities,
+        existing_concepts=existing_concepts,
+    )
+    identity_resolution = await to_thread(
+        resolve_wiki_identity_conflicts,
+        draft=resolution_draft,
+        source_title=source.title,
+        model=model,
+    )
+    resolved_classification = validate_wiki_identity_quality(
+        classification=identity_resolution.classification,
+        existing_entities=existing_entities,
+        existing_concepts=existing_concepts,
+    )
+    timestamp = generated_at or datetime.now(UTC).isoformat()
+    plan = build_wiki_plan(
+        source_title=source.title,
+        source_url=source.canonical_url,
+        source_tags=source.tags,
+        source_content_hash=source.content_hash,
+        source_size_bytes=len(source.raw_content.encode("utf-8")),
+        classification=resolved_classification,
+        existing_entities=existing_entities,
+        existing_concepts=existing_concepts,
+        generated_at=timestamp,
+        model=f"{model};identity={identity_resolution.model};relation=deterministic:claude-authored-v1",
+        existing_relations=existing_relations,
+    )
+    merged_entities = _entries_after_plan(existing_entities, plan.entities)
+    merged_concepts = _entries_after_plan(existing_concepts, plan.concepts)
+    quality = await wba_014([*merged_entities, *merged_concepts], plan.relations)
+    if not quality.passed:
+        errors = [issue.message for issue in quality.issues if issue.severity == "error"]
+        raise ValueError(
+            "Claude 작성 Wiki 항목 품질 게이트 실패: " + "; ".join(errors[:5])
+        )
+
+    async with connection.transaction():
+        await set_personal_wiki_scope(connection, user_id=user_id)
+        job_anchor = await create_completed_agent_job(
+            connection,
+            feature_id="WBA-018",
+            job_type="personal_wiki_mcp_write",
+            user_id=user_id,
+            payload={"source_document_version_id": source_document_version_id},
+            request_id=None,
+        )
+        persisted = await persist_wiki_build(
+            connection,
+            source=source,
+            plan=plan,
+            job_id=job_anchor.job_id,
+        )
+    changed_version_ids = [
+        document.document_version_id
+        for document in persisted.affected_documents
+        if document.document_kind in {"entity", "concept"}
+        and document.action in {"create", "created", "update", "updated"}
+    ]
+    if changed_version_ids:
+        try:
+            await wba_011(
+                connection,
+                namespace_key=source.namespace_key,
+                document_version_ids=changed_version_ids,
+                model="text-embedding-3-small",
+            )
+        except Exception as error:  # noqa: BLE001 - 저장된 Build는 성공으로 유지
+            logger.warning("Claude 작성 Wiki 재임베딩 실패: %s", error)
+    return persisted, quality
+
+
+async def wba_018(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    source_document_version_id: str,
+    classification: WikiClassification,
+    model: str = "claude-mcp-write",
+) -> tuple[PersistedWikiBuild, WikiQualityReport]:
+    """[WBA-018] Claude 작성 Wiki 항목 저장.
+
+    MCP로 받은 Claude 분류 결과를 기존 Build 파이프라인으로 검증·저장한다.
+    """
+    if not user_id:
+        raise ValueError("WBA-018에 user_id가 필요합니다.")
+    if not source_document_version_id:
+        raise ValueError("WBA-018에 source_document_version_id가 필요합니다.")
+    if not classification.entities and not classification.concepts:
+        raise ValueError("WBA-018에는 최소 1개의 entity 또는 concept이 필요합니다.")
+    return await persist_claude_authored_wiki_entry(
+        connection,
+        user_id=user_id,
+        source_document_version_id=source_document_version_id,
+        classification=classification,
         model=model,
     )

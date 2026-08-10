@@ -10,13 +10,13 @@ from app.dependencies import AppContainer
 from app.security.api_keys.api import key_008
 from mcp_server.main import build_mcp_http_app, build_mcp_server
 from mcp_server import main as mcp_main
-from tests.mcp_server.tools.test_personal_wiki import _FakeWikiReader
+from tests.mcp_server.tools.test_personal_wiki import _FakeWikiReader, _FakeWikiWriter
 
 
 class _FakeMcpApiKeyRepository:
     """MCP HTTP 인증에 사용할 단일 API Key 저장소 대역."""
 
-    def __init__(self, raw_key: str) -> None:
+    def __init__(self, raw_key: str, *, scopes: list[str] | None = None) -> None:
         """원문 Key의 Prefix와 Hash만 검증 레코드로 보존한다."""
         generated = asyncio.run(key_008(raw_key))
         self.record = {
@@ -24,7 +24,7 @@ class _FakeMcpApiKeyRepository:
             "key_prefix": generated.key_prefix,
             "key_hash": generated.key_hash,
             "principal_id": "42",
-            "scopes": ["wiki:read"],
+            "scopes": scopes or ["wiki:read"],
             "status": "active",
             "expires_at": None,
         }
@@ -43,8 +43,13 @@ class _FakeMcpApiKeyRepository:
         """검증 성공 시각 갱신을 생략한다."""
 
 
-class _FakeMcpWikiRepository(_FakeWikiReader):
-    """Container 수명 주기를 지원하는 Wiki 읽기 저장소 대역."""
+class _FakeMcpWikiRepository(_FakeWikiReader, _FakeWikiWriter):
+    """Container 수명 주기를 지원하는 Wiki 읽기·쓰기 저장소 대역."""
+
+    def __init__(self) -> None:
+        """읽기·쓰기 대역의 호출 기록을 모두 초기화한다."""
+        _FakeWikiReader.__init__(self)
+        _FakeWikiWriter.__init__(self)
 
     async def startup(self) -> None:
         """인메모리 저장소라 시작 작업을 하지 않는다."""
@@ -62,7 +67,7 @@ def _meta() -> dict[str, object]:
     }
 
 
-def _client(raw_key: str) -> TestClient:
+def _client(raw_key: str, *, scopes: list[str] | None = None) -> TestClient:
     """MCP 인증·Wiki 대역이 연결된 전용 MCP TestClient를 만든다."""
     settings = Settings(
         environment="test",
@@ -71,7 +76,7 @@ def _client(raw_key: str) -> TestClient:
     )
     container = AppContainer(
         settings=settings,
-        mcp_api_key_repository=_FakeMcpApiKeyRepository(raw_key),
+        mcp_api_key_repository=_FakeMcpApiKeyRepository(raw_key, scopes=scopes),
         wiki_graph_repository=_FakeMcpWikiRepository(),
     )
     server = build_mcp_server(settings, container)
@@ -135,6 +140,70 @@ def test_mcp_http_discovers_and_calls_personal_wiki_search() -> None:
     assert "tools" in discovered.json()["result"]["capabilities"]
     assert searched.status_code == 200
     assert searched.json()["result"]["structuredContent"]["results"][0]["id"] == "document-1"
+
+
+def test_mcp_http_calls_add_source_with_write_scope() -> None:
+    """wiki:write Scope를 가진 Key가 add_source로 Source를 저장한다."""
+    raw_key = "bmb_mcp_0123456789ab.test-secret"
+    add_source = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "add_source",
+            "arguments": {"title": "제목", "content": "본문"},
+            "_meta": _meta(),
+        },
+    }
+    with _client(raw_key, scopes=["wiki:read", "wiki:write"]) as client:
+        response = client.post(
+            "/mcp", json=add_source, headers=_headers(raw_key, "tools/call", name="add_source")
+        )
+
+    assert response.status_code == 200
+    structured = response.json()["result"]["structuredContent"]
+    assert structured["source_document_id"] == "source-1"
+
+
+def test_mcp_http_rejects_add_source_without_write_scope() -> None:
+    """wiki:read만 있는 Key는 add_source 호출이 거부된다."""
+    raw_key = "bmb_mcp_0123456789ab.test-secret"
+    add_source = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "add_source",
+            "arguments": {"title": "제목", "content": "본문"},
+            "_meta": _meta(),
+        },
+    }
+    with _client(raw_key, scopes=["wiki:read"]) as client:
+        response = client.post(
+            "/mcp", json=add_source, headers=_headers(raw_key, "tools/call", name="add_source")
+        )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result.get("isError") is True
+
+
+def test_authenticated_user_id_enforces_required_scope(monkeypatch) -> None:
+    """지정한 Scope가 없는 인증 Context는 Personal Wiki 사용자 ID를 내주지 않는다."""
+
+    class _FakeAccessToken:
+        subject = "42"
+        scopes = ["wiki:write"]
+
+    monkeypatch.setattr(mcp_main, "get_access_token", lambda: _FakeAccessToken())
+
+    assert mcp_main._authenticated_user_id("wiki:write") == "42"
+    try:
+        mcp_main._authenticated_user_id("wiki:read")
+        raised = False
+    except PermissionError:
+        raised = True
+    assert raised
 
 
 def test_run_uses_configured_mcp_port(monkeypatch) -> None:

@@ -9,10 +9,14 @@ import pytest
 from infrastructure.persistence.features import source_ingestion
 from infrastructure.persistence.features.jobs import EnqueuedWikiBuildJob
 from infrastructure.persistence.features.personal_wiki import SavedUserSourceVersion
+from infrastructure.persistence.features.personal_wiki import UserSourceDocumentForAgent
 from infrastructure.persistence.features.source_ingestion import (
+    PersistedMcpSourceSubmission,
     PersistedSourceSubmission,
     _upsert_onboarding_seed_version,
+    enqueue_wiki_rebuild_for_source,
     save_fetched_url_and_enqueue,
+    save_mcp_source_submission,
     save_web_clipping_and_enqueue,
 )
 
@@ -213,6 +217,163 @@ def test_save_web_clipping_reuses_same_source_version_and_job() -> None:
         "INSERT INTO agent.user_source_document_versions" in sql
         for sql, _ in connection.executed
     )
+
+
+def test_save_mcp_source_submission_persists_without_enqueueing_job() -> None:
+    """MCP Source 저장이 Build Job 없이 원본 Version만 멱등 저장하는지 검증한다."""
+    connection = _SequencedConnection(
+        [
+            {"id": "event-1"},
+            None,
+            {"id": "source-1"},
+            None,
+            {"id": "source-version-1"},
+            None,
+        ]
+    )
+
+    result = asyncio.run(
+        save_mcp_source_submission(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            title="Claude가 보낸 제목",
+            content="# MCP로 받은 본문",
+            tags=["ai"],
+            memo="메모",
+            occurred_at=None,
+        )
+    )
+
+    assert result == PersistedMcpSourceSubmission(
+        source_document_id="source-1",
+        source_document_version_id="source-version-1",
+        source_version=1,
+        source_event_row_id="event-1",
+    )
+    assert len(connection.executed) == 6
+    event_sql, _event_params = connection.executed[0]
+    assert "'mcp_submission'" in event_sql
+    version_sql, _version_params = connection.executed[4]
+    assert "agent.user_source_document_versions" in version_sql
+
+
+def test_save_mcp_source_submission_reuses_same_version_for_identical_content() -> None:
+    """동일 본문 재제출이 새 Version이나 Event Row를 추가하지 않는지 검증한다."""
+    from agent.wiki_builder.features.vault import compute_content_hash
+
+    content = "# 동일 MCP 본문"
+    connection = _SequencedConnection(
+        [
+            {"id": "event-1"},
+            {"id": "source-1"},
+            {
+                "id": "source-version-1",
+                "version": 1,
+                "content_hash": compute_content_hash(content),
+            },
+        ]
+    )
+
+    result = asyncio.run(
+        save_mcp_source_submission(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            title="제목",
+            content=content,
+            tags=[],
+            memo=None,
+            occurred_at=None,
+        )
+    )
+
+    assert result.source_document_version_id == "source-version-1"
+    assert len(connection.executed) == 3
+    assert not any(
+        "INSERT INTO agent.user_source_document_versions" in sql
+        for sql, _ in connection.executed
+    )
+
+
+def test_enqueue_wiki_rebuild_for_source_reuses_source_event_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """재빌드 트리거가 조회된 원본의 event_id·version으로 멱등 Job을 등록하는지 검증한다."""
+    fetched_kwargs: dict[str, Any] = {}
+    enqueued_kwargs: dict[str, Any] = {}
+
+    async def fake_get_source(connection: Any, **kwargs: Any) -> UserSourceDocumentForAgent:
+        """조회 인자를 기록하고 고정된 원본 Version을 반환한다."""
+        fetched_kwargs.update(kwargs)
+        return UserSourceDocumentForAgent(
+            source_document_id="source-1",
+            source_document_version_id="source-version-1",
+            source_event_id="mcp-write:abc123",
+            user_id="user-1",
+            namespace_key="user/user-1",
+            source_type="mcp_submission",
+            canonical_url=None,
+            version=2,
+            title="제목",
+            author=None,
+            published_at=None,
+            clipped_on=None,
+            description=None,
+        )
+
+    async def fake_enqueue(connection: Any, **kwargs: Any) -> EnqueuedWikiBuildJob:
+        """후속 Wiki Job 등록 인자를 기록한다."""
+        enqueued_kwargs.update(kwargs)
+        return EnqueuedWikiBuildJob(job_id="wiki-job-2", created=True)
+
+    monkeypatch.setattr(
+        source_ingestion, "get_user_source_document_version_for_agent", fake_get_source
+    )
+    monkeypatch.setattr(source_ingestion, "enqueue_personal_wiki_build_job", fake_enqueue)
+
+    result = asyncio.run(
+        enqueue_wiki_rebuild_for_source(
+            object(),  # type: ignore[arg-type]
+            user_id="user-1",
+            source_document_version_id="source-version-1",
+            request_id="request-3",
+        )
+    )
+
+    assert result == EnqueuedWikiBuildJob(job_id="wiki-job-2", created=True)
+    assert fetched_kwargs["user_id"] == "user-1"
+    assert fetched_kwargs["source_document_version_id"] == "source-version-1"
+    assert enqueued_kwargs["source_event_id"] == "mcp-write:abc123"
+    assert enqueued_kwargs["source_version"] == 2
+    assert enqueued_kwargs["feature_id"] == "MCPTOOL-014"
+
+
+def test_enqueue_wiki_rebuild_for_source_rejects_unknown_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """존재하지 않는 원본 Version은 Job 등록 없이 거부한다."""
+
+    async def fake_missing(connection: Any, **kwargs: Any) -> None:
+        """원본을 찾지 못한 상황을 반환한다."""
+        return None
+
+    async def fail_enqueue(connection: Any, **kwargs: Any) -> EnqueuedWikiBuildJob:
+        """원본이 없을 때 Job이 등록되면 테스트를 실패시킨다."""
+        raise AssertionError("존재하지 않는 원본에 재빌드 Job을 등록했습니다.")
+
+    monkeypatch.setattr(
+        source_ingestion, "get_user_source_document_version_for_agent", fake_missing
+    )
+    monkeypatch.setattr(source_ingestion, "enqueue_personal_wiki_build_job", fail_enqueue)
+
+    with pytest.raises(ValueError):
+        asyncio.run(
+            enqueue_wiki_rebuild_for_source(
+                object(),  # type: ignore[arg-type]
+                user_id="user-1",
+                source_document_version_id="missing-version",
+                request_id=None,
+            )
+        )
 
 
 def test_save_fetched_url_persists_version_and_enqueues_wiki_job(
