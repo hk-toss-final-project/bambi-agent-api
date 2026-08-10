@@ -42,8 +42,11 @@ class _Connection:
         "UPDATE agent.wiki_document_relations": 4,
         "UPDATE agent.wiki_chunks": 5,
         "UPDATE agent.wiki_documents": 6,
+        "DELETE FROM agent.user_source_document_versions": 7,
+        "DELETE FROM agent.user_source_documents": 3,
         "UPDATE agent.wiki_versions": 1,
         "UPDATE agent.user_interest_profiles": 1,
+        "UPDATE agent.wiki_source_events": 2,
     }
 
     def __init__(self) -> None:
@@ -68,8 +71,8 @@ class _Connection:
         return _Cursor([])
 
 
-def test_reset_personal_wiki_deactivates_only_derived_user_state() -> None:
-    """초기화가 사용자 원본을 건드리지 않고 파생 상태와 Build를 종료하는지 검증한다."""
+def test_reset_personal_wiki_deletes_user_sources_and_derived_state() -> None:
+    """초기화가 사용자 원본을 지우고 파생 상태와 Build를 종료하는지 검증한다."""
     connection = _Connection()
 
     result = asyncio.run(
@@ -84,6 +87,9 @@ def test_reset_personal_wiki_deactivates_only_derived_user_state() -> None:
         "reset_document_count": 6,
         "reset_relation_count": 4,
         "unsearchable_chunk_count": 5,
+        "deleted_source_document_count": 3,
+        "deleted_source_version_count": 7,
+        "redacted_source_event_count": 2,
         "retired_wiki_version_count": 1,
         "retired_interest_profile_count": 1,
         "cancelled_job_count": 2,
@@ -93,5 +99,8 @@ def test_reset_personal_wiki_deactivates_only_derived_user_state() -> None:
     assert "pg_advisory_xact_lock" in sql
     assert "job_type = 'personal_wiki_build'" in sql
     assert "source_type" in sql and "'reset'" in sql
-    assert "UPDATE agent.user_source" not in sql
-    assert "DELETE FROM agent.user_source" not in sql
+    assert "DELETE FROM agent.user_source_document_versions" in sql
+    assert "DELETE FROM agent.user_source_documents" in sql
+    assert "payload = '{}'::jsonb" in sql
+    assert "source_type <> 'reset'" in sql
+    assert "agent.global_source_documents" not in sql

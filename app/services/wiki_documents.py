@@ -64,7 +64,7 @@ class WikiDocumentRepository(Protocol):
     async def reset_wiki(
         self, user_id: str, *, request_id: str
     ) -> Mapping[str, object]:
-        """사용자의 개인 LLM Wiki 파생 상태를 초기화한다."""
+        """사용자의 개인 LLM Wiki와 입력 원본을 초기화한다."""
         ...
 
 
@@ -176,7 +176,7 @@ class WikiDocumentService:
     async def reset_wiki(
         self, user_id: str, *, request_id: str
     ) -> PersonalWikiResetResponse:
-        """사용자 원본을 보존하고 개인 LLM Wiki 파생 상태를 초기화한다."""
+        """사용자 원본을 영구 삭제하고 개인 LLM Wiki 상태를 초기화한다."""
         result = await pwiki_013(
             self._repository,
             user_id,

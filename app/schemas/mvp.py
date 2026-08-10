@@ -306,6 +306,15 @@ class PersonalWikiResetResponse(ImmutableSchema):
     unsearchable_chunk_count: int = Field(
         ge=0, description="검색에서 제외한 Wiki Chunk 수"
     )
+    deleted_source_document_count: int = Field(
+        ge=0, description="영구 삭제한 사용자 원본 문서 수"
+    )
+    deleted_source_version_count: int = Field(
+        ge=0, description="영구 삭제한 사용자 원본 Version 수"
+    )
+    redacted_source_event_count: int = Field(
+        ge=0, description="개인정보 Payload를 비식별화한 Source Event 수"
+    )
     retired_wiki_version_count: int = Field(
         ge=0, description="종료한 Wiki Build Snapshot 수"
     )

@@ -1,8 +1,8 @@
-"""사용자별 개인 LLM Wiki 파생 데이터 초기화 기능.
+"""사용자별 개인 LLM Wiki와 사용자 입력 원본 초기화 기능.
 
-사용자 원본과 원본 Version은 보존하고 Wiki 문서·관계·검색 Chunk·Build Snapshot·
-관심사 Profile만 비활성화한다. 같은 사용자 Namespace 잠금으로 Wiki Build 저장과
-직렬화하며 대기·실행 중인 Build Job도 함께 취소한다.
+Wiki 문서·관계·검색 Chunk·Build Snapshot·관심사 Profile을 비활성화하고 사용자
+원본과 원본 Version을 영구 삭제한다. 같은 사용자 Namespace 잠금으로 Wiki Build
+저장과 직렬화하며 대기·실행 중인 Build Job도 함께 취소한다.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ async def reset_personal_wiki(
     user_id: str,
     request_id: str,
 ) -> dict[str, object]:
-    """사용자 원본을 보존하고 개인 LLM Wiki 파생 상태를 멱등 초기화한다.
+    """사용자 원본을 영구 삭제하고 개인 LLM Wiki 상태를 멱등 초기화한다.
 
     Args:
         connection: 개인 Wiki PostgreSQL 연결
@@ -133,6 +133,24 @@ async def reset_personal_wiki(
             """,
             (reset_at, reset_at, namespace_key),
         )
+        deleted_source_versions = await _execute_count(
+            connection,
+            """
+            DELETE FROM agent.user_source_document_versions
+            WHERE namespace_key = %s
+            RETURNING id
+            """,
+            (namespace_key,),
+        )
+        deleted_source_documents = await _execute_count(
+            connection,
+            """
+            DELETE FROM agent.user_source_documents
+            WHERE namespace_key = %s
+            RETURNING id
+            """,
+            (namespace_key,),
+        )
         retired_versions = await _execute_count(
             connection,
             """
@@ -154,6 +172,29 @@ async def reset_personal_wiki(
             RETURNING id
             """,
             (user_id,),
+        )
+        redacted_source_events = await _execute_count(
+            connection,
+            """
+            UPDATE agent.wiki_source_events
+            SET source_url = NULL,
+                source_content_id = NULL,
+                object_uri = NULL,
+                payload = '{}'::jsonb,
+                error_message = NULL,
+                updated_at = %s
+            WHERE user_id = %s
+              AND source_type <> 'reset'
+              AND (
+                  source_url IS NOT NULL
+                  OR source_content_id IS NOT NULL
+                  OR object_uri IS NOT NULL
+                  OR payload <> '{}'::jsonb
+                  OR error_message IS NOT NULL
+              )
+            RETURNING id
+            """,
+            (reset_at, user_id),
         )
         await connection.execute(
             """
@@ -177,6 +218,9 @@ async def reset_personal_wiki(
                         "reset_document_count": reset_documents,
                         "reset_relation_count": reset_relations,
                         "unsearchable_chunk_count": unsearchable_chunks,
+                        "deleted_source_document_count": deleted_source_documents,
+                        "deleted_source_version_count": deleted_source_versions,
+                        "redacted_source_event_count": redacted_source_events,
                         "retired_wiki_version_count": retired_versions,
                         "retired_interest_profile_count": retired_profiles,
                         "cancelled_job_count": cancelled_jobs,
@@ -189,6 +233,9 @@ async def reset_personal_wiki(
         "reset_document_count": reset_documents,
         "reset_relation_count": reset_relations,
         "unsearchable_chunk_count": unsearchable_chunks,
+        "deleted_source_document_count": deleted_source_documents,
+        "deleted_source_version_count": deleted_source_versions,
+        "redacted_source_event_count": redacted_source_events,
         "retired_wiki_version_count": retired_versions,
         "retired_interest_profile_count": retired_profiles,
         "cancelled_job_count": cancelled_jobs,
