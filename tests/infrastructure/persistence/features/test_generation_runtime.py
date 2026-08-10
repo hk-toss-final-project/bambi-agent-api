@@ -535,12 +535,20 @@ def test_uuid_or_none_keeps_wiki_ids_and_drops_live_references() -> None:
 
 
 def _connection_for_persist(
-    topic: str, parameters: dict[str, Any] | None = None
+    topic: str,
+    parameters: dict[str, Any] | None = None,
+    request_idempotency_key: str | None = None,
 ) -> _FakeConnection:
-    """인용 없는 리포트 저장 경로가 실행할 질의 순서대로 응답을 준비한다."""
+    """인용 없는 리포트 저장 경로가 실행할 질의 순서대로 응답을 준비한다.
+
+    request_idempotency_key를 주지 않으면 Job 조인 컬럼이 없는 행이 되어,
+    이 컬럼을 읽기 전에 저장된 데이터를 만나는 상황을 재현한다.
+    """
     request_row: dict[str, Any] = {"id": "request-1", "topic": topic}
     if parameters is not None:
         request_row["parameters"] = parameters
+    if request_idempotency_key is not None:
+        request_row["request_idempotency_key"] = request_idempotency_key
     return _FakeConnection(
         [
             [request_row],  # generation_requests 조회
@@ -629,6 +637,47 @@ def test_publish_payload_keeps_report_type_empty_for_older_requests() -> None:
     _persist(connection)
 
     assert _publish_payload(connection)["report_type"] == ""
+
+
+def test_publish_payload_echoes_the_request_idempotency_key() -> None:
+    """요청 멱등키를 발행 Snapshot에 원문 그대로 싣는다.
+
+    Service는 이 값으로 대기 중이던 generation_pendings 행과 Claim으로 들어온
+    완료 카드를 연결한다. 빠지면 Pending이 완료로 전환되지 않고 cardPublicId도
+    실을 수 없다(2026-08-06 협의).
+    """
+    connection = _connection_for_persist(
+        "코스피", request_idempotency_key="2026-08-10-user-1-interest_news_card"
+    )
+
+    _persist(connection)
+
+    payload = _publish_payload(connection)
+    assert payload["request_idempotency_key"] == "2026-08-10-user-1-interest_news_card"
+
+
+def test_publish_payload_keeps_request_idempotency_key_empty_when_unknown() -> None:
+    """멱등키를 읽지 못한 행도 빈 문자열로 안전하게 저장된다."""
+    connection = _connection_for_persist("코스피")
+
+    _persist(connection)
+
+    assert _publish_payload(connection)["request_idempotency_key"] == ""
+
+
+def test_persist_reads_the_idempotency_key_from_the_job_row() -> None:
+    """멱등키는 generation_requests가 아니라 Job 행에서 조인해 읽는다.
+
+    parameters에 복사해 두는 방식이면 이 변경 이전에 등록된 Job이 영영 빈 값으로
+    남는다. 조인해서 읽어야 이미 큐에 들어가 있는 Job도 그대로 키가 실린다.
+    """
+    connection = _connection_for_persist("코스피", request_idempotency_key="key-1")
+
+    _persist(connection)
+
+    request_sql = connection.executed[0][0]
+    assert "agent.agent_jobs" in request_sql
+    assert "idempotency_key" in request_sql
 
 
 def test_publish_payload_exposes_interest_bundle_origin() -> None:
@@ -815,6 +864,7 @@ def test_snapshot_row_mapping_exposes_every_payload_field_we_write() -> None:
             "tags": ["의존성 구조"],
             "content_tags": ["강한 결합", "DDD"],
             "report_type": "MORNING_BRIEFING",
+            "request_idempotency_key": "2026-08-10-user-1-interest_news_card",
             "generation_scope": "INTEREST_BUNDLE",
             "source_interest_id": "interest-1",
             "interest_profile_id": "profile-1",
@@ -828,6 +878,9 @@ def test_snapshot_row_mapping_exposes_every_payload_field_we_write() -> None:
     assert snapshot.tags == ["의존성 구조"]
     assert snapshot.content_tags == ["강한 결합", "DDD"]
     assert snapshot.report_type == "MORNING_BRIEFING"
+    assert (
+        snapshot.request_idempotency_key == "2026-08-10-user-1-interest_news_card"
+    )
     assert snapshot.generation_scope == "INTEREST_BUNDLE"
     assert snapshot.source_interest_id == "interest-1"
     assert snapshot.interest_profile_id == "profile-1"
@@ -857,6 +910,7 @@ def test_snapshot_row_mapping_tolerates_snapshots_saved_before_new_fields() -> N
     assert snapshot.tags == []
     assert snapshot.content_tags == []
     assert snapshot.report_type == ""
+    assert snapshot.request_idempotency_key == ""
     assert snapshot.generation_scope == "SINGLE_TOPIC"
     assert snapshot.source_interest_id == ""
     assert snapshot.interest_profile_id == ""
@@ -882,11 +936,16 @@ def test_snapshot_save_payload_preserves_interest_bundle_fields() -> None:
         source_interest_id="interest-1",
         interest_profile_id="profile-1",
         bundle_keywords=["생성형 AI", "RAG"],
+        request_idempotency_key="interest-bundle:2026-08-10:user-1:interest-1",
         created_at=datetime(2026, 8, 7, tzinfo=UTC),
     )
 
     payload = PostgresPublishSnapshotRepository._payload_from_snapshot(snapshot)
 
+    assert (
+        payload["request_idempotency_key"]
+        == "interest-bundle:2026-08-10:user-1:interest-1"
+    )
     assert payload["generation_scope"] == "INTEREST_BUNDLE"
     assert payload["source_interest_id"] == "interest-1"
     assert payload["interest_profile_id"] == "profile-1"

@@ -84,6 +84,54 @@ def test_publish_snapshot_carries_interest_tags(
     assert fetched.json()["tags"] == ["코스피"]
 
 
+def test_publish_snapshot_carries_request_idempotency_key(
+    client: TestClient, publish_service: PublishSnapshotService
+) -> None:
+    """Snapshot 조회 응답이 요청 멱등키를 원문 그대로 전달하는지 검증한다.
+
+    Service는 이 값으로 대기 중이던 generation_pendings 행과 완료 카드를
+    연결한다. 저장 경로와 조회 매핑 중 한쪽만 고치면 저장은 되는데 응답이 늘
+    빈 값이 되므로(2026-08-05 content_tags 실측) 왕복으로 확인한다.
+    """
+    snapshot = PublishSnapshotResponse(
+        content_id="content-idem",
+        user_id="user-1",
+        version=1,
+        snapshot_hash="hash-idem",
+        title="Generated title",
+        summary="Generated summary",
+        body="Generated body",
+        request_idempotency_key="2026-08-10-user-1-interest_news_card",
+        created_at=datetime.now(UTC),
+    )
+    asyncio.run(publish_service.save_publish_snapshot(snapshot))
+
+    fetched = client.get("/internal/v1/publish-snapshots/content-idem")
+
+    assert fetched.status_code == 200
+    assert (
+        fetched.json()["request_idempotency_key"]
+        == "2026-08-10-user-1-interest_news_card"
+    )
+
+
+def test_publish_snapshot_request_idempotency_key_defaults_to_blank() -> None:
+    """멱등키 없이 만든 예전 Snapshot도 빈 문자열로 안전하게 직렬화된다."""
+    snapshot = PublishSnapshotResponse(
+        content_id="content-no-idem",
+        user_id="user-1",
+        version=1,
+        snapshot_hash="hash-no-idem",
+        title="Generated title",
+        summary="Generated summary",
+        body="Generated body",
+        created_at=datetime.now(UTC),
+    )
+
+    assert snapshot.request_idempotency_key == ""
+    assert snapshot.model_dump()["request_idempotency_key"] == ""
+
+
 def test_publish_snapshot_tags_default_to_empty_list() -> None:
     """태그 없이 만든 Snapshot이 빈 목록으로 직렬화되는지 검증한다."""
     snapshot = PublishSnapshotResponse(

@@ -529,6 +529,15 @@ class PublishSnapshotResponse(ImmutableSchema):
             "다시 짜맞추지 않도록 함께 싣는다."
         ),
     )
+    request_idempotency_key: str = Field(
+        default="",
+        description=(
+            "생성 요청의 `idempotency_key`를 원문 그대로 돌려준다 "
+            "(2026-08-06 협의). Service는 이 값으로 대기 중이던 "
+            "`generation_pendings` 행과 Claim으로 들어온 완료 카드를 연결한다. "
+            "Agent는 해석하지 않으며, UUID 파생 등 가공은 Service가 소유한다."
+        ),
+    )
     generation_scope: GenerationScope = Field(
         default=GenerationScope.SINGLE_TOPIC,
         description="리포트가 단일 주제 또는 활성 관심사 범주로 생성됐는지",

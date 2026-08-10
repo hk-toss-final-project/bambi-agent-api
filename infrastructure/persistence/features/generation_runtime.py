@@ -955,12 +955,23 @@ async def persist_report_generation(
     (2026-08-05 실측: 인용이 엉뚱한 리포트가 발행됐는데 검토자가 돌았는지조차
     로그 없이는 알 수 없었다).
     """
+    # 요청 멱등키는 Job 행이 원문 그대로 갖고 있으므로 여기서 함께 읽는다
+    # (2026-08-06 협의: Service가 generation_pendings와 완료 카드를 잇는 열쇠).
+    # generation_requests.parameters에 따로 복사해 두지 않는 이유는, 그렇게 하면
+    # 이 변경 이전에 등록된 Job이 영영 빈 값으로 남기 때문이다. 조인해서 읽으면
+    # 이미 큐에 들어가 있는 Job도 그대로 키가 실린다.
     request_cursor = await connection.execute(
         """
-        SELECT id, topic, parameters
-        FROM agent.generation_requests
-        WHERE job_id = %s AND user_id = %s
-        FOR UPDATE
+        SELECT
+            generation_request.id,
+            generation_request.topic,
+            generation_request.parameters,
+            job.idempotency_key AS request_idempotency_key
+        FROM agent.generation_requests AS generation_request
+        JOIN agent.agent_jobs AS job
+          ON job.id = generation_request.job_id
+        WHERE generation_request.job_id = %s AND generation_request.user_id = %s
+        FOR UPDATE OF generation_request
         """,
         (job_id, user_id),
     )
@@ -1137,6 +1148,12 @@ async def persist_report_generation(
     # (2026-08-06 이송우 협의). Agent는 해석하지 않는다.
     parameters = generation_request.get("parameters") or {}
     report_type = str(parameters.get("report_type") or "")
+    # 요청 멱등키도 같은 이유로 원문 그대로 싣는다. report_type이 "어떤 맥락에서
+    # 만들어졌나"를 알려준다면, 이 값은 "어느 요청의 결과인가"를 특정한다 —
+    # Service는 이것으로 대기 행(generation_pendings)을 완료로 전환한다.
+    request_idempotency_key = str(
+        generation_request.get("request_idempotency_key") or ""
+    )
     generation_scope = str(parameters.get("generation_scope") or "SINGLE_TOPIC")
     source_interest_id = str(parameters.get("interest_id") or "")
     raw_interest_bundle = parameters.get("interest_bundle")
@@ -1167,6 +1184,7 @@ async def persist_report_generation(
         "tags": [topic] if topic else [],
         "content_tags": list(generated.content_tags),
         "report_type": report_type,
+        "request_idempotency_key": request_idempotency_key,
         "generation_scope": generation_scope,
         "source_interest_id": source_interest_id,
         "interest_profile_id": interest_profile_id,

@@ -89,6 +89,9 @@ class PostgresPublishSnapshotRepository:
                 "tags": payload.get("tags", []),
                 "content_tags": payload.get("content_tags", []),
                 "report_type": payload.get("report_type", ""),
+                "request_idempotency_key": payload.get(
+                    "request_idempotency_key", ""
+                ),
                 "generation_scope": payload.get("generation_scope", "SINGLE_TOPIC"),
                 "source_interest_id": payload.get("source_interest_id", ""),
                 "interest_profile_id": payload.get("interest_profile_id", ""),
@@ -111,6 +114,7 @@ class PostgresPublishSnapshotRepository:
             "tags": list(snapshot.tags),
             "content_tags": list(snapshot.content_tags),
             "report_type": snapshot.report_type,
+            "request_idempotency_key": snapshot.request_idempotency_key,
             "generation_scope": snapshot.generation_scope.value,
             "source_interest_id": snapshot.source_interest_id,
             "interest_profile_id": snapshot.interest_profile_id,

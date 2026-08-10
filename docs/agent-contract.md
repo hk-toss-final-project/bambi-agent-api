@@ -149,6 +149,11 @@
   이후 생성분은 정상이며, 과거 데이터를 다루는 쪽은 null 가능성을 전제해야 한다.
 - 참고: **발행 Snapshot(claim) 카드의 citation은 `{citation_id,title,url}`로 더 단순** — 두 citation 모양이 다르다.
 - 발행 Snapshot payload는 citation 외에 **`tags`**(카드 관심사 태그)를 함께 싣는다. 상세는 [service-integration-guide.md](service-integration-guide.md) "Claim 응답" 절.
+- 발행 Snapshot은 요청에서 받은 값 **두 개를 해석 없이 되돌려준다** — `report_type`(생성 맥락)과
+  `request_idempotency_key`(어느 요청의 결과인가). 둘 다 2026-08-06에 함께 합의됐으나
+  **이 문서에 `report_type`만 적혀 있어서 `request_idempotency_key`가 구현에서 누락됐고**,
+  그 사이 service는 `generation_pendings`를 완료로 전환하지 못했다(2026-08-10 채움).
+  ⚠️ 합의한 필드는 코드보다 **이 문서에 먼저** 적는다 — 에이전트·팀 모두 문서를 보고 구현한다.
 - 참고: 기존 동기 계약의 `BookmarkProcessResponse{summary, interests[], tags[], confidence}` 중 `confidence`·`tags`는 agent 실제 결과에 대응이 불명확 → 관심사 태그로 정리되며 자연 흡수.
 - ✅ **결정 완료(07-22, 송우).** 구현 소유: `report`/카드 관심사태그 스키마 = 영현·우석, service-worker Pull 저장·스케줄링 = 소라·서빈.
 

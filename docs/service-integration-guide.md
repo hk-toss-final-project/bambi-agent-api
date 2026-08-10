@@ -120,7 +120,7 @@ flowchart LR
 
 | 필드 | 필수 | 설명 |
 |---|---|---|
-| `idempotency_key` | O | **`{schedule window}-{user_id}-{content_type}` 규칙 권장** (예: `2026-07-21-user-1-interest_news_card`). 스케줄러 재시도·중복 실행에도 Job이 한 번만 생김 |
+| `idempotency_key` | O | **`{schedule window}-{user_id}-{content_type}` 규칙 권장** (예: `2026-07-21-user-1-interest_news_card`). 스케줄러 재시도·중복 실행에도 Job이 한 번만 생김. **완성 카드의 `request_idempotency_key`로 그대로 되돌아오므로**, Pending 행과 잇는 키로도 쓸 수 있음 |
 | `generation_scope` | X | 기본 `SINGLE_TOPIC`. 특정 활성 LLM Wiki 관심사와 연결 노드를 묶을 때 `INTEREST_BUNDLE` |
 | `topic` | 조건부 | `SINGLE_TOPIC`에서 필수(1~500자). `INTEREST_BUNDLE`에서는 생략하며 Agent가 활성 관심사 루트로 확정 |
 | `interest_id` | 조건부 | `INTEREST_BUNDLE`에서 필수. **온보딩 taxonomy ID가 아니라 현재 활성 `user_interests.id` UUID** |
@@ -246,9 +246,27 @@ loop (10~30초):
 ### Claim 응답
 
 `batch_id`, `lease_expires_at`과 함께 각 item에 **전체 Payload**(content_id,
-user_id, version, snapshot_hash, title, summary, body, citations, tags와 생성 범주
-메타데이터)가 포함되므로
+user_id, version, snapshot_hash, title, summary, body, citations, tags,
+`report_type`·`request_idempotency_key`와 생성 범주 메타데이터)가 포함되므로
 추가 조회 없이 바로 Upsert할 수 있습니다. 처리할 것이 없으면 `items=[]`.
+
+**`request_idempotency_key`(2026-08-10 추가)** — 이 카드를 만들게 한 생성 요청의
+`idempotency_key`를 **원문 그대로** 돌려줍니다.
+
+```json
+"request_idempotency_key": "2026-08-10-user-1-interest_news_card"
+```
+
+- 요청과 Claim 시점이 떨어져 있어, service는 이 값으로 대기 중이던
+  `generation_pendings` 행과 완료 카드를 연결합니다(Pending → 완료 전환,
+  `cardPublicId` 응답).
+- **Agent는 해석하지 않습니다.** UUID 파생 등 가공은 service 한 곳에서만 합니다.
+- ⚠️ **2026-08-10 이전에 생성된 Snapshot은 이 값이 빈 문자열입니다.** 소급되지
+  않으므로 과거 데이터를 다루는 쪽은 빈 값을 전제해야 합니다.
+- ⚠️ Agent 자체 생성 경로(관심사 리포트 등)의 카드에는 service가 보낸 적 없는
+  **agent 내부 멱등키**가 실립니다. 매칭되는 pending이 없을 뿐 오류가 아닙니다.
+- 배경: 2026-08-06에 `report_type`과 함께 합의됐으나 계약 문서에 기록되지 않아
+  구현에서 누락됐고, 2026-08-10에 뒤늦게 채웠습니다.
 
 **`tags`(2026-07-30 추가)** — 카드에 노출할 관심사 태그 목록입니다.
 
