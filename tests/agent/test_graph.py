@@ -1411,6 +1411,7 @@ def test_multi_topic_report_collects_live_when_the_pool_is_thin(
     (2026-08-10 실측: '환율' 섹션이 통째로 빠졌다).
     """
     collected: list[str] = []
+    expanded: dict[str, list[str]] = {}
     generated_with: dict[str, Any] = {}
 
     async def fake_scope(connection: Any, *, user_id: str) -> None:
@@ -1421,13 +1422,23 @@ def test_multi_topic_report_collects_live_when_the_pool_is_thin(
         """창고가 비어 있는 상황을 만든다."""
         return []
 
+    async def fake_expansion(connection: Any, **kwargs: Any) -> Any:
+        """주제마다 Wiki 이웃 키워드를 하나씩 돌려준다."""
+        return SimpleNamespace(
+            keywords=(f"{kwargs['topic']}-이웃",),
+            mode="verified_one_hop",
+            gate_passed=True,
+            maturity_reasons=(),
+        )
+
     async def fake_prag_006(contexts: list[str]) -> list[str]:
         """검색 Context를 변경 없이 반환한다."""
         return contexts
 
-    def fake_collect(topic: str, user_id: str, **_kwargs: Any) -> list[str]:
-        """실시간 수집을 대체하고 주제를 기록한다."""
+    def fake_collect(topic: str, user_id: str, **kwargs: Any) -> list[str]:
+        """실시간 수집을 대체하고 주제·이웃 키워드를 기록한다."""
         collected.append(topic)
+        expanded[topic] = list(kwargs.get("related_keywords") or [])
         return [f"live-{topic}"]
 
     def fake_generate(**kwargs: Any) -> str:
@@ -1443,6 +1454,9 @@ def test_multi_topic_report_collects_live_when_the_pool_is_thin(
     monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
     monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
     monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect)
+    monkeypatch.setattr(
+        agent_graph, "_load_related_keyword_expansion", fake_expansion
+    )
     monkeypatch.setattr(agent_graph, "generate_report_content_with_quality", fake_generate)
     monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
     _disable_research(monkeypatch)
@@ -1463,6 +1477,9 @@ def test_multi_topic_report_collects_live_when_the_pool_is_thin(
 
     assert collected == ["반도체", "환율"]
     assert generated_with["contexts"] == ["live-반도체", "live-환율"]
+    # 주제 이름 하나로만 수집하면 '코스피' 리포트에 코스닥시장 기사가 안 걸린다.
+    # 단일 주제 경로와 같은 Wiki 이웃 확장을 주제마다 적용한다.
+    assert expanded == {"반도체": ["반도체-이웃"], "환율": ["환율-이웃"]}
 
 
 def test_multi_topic_report_caps_live_collection_per_report(

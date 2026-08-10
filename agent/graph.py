@@ -1371,10 +1371,24 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 "실시간 수집 생략: topic=%s 이번 리포트의 수집 예산을 다 썼다.", topic
             )
             return stored, False
+        # 단일 주제 경로와 같은 확장이다. 주제 이름 하나로만 수집하면 '코스피'
+        # 리포트에 코스닥시장 기사가 안 걸리는데, 그 연결은 Wiki Builder가 이미
+        # 저장해 둔 것이다. 수집을 실제로 돌 때만 조회한다 — 건너뛸 거면 DB 왕복이
+        # 낭비다.
+        related_keywords = await load_related_keywords(state["user_id"], topic)
         live = await to_thread(
-            collect_live_context, topic, state["user_id"], model=state["model"]
+            collect_live_context,
+            topic,
+            state["user_id"],
+            model=state["model"],
+            related_keywords=related_keywords,
         )
-        logger.info("주제별 실시간 수집: topic=%s %d건", topic, len(live))
+        logger.info(
+            "주제별 실시간 수집: topic=%s %d건 (이웃 키워드 %d개)",
+            topic,
+            len(live),
+            len(related_keywords),
+        )
         return [*stored, *live], True
 
     async def _load_multi_topic_contexts(
