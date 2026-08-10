@@ -176,6 +176,7 @@ async def run_global_source_collection_batch(
     search_options: dict[str, object] | None = None,
     source_key: str | None = None,
     target_key: str | None = None,
+    trigger_source: str = "schedule",
 ) -> list[dict[str, object]]:
     """키워드로 뉴스·SNS Provider를 검색해 Global 수집 캐시에 저장한다.
 
@@ -243,6 +244,7 @@ async def run_global_source_collection_batch(
                             articles=articles,
                             source_key=source_key,
                             target_key=target_key,
+                            trigger_source=trigger_source,
                         )
 
                 saved = await persist_articles()
@@ -284,6 +286,7 @@ async def worker_001(
     search_options: dict[str, object] | None = None,
     source_key: str | None = None,
     target_key: str | None = None,
+    trigger_source: str = "schedule",
 ) -> list[dict[str, object]]:
     """[WORKER-001] Global Source Collector Worker.
 
@@ -312,4 +315,5 @@ async def worker_001(
         search_options=search_options,
         source_key=source_key,
         target_key=target_key,
+        trigger_source=trigger_source,
     )

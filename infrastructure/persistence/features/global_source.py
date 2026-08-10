@@ -212,9 +212,15 @@ _SCHEDULE_SELECT = """
             LIMIT 1
         ) AS last_run ON true
         LEFT JOIN LATERAL (
+            -- 일일 한도는 "알아서 도는 수집"을 통제하는 장치다. 점검용 수동
+            -- 실행(SCH-021)은 한도를 무시하고 도는데 이력에는 남으므로, 여기서
+            -- 함께 세면 수동 실행 한 번이 그날 정기 수집 예산을 먹는다
+            -- (2026-08-10 실측: 한도 200인 Source의 runs_today가 수동 실행 두 번에
+            -- 414가 되어 그날 남은 정기 회차가 전부 건너뛰어졌다).
             SELECT count(*) AS run_count
             FROM agent.global_collection_runs AS run
             WHERE run.source_id = source.id
+              AND run.trigger_source = 'schedule'
               AND run.started_at >= date_trunc('day', clock_timestamp())
         ) AS today ON true
         LEFT JOIN LATERAL (
@@ -543,6 +549,7 @@ async def persist_collected_articles(
     content_status: str = "pending",
     source_key: str | None = None,
     target_key: str | None = None,
+    trigger_source: str = "schedule",
 ) -> dict[str, object]:
     """수집한 뉴스 기사 URL을 Global 수집 캐시에 중복 없이 저장한다.
 
@@ -561,6 +568,8 @@ async def persist_collected_articles(
         target_key: 이 수집을 지시한 수집 대상(Topic)의 Key. 넘기면 검색어
             글자와 무관하게 이 Topic에 연결한다. 생략하면 검색어가 곧 Topic
             질의라고 보고 글자로 대조한다(아래 주석 참고)
+        trigger_source: 이 수집을 무엇이 걸었는지("schedule"|"manual"). 일일 실행
+            한도는 정기 수집만 세므로, 점검용 수동 실행이 그날 예산을 먹지 않는다
 
     Returns:
         source_id, run_id와 수집·생성·중복 건수, 저장된 문서 항목 목록
@@ -602,11 +611,12 @@ async def persist_collected_articles(
         INSERT INTO agent.global_collection_runs (
             source_id,
             status,
-            cursor_before
-        ) VALUES (%s, 'running', %s)
+            cursor_before,
+            trigger_source
+        ) VALUES (%s, 'running', %s, %s)
         RETURNING id
         """,
-        (source["id"], Jsonb({"query": query})),
+        (source["id"], Jsonb({"query": query}), trigger_source),
     )
     run = await run_cursor.fetchone()
 
