@@ -747,6 +747,12 @@ async def run_personal_wiki_build(
 # 늘수록 각 섹션이 근거 1~2건으로 얇아져 요약이 아니라 헤드라인 나열이 된다.
 _MIN_TOPIC_CONTEXT_DOCUMENTS = 3
 
+# 한 리포트에서 실시간 수집을 돌릴 수 있는 주제 수 상한. 수집 한 번이 뉴스 RSS·
+# YouTube·Reddit 호출과 LLM 요약을 포함해 수십 초가 걸리므로, 주제 수만큼 돌리면
+# Worker lease(600초)를 넘겨 같은 Job이 죽은 것으로 판정되고 리포트가 중복 생성된다.
+# 창고가 충분한 주제는 애초에 수집하지 않으므로 이 상한에 실제로 닿는 경우는 드물다.
+_MAX_LIVE_COLLECT_TOPICS = 2
+
 # 생성 프롬프트에 넣는 근거 문서 상한(REPORT-006 기본값과 같아야 한다).
 _MAX_REPORT_CONTEXTS = 12
 
@@ -1294,13 +1300,22 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             raise RuntimeError("REPORT 검색 기능이 Context 목록을 반환하지 않았습니다.")
         return {"contexts": contexts}
 
-    async def _topic_documents(state: ReportGenerationState, topic: str) -> list[Any]:
+    async def _topic_documents(
+        state: ReportGenerationState, topic: str, *, allow_live: bool
+    ) -> list[Any]:
         """주제 하나가 쓸 근거 문서를 모은다(여러 주제를 묶는 경로 전용).
 
-        조사원이 그 주제로 모은 자료를 우선 쓰고, 빈손이면 저장된 자료만 다시
-        검색한다. 여기서는 실시간 수집을 하지 않는다 — 주제 수만큼 외부 수집을
-        돌리면 Worker lease(600초)를 넘겨 같은 Job이 죽은 것으로 판정되고, 조사원
-        단계에서 이미 수집 기회가 한 번 있었기 때문이다.
+        조사원이 그 주제로 모은 자료를 우선 쓰고, 빈손이면 창고를 다시 검색한다.
+        창고가 부족하면 단일 주제 경로와 **같은 규칙으로** 실시간 수집을 돈다.
+
+        처음 만들 때는 실시간 수집을 아예 뺐다. "조사원이 이미 수집 기회를 한 번
+        썼다"고 봤는데 틀렸다 — 조사원에게는 search_pool만 주고 collect_live는
+        도구로 노출하지 않는다(researcher.py). 그래서 창고에 없는 주제는 영영
+        근거가 0건이었다(2026-08-10 실측: '환율' 섹션이 통째로 빠졌다).
+
+        Args:
+            allow_live: 이 리포트에 실시간 수집 예산이 남았는지. 주제마다 외부
+                수집을 돌리면 Worker lease(600초)를 넘길 수 있어 호출자가 제한한다.
         """
         researched = list(
             (state.get("research_documents_by_topic") or {}).get(topic) or []
@@ -1337,7 +1352,23 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             topic_intent=topic_intent,
             score_ratio=0.0,
         )
-        return [*select_personal_documents(hybrid), *pool_documents]
+        stored = [*select_personal_documents(hybrid), *pool_documents]
+        # 단일 주제 경로와 같은 판정이다 — 창고에 확실히 쓸 만한 자료가 있으면
+        # 외부 수집을 건너뛴다. 대부분의 주제가 여기서 끝난다.
+        if is_pool_sufficient(pool_documents) and await to_thread(
+            is_pool_relevant, topic, pool_documents
+        ):
+            return stored
+        if not allow_live:
+            logger.info(
+                "실시간 수집 생략: topic=%s 이번 리포트의 수집 예산을 다 썼다.", topic
+            )
+            return stored
+        live = await to_thread(
+            collect_live_context, topic, state["user_id"], model=state["model"]
+        )
+        logger.info("주제별 실시간 수집: topic=%s %d건", topic, len(live))
+        return [*stored, *live]
 
     async def _load_multi_topic_contexts(
         state: ReportGenerationState, topics: list[str]
@@ -1352,8 +1383,14 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         merged: list[Any] = []
         seen: set[str] = set()
         covered: list[str] = []
+        live_budget = _MAX_LIVE_COLLECT_TOPICS
         for topic in topics:
-            documents = await _topic_documents(state, topic)
+            documents = await _topic_documents(
+                state, topic, allow_live=live_budget > 0
+            )
+            # 수집이 실제로 돌았는지는 알 수 없으므로, 수집이 가능했던 주제마다
+            # 예산을 깎는다. 넉넉히 잡는 대신 상한은 확실히 지킨다.
+            live_budget -= 1
             finalized = await _finalize_contexts(state, documents, max_documents=quota)
             picked = 0
             for context in finalized.get("contexts", []):

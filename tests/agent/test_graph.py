@@ -1311,6 +1311,8 @@ def test_multi_topic_report_gathers_evidence_per_topic(
     monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
     monkeypatch.setattr(agent_graph, "generate_report_content_with_quality", fake_generate)
     monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
+    # 대체하지 않으면 네이버·구글·유튜브·OpenAI를 실제로 호출한다.
+    monkeypatch.setattr(agent_graph, "collect_live_context", lambda *a, **k: [])
     _disable_research(monkeypatch)
 
     result = asyncio.run(
@@ -1375,6 +1377,8 @@ def test_multi_topic_report_drops_topics_without_evidence(
     monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
     monkeypatch.setattr(agent_graph, "generate_report_content_with_quality", fake_generate)
     monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
+    # 대체하지 않으면 네이버·구글·유튜브·OpenAI를 실제로 호출한다.
+    monkeypatch.setattr(agent_graph, "collect_live_context", lambda *a, **k: [])
     _disable_research(monkeypatch)
 
     asyncio.run(
@@ -1394,6 +1398,132 @@ def test_multi_topic_report_drops_topics_without_evidence(
     # 근거가 붙은 두 주제만 프롬프트로 간다.
     assert generated_with["topics"] == ["반도체", "프로야구"]
     assert generated_with["contexts"] == ["context-반도체", "context-프로야구"]
+
+
+def test_multi_topic_report_collects_live_when_the_pool_is_thin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """창고가 부족한 주제는 실시간 수집으로 근거를 채운다.
+
+    처음엔 여러 주제 경로에서 실시간 수집을 아예 뺐다. "조사원이 이미 수집을
+    시도했다"고 봤는데 틀렸다 — 조사원에게는 search_pool만 주고 collect_live는
+    도구로 노출하지 않는다. 그래서 창고에 없는 주제는 영영 근거가 0건이었다
+    (2026-08-10 실측: '환율' 섹션이 통째로 빠졌다).
+    """
+    collected: list[str] = []
+    generated_with: dict[str, Any] = {}
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """DB 사용자 Scope 설정을 생략한다."""
+        return None
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[str]:
+        """창고가 비어 있는 상황을 만든다."""
+        return []
+
+    async def fake_prag_006(contexts: list[str]) -> list[str]:
+        """검색 Context를 변경 없이 반환한다."""
+        return contexts
+
+    def fake_collect(topic: str, user_id: str, **_kwargs: Any) -> list[str]:
+        """실시간 수집을 대체하고 주제를 기록한다."""
+        collected.append(topic)
+        return [f"live-{topic}"]
+
+    def fake_generate(**kwargs: Any) -> str:
+        """생성 입력을 붙잡아 두고 고정 콘텐츠를 반환한다."""
+        generated_with.update(kwargs)
+        return "generated"
+
+    async def fake_prag_007(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """저장 호출을 고정 결과로 대체한다."""
+        return {"content_candidate_id": "candidate-1"}
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
+    monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect)
+    monkeypatch.setattr(agent_graph, "generate_report_content_with_quality", fake_generate)
+    monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
+    _disable_research(monkeypatch)
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 관심사 요약",
+            topics=["반도체", "환율"],
+            content_type="interest_news_card",
+            language="ko",
+            model="test-model",
+        )
+    )
+
+    assert collected == ["반도체", "환율"]
+    assert generated_with["contexts"] == ["live-반도체", "live-환율"]
+
+
+def test_multi_topic_report_caps_live_collection_per_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """한 리포트에서 실시간 수집을 도는 주제 수에 상한을 둔다.
+
+    수집 한 번이 뉴스·YouTube·Reddit 호출과 LLM 요약을 포함해 수십 초 걸린다.
+    주제 수만큼 돌리면 Worker lease(600초)를 넘겨 같은 Job이 죽은 것으로 판정되고
+    리포트가 중복 생성된다.
+    """
+    collected: list[str] = []
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """DB 사용자 Scope 설정을 생략한다."""
+        return None
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[str]:
+        """창고가 비어 있는 상황을 만든다."""
+        return []
+
+    async def fake_prag_006(contexts: list[str]) -> list[str]:
+        """검색 Context를 변경 없이 반환한다."""
+        return contexts
+
+    def fake_collect(topic: str, user_id: str, **_kwargs: Any) -> list[str]:
+        """실시간 수집을 대체하고 주제를 기록한다."""
+        collected.append(topic)
+        return [f"live-{topic}"]
+
+    def fake_generate(**kwargs: Any) -> str:
+        """고정 콘텐츠를 반환한다."""
+        return "generated"
+
+    async def fake_prag_007(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """저장 호출을 고정 결과로 대체한다."""
+        return {"content_candidate_id": "candidate-1"}
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
+    monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect)
+    monkeypatch.setattr(agent_graph, "generate_report_content_with_quality", fake_generate)
+    monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
+    _disable_research(monkeypatch)
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 관심사 요약",
+            topics=["반도체", "환율", "프로야구", "웹툰"],
+            content_type="interest_news_card",
+            language="ko",
+            model="test-model",
+        )
+    )
+
+    assert collected == ["반도체", "환율"]
 
 
 def test_single_topic_report_keeps_the_existing_path(
