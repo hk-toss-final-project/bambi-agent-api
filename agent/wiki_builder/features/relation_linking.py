@@ -8,7 +8,7 @@ merge/connect/standalone 처리를 검증한다.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -30,6 +30,7 @@ from shared.wiki_models import (
 )
 
 type WikiCompletion = Callable[..., str]
+type RelationIdentity = tuple[str, str]
 
 RELATION_LINKER_PROMPT_VERSION = "personal-wiki-relation-linker-v1"
 _PROMPT_PATH = (
@@ -157,19 +158,30 @@ def _incoming_refs(
     return refs, lines
 
 
+def _relation_identity(
+    kind: str, name: str, matched_key: str | None
+) -> RelationIdentity:
+    """관계 endpoint를 canonical 문서 종류와 식별자 조합으로 정규화한다."""
+    return kind, (matched_key or name).casefold()
+
+
 def _candidate_refs(
     candidates_by_node: Mapping[str, Sequence[WikiRelationCandidate]],
     *,
     start_index: int,
+    excluded_identities: Collection[RelationIdentity] = (),
 ) -> tuple[dict[str, tuple[str, str, str | None]], list[str]]:
-    """후보 세트의 중복 노드를 하나로 합치고 검색 신호를 프롬프트에 남긴다."""
+    """후보 세트의 중복·신규 노드를 정리하고 검색 신호를 프롬프트에 남긴다."""
+    excluded = set(excluded_identities)
     merged: dict[tuple[str, str], tuple[WikiRelationCandidate, set[str]]] = {}
     for incoming_ref, candidates in candidates_by_node.items():
         for candidate in candidates:
             identity = (
                 candidate.entry.document_kind,
-                candidate.entry.document_key,
+                candidate.entry.document_key.casefold(),
             )
+            if identity in excluded:
+                continue
             if identity not in merged:
                 merged[identity] = (candidate, {incoming_ref})
             else:
@@ -216,26 +228,27 @@ def _deduplicate_relations(
 def _accepted_relations(
     relations: Sequence[WikiRelationClassification],
     *,
-    incoming_refs: set[str],
-    ref_by_identity: Mapping[tuple[str, str], str],
+    incoming_identities: Collection[RelationIdentity],
 ) -> tuple[list[WikiRelationClassification], list[str]]:
     """검토 상태·provenance별 최소 신뢰도·신규 노드 포함 조건을 검사한다."""
     accepted: list[WikiRelationClassification] = []
     warnings: list[str] = []
+    incoming_identity_set = set(incoming_identities)
     for relation in relations:
-        source_identity = (
+        source_identity = _relation_identity(
             relation.source_kind,
-            (relation.source_matched_key or relation.source_name).casefold(),
+            relation.source_name,
+            relation.source_matched_key,
         )
-        target_identity = (
+        target_identity = _relation_identity(
             relation.target_kind,
-            (relation.target_matched_key or relation.target_name).casefold(),
+            relation.target_name,
+            relation.target_matched_key,
         )
-        endpoint_refs = {
-            ref_by_identity.get(source_identity),
-            ref_by_identity.get(target_identity),
-        }
-        if not endpoint_refs.intersection(incoming_refs):
+        if (
+            source_identity not in incoming_identity_set
+            and target_identity not in incoming_identity_set
+        ):
             warnings.append("신규·갱신 노드가 없는 기존 관계를 제외했습니다.")
             continue
         minimum = _MIN_CONFIDENCE.get(relation.provenance_kind, 1.0)
@@ -337,8 +350,14 @@ def link_wiki_relations(
     incoming, incoming_lines = _incoming_refs(classification)
     if not incoming:
         return classification
+    incoming_identities = {
+        _relation_identity(kind, name, matched_key)
+        for kind, name, matched_key in incoming.values()
+    }
     candidate_refs, candidate_lines = _candidate_refs(
-        candidates_by_node, start_index=1
+        candidates_by_node,
+        start_index=1,
+        excluded_identities=incoming_identities,
     )
     all_refs = {**incoming, **candidate_refs}
     user_prompt = (
@@ -372,14 +391,9 @@ def link_wiki_relations(
         model=model,
         prompt_version=RELATION_LINKER_PROMPT_VERSION,
     )
-    ref_by_identity = {
-        (kind, (matched_key or name).casefold()): reference
-        for reference, (kind, name, matched_key) in all_refs.items()
-    }
     accepted, quality_warnings = _accepted_relations(
         parsed.relations,
-        incoming_refs=set(incoming),
-        ref_by_identity=ref_by_identity,
+        incoming_identities=incoming_identities,
     )
     dispositions, disposition_warnings = _parse_dispositions(
         payload.get("dispositions"),
