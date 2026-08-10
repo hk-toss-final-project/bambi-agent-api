@@ -123,6 +123,13 @@ from .features.generation_runtime import (
     persist_report_generation,
     upsert_user_context_snapshot,
 )
+from .features.wiki_navigation import (
+    load_wiki_navigation_keyword_candidates,
+    load_wiki_navigation_pages,
+    load_wiki_navigation_relations,
+    load_wiki_navigation_sources,
+    load_wiki_navigation_vector_candidates,
+)
 from .features.change_history_facts import (
     list_change_history_facts,
     load_change_history_facts_by_ids,

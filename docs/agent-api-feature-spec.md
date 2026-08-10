@@ -114,6 +114,17 @@
 | PRAG-008 | 검색 로그 저장 | 검색 Query, 결과, 점수와 사용 Agent를 기록한다. |
 | PRAG-009 | 검색 품질 평가 | 개인 Wiki 검색 결과의 적합성을 평가한다. |
 
+## 7-1. LLM Wiki Navigator
+
+| ID | 기능 | 설명 |
+|---|---|---|
+| WNAV-001 | Wiki Page 후보 Locate | Logical Index의 제목·별칭·Keyword·Vector 순위를 결합해 최대 30개 Page 후보를 반환한다. |
+| WNAV-002 | Wiki Page Version Read | Consumer가 선택한 정확한 Wiki Page Version과 관련 Chunk를 읽는다. |
+| WNAV-003 | Wiki Link Traverse | 검증된 관계와 active Support를 최대 2홉 범위에서 순회한다. |
+| WNAV-004 | Wiki Source Read | Wiki Page의 사용자 원본과 저장·게시 시각을 조회한다. |
+| WNAV-005 | Wiki Context Packet 구성 | Page·관계·Source·Trace를 최종 답변 없는 Context Packet으로 구성한다. |
+| WNAV-006 | Wiki Navigation | Consumer가 선택한 Seed Page를 읽고 Link를 따라 Context Packet을 반환한다. |
+
 ## 8. 사용자 관심사 분류
 
 | ID | 기능 | 설명 |
