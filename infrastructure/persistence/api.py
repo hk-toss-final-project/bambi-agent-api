@@ -144,6 +144,7 @@ from .features.wiki_deletion import (
     WikiDocumentNotFoundError,
     delete_wiki_document_and_record_event,
 )
+from .features.wiki_reset import reset_personal_wiki
 
 __all__ = [
     "db_001",
@@ -189,4 +190,5 @@ __all__ = [
     "update_full_wiki_rebuild_summary",
     "save_fetched_url_and_enqueue",
     "sync_wiki_relation_supports",
+    "reset_personal_wiki",
 ]

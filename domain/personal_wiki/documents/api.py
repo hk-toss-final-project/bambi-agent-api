@@ -13,6 +13,7 @@ from .features.merging import pwiki_009
 from .features.summarization import pwiki_010
 from .features.normalization import pwiki_011
 from .features.isolation import pwiki_012
+from .features.reset import pwiki_013
 
 __all__ = [
     "pwiki_001",
@@ -27,4 +28,5 @@ __all__ = [
     "pwiki_010",
     "pwiki_011",
     "pwiki_012",
+    "pwiki_013",
 ]

@@ -69,6 +69,12 @@ WIKI_RELATION_LIFECYCLE_MIGRATION_PATH = (
     / "migrations"
     / "0017_wiki_relation_lifecycle.sql"
 )
+PERSONAL_WIKI_RESET_MIGRATION_PATH = (
+    PROJECT_ROOT
+    / "database"
+    / "migrations"
+    / "0018_personal_wiki_reset.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
@@ -482,6 +488,16 @@ def test_every_migration_records_its_own_version() -> None:
     assert missing == [], f"schema_migrations 기록이 없습니다: {missing}"
     assert mismatched == [], f"파일 이름과 기록된 version이 다릅니다: {mismatched}"
     assert not_transactional == [], f"트랜잭션이 없습니다: {not_transactional}"
+
+
+def test_personal_wiki_reset_migration_blocks_cancelled_build_writes() -> None:
+    """초기화와 경합한 취소 Build가 Wiki Version을 저장하지 못하는지 검증한다."""
+    migration = _read(PERSONAL_WIKI_RESET_MIGRATION_PATH)
+
+    assert "'onboarding_seed', 'reset'" in migration
+    assert "CREATE FUNCTION agent.reject_cancelled_wiki_build()" in migration
+    assert "job.status = 'cancelled'" in migration
+    assert "ON agent.wiki_document_versions" in migration
 
 
 def test_database_initializer_runs_only_migrations() -> None:

@@ -39,6 +39,7 @@ from app.schemas.mvp import (
     GenerationRequest,
     JobResultResponse,
     JobStatusResponse,
+    PersonalWikiResetResponse,
     UrlWikiSourceRequest,
     UserContextResponse,
     UserContextUpsertRequest,
@@ -305,6 +306,21 @@ async def get_personal_wiki_graph(
 ) -> WikiGraphResponse:
     """[PWIKI-003] 현재 Entity·Concept 문서와 관계 Graph를 조회한다."""
     return await service.get_graph(user_id, _request_id(request))
+
+
+@router.delete(
+    "/users/{user_id}/wiki",
+    response_model=PersonalWikiResetResponse,
+    operation_id="pwiki_013",
+    summary="개인 LLM Wiki 초기화",
+)
+async def reset_personal_wiki(
+    user_id: UserId,
+    request: Request,
+    service: WikiDocumentService = Depends(get_wiki_document_service),
+) -> PersonalWikiResetResponse:
+    """[PWIKI-013] 사용자 원본을 보존하고 개인 LLM Wiki를 초기화한다."""
+    return await service.reset_wiki(user_id, request_id=_request_id(request))
 
 
 @router.get(
