@@ -8,11 +8,14 @@ merge/connect/standalone 처리를 검증한다.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
+import re
+import unicodedata
+from collections.abc import Callable, Collection, Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from agent.llm.api import complete, strip_json_fence
+from agent.wiki_builder.features.identity_resolution import normalize_wiki_surface
 from agent.wiki_builder.features.relation_candidates import (
     RelationCandidateQuery,
     WikiGraphEdge,
@@ -30,6 +33,7 @@ from shared.wiki_models import (
 )
 
 type WikiCompletion = Callable[..., str]
+type RelationIdentity = tuple[str, str]
 
 RELATION_LINKER_PROMPT_VERSION = "personal-wiki-relation-linker-v1"
 _PROMPT_PATH = (
@@ -45,6 +49,16 @@ _MIN_CONFIDENCE = {
     "user_declared": 0.90,
     "system_rule": 0.90,
 }
+
+
+@dataclass(frozen=True, slots=True)
+class _CandidateReferenceSet:
+    """프롬프트 후보 참조와 원래 신규 노드 범위·표면형을 함께 보존한다."""
+
+    refs: dict[str, tuple[str, str, str | None]]
+    lines: tuple[str, ...]
+    incoming_refs_by_candidate: dict[str, frozenset[str]]
+    surfaces_by_candidate: dict[str, tuple[str, ...]]
 
 
 def build_relation_candidate_sets(
@@ -157,31 +171,69 @@ def _incoming_refs(
     return refs, lines
 
 
+def _relation_identity(
+    kind: str, name: str, matched_key: str | None
+) -> RelationIdentity:
+    """관계 endpoint를 canonical 문서 종류와 식별자 조합으로 정규화한다."""
+    return kind, (matched_key or name).casefold()
+
+
+def _metadata_aliases(entry: ExistingWikiEntry) -> tuple[str, ...]:
+    """기존 Wiki 후보 Metadata에서 비어 있지 않은 문자열 별칭을 읽는다."""
+    aliases = entry.metadata.get("aliases", ())
+    if not isinstance(aliases, (list, tuple)):
+        return ()
+    return tuple(str(alias).strip() for alias in aliases if str(alias).strip())
+
+
+def _unique_surfaces(values: Sequence[str]) -> tuple[str, ...]:
+    """원래 순서를 유지하며 빈 값과 동일 canonical 표면형을 제거한다."""
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        surface = str(value).strip()
+        marker = normalize_wiki_surface(surface)
+        if surface and marker and marker not in seen:
+            seen.add(marker)
+            result.append(surface)
+    return tuple(result)
+
+
 def _candidate_refs(
     candidates_by_node: Mapping[str, Sequence[WikiRelationCandidate]],
     *,
     start_index: int,
-) -> tuple[dict[str, tuple[str, str, str | None]], list[str]]:
-    """후보 세트의 중복 노드를 하나로 합치고 검색 신호를 프롬프트에 남긴다."""
+    excluded_identities: Collection[RelationIdentity] = (),
+) -> _CandidateReferenceSet:
+    """후보 세트의 중복·신규 노드를 정리하고 검색 신호를 프롬프트에 남긴다."""
+    excluded = set(excluded_identities)
     merged: dict[tuple[str, str], tuple[WikiRelationCandidate, set[str]]] = {}
     for incoming_ref, candidates in candidates_by_node.items():
         for candidate in candidates:
             identity = (
                 candidate.entry.document_kind,
-                candidate.entry.document_key,
+                candidate.entry.document_key.casefold(),
             )
+            if identity in excluded:
+                continue
             if identity not in merged:
                 merged[identity] = (candidate, {incoming_ref})
             else:
                 merged[identity][1].add(incoming_ref)
     refs: dict[str, tuple[str, str, str | None]] = {}
     lines: list[str] = []
+    incoming_refs_by_candidate: dict[str, frozenset[str]] = {}
+    surfaces_by_candidate: dict[str, tuple[str, ...]] = {}
     for offset, (_identity, (candidate, incoming_refs)) in enumerate(
         sorted(merged.items()), start=start_index
     ):
         reference = f"X{offset}"
         entry = candidate.entry
         refs[reference] = (entry.document_kind, entry.title, entry.document_key)
+        incoming_refs_by_candidate[reference] = frozenset(incoming_refs)
+        surfaces_by_candidate[reference] = _unique_surfaces(
+            (entry.title, entry.document_key, *_metadata_aliases(entry))
+        )
         signal_text = ", ".join(
             f"{signal.kind}:{signal.score:.3f}" for signal in candidate.signals
         )
@@ -191,7 +243,93 @@ def _candidate_refs(
             f"summary={entry.summary or '(없음)'} / score={candidate.score:.3f} / "
             f"signals=[{signal_text}] / for={sorted(incoming_refs)}"
         )
-    return refs, lines
+    return _CandidateReferenceSet(
+        refs=refs,
+        lines=tuple(lines),
+        incoming_refs_by_candidate=incoming_refs_by_candidate,
+        surfaces_by_candidate=surfaces_by_candidate,
+    )
+
+
+def _surface_is_grounded(surfaces: Sequence[str], text: str) -> bool:
+    """후보 제목·key·별칭 중 하나가 제목과 인용 근거에 명시됐는지 확인한다."""
+    folded_text = unicodedata.normalize("NFKC", text).casefold()
+    normalized_text = normalize_wiki_surface(text)
+    for surface in surfaces:
+        folded_surface = unicodedata.normalize("NFKC", surface).casefold().strip()
+        marker = normalize_wiki_surface(surface)
+        if not marker:
+            continue
+        if marker.isascii() and marker.isalnum() and len(marker) <= 3:
+            if re.search(
+                rf"(?<![a-z0-9]){re.escape(folded_surface)}(?![a-z0-9])",
+                folded_text,
+            ):
+                return True
+            continue
+        if marker in normalized_text:
+            return True
+    return False
+
+
+def _filter_relation_reference_scope(
+    raw_relations: object,
+    *,
+    incoming_refs: Collection[str],
+    candidates: _CandidateReferenceSet,
+    source_title: str,
+) -> tuple[object, list[str]]:
+    """LLM 관계가 후보별 회수 범위와 source_explicit 표면 근거를 지키는지 검사한다."""
+    if not isinstance(raw_relations, list):
+        return raw_relations, []
+    normalized_incoming = {reference.casefold() for reference in incoming_refs}
+    candidate_scopes = {
+        reference.casefold(): {item.casefold() for item in scopes}
+        for reference, scopes in candidates.incoming_refs_by_candidate.items()
+    }
+    candidate_surfaces = {
+        reference.casefold(): surfaces
+        for reference, surfaces in candidates.surfaces_by_candidate.items()
+    }
+    filtered: list[object] = []
+    warnings: list[str] = []
+    for index, raw in enumerate(raw_relations, start=1):
+        if not isinstance(raw, dict):
+            filtered.append(raw)
+            continue
+        source_ref = str(raw.get("source_ref") or "").strip().casefold()
+        target_ref = str(raw.get("target_ref") or "").strip().casefold()
+        candidate_ref: str | None = None
+        incoming_ref: str | None = None
+        if source_ref in candidate_scopes and target_ref in normalized_incoming:
+            candidate_ref, incoming_ref = source_ref, target_ref
+        elif target_ref in candidate_scopes and source_ref in normalized_incoming:
+            candidate_ref, incoming_ref = target_ref, source_ref
+        if candidate_ref is None or incoming_ref is None:
+            filtered.append(raw)
+            continue
+        if incoming_ref not in candidate_scopes[candidate_ref]:
+            warnings.append(
+                f"relations[{index}]의 기존 후보 {candidate_ref.upper()}는 "
+                f"{incoming_ref.upper()}의 회수 후보가 아니어 제외했습니다."
+            )
+            continue
+        provenance_kind = str(
+            raw.get("provenance_kind") or "source_explicit"
+        ).strip()
+        if provenance_kind == "source_explicit":
+            evidence = str(raw.get("evidence") or "").strip()
+            grounding_text = f"{source_title}\n{evidence}"
+            if not _surface_is_grounded(
+                candidate_surfaces.get(candidate_ref, ()), grounding_text
+            ):
+                warnings.append(
+                    f"relations[{index}]의 기존 후보 {candidate_ref.upper()}가 "
+                    "원본 제목·evidence에 명시되지 않아 제외했습니다."
+                )
+                continue
+        filtered.append(raw)
+    return filtered, warnings
 
 
 def _deduplicate_relations(
@@ -216,26 +354,27 @@ def _deduplicate_relations(
 def _accepted_relations(
     relations: Sequence[WikiRelationClassification],
     *,
-    incoming_refs: set[str],
-    ref_by_identity: Mapping[tuple[str, str], str],
+    incoming_identities: Collection[RelationIdentity],
 ) -> tuple[list[WikiRelationClassification], list[str]]:
     """검토 상태·provenance별 최소 신뢰도·신규 노드 포함 조건을 검사한다."""
     accepted: list[WikiRelationClassification] = []
     warnings: list[str] = []
+    incoming_identity_set = set(incoming_identities)
     for relation in relations:
-        source_identity = (
+        source_identity = _relation_identity(
             relation.source_kind,
-            (relation.source_matched_key or relation.source_name).casefold(),
+            relation.source_name,
+            relation.source_matched_key,
         )
-        target_identity = (
+        target_identity = _relation_identity(
             relation.target_kind,
-            (relation.target_matched_key or relation.target_name).casefold(),
+            relation.target_name,
+            relation.target_matched_key,
         )
-        endpoint_refs = {
-            ref_by_identity.get(source_identity),
-            ref_by_identity.get(target_identity),
-        }
-        if not endpoint_refs.intersection(incoming_refs):
+        if (
+            source_identity not in incoming_identity_set
+            and target_identity not in incoming_identity_set
+        ):
             warnings.append("신규·갱신 노드가 없는 기존 관계를 제외했습니다.")
             continue
         minimum = _MIN_CONFIDENCE.get(relation.provenance_kind, 1.0)
@@ -337,14 +476,20 @@ def link_wiki_relations(
     incoming, incoming_lines = _incoming_refs(classification)
     if not incoming:
         return classification
-    candidate_refs, candidate_lines = _candidate_refs(
-        candidates_by_node, start_index=1
+    incoming_identities = {
+        _relation_identity(kind, name, matched_key)
+        for kind, name, matched_key in incoming.values()
+    }
+    candidate_references = _candidate_refs(
+        candidates_by_node,
+        start_index=1,
+        excluded_identities=incoming_identities,
     )
-    all_refs = {**incoming, **candidate_refs}
+    all_refs = {**incoming, **candidate_references.refs}
     user_prompt = (
         f"[원본 제목]\n{source_title}\n\n"
         f"[신규/갱신 노드]\n{chr(10).join(incoming_lines)}\n\n"
-        f"[기존 Wiki 후보]\n{chr(10).join(candidate_lines) or '(없음)'}\n\n"
+        f"[기존 Wiki 후보]\n{chr(10).join(candidate_references.lines) or '(없음)'}\n\n"
         f"[원본 본문]\n{source_content}"
     )
     try:
@@ -365,21 +510,22 @@ def link_wiki_relations(
         )
     if not isinstance(payload, dict):
         payload = {}
-    parsed = parse_relation_candidates(
+    scoped_relations, scope_warnings = _filter_relation_reference_scope(
         payload.get("relations"),
+        incoming_refs=incoming,
+        candidates=candidate_references,
+        source_title=source_title,
+    )
+    parsed = parse_relation_candidates(
+        scoped_relations,
         node_refs=all_refs,
         source_content=source_content,
         model=model,
         prompt_version=RELATION_LINKER_PROMPT_VERSION,
     )
-    ref_by_identity = {
-        (kind, (matched_key or name).casefold()): reference
-        for reference, (kind, name, matched_key) in all_refs.items()
-    }
     accepted, quality_warnings = _accepted_relations(
         parsed.relations,
-        incoming_refs=set(incoming),
-        ref_by_identity=ref_by_identity,
+        incoming_identities=incoming_identities,
     )
     dispositions, disposition_warnings = _parse_dispositions(
         payload.get("dispositions"),
@@ -394,6 +540,7 @@ def link_wiki_relations(
             dict.fromkeys(
                 [
                     *classification.relation_warnings,
+                    *scope_warnings,
                     *parsed.warnings,
                     *quality_warnings,
                     *disposition_warnings,
