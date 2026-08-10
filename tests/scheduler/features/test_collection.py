@@ -226,6 +226,28 @@ def test_topic_collection_passes_target_key_and_split_limit_to_worker(
     assert sum(call["limit_per_provider"] for call in calls) == 10
 
 
+def test_scheduled_collection_is_recorded_as_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """정기 수집은 실행 이력에 schedule로 남아 일일 한도에 그대로 잡힌다.
+
+    수동 실행(SCH-021)만 한도 집계에서 빠져야 한다. 정기 실행까지 빠지면 한도가
+    통째로 무력화된다.
+    """
+    calls = _patch(monkeypatch, [_schedule(provider="google_news", keywords=("AI",))])
+
+    asyncio.run(
+        sch_001(
+            _FakeConnection(),
+            database_url="postgresql://fake",
+            credentials=_CREDENTIALS,
+            now=_NOW,
+        )
+    )
+
+    assert [call["trigger_source"] for call in calls] == ["schedule"]
+
+
 def test_next_collection_run_at_follows_cron() -> None:
     """Cron 식과 기준 시각으로 다음 실행 시각을 계산하는지 검증한다."""
     assert next_collection_run_at("0 */6 * * *", after=_NOW) == datetime(

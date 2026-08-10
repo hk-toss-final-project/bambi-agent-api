@@ -614,3 +614,26 @@ def test_manual_run_passes_source_search_options(
         "subreddits": ["MachineLearning"],
         "time_filter": "day",
     }
+
+
+def test_manual_run_is_recorded_as_manual(monkeypatch: pytest.MonkeyPatch) -> None:
+    """수동 실행은 실행 이력에 manual로 남는다.
+
+    일일 한도는 알아서 도는 수집을 통제하는 장치다. 점검용 수동 실행이 그날 정기
+    수집 예산을 먹으면 안 되므로 한도 집계에서 빠져야 하고, 그러려면 이력에 구분이
+    남아야 한다(2026-08-10 실측: 한도 200인 Source의 runs_today가 수동 실행 두 번에
+    414가 되어 그날 남은 정기 회차가 전부 건너뛰어졌다).
+    """
+    calls = _patch_manual_run(monkeypatch, _schedule(keywords=("후쿠오카",)))
+
+    asyncio.run(
+        sch_021(
+            _FakeConnection(),  # type: ignore[arg-type]
+            source_key="latest-naver",
+            database_url="postgresql://fake",
+            credentials=_CREDENTIALS,
+            now=_NOW,
+        )
+    )
+
+    assert [call["trigger_source"] for call in calls] == ["manual"]

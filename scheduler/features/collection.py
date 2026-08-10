@@ -268,6 +268,7 @@ async def _collect_planned_query(
     database_url: str,
     credentials: CollectionCredentials,
     following_run_at: datetime | None,
+    trigger_source: str = "schedule",
 ) -> CollectionScheduleResult:
     """검색 하나를 수집 Worker로 실행하고 완료 결과로 감싼다.
 
@@ -293,6 +294,10 @@ async def _collect_planned_query(
         # 검색어 글자가 달라 연결이 끊기고, 그 Topic의 next_collection_at도
         # 갱신되지 않아 매 tick 재검색된다.
         target_key=planned.target_key,
+        # 점검용 수동 실행은 일일 한도 집계에서 빠진다. 한도는 알아서 도는
+        # 수집을 통제하는 장치이므로, 관리자가 지금 눌러 본 실행이 그날 정기
+        # 수집 예산을 먹으면 안 된다.
+        trigger_source=trigger_source,
     )
     return CollectionScheduleResult(
         provider=schedule.provider,
@@ -312,6 +317,7 @@ async def _collect_queries_concurrently(
     credentials: CollectionCredentials,
     following_run_at: datetime | None,
     concurrency: int,
+    trigger_source: str = "manual",
 ) -> list[CollectionScheduleResult]:
     """여러 검색을 동시에 수집한다. 동시 실행 수를 세마포어로 제한한다.
 
@@ -330,6 +336,7 @@ async def _collect_queries_concurrently(
                 database_url=database_url,
                 credentials=credentials,
                 following_run_at=following_run_at,
+                trigger_source=trigger_source,
             )
 
     return list(
@@ -381,6 +388,10 @@ async def collect_schedule_keywords(
         if schedule.daily_max_runs is None or not enforce_daily_limit
         else schedule.daily_max_runs - schedule.runs_today
     )
+    # 한도를 세지 않는 실행이 곧 수동 실행(SCH-021)이다. 실행 이력에는 남기되
+    # 일일 한도 집계에서는 빠지도록 표시한다 — 한도는 알아서 도는 수집을 통제하는
+    # 장치라, 관리자가 점검하려고 누른 실행이 그날 정기 수집 예산을 먹으면 안 된다.
+    trigger_source = "schedule" if enforce_daily_limit else "manual"
     planned_queries = plan_schedule_queries(schedule)
     # 한도를 세지 않는 실행만 동시에 돌린다. 한도를 세는 정기 실행은 남은 호출
     # 수를 순서대로 깎아 초과분을 skipped로 남겨야 하므로 순차 경로를 지킨다.
@@ -392,6 +403,7 @@ async def collect_schedule_keywords(
             credentials=credentials,
             following_run_at=following_run_at,
             concurrency=concurrency,
+            trigger_source=trigger_source,
         )
     results: list[CollectionScheduleResult] = []
     for planned in planned_queries:
@@ -415,6 +427,7 @@ async def collect_schedule_keywords(
             database_url=database_url,
             credentials=credentials,
             following_run_at=following_run_at,
+            trigger_source=trigger_source,
         )
         if remaining is not None:
             remaining -= 1
