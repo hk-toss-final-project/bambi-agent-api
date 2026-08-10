@@ -83,6 +83,7 @@
 | PWIKI-010 | Wiki 문서 요약 | 긴 문서를 개인 Wiki용 요약 문서로 구성한다. |
 | PWIKI-011 | Wiki 문서 정규화 | 문서 형식과 메타 정보를 공통 구조로 변환한다. |
 | PWIKI-012 | 개인 Wiki 사용자 격리 | 다른 사용자의 개인 Wiki에 접근하지 못하도록 격리한다. |
+| PWIKI-013 | 개인 Wiki 초기화 | 사용자 원본은 보존하고 개인 LLM Wiki 파생 데이터와 진행 중인 Build를 계정 단위로 초기화한다. |
 
 ## 6. 개인 Wiki Chunk 및 Embedding
 

@@ -249,6 +249,10 @@ class FeedbackSignalItem(ImmutableSchema):
     occurred_at: datetime | None = Field(
         default=None, description="행동 발생 시각 (시간 감쇠 기준)"
     )
+    metadata: dict[str, object] = Field(
+        default_factory=dict,
+        description="Service가 계측한 신호 부가 정보 (해석하거나 손실시키지 않고 보존)",
+    )
 
 
 class FeedbackSignalsRequest(ImmutableSchema):
@@ -290,6 +294,26 @@ class WikiDocumentDeletionResponse(ImmutableSchema):
     unsearchable_chunk_count: int = Field(
         ge=0, description="검색에서 제외 처리된 Chunk 수"
     )
+    request_id: str = Field(description="요청 추적 ID")
+
+
+class PersonalWikiResetResponse(ImmutableSchema):
+    """개인 LLM Wiki 계정 단위 초기화 결과."""
+
+    user_id: str = Field(description="Wiki를 초기화한 사용자 ID")
+    reset_document_count: int = Field(ge=0, description="비활성화한 Wiki 문서 수")
+    reset_relation_count: int = Field(ge=0, description="비활성화한 Wiki 관계 수")
+    unsearchable_chunk_count: int = Field(
+        ge=0, description="검색에서 제외한 Wiki Chunk 수"
+    )
+    retired_wiki_version_count: int = Field(
+        ge=0, description="종료한 Wiki Build Snapshot 수"
+    )
+    retired_interest_profile_count: int = Field(
+        ge=0, description="종료한 관심사 Profile 수"
+    )
+    cancelled_job_count: int = Field(ge=0, description="취소한 Wiki Build Job 수")
+    reset_at: datetime = Field(description="초기화 완료 시각")
     request_id: str = Field(description="요청 추적 ID")
 
 
@@ -610,13 +634,13 @@ class PublishBatchAckRequest(ImmutableSchema):
                     "worker_id": "service-worker-01",
                     "items": [
                         {
-                            "content_id": "mock-content-001",
+                            "content_id": "example-content-001",
                             "version": 1,
                             "snapshot_hash": "d3b07384d113edec49eaa6238ad5ff00d3b07384d113edec49eaa6238ad5ff00",
                             "status": "published",
                         },
                         {
-                            "content_id": "mock-content-002",
+                            "content_id": "example-content-002",
                             "version": 1,
                             "snapshot_hash": "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
                             "status": "failed",

@@ -4,7 +4,11 @@
 """
 
 from .features.keyword import prag_001
-from .features.vector import prag_002
+from .features.vector import (
+    DEFAULT_WIKI_EMBEDDING_MODEL,
+    WIKI_EMBEDDING_DIMENSIONS,
+    prag_002,
+)
 from .features.hybrid import prag_003
 from .features.reranking import prag_004
 from .features.personalization import prag_005
@@ -23,4 +27,6 @@ __all__ = [
     "prag_007",
     "prag_008",
     "prag_009",
+    "DEFAULT_WIKI_EMBEDDING_MODEL",
+    "WIKI_EMBEDDING_DIMENSIONS",
 ]

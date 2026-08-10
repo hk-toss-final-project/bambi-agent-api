@@ -14,7 +14,6 @@ services:
       POSTGRES_DB: ${AGENT_DB_NAME:-bambi_agent}
       POSTGRES_USER: ${AGENT_DB_USER:-bambi_agent}
       POSTGRES_PASSWORD: ${AGENT_DB_PASSWORD:?AGENT_DB_PASSWORD must be set in .env}
-      AGENT_DB_APPLY_DEV_SEEDS: ${AGENT_DB_APPLY_DEV_SEEDS:-true}
     ports:
       - "127.0.0.1:${AGENT_DB_PORT:-5432}:5432"
     healthcheck:
@@ -26,7 +25,6 @@ services:
     volumes:
       - agent-db-data:/var/lib/postgresql/data
       - ./database/migrations:/opt/bambi/migrations:ro
-      - ./database/seeds:/opt/bambi/seeds:ro
       - ./scripts/run_agent_db_migrations.sh:/usr/local/bin/run-agent-db-migrations:ro
       - ./scripts/initialize_agent_db.sh:/usr/local/bin/initialize-agent-db:ro
     post_start:

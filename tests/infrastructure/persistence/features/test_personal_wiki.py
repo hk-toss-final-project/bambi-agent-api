@@ -7,22 +7,162 @@ from typing import Any
 
 import pytest
 
-from agent.wiki_builder.models import WikiDocumentPlan
+from agent.wiki_builder.models import (
+    GeneratedArtifact,
+    WikiBuildPlan,
+    WikiDocumentPlan,
+    WikiRelationPlan,
+)
 from infrastructure.persistence.features.personal_wiki import (
     RegisteredUrlSource,
     SavedUserSourceVersion,
     UserSourceDocumentForAgent,
+    _observed_relations_for_build,
+    _relation_persistence_values,
     _count_wiki_relations,
     _upsert_wiki_document,
     chunk_wiki_markdown,
     get_user_source_document_version_for_agent,
     list_existing_wiki_entries,
     list_existing_wiki_relations,
+    list_onboarding_wiki_anchor_keys,
     list_related_wiki_keywords,
+    list_wiki_graph_relation_snapshot,
+    list_wiki_node_embeddings,
+    list_user_source_versions_for_rebuild,
     mark_url_source_event,
     register_user_url_source,
     save_user_url_document_version,
+    sync_wiki_relation_supports,
+    supersede_personal_wiki_for_rebuild,
+    update_full_wiki_rebuild_summary,
 )
+
+
+def test_list_wiki_node_embeddings_averages_current_chunk_vectors() -> None:
+    """현재 노드의 여러 Chunk Vector를 차원별로 평균한다."""
+    connection = _FakeConnection(
+        [
+            {
+                "document_kind": "concept",
+                "document_key": "weather",
+                "embedding": "[1,0,0]",
+            },
+            {
+                "document_kind": "concept",
+                "document_key": "weather",
+                "embedding": "[0,1,0]",
+            },
+            {
+                "document_kind": "entity",
+                "document_key": "seoul",
+                "embedding": "손상",
+            },
+        ]
+    )
+
+    result = asyncio.run(
+        list_wiki_node_embeddings(
+            connection,  # type: ignore[arg-type]
+            namespace_key="user/56",
+            model_name="text-embedding-3-small",
+        )
+    )
+
+    assert len(result) == 1
+    assert result[0].document_key == "weather"
+    assert result[0].embedding == (0.5, 0.5, 0.0)
+    query, params = connection.executed[0]
+    assert "embedding.embedding::text" in query
+    assert "version.version = document.current_version" in query
+    assert params == ("text-embedding-3-small", "user/56")
+
+
+def test_list_onboarding_wiki_anchor_keys_uses_source_provenance() -> None:
+    """온보딩 anchor를 제목 추측이 아닌 원본 source_type으로 조회한다."""
+    connection = _FakeConnection(
+        [{"document_kind": "concept", "document_key": "weather"}]
+    )
+
+    result = asyncio.run(
+        list_onboarding_wiki_anchor_keys(
+            connection,  # type: ignore[arg-type]
+            namespace_key="user/56",
+        )
+    )
+
+    assert result == [("concept", "weather")]
+    query, params = connection.executed[0]
+    assert "source_document.source_type = 'onboarding_seed'" in query
+    assert params == ("user/56",)
+
+
+def test_list_user_source_versions_for_rebuild_reads_current_versions() -> None:
+    """재구성 원본은 삭제되지 않은 Head의 현재 Version으로 고정한다."""
+    connection = _FakeConnection(_sample_row())
+
+    result = asyncio.run(
+        list_user_source_versions_for_rebuild(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+        )
+    )
+
+    assert len(result) == 1
+    assert result[0].source_document_version_id == "version-1"
+    query, params = connection.executed[0]
+    assert "version.version = document.current_version" in query
+    assert "document.deleted_at IS NULL" in query
+    assert "document.source_type = 'onboarding_seed' THEN 0" in query
+    assert "document.created_at" in query
+    assert params == ("user-1", "user/user-1")
+
+
+def test_supersede_personal_wiki_for_rebuild_clears_retry_snapshot_atomically() -> None:
+    """재시도 Snapshot을 비우고 관계 근거·Head·문서를 대체 상태로 만든다."""
+    connection = _FakeConnection([{"id": "doc-1"}, {"id": "doc-2"}])
+
+    count = asyncio.run(
+        supersede_personal_wiki_for_rebuild(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+        )
+    )
+
+    assert count == 2
+    queries = [query for query, _params in connection.executed]
+    assert "DELETE FROM agent.wiki_version_documents" in queries[0]
+    assert "UPDATE agent.wiki_relation_supports" in queries[1]
+    assert "UPDATE agent.wiki_document_relations" in queries[2]
+    assert "UPDATE agent.wiki_documents" in queries[3]
+    assert connection.executed[0][1] == ("user-1", "job-1")
+
+
+def test_update_full_wiki_rebuild_summary_records_complete_replacement_scope() -> None:
+    """Full Rebuild Build Head에 전체 원본·문서 교체 범위를 기록한다."""
+    connection = _FakeConnection(None)
+
+    asyncio.run(
+        update_full_wiki_rebuild_summary(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            wiki_version_id="wiki-1",
+            source_count=4,
+            affected_document_count=9,
+            superseded_document_count=7,
+        )
+    )
+
+    query, params = connection.executed[0]
+    assert "UPDATE agent.wiki_versions" in query
+    assert params[0].obj == {
+        "mode": "full_rebuild",
+        "source_count": 4,
+        "affected_document_count": 9,
+        "superseded_document_count": 7,
+    }
+    assert params[1:] == ("wiki-1", "user-1", "user/user-1")
 
 
 class _FakeCursor:
@@ -73,6 +213,8 @@ def test_count_wiki_relations_scopes_query_to_namespace() -> None:
     assert count == 4
     query, params = connection.executed[0]
     assert "FROM agent.wiki_document_relations AS relation" in query
+    assert "relation.status = 'active'" in query
+    assert "relation.review_status <> 'rejected'" in query
     assert "source.deleted_at IS NULL" in query
     assert "target.deleted_at IS NULL" in query
     assert params == ("user/user-1",)
@@ -245,7 +387,129 @@ def test_list_existing_wiki_relations_maps_document_keys() -> None:
     assert result[0].source_document_key == "obsidian"
     assert result[0].target_document_key == "연결-노트"
     assert result[0].metadata == {"confidence": 0.9}
+    query, _ = connection.executed[0]
+    assert "relation.status = 'active'" in query
+    assert "relation.review_status <> 'rejected'" in query
     assert connection.executed[0][1] == ("user/user-1",)
+
+
+def _sample_relation(
+    *,
+    observed: bool | None = True,
+    confidence: object = 0.82,
+) -> WikiRelationPlan:
+    """관계 근거 수명주기 테스트에 사용할 Wiki 관계 계획을 만든다."""
+    metadata: dict[str, object] = {
+        "evidence": "서울에 폭염 경보가 발효됐다.",
+        "provenance_kind": "source_explicit",
+        "confidence": confidence,
+        "review_status": "accepted",
+        "model": "gpt-4.1-mini",
+        "model_version": "2026-07-01",
+        "prompt_key": "personal-wiki-relation",
+        "prompt_version": 3,
+        "disposition": "connect",
+    }
+    if observed is not None:
+        metadata["observed_in_current_build"] = observed
+    return WikiRelationPlan(
+        source_document_key="서울",
+        source_document_kind="entity",
+        target_document_key="폭염",
+        target_document_kind="concept",
+        relation_type="applies_concept",
+        metadata=metadata,
+    )
+
+
+def _sample_relation_plan(
+    relations: list[WikiRelationPlan], *, extracted_relation_count: int
+) -> WikiBuildPlan:
+    """관계 관측 선택 로직에 필요한 최소 Wiki Build 계획을 만든다."""
+    artifact = GeneratedArtifact(file_path="artifact.md", content="")
+    return WikiBuildPlan(
+        entities=[],
+        concepts=[],
+        schema=WikiDocumentPlan(
+            document_kind="schema",
+            document_key="root",
+            file_path="schema/schema.md",
+            domain=None,
+            title="Schema",
+            summary="",
+            normalized_content="schema",
+            action="update",
+        ),
+        relations=relations,
+        index=artifact,
+        source_manifest=artifact,
+        log_entry=artifact,
+        extracted_relation_count=extracted_relation_count,
+    )
+
+
+def test_relation_persistence_values_separates_trace_and_transient_marker() -> None:
+    """관계 Metadata의 근거·추적 값은 컬럼화하고 Build 전용 표식은 제거한다."""
+    values = _relation_persistence_values(_sample_relation())
+
+    assert values.provenance_kind == "source_explicit"
+    assert values.confidence == pytest.approx(0.82)
+    assert values.review_status == "accepted"
+    assert values.evidence == "서울에 폭염 경보가 발효됐다."
+    assert values.model_name == "gpt-4.1-mini"
+    assert values.model_version == "2026-07-01"
+    assert values.prompt_key == "personal-wiki-relation"
+    assert values.prompt_version == "3"
+    assert "observed_in_current_build" not in values.metadata
+    assert values.metadata["disposition"] == "connect"
+
+
+@pytest.mark.parametrize(
+    ("metadata_key", "invalid_value"),
+    [
+        ("provenance_kind", "guessed"),
+        ("confidence", 1.01),
+        ("confidence", True),
+        ("review_status", "approved"),
+    ],
+)
+def test_relation_persistence_values_rejects_invalid_lifecycle_values(
+    metadata_key: str, invalid_value: object
+) -> None:
+    """DB Check와 어긋나는 관계 근거 값은 SQL 실행 전에 거절한다."""
+    relation = _sample_relation()
+    relation.metadata[metadata_key] = invalid_value
+
+    with pytest.raises(ValueError):
+        _relation_persistence_values(relation)
+
+
+def test_observed_relations_for_build_uses_explicit_marker() -> None:
+    """누적 관계 중 이번 Build 표식이 있는 관계만 원본 support로 선택한다."""
+    observed = _sample_relation(observed=True)
+    historical = _sample_relation(observed=None)
+    historical = WikiRelationPlan(
+        source_document_key=historical.source_document_key,
+        source_document_kind=historical.source_document_kind,
+        target_document_key="온열질환",
+        target_document_kind=historical.target_document_kind,
+        relation_type=historical.relation_type,
+        metadata=historical.metadata,
+    )
+    plan = _sample_relation_plan(
+        [historical, observed],
+        extracted_relation_count=1,
+    )
+
+    assert _observed_relations_for_build(plan) == [observed]
+
+
+def test_observed_relations_for_build_does_not_guess_ambiguous_legacy_plan() -> None:
+    """기존·신규가 섞인 표식 없는 계획을 현재 원본 support로 잘못 귀속하지 않는다."""
+    relation = _sample_relation(observed=None)
+    plan = _sample_relation_plan([relation], extracted_relation_count=0)
+
+    assert _observed_relations_for_build(plan) == []
 
 
 class _SequencedFakeConnection:
@@ -595,6 +859,59 @@ def test_list_related_wiki_keywords_maps_rows() -> None:
     assert related[1].relation_types == ("applies_concept", "related_concept")
 
 
+def test_list_wiki_graph_relation_snapshot_maps_heads_titles_and_support() -> None:
+    """Graph Gate Snapshot에 Head 정책·endpoint 표시값·active support를 보존한다."""
+    connection = _FakeConnection(
+        [
+            {
+                "source_document_kind": "concept",
+                "source_document_key": "weather",
+                "source_title": " 날씨 ",
+                "source_domain": "field",
+                "target_document_kind": "concept",
+                "target_document_key": "heatwave",
+                "target_title": "폭염",
+                "target_domain": "phenomenon",
+                "relation_type": "subtopic_of",
+                "status": "active",
+                "review_status": "accepted",
+                "provenance_kind": "semantic_inference",
+                "confidence": 0.84,
+                "weight": 1.0,
+                "supported": True,
+            }
+        ]
+    )
+
+    snapshot = asyncio.run(
+        list_wiki_graph_relation_snapshot(
+            connection,  # type: ignore[arg-type]
+            namespace_key="user/user-1",
+        )
+    )
+
+    assert len(snapshot) == 1
+    relation = snapshot[0]
+    assert relation.source_title == "날씨"
+    assert relation.target_title == "폭염"
+    assert relation.relation_type == "subtopic_of"
+    assert relation.review_status == "accepted"
+    assert relation.provenance_kind == "semantic_inference"
+    assert relation.confidence == pytest.approx(0.84)
+    assert relation.supported is True
+
+    query, params = connection.executed[0]
+    assert "source_version.title AS source_title" in query
+    assert "target_version.title AS target_title" in query
+    assert "FROM agent.wiki_relation_supports AS support" in query
+    assert "support.status = 'active'" in query
+    assert "source_version.version = source.current_version" in query
+    assert "target_version.version = target.current_version" in query
+    assert "relation.status = 'active'" not in query
+    assert "relation.review_status = 'accepted'" not in query
+    assert params == ("user/user-1",)
+
+
 def test_list_related_wiki_keywords_scopes_and_limits_query() -> None:
     """Namespace·1홉·상한 조건을 SQL과 Parameter에 담아 조회한다."""
     connection = _FakeConnection([])
@@ -610,6 +927,12 @@ def test_list_related_wiki_keywords_scopes_and_limits_query() -> None:
 
     query, params = connection.executed[0]
     assert "FROM agent.wiki_document_relations AS relation" in query
+    assert "relation.status = 'active'" in query
+    assert "relation.review_status <> 'rejected'" in query
+    assert "WHEN 'subtopic_of' THEN 1.0" in query
+    assert "WHEN 'associated_with' THEN 0.5" in query
+    assert "MAX(" in query
+    assert "HAVING MAX(" in query
     assert "peer.document_kind IN ('entity', 'concept')" in query
     # 기관·언론사 이름을 검색어로 쓰면 주제가 아니라 그 회사 소식이 걸린다.
     assert "COALESCE(peer.domain, '') <> 'organization'" in query
@@ -617,6 +940,27 @@ def test_list_related_wiki_keywords_scopes_and_limits_query() -> None:
     assert "ORDER BY weight DESC, title ASC" in query
     # 토픽은 앞뒤 공백을 제거해 노드 제목·document_key 양쪽과 대조한다.
     assert params == ("user/user-1", "코스피", "코스피", "user/user-1", 5)
+
+
+def test_list_related_wiki_keywords_supports_pre_lifecycle_schema_fallback() -> None:
+    """Migration 전 운영 폴백 SQL은 새 relation lifecycle 컬럼을 참조하지 않는다."""
+    connection = _FakeConnection([])
+
+    asyncio.run(
+        list_related_wiki_keywords(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            topic="코스피",
+            limit=2,
+            lifecycle_aware=False,
+        )
+    )
+
+    query, params = connection.executed[0]
+    assert "relation.status = 'active'" not in query
+    assert "relation.review_status" not in query
+    assert "FROM agent.wiki_relation_supports" not in query
+    assert params == ("user/user-1", "코스피", "코스피", "user/user-1", 2)
 
 
 def test_list_related_wiki_keywords_skips_query_when_disabled() -> None:
@@ -646,3 +990,128 @@ def test_list_related_wiki_keywords_skips_query_when_disabled() -> None:
         == []
     )
     assert connection.executed == []
+
+
+def test_sync_wiki_relation_supports_replaces_source_support_and_supersedes_head() -> None:
+    """Build마다 원본 support를 교체하고 지지가 사라진 관계 Head를 supersede한다."""
+    relation = _sample_relation()
+    connection = _SequencedConnection(
+        [
+            [{"relation_id": "relation-old"}],
+            [
+                {
+                    "id": "document-seoul",
+                    "document_kind": "entity",
+                    "document_key": "서울",
+                },
+                {
+                    "id": "document-heatwave",
+                    "document_kind": "concept",
+                    "document_key": "폭염",
+                },
+            ],
+            {"id": "relation-new"},
+            None,
+            None,
+            [{"id": "relation-old"}],
+        ]
+    )
+
+    result = asyncio.run(
+        sync_wiki_relation_supports(
+            connection,  # type: ignore[arg-type]
+            namespace_key="user/user-1",
+            source_document_id="source-document-1",
+            source_document_version_id="source-version-1",
+            job_id="job-1",
+            relations=[relation],
+            observed_relations=[relation],
+        )
+    )
+
+    assert result.observed_relation_count == 1
+    assert result.stored_support_count == 1
+    assert result.superseded_support_count == 1
+    assert result.superseded_relation_count == 1
+
+    stale_query, stale_params = connection.executed[0]
+    assert "UPDATE agent.wiki_relation_supports" in stale_query
+    assert "status = 'superseded'" in stale_query
+    assert "source_version.source_document_id = %s" in stale_query
+    assert "%s IS NOT NULL" not in stale_query
+    assert stale_params == (
+        "user/user-1",
+        "source-version-1",
+        "source-document-1",
+    )
+
+    head_query, head_params = connection.executed[2]
+    assert "INSERT INTO agent.wiki_document_relations" in head_query
+    assert "superseded_at = NULL" in head_query
+    assert head_params[:4] == (
+        "document-seoul",
+        "document-heatwave",
+        "user/user-1",
+        "applies_concept",
+    )
+    assert head_params[5:12] == (
+        "source_explicit",
+        0.82,
+        "accepted",
+        "gpt-4.1-mini",
+        "2026-07-01",
+        "personal-wiki-relation",
+        "3",
+    )
+
+    support_query, support_params = connection.executed[3]
+    assert "INSERT INTO agent.wiki_relation_supports" in support_query
+    assert "ON CONFLICT (relation_id, source_document_version_id, build_job_id)" in support_query
+    assert support_params[:8] == (
+        "relation-new",
+        "user/user-1",
+        "source-version-1",
+        "job-1",
+        "source_explicit",
+        0.82,
+        "accepted",
+        "서울에 폭염 경보가 발효됐다.",
+    )
+    assert "observed_in_current_build" not in support_params[12].obj
+
+    supersede_head_query, _ = connection.executed[5]
+    assert "NOT EXISTS" in supersede_head_query
+    assert "support.status = 'active'" in supersede_head_query
+
+
+def test_sync_wiki_relation_supports_keeps_head_when_another_support_remains() -> None:
+    """현재 원본의 support가 빠져도 다른 active support가 있으면 Head를 유지한다."""
+    connection = _SequencedConnection(
+        [
+            [{"relation_id": "relation-shared"}],
+            [],
+            None,
+            [],
+        ]
+    )
+
+    result = asyncio.run(
+        sync_wiki_relation_supports(
+            connection,  # type: ignore[arg-type]
+            namespace_key="user/user-1",
+            source_document_id="source-document-1",
+            source_document_version_id="source-version-1",
+            job_id="job-2",
+            relations=[],
+            observed_relations=[],
+        )
+    )
+
+    assert result.stored_support_count == 0
+    assert result.superseded_support_count == 1
+    assert result.superseded_relation_count == 0
+    representative_query, _ = connection.executed[2]
+    assert "WITH representative AS" in representative_query
+    supersede_query, params = connection.executed[3]
+    assert "NOT EXISTS" in supersede_query
+    assert params[0] == "user/user-1"

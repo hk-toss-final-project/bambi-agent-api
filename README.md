@@ -52,8 +52,8 @@ cp .env.example .env
 ./scripts/start_agent_db.sh
 ```
 
-처음 시작하는 DB뿐 아니라 이미 실행 중인 DB에도 미적용 Migration과 변경된
-개발 Seed(`mock-clipping-user`, `28` 데이터 포함)를 반영한 뒤 Health 상태를 확인합니다.
+처음 시작하는 DB뿐 아니라 이미 실행 중인 DB에도 미적용 Migration을 반영한 뒤
+Health 상태를 확인합니다.
 자세한 절차는 [database/README.md](database/README.md)를 참고하세요. 키워드 비서
 UI만 쓸 경우에는 필요 없습니다.
 
@@ -104,7 +104,6 @@ Agent API 서버(8000)에 내장된 개인 지식 그래프 시각화 페이지�
 
 ```text
 http://127.0.0.1:8000/wiki-graph?user_id={user_id}
-예) http://127.0.0.1:8000/wiki-graph?user_id=28   ← 개발 Seed 사용자
 ```
 
 - Entity(초록)·Concept(보라) Node 그래프, 검색·종류 필터, 확대·이동·Node
@@ -149,7 +148,7 @@ Wiki 빌드와 Report Builder 생성은 OpenAI를 실제 호출하므로 비용�
 | Worker | 용도 | 모드 |
 |---|---|---|
 | `url-collection` | 사용자 URL을 Jina Reader로 읽어 Markdown 원문 Version 저장 | 단발 / `--loop` 상주 |
-| `personal-wiki` | 클리핑·URL 원본을 LLM Wiki로 빌드 (Chunk 포함, Embedding은 보류) | 단발 / `--loop` 상주 |
+| `personal-wiki` | 클리핑·URL 원본을 LLM Wiki로 빌드하고 변경 Chunk를 best-effort 재임베딩 | 단발 / `--loop` 상주 |
 | `report-generation` | 생성 Job을 처리해 콘텐츠·발행 Snapshot 저장 | 단발 / `--loop` 상주 |
 | `global-collector` | 키워드로 외부 기사 수집 (`--keywords` 필수, Provider 기본 `gdelt,naver,google_news`) | 단발 |
 | `global-content` | 수집된 기사의 본문 확보 (**Scheduler가 tick마다 자동 실행**, 이 CLI는 수동 점검·backlog 소진용) | 단발 |
@@ -343,57 +342,6 @@ research → load_context → generate → review → persist
 `review_problem`에 지적 문장이 함께 남으므로 서버 로그 없이 원인을 볼 수
 있습니다.
 
-### 측정된 품질
-
-프롬프트·모델을 바꾸면 단위 테스트는 그대로 통과하지만 품질은 조용히
-달라집니다. 그래서 LLM 판단이 들어가는 기능은 [`bench/`](bench/README.md)에서
-실제 LLM로 측정합니다. 아래는 2026-08-05 기준이며, 실행 기록은 각
-`results/` 디렉터리에 있습니다.
-
-**검토자** — 근거에 없는 서술을 잡아내는가 ([30케이스](bench/critic/dataset.jsonl))
-
-| 지표 | 값 | 뜻 |
-|---|---|---|
-| 거짓 탐지율 | 100% | 지어낸 초안 15건 중 잡아낸 비율 |
-| 헛지적률 | 0.0% | 정상 초안 15건 중 잘못 되돌린 비율 |
-| 비용 | 약 $0.02 / 30건 | 리포트당 도구 호출 1.6회 |
-
-**조사원** — 주제어만으로는 안 나오는 자료를 찾아내는가 ([19케이스](bench/researcher/dataset.jsonl))
-
-| 지표 | 값 | 뜻 |
-|---|---|---|
-| 확장 도달률 | 100% | 연관어로 넓혀야 닿는 자료 18건 중 찾은 비율 |
-| 실시간 수집 판단 | 100% | 인터넷 수집을 불러야 할 때만 불렀는가 |
-| 잡음 유입 | 0건 | 주제와 무관한 자료를 끌어온 케이스 수 |
-
-**생성** — 개인·Global 근거를 결합해 인용까지 붙이는가 ([10케이스](bench/report_generation/dataset.jsonl))
-
-| 지표 | 값 |
-|---|---|
-| 통과 | 10/10 |
-| 인용 구성 | 전 케이스 P1·G1 |
-
-> 벤치마크가 무엇을 **측정하지 못하는지**도 결과 문서에 적었습니다. 2026-08-05에
-> 조사원 벤치가 만점을 유지하는 동안 실제 배포에서는 무관한 기사 6건이 "충분"으로
-> 통과하고 있었습니다 — 검증 대상을 스텁이 통째로 대신하고 있었기 때문입니다.
-> 지금은 스텁 위치를 DB 호출로 내려 실제 컷오프 코드가 실행됩니다.
-
-**모델 선택** — 같은 데이터셋으로 위·아래 모델을 재고 `gpt-4.1-mini`를
-유지하기로 했습니다 ([상세](bench/critic/results/2026-08-04_model-comparison.md)).
-
-| 모델 | 정확도 | 헛지적률 | 입력 토큰 |
-|---|---|---|---|
-| `gpt-4.1` | 100% | 0.0% | 49,876 |
-| **`gpt-4.1-mini`** | **96.7%** | **0.0%** | **39,696** |
-| `gpt-4.1-nano` | 80.0% | 13.3% | 46,406 |
-
-`gpt-4.1`이 더 잡는 것은 경계 케이스 1건뿐이라 비용 차이를 감수할 근거가
-부족했고, `nano`는 멀쩡한 리포트를 8건 중 1건꼴로 되돌려 쓸 수 없었습니다.
-
-> 프롬프트를 고쳐 품질을 올리려는 시도는 지금까지 네 번 중 한 번만
-> 성공했습니다. 실패한 시도도 결과 문서에 그대로 남겨 두었습니다 —
-> 같은 길을 다시 가지 않기 위해서입니다.
-
 ## 구조
 
 Agent API는 전체 기능 명세 1~43절의 기능 ID를 코드 함수와 1:1로 매핑하고,
@@ -423,23 +371,6 @@ uv run python -m compileall -q app agent domain infrastructure workers scheduler
 `pytest`는 **LLM을 호출하지 않습니다.** 항상 무료·빠르게·같은 결과로 통과해야
 하므로 LLM이 필요한 부분은 mock으로 대체합니다.
 
-LLM 판단 품질은 별도로 측정합니다. 비용이 발생하므로 `--confirm-cost` 없이는
-실행되지 않습니다.
-
-```bash
-# 예상 케이스 수와 토큰만 출력하고 종료
-uv run python bench/critic/run.py
-
-# 실제 실행 (약 $0.02)
-uv run python bench/critic/run.py --confirm-cost
-
-# 다른 모델로 비교
-uv run python bench/critic/run.py --model gpt-4.1 --confirm-cost
-```
-
-프롬프트·모델·파라미터를 바꿨다면 **벤치마크를 다시 돌려 결과를 기록한 뒤**
-개선 여부를 판단합니다. 자세한 규칙은 [`bench/README.md`](bench/README.md)와
-`AGENTS.md`의 "8. LLM 기능 벤치마크"를 따릅니다.
 
 ### 검색 색인 백필
 

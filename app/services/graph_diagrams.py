@@ -97,7 +97,9 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                 "원본 조회(load_source) → 추출 분류(classify) → 표기 정규화와 "
                 "후보 탐색(prepare_identity) → 충돌이 있을 때만 의미 판정"
                 "(resolve_identity) → canonical 중복 품질 검증(quality_gate) → "
-                "반영 계획(plan) → 문서·Chunk 저장(persist) → Job 결과 조립(finalize)"
+                "하이브리드 관계 후보(recall_candidates) → 관계 판정(link_relations) → "
+                "반영 계획(plan) → Snapshot Lint(validate_plan) → "
+                "문서·Chunk 저장(persist) → Vector 갱신(embed) → Job 결과 조립(finalize)"
             ),
             compiled=build_personal_wiki_graph(None),
             nodes=(
@@ -114,7 +116,8 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                     title="Wiki 항목 추출·분류",
                     description=(
                         "트랜잭션 밖에서 원본 유형과 기존 Wiki 상태를 참고해 새 "
-                        "Entity·Concept·관계 후보를 추출하고 분류합니다."
+                        "Entity·Concept 후보만 추출하고 관계 판정은 후속 "
+                        "Linker와 분리합니다."
                     ),
                 ),
                 GraphNodeDescription(
@@ -142,6 +145,22 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                     ),
                 ),
                 GraphNodeDescription(
+                    node_id="recall_candidates",
+                    title="하이브리드 관계 후보 검색",
+                    description=(
+                        "정확 표면형·어휘·trigram·Embedding·Graph 1-hop·온보딩 "
+                        "anchor를 합쳐 LLM이 검토할 기존 노드를 선별합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="link_relations",
+                    title="근거 기반 관계 판정",
+                    description=(
+                        "부분 Edge 유무와 무관하게 전체 후보를 검토하고, "
+                        "유형·provenance·confidence·disposition을 확정합니다."
+                    ),
+                ),
+                GraphNodeDescription(
                     node_id="plan",
                     title="Wiki 반영 계획 생성",
                     description=(
@@ -150,11 +169,27 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                     ),
                 ),
                 GraphNodeDescription(
+                    node_id="validate_plan",
+                    title="Wiki Snapshot 품질 Lint",
+                    description=(
+                        "중복·고립·무근거·저신뢰·스타일 Edge와 과밀 Hub를 검사해 "
+                        "오류가 있는 계획의 저장을 막습니다."
+                    ),
+                ),
+                GraphNodeDescription(
                     node_id="persist",
                     title="Wiki 결과 저장",
                     description=(
                         "계획된 문서·관계·Chunk와 Build Snapshot을 하나의 저장 "
                         "트랜잭션으로 기록합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="embed",
+                    title="변경 Chunk Vector 갱신",
+                    description=(
+                        "변경된 Entity·Concept Chunk를 재임베딩해 다음 Build의 "
+                        "의미 후보 recall에 사용합니다."
                     ),
                 ),
                 GraphNodeDescription(

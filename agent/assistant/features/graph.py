@@ -63,8 +63,8 @@ STATUS_STOP = "stop"      # 재시도하지 않고 종료하기로 판단
 STATUS_FAILED = "failed"  # 이 단계가 실패
 
 # 재구성 검색어로 허용할 최대 길이(공백 포함). 이보다 길면 검색어가 아니라 키워드
-# 나열·설명문일 가능성이 높다. 벤치마크(bench/assistant_reformulation)에서 한 글자
-# 주제("K")에 LLM이 "케이팝 K-pop K드라마 …" 52자를 반환한 사례로 확인됐다.
+# 나열·설명문일 가능성이 높다. 한 글자 주제("K")에 LLM이
+# "케이팝 K-pop K드라마 …" 52자를 반환한 사례로 확인됐다.
 MAX_QUERY_CHARS: int = 40
 
 REFORMULATE_SYSTEM = (
@@ -80,9 +80,8 @@ REFORMULATE_SYSTEM = (
 def build_reformulate_prompt(topic: str, attempts: list[str]) -> str:
     """검색어 재구성 user 프롬프트를 만든다.
 
-    벤치마크(bench/assistant_reformulation)가 그래프와 똑같은 프롬프트를 평가할 수
-    있도록 조립을 함수로 분리한다 — 프롬프트가 두 곳에 복제되면 벤치 결과가 실제
-    동작과 어긋난다.
+    품질 평가가 그래프와 똑같은 프롬프트를 사용할 수 있도록 조립을 함수로
+    분리한다. 프롬프트가 두 곳에 복제되면 평가 결과가 실제 동작과 어긋난다.
     """
     tried = ", ".join(attempts) or topic
     return (

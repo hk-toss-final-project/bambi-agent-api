@@ -15,11 +15,11 @@
 
 ## MVP 구현 현황 체크리스트
 
-> 기준: 2026-08-06. 기능 ID 스캐폴드 함수가 아니라 **실제 런타임 경로**(라우터·서비스·Worker·저장소·Agent)가
+> 기준: 2026-08-07. 기능 ID 스캐폴드 함수가 아니라 **실제 런타임 경로**(라우터·서비스·Worker·저장소·Agent)가
 > 동작하는지 기준으로 판정했다. 표기: `[x]` 구현 완료, `[x] ⚠️` 핵심 동작은 되지만 제약 있음,
 > `[ ] ❌` 미구현, `[ ] ➖` Agent API 범위 아님(service-worker 책임).
 >
-> **집계: 완료 63 · 부분 8 · 미구현 11 · 범위 외 2 (총 84)**
+> **집계: 완료 96 · 부분 6 · 미구현 4 · 범위 외 3 (총 109)**
 
 ### 내부 API 인증
 
@@ -46,7 +46,7 @@
 - [x] `SVC-002` 웹 클리핑 처리 요청 — 원본·Version·Job 한 Transaction Commit 후 202
 - [x] `SVC-003` URL 처리 요청 — URL Head 저장 + `personal_wiki_url` 수집 Job 등록 + 상주 `url-collection` Worker의 Jina 본문 Version 저장·후속 Wiki Job 연결
 - [x] `SVC-004` 위키마킹 처리 요청 — 생성 후보 본문을 `content_mark` 원본 Version으로 물질화 후 기존 `personal_wiki_build` Job으로 처리 (별도 Handler 불필요, 2026-07-27 구현. 대상 콘텐츠 없으면 404)
-- [x] `SVC-006` 사용자 피드백 전달 — 좋아요·숨김·신고 신호를 `feedback` 이벤트로 멱등 저장(Wiki 문서 미생성). 다음 재계산 때 INT-005가 점수 반영 (2026-07-27 구현)
+- [x] `SVC-006` 사용자 피드백 전달 — 좋아요·숨김·신고 신호를 `feedback` 이벤트로 멱등 저장(Wiki 문서 미생성), 계측 Metadata 무손실 보존. 신규 이벤트 저장 후 같은 요청에서 INT-011을 best-effort로 재계산하며 실패해도 이벤트는 유지 (2026-08-09 개선)
 - [x] `SVC-008` 콘텐츠 생성 요청 — `generation_requests` + `report_generation` Job 멱등 등록, `scheduled_at` 예약 실행 지원
 - [x] `SVC-013` Agent Job 상태 조회
 - [x] `SVC-014` Agent 결과 조회 — 미완료 시 `JOB_RESULT_NOT_READY`
@@ -66,17 +66,21 @@
 - [x] `PWIKI-003` 개인 Wiki 문서 조회 — 목록·상세·Build·Graph·연결 상위 Node(top-nodes)
 - [x] `PWIKI-005` 개인 Wiki 문서 삭제 — soft-delete + Chunk 검색 제외 (동기·멱등). 삭제 정책은 Service 소유, `pwiki_005` facade는 영속화 계층 `delete_wiki_document_and_record_event`에 위임 (WBA-015와 동일 실행 경로 공유). D1 잠정: 재등장 시 기본 부활, tombstone 없음
 - [x] `PWIKI-008` Wiki 문서 중복 제거 — 같은 `document_key` Upsert에 더해 Unicode NFKC·대소문자·공백·구두점 제거 표면형으로 기존 title·aliases를 비교한다. 동일 kind 단일 후보는 코드로 병합하고, namespace 충돌·복수 후보만 별도 LLM identity 판정기에 한 번에 전달한다. 판정 응답은 제공된 기존 key와 incoming label만 허용하며 저장 전 canonical 중복 품질 게이트를 통과해야 한다.
+- [x] `PWIKI-013` 개인 Wiki 초기화 — 사용자 원본·Version·기존 Source Event는 보존하고 활성 Wiki 문서·관계·Chunk 검색·Build Snapshot·관심사 Profile을 비활성화한다. 대기·실행 중인 Wiki Build를 취소하고 취소 Job의 지연 저장도 DB Trigger로 차단한다. 계정별 동기·멱등 `DELETE /internal/v1/users/{user_id}/wiki`
 - [x] `PWE-001` 개인 Wiki 문서 Chunking
 - [x] `PWE-002` Chunk 저장 — `wiki_chunks` 멱등 Upsert
-- [ ] `PWE-004` Embedding 생성 — ❌ 보류(2026-07-20 결정). 활용처(Vector 검색)가 없어 실행 경로에서 제외했으며 생성 유틸(`generate_wiki_embeddings`)은 재도입 대비로 유지
-- [ ] `PWE-005` Embedding 저장 — ❌ 보류(위와 동일). `wiki_embeddings` 스키마와 저장 함수는 유지
-- [x] `PRAG-003` Hybrid Search — ⚠️ FTS·키워드 검색만 결합, pgvector 의미 검색은 미연결
+- [ ] `PWE-004` Embedding 생성 — ❌ 독립 PWE Feature facade는 아직 스텁이다. 현재 Wiki Build는 `WBA-011` 내부 경로에서 변경 Entity·Concept Chunk의 1536차원 Vector를 생성한다.
+- [ ] `PWE-005` Embedding 저장 — ❌ 독립 PWE Feature facade는 아직 스텁이다. 현재 Wiki Build의 저장은 `WBA-011`이 `wiki_embeddings`에 멱등 반영하며 별도 재시도 Job은 미연결이다.
+- [x] `PRAG-001` Keyword Search — 개인 Wiki와 Global 저장 자료의 FTS·Trigram 후보 조회
+- [x] `PRAG-002` Vector Search — 기존 `wiki_embeddings`의 active config·동일 모델을 사용한 개인 Wiki Cosine top-k 조회
+- [x] `PRAG-003` Hybrid Search — 개인 Wiki Keyword·Vector 후보를 결정적 RRF로 결합하고 Global Keyword 결과를 유지한다. Embedding Provider·Vector 조회 실패는 Keyword로 폴백한다.
+- [x] `PRAG-004` 검색 결과 Reranking — 순위 기반 RRF로 개인 Wiki Chunk 중복을 제거·재정렬하고 기존 점수는 하류 품질 판정을 위해 보존
 - [x] `PRAG-006` 개인 Wiki Context 구성 — Report Builder 입력 Context(P1, P2 참조) 조립
 - [x] `PRAG-007` Citation 연결 — `citations`에 문서 Version·Chunk 연결
 
 ### DB 기반 관심사 분류
 
-- [x] `INT-001` 관심사 Topic 추출 — 활성 Wiki의 Entity·Concept 노드를 후보로 삼고 관계 유형 가중 연결 수(degree)로 정렬 (2026-07-23 텍스트 토큰화 폐기, 로직 소유 `domain/interests`)
+- [x] `INT-001` 관심사 Topic 추출 — 활성 Wiki의 Entity·Concept 노드를 후보로 삼고 고유 이웃별 최대 관계 가중치를 합산한 degree로 정렬한다. 같은 이웃과 여러 관계 유형이 있어도 중복 가산하지 않는다(2026-07-23 텍스트 토큰화 폐기, 로직 소유 `domain/interests`).
 - [ ] `INT-002` 관심사 Category 분류 — ➖ **MVP 범위에서 제외 (2026-08-04 팀 결정).** Category는 온보딩에서 신규 사용자의 관심사를 대략 파악하는 용도이며, **추출된 관심 Topic을 Category로 다시 묶을 필요는 없다**는 결론. 상세는 §3 참고
 - [x] `INT-005` 관심사 점수 계산 — 2층 계산(2026-07-27 병합). ① 기본 점수: 근거 원문의 수·종류(행동 강도)와 반감기 감쇠(최신성, 90일)를 INT-001 구조 가중치에 곱한다. ② 행동 보정: 좋아요·숨김 신호에 시간 감쇠(반감기 14일)를 적용해 기본 점수에 더하고, Wiki에 없는 Topic도 양의 신호가 쌓이면 행동 전용 후보로 추가한다. 신호 가중치·신호 반감기는 D2 잠정값. 로직 소유 `domain/interests`
 - [x] `INT-011` 관심사 프로필 재계산 — Wiki Build 완료 시 자동 재계산(`run_personal_wiki_build` 훅, 실패해도 Build 결과 유지) + 수동 rebuild API. 행동 신호가 없어도 기본 점수는 항상 계산한다. 오케스트레이션 로직 소유 `domain/interests`
@@ -140,7 +144,10 @@
 - [ ] `SW-007` service-db 콘텐츠 Upsert — ➖ service-worker 책임
 - [x] `SW-009` 발행 완료 ACK — 단건 + 부분 성공 Batch ACK
 - [x] `WBA-001` Incremental Wiki Build
+- [x] `WBA-002` Full Wiki Rebuild — ⚠️ 삭제되지 않은 원본 Head의 최신 Version 전체를 메모리에서 재분류·검증한 뒤 최종 Transaction에서 기존 파생 Wiki를 supersede하고 새 Snapshot을 저장하는 facade 구현. 내부 API·Job·Worker route와 실제 DB E2E는 미연결
 - [x] `WBA-003` Wiki 문서 정규화 — Build 파이프라인에 포함
+- [x] `WBA-011` Wiki 재임베딩 — ⚠️ Incremental Build와 Full Rebuild의 변경 Entity·Concept Chunk를 재임베딩한다. 저장 후 best-effort라 Provider 실패 시 Wiki Build는 유지하며 별도 재시도 Job은 없음
+- [x] `WBA-014` Wiki 품질 검증 — canonical 중복, endpoint·관계 유형, provenance·confidence·review·lifecycle·근거, 고아·모순·과밀 Hub를 결정적으로 검사하고 오류는 저장 전 차단
 - [x] `WBA-015` Wiki 삭제 반영 — delete 이벤트 기록 + 문서 soft-delete + Chunk 검색 제외 (동기·멱등, 2026-07-27 구현. 실행 경로는 삭제 API→Repository이며 wba_015는 커넥션 보유 호출자용 facade. D1 잠정: 재등장 시 기본 부활, tombstone 없음)
 - [x] `JOB-001` Agent Job 생성 — 원본 저장과 같은 Transaction
 - [x] `JOB-002` Agent Job 조회
@@ -209,11 +216,15 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | PWIKI-003 | 개인 Wiki 문서 조회 | 사용자의 Wiki 문서 목록과 상세 내용을 조회한다. |
 | PWIKI-005 | 개인 Wiki 문서 삭제 | 사용자가 제거한 데이터를 Wiki 검색 대상에서 제외한다. |
 | PWIKI-008 | Wiki 문서 중복 제거 | 동일하거나 유사한 개인 Wiki 문서를 중복 제거한다. |
+| PWIKI-013 | 개인 Wiki 초기화 | 사용자 원본은 보존하고 개인 LLM Wiki 파생 데이터와 진행 중인 Build를 초기화한다. |
 | PWE-001 | 개인 Wiki 문서 Chunking | Wiki 문서를 의미 단위 Chunk로 분할한다. |
 | PWE-002 | Chunk 저장 | 생성된 Chunk를 문서 Version과 연결해 PostgreSQL에 저장한다. |
 | PWE-004 | Embedding 생성 | 개인 Wiki Chunk의 Vector를 생성한다. |
 | PWE-005 | Embedding 저장 | 사용자별 Vector 검색 저장소에 Embedding을 저장한다. |
+| PRAG-001 | Keyword Search | 개인 Wiki에서 키워드 기반 검색을 수행한다. |
+| PRAG-002 | Vector Search | 개인 Wiki에서 의미 유사도 검색을 수행한다. |
 | PRAG-003 | Hybrid Search | Keyword와 Vector 검색 결과를 결합한다. |
+| PRAG-004 | 검색 결과 Reranking | Keyword·Vector 순위를 결정적으로 결합한다. |
 | PRAG-006 | 개인 Wiki Context 구성 | LLM 입력에 사용할 개인 Wiki Context를 구성한다. |
 | PRAG-007 | Citation 연결 | 생성 결과와 참조한 개인 Wiki 문서를 연결한다. |
 
@@ -223,6 +234,9 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
   Node·Edge Graph로 조회합니다.
 - Graph 응답은 사용자 Namespace의 문서만 포함하고 PostgreSQL RLS 사용자 Scope를
   함께 적용합니다.
+- Node의 `degree`는 active이며 rejected가 아닌 관계가 잇는 **고유 이웃 수**입니다.
+  같은 두 Node 사이에 관계 유형이 여러 개여도 degree는 1만 증가하며, 원문 등장
+  횟수·PageRank·의미 중요도 점수가 아닙니다.
 - 내부 데이터 API는 `GET /internal/v1/users/{user_id}/wiki/graph`, 시각화 페이지는
   `GET /wiki-graph?user_id={user_id}`로 제공합니다.
 - 페이지는 검색, Entity·Concept 필터, 확대·축소·이동·Node Drag와 Markdown 상세
@@ -237,6 +251,23 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 - Schema는 사용자 Namespace당 `schema/schema.md` 하나만 존재하며, Entity 추가·삭제나 관계 변경 시 새 Version을 생성합니다.
 - 완성 Markdown은 YAML Frontmatter를 포함해 `wiki_document_versions.normalized_content`에 저장합니다.
 - `wiki_document_relations`는 Entity·Concept 관계를, `wiki_version_documents`는 특정 Wiki Build의 문서 Version·파일 경로 구성을 보존합니다.
+
+### Wiki 관계 판정·수명주기 계약
+
+- Relation Linker는 노드 추출 결과에 관계가 일부 있어도 생략하지 않고 신규·갱신
+  노드 전체를 검토합니다. 표면형·어휘·trigram·선택적 Embedding·기존 Graph 1-hop·
+  온보딩 Anchor는 후보 recall에만 사용하며 Edge를 자동 생성하지 않습니다.
+- 저장 Ontology는 기존 `entity_relation`, `applies_concept`, `related_concept`,
+  `alias_of`와 의미 관계 `instance_of`, `subtopic_of`, `part_of`, `located_in`,
+  `occurs_in`, `affects`, `causes`, `associated_with`입니다.
+- 관계 Head는 `active|superseded`, `provenance_kind`, `confidence`,
+  `review_status`, Model·Prompt trace를 보존합니다. `wiki_relation_supports`는
+  원본 Version·Build별 evidence와 판정 이력을 보존합니다.
+- 새 원본 Version은 같은 논리 원본의 과거 active support를 supersede합니다.
+  다른 active support가 남아 있는 관계 Head는 유지하고 마지막 support가 사라질
+  때만 Head를 supersede합니다.
+- 상세 구현 범위와 P3 Graph Gate는
+  [LLM Wiki Builder P0~P3 개선 설계](wiki-builder-p0-p3-improvement.md)를 따릅니다.
 
 ## 3. DB 기반 관심사 분류
 
@@ -358,7 +389,10 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | ID | 기능 | 설명 |
 |---|---|---|
 | WBA-001 | Incremental Wiki Build | 새로 저장된 사용자 원본 Version만 증분 처리한다. |
+| WBA-002 | Full Wiki Rebuild | 활성 원본 전체를 메모리에서 재분류·검증하고 최종 Transaction에서 새 Wiki Snapshot으로 교체한다. 운영 API·Job route는 아직 연결하지 않는다. |
 | WBA-003 | Wiki 문서 정규화 | 저장된 Markdown과 Metadata를 Chunking 가능한 공통 구조로 정리한다. |
+| WBA-011 | Wiki 재임베딩 | 변경된 Entity·Concept Chunk의 1536차원 Embedding을 생성·저장해 다음 관계 후보 recall에 사용한다. |
+| WBA-014 | Wiki 품질 검증 | 문서 중복과 관계 endpoint·Ontology·근거·confidence·review·lifecycle, 고아·모순·과밀 Hub를 검사한다. |
 | WBA-015 | Wiki 삭제 반영 | 삭제된 사용자 원천과 파생 데이터를 제거한다. |
 | JOB-001 | Agent Job 생성 | 클리핑 저장 Transaction에서 Personal Wiki Build Job을 함께 생성한다. |
 | JOB-002 | Agent Job 조회 | API와 Worker가 클리핑 Job 상태와 진행률을 조회한다. |
@@ -379,7 +413,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 - Extension은 service-api의 사용자 인증 경계를 거치고, service-api가 Agent API의 내부 클리핑 경로를 호출합니다.
 - Agent API는 source_event_id 멱등성을 확인한 뒤 Source Event, 사용자 원본 문서·Version, Personal Wiki Build Job을 한 Transaction으로 저장합니다.
 - Markdown 원문 저장은 LLM 호출 없이 수행하며 title과 본문은 각각 user_source_document_versions.title, raw_content에 보존합니다.
-- Worker는 Job Batch를 Lease와 함께 Claim하고 source_document_version_id를 기준으로 Entity·Concept·Schema를 Upsert합니다. 새 문서 Version, 원본·문서 관계, Wiki Build 구성을 한 결과 Transaction에 저장한 뒤 Chunk, Embedding과 관심사를 갱신합니다.
+- Worker는 Job Batch를 Lease와 함께 Claim하고 source_document_version_id를 기준으로 Entity·Concept·Schema를 Upsert합니다. 관계 후보 recall·Linker·WBA-014 검증을 거쳐 새 문서 Version, 원본·관계 support, Wiki Build 구성과 Chunk를 한 결과 Transaction에 저장합니다. Embedding과 관심사 갱신은 저장 뒤 best-effort 파생 단계입니다.
 - Worker 재시도 중에도 Markdown 원문과 Frontmatter는 삭제하지 않습니다. 생성 Wiki·출처 관계·Chunk·Embedding만 멱등하게 다시 생성할 수 있습니다.
 - 성공 시 Source Event와 Job을 completed로 바꾸고 source_document_id, source_document_version_id, wiki_version_id, affected_documents, chunk_count를 결과에 기록합니다. affected_documents의 각 항목은 document_id, document_version_id, document_kind, document_key, file_path를 포함합니다.
 - 최종 실패 시 Source Event와 Job의 오류를 기록하되 저장된 Markdown 원문은 사용자가 삭제할 때까지 유지합니다.
@@ -405,7 +439,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 - 번역 및 이미지 생성
 - 별도의 추천 Agent
 - 고급 관심사 Graph
-- Personal Wiki 전체 재구성 및 Memory 압축
+- Personal Wiki Memory 압축
 - 다중 평가 Agent와 고급 사실 검증
 - Prompt 및 추천 A/B Test
 - 고급 메시징 패턴과 자동 확장

@@ -165,6 +165,7 @@ Service에 위임([service-integration-guide.md](service-integration-guide.md) �
 - 시드 노드/Build 물질화(S1 결정 반영) + `_SOURCE_TYPE_WEIGHTS` 항목 추가.
 - `upsert_user_context` 첫 스냅샷 시 시드 이벤트 + 웰컴 리포트 Job enqueue(실패 격리·멱등).
 - 새 그래프 노드가 생기면 `/dev/graphs` 레지스트리·가드 테스트 갱신(AGENTS.md 규칙 10).
-- 결정적 시드 경로는 `tests/`, 웰컴 리포트 LLM 품질은 `bench/`에서 검증(규칙 8).
+- 결정적 시드 경로는 `tests/`에서 검증하고, 웰컴 리포트 LLM 품질 평가는
+  다시 필요해질 때 규칙 8에 따라 새로 구성한다.
 - `agent-contract.md`·`service-integration-guide.md`에 온보딩→시드/리포트 트리거 계약 반영.
 ```

@@ -111,7 +111,7 @@ async def svc_006(
 ) -> FeedbackSignalsResponse:
     """[SVC-006] 사용자 피드백 전달.
 
-    좋아요, 숨김, 신고 등의 신호를 전달한다.
+    좋아요, 숨김, 신고 등의 신호를 전달하고 관심사 재계산을 시도한다.
     """
     return await service.submit_feedback_signals(
         user_id=user_id, payload=payload, request_id=request_id

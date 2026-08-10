@@ -73,6 +73,29 @@ def test_parse_relation_candidates_rejects_unsupported_direction() -> None:
     assert "일치하지 않습니다" in result.warnings[0]
 
 
+def test_parse_relation_candidates_rejects_concept_instance_of_concept() -> None:
+    """Concept 간 상하위 관계에 instance_of를 쓰면 제외한다."""
+    evidence = "폭염은 날씨 현상이다."
+    result = parse_relation_candidates(
+        [
+            {
+                "source_ref": "C1",
+                "target_ref": "C2",
+                "relation_type": "instance_of",
+                "evidence": evidence,
+            }
+        ],
+        node_refs={
+            "C1": ("concept", "폭염", None),
+            "C2": ("concept", "날씨", "weather"),
+        },
+        source_content=evidence,
+    )
+
+    assert result.relations == []
+    assert "일치하지 않습니다" in result.warnings[0]
+
+
 def test_parse_relation_candidates_rejects_non_verbatim_evidence() -> None:
     """원문에 존재하지 않는 관계 근거를 제외한다."""
     result = parse_relation_candidates(

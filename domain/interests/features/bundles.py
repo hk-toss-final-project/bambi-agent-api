@@ -30,6 +30,92 @@ class InterestBundleRepository(Protocol):
         """관심 근거 문서의 1홉 Wiki 이웃을 연결 강도 순으로 조회한다."""
         ...
 
+    async def list_node_snapshots(
+        self,
+        user_id: str,
+        *,
+        document_ids: Sequence[str],
+    ) -> Sequence[Mapping[str, object]]:
+        """관심 근거 문서의 현재 Version과 요약을 입력 순서대로 조회한다."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class InterestBundleNode:
+    """Job 접수 시점에 고정한 개인 Wiki 노드 Version."""
+
+    document_id: str
+    document_version_id: str
+    keyword: str
+    document_kind: str
+    summary: str
+    aliases: tuple[str, ...]
+    updated_at: str | None
+
+    def to_payload(self) -> dict[str, object]:
+        """비동기 Job에 저장할 JSON 호환 노드 Snapshot으로 변환한다."""
+        return {
+            "document_id": self.document_id,
+            "document_version_id": self.document_version_id,
+            "keyword": self.keyword,
+            "document_kind": self.document_kind,
+            "summary": self.summary,
+            "aliases": list(self.aliases),
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class InterestBundleRelationSupport:
+    """관계를 뒷받침하는 활성 원본 Version 근거 Snapshot."""
+
+    source_document_version_id: str
+    provenance_kind: str
+    confidence: float
+    review_status: str
+    evidence: str
+    rationale: str
+
+    def to_payload(self) -> dict[str, object]:
+        """비동기 Job에 저장할 JSON 호환 관계 근거로 변환한다."""
+        return {
+            "source_document_version_id": self.source_document_version_id,
+            "provenance_kind": self.provenance_kind,
+            "confidence": self.confidence,
+            "review_status": self.review_status,
+            "evidence": self.evidence,
+            "rationale": self.rationale,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class InterestBundleRelation:
+    """루트 Wiki 노드와 이웃을 잇는 검증 관계 Snapshot."""
+
+    relation_id: str
+    root_document_id: str
+    direction: str
+    relation_type: str
+    confidence: float
+    provenance_kind: str
+    review_status: str
+    rationale: str
+    supports: tuple[InterestBundleRelationSupport, ...]
+
+    def to_payload(self) -> dict[str, object]:
+        """비동기 Job에 저장할 JSON 호환 관계 Snapshot으로 변환한다."""
+        return {
+            "relation_id": self.relation_id,
+            "root_document_id": self.root_document_id,
+            "direction": self.direction,
+            "relation_type": self.relation_type,
+            "confidence": self.confidence,
+            "provenance_kind": self.provenance_kind,
+            "review_status": self.review_status,
+            "rationale": self.rationale,
+            "supports": [support.to_payload() for support in self.supports],
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class InterestBundleNeighbor:
@@ -42,6 +128,11 @@ class InterestBundleNeighbor:
     relation_types: tuple[str, ...]
     shared_source_count: int
     degree: float
+    document_version_id: str = ""
+    summary: str = ""
+    aliases: tuple[str, ...] = ()
+    updated_at: str | None = None
+    relations: tuple[InterestBundleRelation, ...] = ()
 
     def to_payload(self) -> dict[str, object]:
         """비동기 Job에 저장할 JSON 호환 Payload로 변환한다."""
@@ -53,6 +144,11 @@ class InterestBundleNeighbor:
             "relation_types": list(self.relation_types),
             "shared_source_count": self.shared_source_count,
             "degree": self.degree,
+            "document_version_id": self.document_version_id,
+            "summary": self.summary,
+            "aliases": list(self.aliases),
+            "updated_at": self.updated_at,
+            "relations": [relation.to_payload() for relation in self.relations],
         }
 
 
@@ -66,6 +162,7 @@ class InterestReportBundle:
     root_keyword: str
     root_score: float
     root_document_ids: tuple[str, ...]
+    root_documents: tuple[InterestBundleNode, ...]
     neighbors: tuple[InterestBundleNeighbor, ...]
 
     @property
@@ -83,6 +180,7 @@ class InterestReportBundle:
                 "keyword": self.root_keyword,
                 "score": self.root_score,
                 "document_ids": list(self.root_document_ids),
+                "documents": [document.to_payload() for document in self.root_documents],
             },
             "neighbors": [neighbor.to_payload() for neighbor in self.neighbors],
             "keywords": list(self.keywords),
@@ -137,6 +235,32 @@ async def int_012(
             if str(document_id).strip()
         )
     )
+    root_rows = (
+        await repository.list_node_snapshots(
+            normalized_user_id,
+            document_ids=document_ids,
+        )
+        if document_ids
+        else ()
+    )
+    root_documents = tuple(
+        InterestBundleNode(
+            document_id=str(item.get("document_id") or ""),
+            document_version_id=str(item.get("document_version_id") or ""),
+            keyword=str(item.get("keyword") or "").strip(),
+            document_kind=str(item.get("document_kind") or ""),
+            summary=str(item.get("summary") or "").strip(),
+            aliases=tuple(str(value) for value in item.get("aliases") or ()),
+            updated_at=(
+                str(item["updated_at"])
+                if item.get("updated_at") is not None
+                else None
+            ),
+        )
+        for item in root_rows
+        if str(item.get("document_id") or "").strip()
+        and str(item.get("document_version_id") or "").strip()
+    )
     related = (
         await repository.list_related_nodes(
             normalized_user_id,
@@ -146,20 +270,74 @@ async def int_012(
         if document_ids and neighbor_limit > 0
         else ()
     )
-    neighbors = tuple(
-        InterestBundleNeighbor(
-            document_id=str(item.get("document_id") or ""),
-            keyword=str(item.get("keyword") or "").strip(),
-            document_kind=str(item.get("document_kind") or ""),
-            weight=float(item.get("weight") or 0.0),
-            relation_types=tuple(str(value) for value in item.get("relation_types") or ()),
-            shared_source_count=int(item.get("shared_source_count") or 0),
-            degree=float(item.get("degree") or 0.0),
+    neighbors: list[InterestBundleNeighbor] = []
+    for item in related:
+        document_id = str(item.get("document_id") or "").strip()
+        keyword = str(item.get("keyword") or "").strip()
+        if not document_id or not keyword:
+            continue
+        relations: list[InterestBundleRelation] = []
+        for raw_relation in item.get("relations") or ():
+            if not isinstance(raw_relation, Mapping):
+                continue
+            supports = tuple(
+                InterestBundleRelationSupport(
+                    source_document_version_id=str(
+                        raw_support.get("source_document_version_id") or ""
+                    ),
+                    provenance_kind=str(raw_support.get("provenance_kind") or ""),
+                    confidence=float(raw_support.get("confidence") or 0.0),
+                    review_status=str(raw_support.get("review_status") or ""),
+                    evidence=str(raw_support.get("evidence") or "").strip(),
+                    rationale=str(raw_support.get("rationale") or "").strip(),
+                )
+                for raw_support in raw_relation.get("supports") or ()
+                if isinstance(raw_support, Mapping)
+                and str(raw_support.get("source_document_version_id") or "").strip()
+            )
+            # SQL이 active·비거절 Support를 강제한다. 도메인에서도 빈 근거 관계를
+            # 한 번 더 제거해 저장소 대역·과거 호출자가 계약을 우회하지 못하게 한다.
+            if not supports:
+                continue
+            relations.append(
+                InterestBundleRelation(
+                    relation_id=str(raw_relation.get("relation_id") or ""),
+                    root_document_id=str(
+                        raw_relation.get("root_document_id") or ""
+                    ),
+                    direction=str(raw_relation.get("direction") or ""),
+                    relation_type=str(raw_relation.get("relation_type") or ""),
+                    confidence=float(raw_relation.get("confidence") or 0.0),
+                    provenance_kind=str(
+                        raw_relation.get("provenance_kind") or ""
+                    ),
+                    review_status=str(raw_relation.get("review_status") or ""),
+                    rationale=str(raw_relation.get("rationale") or "").strip(),
+                    supports=supports,
+                )
+            )
+        neighbors.append(
+            InterestBundleNeighbor(
+                document_id=document_id,
+                keyword=keyword,
+                document_kind=str(item.get("document_kind") or ""),
+                weight=float(item.get("weight") or 0.0),
+                relation_types=tuple(
+                    str(value) for value in item.get("relation_types") or ()
+                ),
+                shared_source_count=int(item.get("shared_source_count") or 0),
+                degree=float(item.get("degree") or 0.0),
+                document_version_id=str(item.get("document_version_id") or ""),
+                summary=str(item.get("summary") or "").strip(),
+                aliases=tuple(str(value) for value in item.get("aliases") or ()),
+                updated_at=(
+                    str(item["updated_at"])
+                    if item.get("updated_at") is not None
+                    else None
+                ),
+                relations=tuple(relations),
+            )
         )
-        for item in related
-        if str(item.get("document_id") or "").strip()
-        and str(item.get("keyword") or "").strip()
-    )
     return InterestReportBundle(
         profile_id=str(active["profile_id"]),
         profile_version=int(active["profile_version"]),
@@ -167,5 +345,6 @@ async def int_012(
         root_keyword=root_keyword,
         root_score=float(active.get("score") or 0.0),
         root_document_ids=document_ids,
-        neighbors=neighbors,
+        root_documents=root_documents,
+        neighbors=tuple(neighbors),
     )

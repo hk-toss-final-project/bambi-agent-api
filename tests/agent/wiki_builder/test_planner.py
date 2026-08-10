@@ -176,6 +176,7 @@ def test_entity_to_concept_relation_uses_resolved_keys() -> None:
     assert relation.target_document_key == "연결-노트"
     assert relation.relation_type == "applies_concept"
     assert relation.metadata["evidence"] == "Obsidian은 연결 노트를 지원한다."
+    assert relation.metadata["prompt_key"] == "personal_wiki_relation_linker"
     assert plan.extracted_relation_count == 1
     assert plan.isolated_node_count == 0
 

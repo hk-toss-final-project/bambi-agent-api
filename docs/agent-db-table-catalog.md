@@ -7,9 +7,10 @@
 > database/migrations/0004_separate_user_sources_from_llm_wiki.sql,
 > database/migrations/0005_structure_llm_wiki_documents.sql,
 > database/migrations/0006_rename_report_builder_contracts.sql,
-> database/migrations/0008_extract_global_source_cache.sql입니다.
+> database/migrations/0008_extract_global_source_cache.sql,
+> database/migrations/0017_wiki_relation_lifecycle.sql입니다.
 
-이 문서는 Agent DB의 44개 테이블을 영역과 데이터 성격으로 분류하고, 각 테이블의
+이 문서는 Agent DB 테이블을 영역과 데이터 성격으로 분류하고, 각 테이블의
 책임, 핵심 관계·제약, RLS 적용 여부와 현재 애플리케이션 연결 상태를 정리합니다.
 데이터 소유권, 배포 구조와 운영 원칙은 agent-db-design.md를 함께 참고합니다.
 컬럼별 타입·필수 여부·기본값·의미는 agent-db-column-dictionary.md를 참고합니다.
@@ -63,7 +64,7 @@ user_context_snapshots와 agent_jobs 대신 인메모리 저장소를 사용합�
 | 설정 | prompt_templates, prompt_versions, model_configs, retrieval_configs, embedding_configs |
 | 사용자·Job | user_context_snapshots, agent_jobs, agent_job_attempts |
 | 사용자 원본 | wiki_source_events, user_source_documents, user_source_document_versions |
-| 지식 문서·검색 공용 | wiki_documents, wiki_document_versions, wiki_document_sources, wiki_document_relations, wiki_chunks, wiki_embeddings |
+| 지식 문서·검색 공용 | wiki_documents, wiki_document_versions, wiki_document_sources, wiki_document_relations, wiki_relation_supports, wiki_chunks, wiki_embeddings |
 | Personal Wiki | wiki_versions, wiki_version_documents |
 | 사용자 관심사 | user_interest_profiles, user_interests, interest_evidence |
 | Global Source·Discovery | global_sources, global_collection_runs, global_source_documents, global_trends, global_trend_documents, discovery_candidates |
@@ -85,6 +86,8 @@ publish_snapshots, publish_attempts에 Lease 기반 Batch 처리 Column과 Index
 Report Builder 계약으로 이전합니다. 0008은 Global 수집 원문을 Wiki 테이블에서
 분리한 소유권 없는 캐시 테이블 global_source_documents를 추가하고, citations에
 캐시 출처 컬럼을 더합니다.
+0017은 관계 Head에 provenance·confidence·review·lifecycle과 Model·Prompt trace를
+추가하고 원본 Version·Build별 근거 이력 테이블 wiki_relation_supports를 추가합니다.
 
 ## 3. 설정
 
@@ -113,7 +116,7 @@ agent_jobs는 0002 Migration에서 lease_expires_at과 Claim 가능 Job 조회 I
 
 ## 5. 지식 문서와 검색
 
-아래 여섯 테이블은 Agent가 구성한 LLM Wiki가 사용합니다. namespace_key는
+아래 일곱 테이블은 Agent가 구성한 LLM Wiki가 사용합니다. namespace_key는
 맥락 주체(개인, 이후 팀)를 나누는 축이며, 0008부터 Global 수집 원문은 이
 테이블들이 아니라 global_source_documents 캐시에 저장합니다.
 
@@ -122,7 +125,8 @@ agent_jobs는 0002 Migration에서 lease_expires_at과 Claim 가능 Job 조회 I
 | wiki_documents | Master/Head | Agent가 생성한 Wiki 문서의 Scope, Entity·Concept·Schema 유형, 논리 Key, Vault 경로와 최신 버전 관리 | Namespace 내 유형+Key·파일 경로 Unique, Schema 1개 | 적용 | Schema only |
 | wiki_document_versions | Version | LLM이 구성한 제목, 요약, 정규화 본문과 생성 Job 보존 | document_id + version Unique, normalized_content 또는 object_uri 필수 | 적용 | Schema only |
 | wiki_document_sources | Relation | 생성된 Wiki Version과 참고한 사용자 원본 Version 연결 | Wiki Version + 원본 Version Composite PK, 동일 Namespace FK | 적용 | Schema only |
-| wiki_document_relations | Relation/Graph | Entity·Concept 등 Wiki 문서 사이의 현재 관계 저장 | 출발+대상+유형 Composite PK, 동일 Namespace FK, 자기 참조 금지 | 적용 | Schema only |
+| wiki_document_relations | Relation/Graph Head | Entity·Concept 사이의 현재 관계·대표 판정과 active/superseded 수명주기 저장 | 출발+대상+유형 Composite PK, 동일 Namespace FK, 자기 참조 금지, provenance·confidence·review 제약 | 적용 | PostgreSQL 연결 |
+| wiki_relation_supports | Relation/History | 관계를 지지하는 원본 Version·Build별 evidence와 판정 이력 저장 | relation+원본 Version+Job Unique, 동일 Namespace FK, active/superseded 수명주기 | 적용 | PostgreSQL 연결 |
 | wiki_chunks | Derived | 문서 버전을 검색·LLM 입력 단위로 분할 | document_version_id + chunk_index Unique, FTS와 pg_trgm GIN Index | 적용 | Schema only |
 | wiki_embeddings | Derived | Chunk의 의미 검색 Vector와 생성 설정 보존 | chunk_id + embedding_config_id Unique, vector(1536), Cosine HNSW | 적용 | Schema only |
 
@@ -249,10 +253,9 @@ Append-only 성격을 강제해야 합니다.
 
 `scripts/start_agent_db.sh`는 실행 중인 컨테이너에도 Initializer를 명시적으로
 호출하고, Compose `post_start` Hook은 컨테이너가 실제로 시작될 때 같은 경로를
-실행합니다. Initializer는 미적용 Migration을 순서대로 적용한 뒤 Checksum이
-변경된 개발 Seed를 한 번 적용합니다. Migration과 Seed가 최신 상태여야 Health
-Check를 통과합니다. 배포 환경은 같은 Initializer를 API·Worker 기동 전 one-shot
-서비스로 실행하고, 성공한 Seed Checksum을 `audit_logs`에 append-only로 기록합니다.
+실행합니다. Initializer는 미적용 Migration을 순서대로 적용하며, 최신 Migration이
+모두 반영되어야 Health Check를 통과합니다. 배포 환경은 같은 Initializer를
+API·Worker 기동 전 one-shot 서비스로 실행합니다.
 
 ## 14. 핵심 관계 흐름
 
@@ -265,6 +268,7 @@ Check를 통과합니다. 배포 환경은 같은 Initializer를 API·Worker 기
       → wiki_documents
       → wiki_document_versions
       → wiki_document_sources / wiki_document_relations
+      → wiki_relation_supports
       → wiki_chunks
       → wiki_embeddings
       → wiki_versions / wiki_version_documents

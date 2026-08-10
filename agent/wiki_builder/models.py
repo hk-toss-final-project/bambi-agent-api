@@ -15,6 +15,7 @@ from shared.wiki_models import (
     WikiDocumentPlan,
     WikiRelationClassification,
     WikiRelationPlan,
+    WikiNodeDisposition,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "WikiDocumentPlan",
     "WikiRelationClassification",
     "WikiRelationPlan",
+    "WikiNodeDisposition",
 ]

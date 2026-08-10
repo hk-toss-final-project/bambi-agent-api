@@ -1,5 +1,5 @@
 #!/bin/sh
-# Agent DB를 실행하고 새 Migration과 개발 Seed를 반영한 뒤 상태를 검증한다.
+# Agent DB를 실행하고 새 Migration을 반영한 뒤 상태를 검증한다.
 
 set -eu
 

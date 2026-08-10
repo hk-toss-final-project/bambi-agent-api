@@ -14,10 +14,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from agent.llm.api import complete, strip_json_fence
-from agent.wiki_builder.features.relations import (
-    parse_relation_candidates,
-    review_missing_relations,
-)
+from agent.wiki_builder.features.relations import parse_relation_candidates
 from agent.wiki_builder.models import (
     ConceptClassification,
     EntityClassification,
@@ -513,7 +510,8 @@ def classify_source_for_wiki(
     """클리핑 원문 한 건을 개인 지식 entity·concept 후보로 분류한다.
 
     긴 원문은 여러 LLM 호출로 나누어 전체 내용을 보존하고, 각 호출의
-    결과를 이름과 기존 document_key 기준으로 합친다.
+    결과를 이름과 기존 document_key 기준으로 합친다. 관계는 이 단계에서
+    확정하지 않고 identity 판정 후 Relation Linker가 전체 후보를 다시 검토한다.
     """
     chunks = split_source_content(source_content)
     if not chunks:
@@ -533,31 +531,30 @@ def classify_source_for_wiki(
         classification = parse_wiki_classification(
             raw_response, source_content=chunk
         )
-        if (
-            len(classification.entities) + len(classification.concepts) >= 2
-            and not classification.relations
-        ):
-            reviewed = review_missing_relations(
-                source_content=chunk,
-                entities=classification.entities,
-                concepts=classification.concepts,
-                model=model,
-                completion=complete,
-            )
-            reviewed_entities, reviewed_concepts = _apply_relations_to_nodes(
-                entities=classification.entities,
-                concepts=classification.concepts,
-                relations=reviewed.relations,
-            )
-            classification = replace(
-                classification,
-                entities=reviewed_entities,
-                concepts=reviewed_concepts,
-                relations=reviewed.relations,
-                relation_warnings=_unique(
-                    [*classification.relation_warnings, *reviewed.warnings]
-                ),
-            )
+        # 구버전 프롬프트·캐시가 relations을 반환해도 추출 단계에서는
+        # Edge를 확정하지 않는다. 부분 Edge가 있으면 재검토를 건너뛰던
+        # 기존 조건을 제거하고, Relation Linker가 항상 완전성을 판정한다.
+        classification = replace(
+            classification,
+            entities=[
+                replace(
+                    entity,
+                    related_entity_names=[],
+                    related_concepts=[],
+                )
+                for entity in classification.entities
+            ],
+            concepts=[
+                replace(
+                    concept,
+                    related_entity_names=[],
+                    related_concepts=[],
+                )
+                for concept in classification.concepts
+            ],
+            relations=[],
+            node_dispositions=[],
+        )
         classifications.append(classification)
     return merge_wiki_classifications(classifications)
 

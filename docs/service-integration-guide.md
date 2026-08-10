@@ -169,6 +169,7 @@ Agent는 접수 시 관심사가 현재 활성 Profile에 속하고 차단되지
 | `GET /users/{user_id}/wiki/documents` (+`/{document_id}`) | Wiki 문서 목록·상세(Markdown 포함) |
 | `GET /users/{user_id}/wiki/graph` | Entity·Concept 관계 그래프 (Node·Edge·통계) |
 | `GET /users/{user_id}/wiki/graph/top-nodes?limit=10` | 연결 많은 순 상위 Node (rank·degree 포함 경량 응답) |
+| `DELETE /users/{user_id}/wiki` | 원본을 보존한 개인 LLM Wiki 계정 단위 초기화 (동기·멱등) |
 | `GET /users/{user_id}/interests` | 활성 관심 키워드 (topic·score·evidence) |
 | `POST /users/{user_id}/interest-profiles/rebuild` | 관심 키워드 수동 재계산 (Wiki Build 완료 시 자동 재계산되므로 새로고침·복구용) |
 | `GET /users/{user_id}/generated-contents` (+`/{candidate_id}`) | 생성 콘텐츠 목록·상세(본문·Citation) |
@@ -178,9 +179,12 @@ Agent는 접수 시 관심사가 현재 활성 Profile에 속하고 차단되지
 - **피드백 신호** (`POST .../feedback-signals`): 좋아요·좋아요 취소·숨김·신고를
   Batch(최대 100건)로 전달합니다. 각 신호에 `topics`(신호가 가리키는 관심
   Topic, Service가 해석)와 `source_event_id`(멱등 키)를 포함하세요. Wiki
-  문서를 만들지 않으며, **다음 관심사 재계산 때** INT-005가 시간 감쇠와 함께
-  점수에 반영합니다(가중치는 잠정값 — D2 확정 시 변경 가능). 즉시 반영이
-  필요하면 `POST .../interest-profiles/rebuild`를 이어서 호출하세요.
+  문서를 만들지 않으며, 신규 이벤트 저장 직후 **같은 요청에서 관심사 재계산을
+  best-effort로 시도**합니다. 재계산이 실패해도 HTTP 응답의 `accepted_count`에
+  포함된 이벤트는 롤백되지 않으며 다음 재계산의 입력으로 남습니다.
+- 체류·스크롤·노출 위치 같은 Service 계측값은 신호의 `metadata` JSON Object에
+  담을 수 있습니다. Agent는 이 값을 손실 없이 저장하지만, 팀에서 확정하지 않은
+  임계값이나 가중치로 해석하지 않습니다.
 
 ### 3.7 리포트 북마크 위키 편입 (2026-07-27 구현 / 2026-07-30 통합)
 
@@ -207,6 +211,17 @@ Agent는 접수 시 관심사가 현재 활성 Profile에 속하고 차단되지
   소유**이며 Agent는 실행만 합니다. 같은 개념이 새 클리핑으로 재등장하면 새
   문서로 되살아납니다(D1 잠정: 기본 부활 — 억제(tombstone) 옵션은 팀 결정 후).
   관심사 반영이 급하면 `POST .../interest-profiles/rebuild`를 이어서 호출하세요.
+
+### 3.9 개인 LLM Wiki 초기화 (2026-08-10 구현)
+
+- **계정 초기화** (`DELETE .../wiki`): 해당 사용자의 활성 Wiki 문서·관계·Chunk
+  검색·Build Snapshot·관심사 Profile을 비활성화하고 대기·실행 중인 Wiki Build를
+  취소합니다(동기 200, 반복 호출 멱등).
+- `user_source_documents`, `user_source_document_versions`, 기존 Source Event는
+  보존합니다. 따라서 초기화는 사용자가 저장한 원본 삭제가 아니며 새 입력이나 전체
+  재구성으로 Wiki를 다시 만들 수 있습니다.
+- 확인 UX와 사용자 인증은 Service가 소유합니다. Agent는 전달된 `user_id`의 Namespace만
+  초기화하고 처리 건수를 반환합니다.
 
 ## 4. service-worker가 구현할 것 — 발행 폴링 루프
 

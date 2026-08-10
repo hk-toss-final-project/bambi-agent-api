@@ -108,10 +108,89 @@ Worker가 실행될 때 프로필이 바뀌어도 재시도 결과가 달라지�
 - 다중 검색 결과의 문서 중복 제거와 Citation 참조 재부여
 - 발행 Snapshot의 범주 메타데이터
 
-실제 LLM 벤치마크는 `bench/interest_bundle_report/`에 최소 10개 케이스를 두고,
+실제 LLM 품질 평가는 다시 수행할 때 최소 10개 케이스를 새로 구성하고,
 비용을 먼저 고지한 뒤 실행한다. 범주 커버리지·루트 집중도·Citation 정확성·지연·
 토큰 비용을 기록한다.
 
 결정적 단위·통합 테스트는 활성/비활성 관심사, 1홉 정렬, Job 스냅샷,
 Researcher 활성/비활성 검색, 단일 실시간 보강, 루트 중심 프롬프트, 발행
 메타데이터까지 검증한다. 실제 LLM 벤치마크 실행은 API 비용 승인 후 별도로 한다.
+
+## 8. Wiki Context 기반 리포트 P0~P3 개선 (승인됨, 2026-08-09)
+
+기존 구현은 관심사와 1홉 이웃 제목으로 개인 Wiki를 다시 검색한다. 검색에
+성공하면 Wiki Chunk 본문이 생성 근거로 들어가지만, 관심사 근거 문서 ID와 관계
+근거는 검색·생성 단계에서 소실된다. 따라서 현재 구조는 Graph 기반 지식 활용보다
+Graph 보조 검색어 확장에 가깝다.
+
+이번 개선은 관심 프로필을 주제 선택용 파생 뷰로 유지하면서, 선택한 Wiki의
+문서·관계·시간 맥락을 별도 `Wiki Context Packet`으로 생성기에 전달한다.
+
+```text
+관심사 선택
+  → Profile Version에 고정된 루트·이웃 Wiki Version 조회
+  → 검증 관계와 원본 근거 Snapshot
+  → ID 고정 Context + Hybrid 검색 Context 조립
+  → 개인 Wiki(기존 지식) + Global/Live(최신 사실) 분리 생성
+```
+
+### 8.1 P0 — Wiki 문서 ID 고정과 Context 예산
+
+- `interest_evidence.document_id`가 가리키는 루트 문서와 선택된 이웃의 현재
+  `document_version_id`·제목·종류·요약·별칭·갱신 시각을 Job 접수 시 고정한다.
+- Worker는 제목을 다시 검색하는 것에 의존하지 않고 고정 Version을 직접 읽는다.
+- 루트 Context를 먼저 넣고, 이웃마다 최소 한 건의 Context 기회를 준 뒤 일반 검색
+  결과를 보강한다.
+- Context 전체 상한 12건과 생성 입력 16,000자 상한은 유지한다.
+- 과거 Job Payload처럼 Version Snapshot이 없는 요청은 기존 키워드 검색으로
+  호환 폴백한다.
+
+완료 조건은 루트 Version이 존재할 때 생성 Context 포함률 100%, 이웃별 Context
+기회 보장, 동일 Job 재시도의 Version 불변성이다.
+
+### 8.2 P1 — 구조화 관계·근거 전달
+
+- 이웃마다 루트와의 방향, 관계 유형, confidence, provenance, review 상태,
+  rationale과 active support evidence를 Snapshot한다.
+- `rejected`·`superseded` 관계와 support가 없는 관계는 생성 Context에서 제외한다.
+- 생성 프롬프트는 개인 Wiki를 기존 지식, Global/Live를 최신 사실로 구분한다.
+- `associated_with`·`related_concept`를 인과관계로 확대하지 않고, 최신 사실은
+  반드시 Global/Live 근거로 확인한다.
+- 관계 Snapshot은 검색 확장뿐 아니라 "기존 관심 구조와 이번 변화의 연결"을
+  설명하는 생성 지시로 사용한다.
+
+### 8.3 P2 — 개인 Wiki Hybrid 검색
+
+- ID 고정 문서는 검색 점수와 무관하게 포함한다.
+- 추가 개인 Wiki 후보는 Keyword/Trigram과 기존 `wiki_embeddings` Vector 검색을
+  각각 수행한 뒤 결정적인 RRF로 결합한다.
+- Vector Provider 실패나 해당 사용자의 Embedding 부재는 Keyword 검색으로
+  폴백하며 리포트 생성을 실패시키지 않는다.
+- Vector 검색은 hard cutoff로 근거를 삭제하지 않고 후보 회수·순서 개선에만 쓴다.
+  이는 `retrieval-noise-measurement-2026-08-05.md`의 측정 결과를 따른다.
+- 검색 입력은 우선 Query 하나를 1536차원 `text-embedding-3-small`로 만들며,
+  저장 Embedding의 active config·model과 같은 값만 비교한다.
+
+### 8.4 P3 — 피드백·시간축 학습 루프
+
+- 리포트 피드백은 Wiki 문서를 자동 생성하지 않고 feedback event로만 저장한다.
+- 저장된 feedback은 같은 요청 안에서 관심 프로필 재계산까지 연결해 다음 리포트
+  선택에 반영한다. 재계산 실패는 수신한 이벤트를 롤백하지 않는다.
+- feedback payload의 계측 Metadata는 손실 없이 보존하되, 팀 미확정 임계값이나
+  새 신호 가중치는 이번 범위에서 확정하지 않는다.
+- Wiki Context에는 Version 갱신 시각을 포함해 "기존 지식"의 기준 시점을
+  생성기에 전달한다.
+- 생성 리포트와 LLM이 추론한 새 관계는 Wiki에 자동 승격하지 않는다. 사용자의
+  명시적 저장이나 별도 검증 파이프라인을 통과한 경우에만 Wiki 입력원이 된다.
+
+### 8.5 검증 경계
+
+결정적 테스트는 Bundle Snapshot, ID 고정 Context, 관계 필터, RRF, Embedding 실패
+폴백, feedback 재계산을 검증한다. 실제 LLM 벤치마크는 Wiki Fixture에서
+`Bundle → Retrieval → Context Packet → Generation` 전체를 실행해 다음을 기록한다.
+
+- Root/Neighbor Context Recall
+- 관계 유형·방향 보존
+- Wiki Context 인용과 최신 외부 근거 인용
+- 기존 지식 반복이 아닌 변화·의미 서술
+- 지연시간·입출력 토큰·Embedding 비용

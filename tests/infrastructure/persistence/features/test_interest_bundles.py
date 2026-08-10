@@ -55,6 +55,42 @@ def test_repository_loads_only_active_unblocked_interest() -> None:
     assert params == ("user-1", "interest-1")
 
 
+def test_repository_snapshots_current_root_versions_in_input_order() -> None:
+    """루트 Wiki는 현재 Version·요약·별칭·갱신 시각을 입력 순서대로 조회한다."""
+    connection = _Connection(
+        [
+            [
+                {
+                    "document_id": "root-1",
+                    "document_version_id": "version-1",
+                    "keyword": "코스피",
+                    "summary": "대표 지수",
+                    "aliases": ["KOSPI"],
+                }
+            ]
+        ]
+    )
+    repository = ConnectionInterestBundleRepository(connection)  # type: ignore[arg-type]
+
+    rows = asyncio.run(
+        repository.list_node_snapshots(
+            "user-1", document_ids=["root-2", "root-1"]
+        )
+    )
+
+    query, params = connection.executed[0]
+    assert rows[0]["document_version_id"] == "version-1"
+    assert "version.version = document.current_version" in query
+    assert "version.source_metadata -> 'aliases'" in query
+    assert "version.created_at AS updated_at" in query
+    assert "ORDER BY array_position(%s::uuid[], document.id)" in query
+    assert params == (
+        ["root-2", "root-1"],
+        "user/user-1",
+        ["root-2", "root-1"],
+    )
+
+
 def test_repository_orders_one_hop_neighbors_by_evidence_strength() -> None:
     """1홉·조직 제외·공동 원문·degree 정렬과 상한을 조회에 반영한다."""
     connection = _Connection(
@@ -85,10 +121,33 @@ def test_repository_orders_one_hop_neighbors_by_evidence_strength() -> None:
     assert "document.id = ANY(%s::uuid[])" in query
     assert "COALESCE(peer.domain, '') <> 'organization'" in query
     assert "peer.id NOT IN (SELECT id FROM origin)" in query
+    assert "WHEN 'subtopic_of' THEN 1.0" in query
+    assert "WHEN 'associated_with' THEN 0.5" in query
+    assert "relation.status = 'active'" in query
+    assert "relation.review_status <> 'rejected'" in query
+    assert "candidate.status = 'active'" in query
+    assert "candidate.review_status <> 'rejected'" in query
+    assert "active_supports.items IS NOT NULL" in query
+    assert "'direction', CASE" in query
+    assert "'source_document_version_id'" in query
+    assert "'evidence', COALESCE(support.evidence, '')" in query
+    assert "LIMIT 3" in query
+    assert "peer_relation.status = 'active'" in query
+    assert "raw_neighbor_relations AS" in query
+    assert "neighbor_pairs AS" in query
+    assert "GROUP BY origin_id, peer_id" in query
+    assert "MAX(weight) AS max_weight" in query
+    assert "SUM(max_weight)::float8 AS weight" in query
+    assert "SELECT SUM(neighbor.max_weight) AS degree" in query
+    assert "GROUP BY active_peer.id" in query
     assert "shared_source_count DESC" in query
     assert "degree DESC" in query
+    assert "peer_version.id::text AS document_version_id" in query
+    assert "peer_version.source_metadata -> 'aliases'" in query
+    assert "peer_version.created_at AS updated_at" in query
     assert params == (
         ["root-1"],
+        "user/user-1",
         "user/user-1",
         "user/user-1",
         "user/user-1",

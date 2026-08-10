@@ -39,6 +39,7 @@ from app.schemas.mvp import (
     GenerationRequest,
     JobResultResponse,
     JobStatusResponse,
+    PersonalWikiResetResponse,
     UrlWikiSourceRequest,
     UserContextResponse,
     UserContextUpsertRequest,
@@ -282,7 +283,7 @@ async def submit_feedback_signals(
 ) -> FeedbackSignalsResponse:
     """[SVC-006] 좋아요·숨김·신고 신호를 관심사 반영 이벤트로 접수한다.
 
-    Wiki 문서를 만들지 않으며, 다음 관심사 재계산 때 점수에 반영된다.
+    Wiki 문서를 만들지 않으며 저장 직후 관심사 재계산을 best-effort로 시도한다.
     """
     return await svc_006(
         service,
@@ -305,6 +306,21 @@ async def get_personal_wiki_graph(
 ) -> WikiGraphResponse:
     """[PWIKI-003] 현재 Entity·Concept 문서와 관계 Graph를 조회한다."""
     return await service.get_graph(user_id, _request_id(request))
+
+
+@router.delete(
+    "/users/{user_id}/wiki",
+    response_model=PersonalWikiResetResponse,
+    operation_id="pwiki_013",
+    summary="개인 LLM Wiki 초기화",
+)
+async def reset_personal_wiki(
+    user_id: UserId,
+    request: Request,
+    service: WikiDocumentService = Depends(get_wiki_document_service),
+) -> PersonalWikiResetResponse:
+    """[PWIKI-013] 사용자 원본을 보존하고 개인 LLM Wiki를 초기화한다."""
+    return await service.reset_wiki(user_id, request_id=_request_id(request))
 
 
 @router.get(

@@ -92,30 +92,46 @@ async def load_interest_documents_for_user(
              AND version.namespace_key = document.namespace_key
              AND version.version = document.current_version
             LEFT JOIN LATERAL (
-                SELECT SUM(
-                    CASE relation.relation_type
-                        WHEN 'entity_relation' THEN 1.0
-                        WHEN 'applies_concept' THEN 1.0
-                        WHEN 'related_concept' THEN 0.5
-                        ELSE 0.0
-                    END
-                ) AS degree
-                FROM agent.wiki_document_relations AS relation
-                JOIN agent.wiki_documents AS peer
-                  ON peer.id = CASE
-                         WHEN relation.source_document_id = document.id
-                         THEN relation.target_document_id
-                         ELSE relation.source_document_id
-                     END
-                 AND peer.namespace_key = relation.namespace_key
-                WHERE relation.namespace_key = document.namespace_key
-                  AND document.id IN (
-                      relation.source_document_id,
-                      relation.target_document_id
-                  )
-                  AND peer.document_kind IN ('entity', 'concept')
-                  AND peer.status = 'active'
-                  AND peer.deleted_at IS NULL
+                SELECT SUM(neighbor.max_weight) AS degree
+                FROM (
+                    SELECT
+                        peer.id,
+                        MAX(
+                            CASE relation.relation_type
+                                WHEN 'entity_relation' THEN 1.0
+                                WHEN 'applies_concept' THEN 1.0
+                                WHEN 'related_concept' THEN 0.5
+                                WHEN 'instance_of' THEN 1.0
+                                WHEN 'subtopic_of' THEN 1.0
+                                WHEN 'part_of' THEN 1.0
+                                WHEN 'located_in' THEN 1.0
+                                WHEN 'occurs_in' THEN 1.0
+                                WHEN 'affects' THEN 1.0
+                                WHEN 'causes' THEN 1.0
+                                WHEN 'associated_with' THEN 0.5
+                                ELSE 0.0
+                            END
+                        ) AS max_weight
+                    FROM agent.wiki_document_relations AS relation
+                    JOIN agent.wiki_documents AS peer
+                      ON peer.id = CASE
+                             WHEN relation.source_document_id = document.id
+                             THEN relation.target_document_id
+                             ELSE relation.source_document_id
+                         END
+                     AND peer.namespace_key = relation.namespace_key
+                    WHERE relation.namespace_key = document.namespace_key
+                      AND relation.status = 'active'
+                      AND relation.review_status <> 'rejected'
+                      AND document.id IN (
+                          relation.source_document_id,
+                          relation.target_document_id
+                      )
+                      AND peer.document_kind IN ('entity', 'concept')
+                      AND peer.status = 'active'
+                      AND peer.deleted_at IS NULL
+                    GROUP BY peer.id
+                ) AS neighbor
             ) AS relation_stats ON true
             LEFT JOIN LATERAL (
                 SELECT
@@ -333,8 +349,8 @@ async def load_recent_feedback_signals_for_user(
 ) -> list[dict[str, object]]:
     """최근 feedback 이벤트를 Topic 단위 행동 신호로 평탄화해 반환한다.
 
-    이벤트 payload의 `topics` 목록을 펼쳐 `{topic, signal_type, occurred_at}`
-    신호로 만든다 — INT-005 점수 보정의 입력이다.
+    이벤트 payload의 `topics` 목록을 펼쳐 Topic별 신호로 만든다. 원본 계측
+    Metadata도 해석하지 않고 함께 전달한다 — INT-005 점수 보정의 입력이다.
     """
     async with connection.transaction():
         await set_personal_wiki_scope(connection, user_id=user_id)
@@ -358,6 +374,8 @@ async def load_recent_feedback_signals_for_user(
         topics = payload.get("topics")
         if not signal_type or not isinstance(topics, list):
             continue
+        raw_metadata = payload.get("metadata")
+        metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
         for topic in topics:
             value = str(topic or "").strip()
             if value:
@@ -366,6 +384,7 @@ async def load_recent_feedback_signals_for_user(
                         "topic": value,
                         "signal_type": signal_type,
                         "occurred_at": row["occurred_at"],
+                        "metadata": metadata,
                     }
                 )
     return signals
@@ -379,14 +398,15 @@ async def save_feedback_signals_for_user(
 ) -> int:
     """행동 신호를 feedback 이벤트로 멱등 저장하고 신규 저장 수를 반환한다.
 
-    신호는 Wiki 문서를 만들지 않고 이벤트로만 남으며(SVC-006), 다음 관심사
-    재계산(INT-011) 때 INT-005가 읽어 점수에 반영한다. `source_event_id`
-    중복은 건너뛴다.
+    신호는 Wiki 문서를 만들지 않고 이벤트로만 남는다(SVC-006). 계측 Metadata는
+    임계값이나 가중치를 해석하지 않고 JSON Payload에 그대로 보존한다.
+    `source_event_id` 중복은 건너뛴다.
     """
     async with connection.transaction():
         await set_personal_wiki_scope(connection, user_id=user_id)
         accepted = 0
         for signal in signals:
+            raw_metadata = signal.get("metadata")
             payload = {
                 "signal_type": str(signal.get("signal_type") or ""),
                 "topics": [
@@ -395,6 +415,9 @@ async def save_feedback_signals_for_user(
                     if str(topic).strip()
                 ],
                 "content_id": signal.get("content_id"),
+                "metadata": (
+                    dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
+                ),
             }
             cursor = await connection.execute(
                 """

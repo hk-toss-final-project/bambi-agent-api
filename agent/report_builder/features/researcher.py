@@ -41,6 +41,7 @@ from .pool_context import (
     select_personal_documents,
     select_pool_documents,
 )
+from .wiki_retrieval import embed_wiki_queries
 
 logger = logging.getLogger("agent.report_builder.researcher")
 
@@ -53,7 +54,7 @@ _OBSERVATION_SNIPPET_CHARS = 160
 # 조사원에게는 "무엇을 검색할까"만 맡긴다. "몇 건이면 충분한가"는 세는 문제라
 # 코드(is_pool_sufficient)가 판정한다 — 2026-07-31 벤치마크에서 LLM에게 셈을
 # 맡겼을 때 판단 정확도가 80%에 그쳤고, 프롬프트를 두 번 고쳐도 오류 방향만
-# 바뀌었다. 상세는 bench/researcher/results/ 참고.
+# 바뀌었다.
 SYSTEM_PROMPT = (
     "너는 리포트 작성에 쓸 근거 자료를 모으는 조사원이다.\n"
     "search_pool로 자료를 모으고, 다 모았으면 무엇을 모았는지 한 문단으로 요약한다.\n"
@@ -109,6 +110,8 @@ class ResearchOutcome:
 
 def _document_key(document: ReportContextDocument) -> str:
     """중복 판정에 쓸 문서 식별 키를 만든다."""
+    if document.namespace_key != GLOBAL_NAMESPACE and document.document_version_id:
+        return f"{document.namespace_key}:{document.document_version_id}"
     return document.url or f"{document.namespace_key}:{document.document_version_id}"
 
 
@@ -139,9 +142,15 @@ async def search_stored_documents(
     Returns:
         개인 Wiki 문서와 컷오프를 통과한 풀 문서 목록
     """
+    query_embeddings = await to_thread(embed_wiki_queries, [query])
     async with connection.transaction():
         await set_personal_wiki_scope(connection, user_id=user_id)
-        hybrid = await prag_003(connection, user_id=user_id, query=query)
+        hybrid = await prag_003(
+            connection,
+            user_id=user_id,
+            query=query,
+            query_embedding=query_embeddings.get(query.strip()),
+        )
         freshness = await load_global_document_freshness(
             connection,
             [

@@ -4,7 +4,7 @@
 Job 전체를 즉시 실행 가능 상태로 되돌리고(SCH-009 release), Personal Wiki
 Builder Worker Batch를 대기 Job이 없어질 때까지 반복 실행한다.
 
-실행: uv run python scripts/build_wiki_now.py [--user-id <id>] [--limit <n>]
+실행: uv run python scripts/build_wiki_now.py --user-id <id> [--limit <n>]
 """
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ from workers.api import run_personal_wiki_batch
 
 type DictRow = dict[str, Any]
 
-DEFAULT_USER_ID = "mock-clipping-user"
 MAX_BATCH_ROUNDS = 20
 
 
@@ -81,7 +80,7 @@ async def run_until_drained(
 def main() -> int:
     """CLI 인자를 해석하고 강제 Wiki Build를 실행한다."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--user-id", default=DEFAULT_USER_ID)
+    parser.add_argument("--user-id", required=True)
     parser.add_argument("--limit", type=int, help="Batch당 Claim할 최대 Job 수")
     parser.add_argument("--lease-seconds", type=int, help="Job Lease 유지 시간")
     args = parser.parse_args()

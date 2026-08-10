@@ -1,17 +1,20 @@
 """Report Builder Generation Job 등록의 예약 시각(scheduled_at) 영속화를 검증한다."""
 
 import asyncio
-
-import pytest
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
+
 from infrastructure.persistence.features.generation_runtime import (
     enqueue_report_generation_job,
+    load_personal_wiki_vector_context,
+    load_pinned_wiki_context,
     persist_report_generation,
     upsert_user_context_snapshot,
 )
-from shared.report_models import GeneratedReportContent
+from shared.report_models import GeneratedReportContent, ReportContextDocument
 
 
 class _FakeCursor:
@@ -51,6 +54,11 @@ class _FakeConnection:
         self.executed.append((query, params))
         rows = self._responses.pop(0) if self._responses else []
         return _FakeCursor(rows)
+
+    @asynccontextmanager
+    async def transaction(self):  # type: ignore[no-untyped-def]
+        """아무 작업 없이 열린 Transaction 문맥을 제공한다."""
+        yield self
 
 
 def _connection_with_context() -> _FakeConnection:
@@ -246,11 +254,50 @@ def test_enqueue_snapshots_active_interest_bundle() -> None:
             ],
             [
                 {
+                    "document_id": "11111111-1111-4111-8111-111111111111",
+                    "document_version_id": "44444444-4444-4444-8444-444444444444",
+                    "keyword": "생성형 AI",
+                    "document_kind": "concept",
+                    "summary": "생성 모델 기반 인공지능",
+                    "aliases": ["Generative AI"],
+                    "updated_at": "2026-08-09T10:00:00+00:00",
+                }
+            ],
+            [
+                {
                     "document_id": "22222222-2222-4222-8222-222222222222",
+                    "document_version_id": "55555555-5555-4555-8555-555555555555",
                     "keyword": "AI 에이전트",
                     "document_kind": "concept",
+                    "summary": "도구를 사용해 목표를 수행하는 AI",
+                    "aliases": ["Agentic AI"],
+                    "updated_at": "2026-08-08T10:00:00+00:00",
                     "weight": 1.0,
                     "relation_types": ["applies_concept"],
+                    "relations": [
+                        {
+                            "relation_id": "88888888-8888-4888-8888-888888888888",
+                            "root_document_id": "11111111-1111-4111-8111-111111111111",
+                            "direction": "root_to_neighbor",
+                            "relation_type": "applies_concept",
+                            "confidence": 0.96,
+                            "provenance_kind": "source_explicit",
+                            "review_status": "accepted",
+                            "rationale": "에이전트는 생성형 AI를 적용한다.",
+                            "supports": [
+                                {
+                                    "source_document_version_id": (
+                                        "99999999-9999-4999-8999-999999999999"
+                                    ),
+                                    "provenance_kind": "source_explicit",
+                                    "confidence": 0.96,
+                                    "review_status": "accepted",
+                                    "evidence": "생성형 AI 기반 에이전트",
+                                    "rationale": "원문 명시",
+                                }
+                            ],
+                        }
+                    ],
                     "shared_source_count": 2,
                     "degree": 3.0,
                 }
@@ -275,7 +322,7 @@ def test_enqueue_snapshots_active_interest_bundle() -> None:
     )
 
     assert submission.job_id == "job-1"
-    _, job_params = connection.executed[4]
+    _, job_params = connection.executed[5]
     assert job_params is not None
     payload = job_params[2].obj
     assert payload["topic"] == "생성형 AI"
@@ -283,10 +330,165 @@ def test_enqueue_snapshots_active_interest_bundle() -> None:
     assert payload["generation_scope"] == "INTEREST_BUNDLE"
     assert payload["interest_bundle"]["profile_version"] == 7
     assert payload["interest_bundle"]["keywords"] == ["생성형 AI", "AI 에이전트"]
-    _, request_params = connection.executed[5]
+    assert (
+        payload["interest_bundle"]["root"]["documents"][0][
+            "document_version_id"
+        ]
+        == "44444444-4444-4444-8444-444444444444"
+    )
+    assert (
+        payload["interest_bundle"]["neighbors"][0]["document_version_id"]
+        == "55555555-5555-4555-8555-555555555555"
+    )
+    assert (
+        payload["interest_bundle"]["neighbors"][0]["relations"][0]["direction"]
+        == "root_to_neighbor"
+    )
+    assert (
+        payload["interest_bundle"]["neighbors"][0]["relations"][0]["supports"][
+            0
+        ]["evidence"]
+        == "생성형 AI 기반 에이전트"
+    )
+    _, request_params = connection.executed[6]
     assert request_params is not None
     assert request_params[3] == "생성형 AI"
     assert request_params[-1].obj["interest_bundle"] == payload["interest_bundle"]
+
+
+def test_load_pinned_wiki_context_uses_exact_snapshot_versions() -> None:
+    """Worker는 현재 Version 재검색 없이 Job에 고정된 Version을 루트 우선 조회한다."""
+    connection = _FakeConnection(
+        [
+            [],
+            [
+                {
+                    "document_version_id": "44444444-4444-4444-8444-444444444444",
+                    "title": "생성형 AI",
+                    "summary": "생성 모델 기반 인공지능",
+                    "chunk_id": "66666666-6666-4666-8666-666666666666",
+                    "content": "## Description\n사용자의 기존 관심 맥락",
+                },
+                {
+                    "document_version_id": "55555555-5555-4555-8555-555555555555",
+                    "title": "AI 에이전트",
+                    "summary": "목표를 수행하는 AI",
+                    "chunk_id": "77777777-7777-4777-8777-777777777777",
+                    "content": "## Definition\n도구 사용과 계획 실행",
+                },
+            ],
+        ]
+    )
+    bundle = {
+        "root": {
+            "documents": [
+                {
+                    "document_version_id": "44444444-4444-4444-8444-444444444444",
+                    "keyword": "생성형 AI",
+                    "updated_at": "2026-08-09T10:00:00+00:00",
+                }
+            ]
+        },
+        "neighbors": [
+            {
+                "document_version_id": "55555555-5555-4555-8555-555555555555",
+                "keyword": "AI 에이전트",
+                "updated_at": "2026-08-08T10:00:00+00:00",
+            }
+        ],
+    }
+
+    contexts = asyncio.run(
+        load_pinned_wiki_context(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            interest_bundle=bundle,
+        )
+    )
+
+    query, params = connection.executed[1]
+    assert "unnest(%s::uuid[]) WITH ORDINALITY" in query
+    assert "version.id = requested.version_id" in query
+    assert "document.current_version" not in query
+    assert params == (
+        [
+            "44444444-4444-4444-8444-444444444444",
+            "55555555-5555-4555-8555-555555555555",
+        ],
+        "user/user-1",
+    )
+    assert [context.context_role for context in contexts] == [
+        "wiki_root",
+        "wiki_neighbor",
+    ]
+    assert [context.reference for context in contexts] == ["P1", "P2"]
+    assert contexts[0].source_updated_at == "2026-08-09T10:00:00+00:00"
+    assert "사용자의 기존 관심 맥락" in contexts[0].content
+
+
+def test_load_personal_wiki_vector_context_uses_active_matching_model() -> None:
+    """Vector 검색은 현재 Wiki와 active 동일 모델 Embedding만 Cosine top-k 조회한다."""
+    connection = _FakeConnection(
+        [
+            [
+                {
+                    "document_version_id": "44444444-4444-4444-8444-444444444444",
+                    "chunk_id": "66666666-6666-4666-8666-666666666666",
+                    "namespace_key": "user/user-1",
+                    "title": "폭염",
+                    "content": "장기간 높은 기온이 이어지는 현상",
+                    "url": None,
+                    "updated_at": "2026-08-09T10:00:00+00:00",
+                    "score": 0.82,
+                }
+            ]
+        ]
+    )
+
+    contexts = asyncio.run(
+        load_personal_wiki_vector_context(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            query_embedding=[0.1] * 1536,
+            model_name="text-embedding-3-small",
+            top_k=5,
+        )
+    )
+
+    query, params = connection.executed[0]
+    assert "wiki_embedding.embedding <=> query_vector.embedding" in query
+    assert "config.status = 'active'" in query
+    assert "document.current_version = version.version" in query
+    assert "document.document_kind IN ('entity', 'concept')" in query
+    assert "GREATEST(0.0, 1.0 - distance) + 0.05" in query
+    assert params is not None
+    assert str(params[0]).startswith("[0.1,0.1")
+    assert params[1:] == (
+        "personal-wiki/text-embedding-3-small",
+        "text-embedding-3-small",
+        "user/user-1",
+        "text-embedding-3-small",
+        5,
+    )
+    assert contexts[0].context_role == "semantic_retrieval"
+    assert contexts[0].source_updated_at == "2026-08-09T10:00:00+00:00"
+
+
+def test_load_personal_wiki_vector_context_rejects_wrong_dimensions() -> None:
+    """DB 호출 전 Query Embedding 차원을 검증한다."""
+    connection = _FakeConnection([])
+
+    with pytest.raises(ValueError, match="1536차원"):
+        asyncio.run(
+            load_personal_wiki_vector_context(
+                connection,  # type: ignore[arg-type]
+                user_id="user-1",
+                query_embedding=[0.1, 0.2],
+                model_name="text-embedding-3-small",
+            )
+        )
+
+    assert connection.executed == []
 
 
 def test_enqueue_bundle_retry_returns_snapshot_without_revalidating_interest() -> None:
@@ -477,6 +679,44 @@ def test_report_context_search_excludes_wiki_schema_documents() -> None:
     assert len(connection.executed) == 2
     for sql, _ in connection.executed:
         assert "document.document_kind <> 'schema'" in sql
+    assert "version.created_at AS source_updated_at" in connection.executed[0][0]
+    assert "recency AS source_updated_at" in connection.executed[1][0]
+
+
+def test_report_context_exposes_version_time_and_retrieval_role() -> None:
+    """개인 Wiki Keyword 결과에 정확한 Version 시각과 역할을 전달한다."""
+    from infrastructure.persistence.features.generation_runtime import (
+        load_report_context,
+    )
+
+    updated_at = datetime(2026, 8, 9, 10, 30, tzinfo=UTC)
+    connection = _FakeConnection(
+        [
+            [
+                {
+                    "document_version_id": "version-1",
+                    "chunk_id": "chunk-1",
+                    "namespace_key": "user/user-1",
+                    "title": "LangGraph",
+                    "content": "사용자가 저장한 Wiki 내용",
+                    "url": None,
+                    "score": 0.8,
+                    "source_updated_at": updated_at,
+                }
+            ]
+        ]
+    )
+
+    contexts = asyncio.run(
+        load_report_context(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            query="LangGraph",
+        )
+    )
+
+    assert contexts[0].context_role == "keyword_retrieval"
+    assert contexts[0].source_updated_at == str(updated_at)
 
 
 def test_report_context_gives_topic_bonus_through_collection_target() -> None:
@@ -624,7 +864,7 @@ def test_snapshot_row_mapping_tolerates_snapshots_saved_before_new_fields() -> N
 
 
 def test_snapshot_save_payload_preserves_interest_bundle_fields() -> None:
-    """개발 Seed 저장 경로도 범주 메타데이터를 JSON Payload에서 누락하지 않는다."""
+    """생성 결과 저장 경로가 범주 메타데이터를 JSON Payload에서 누락하지 않는다."""
     from app.schemas.mvp import PublishSnapshotResponse
     from infrastructure.persistence.postgres_publish_snapshots import (
         PostgresPublishSnapshotRepository,
@@ -733,6 +973,50 @@ def test_run_metadata_records_what_the_critic_objected_to() -> None:
     metadata = _run_metadata(connection)
     assert metadata["review_outcome"] == "revise_exhausted"
     assert metadata["review_problem"] == "인용한 G2 원문은 코스피 상승에 관한 내용이다."
+
+
+def test_run_metadata_records_context_role_and_knowledge_time() -> None:
+    """생성 Run이 Wiki Context의 역할과 지식 기준 시각을 재현 가능하게 남긴다."""
+    connection = _connection_for_persist("생성형 AI")
+    context = ReportContextDocument(
+        reference="P1",
+        document_version_id="version-1",
+        chunk_id="chunk-1",
+        namespace_key="user/user-1",
+        title="생성형 AI",
+        content="사용자가 저장한 기존 지식",
+        url=None,
+        score=1.0,
+        context_role="wiki_root",
+        source_updated_at="2026-08-09T10:00:00+00:00",
+    )
+
+    asyncio.run(
+        persist_report_generation(
+            connection,  # type: ignore[arg-type]
+            job_id="job-1",
+            user_id="user-1",
+            attempt_number=1,
+            content_type="interest_news_card",
+            generated=GeneratedReportContent(
+                title="제목",
+                summary="요약",
+                body="본문",
+                citation_references=(),
+            ),
+            contexts=[context],
+            latency_ms=100,
+        )
+    )
+
+    assert _run_metadata(connection)["retrieval_contexts"] == [
+        {
+            "reference": "P1",
+            "namespace_key": "user/user-1",
+            "context_role": "wiki_root",
+            "source_updated_at": "2026-08-09T10:00:00+00:00",
+        }
+    ]
 
 
 def test_stale_context_error_carries_the_current_version() -> None:

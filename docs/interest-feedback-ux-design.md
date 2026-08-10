@@ -147,7 +147,7 @@ MVP는 아래 넷만 만든다. 나머지는 2차.
 
 | # | 과제 | 지금 상태 (확인함) | 필요한 일 |
 |---|---|---|---|
-| 1 | **신호 payload가 버려진다** | `save_feedback_signals_for_user`가 payload를 `{signal_type, topics, content_id}` **고정 dict로 재조립**해 INSERT한다. axis·dwell을 실어 보내도 조용히 버려지고 API는 200을 반환한다 | writer 확장 + 그것을 검증하는 테스트. **모든 신호 설계의 0단계** |
+| 1 | **신호 payload가 버려진다** | **P3 완료(2026-08-09)** — `metadata` JSON Object를 API부터 이벤트 조회까지 해석 없이 보존한다 | 임계값·가중치는 U1·U2 결정 전까지 적용하지 않는다 |
 | 2 | **억제를 담을 자리가 없다** | 1.2절 ①~④ | 별도 테이블(`user_topic_suppressions` 등) + 생성 단계 필터. 그전까지 "빼 두었어요"를 화면에 띄우지 않는다 |
 | 3 | **명시 신호가 잘려 나간다** | 신호 조회가 `30일 · LIMIT 500` 단일 쿼리(`_FEEDBACK_LOOKBACK_DAYS` / `_FEEDBACK_EVENT_LIMIT`). 암묵 신호를 매일 쏘면 상한에 닿아 **가장 비싸게 얻은 명시 신호부터 사라진다** | 명시·암묵 분리 쿼리. 상한만 올리면 재계산 비용이 선형 증가 |
 | 4 | **카드↔관심사 연결이 문자열** | `generation_requests.topic`이 text이고 `user_interests.id` FK가 아니다 | `interest_id` 계약 추가. 붙기 전에는 자동·무성 교체를 켜지 않는다 — 표기 흔들림 하나로 엉뚱한 관심사가 조용히 죽는다 |

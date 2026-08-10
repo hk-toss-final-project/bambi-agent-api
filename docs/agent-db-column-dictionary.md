@@ -304,19 +304,62 @@ Frontmatter와 Markdown은 이 테이블이 아니라 user_source_document_versi
 
 ### wiki_document_relations
 
-Entity, Concept 등 생성된 Wiki 문서 사이의 현재 논리 Graph를 저장합니다.
+Entity, Concept 등 생성된 Wiki 문서 사이의 현재 논리 Graph Head를 저장합니다.
+한 Head를 지지하는 원본별 근거 이력은 `wiki_relation_supports`에 분리합니다.
 
 | 컬럼 | 타입 | 필수·기본값 | 설명 |
 |---|---|---|---|
+| id | uuid | 자동, Unique | Support 이력이 참조하는 관계 Head 식별자. Namespace와 함께 Unique |
 | source_document_id | uuid | 필수, FK, 복합 PK | 관계를 설명하는 출발 wiki_documents 식별자 |
 | target_document_id | uuid | 필수, FK, 복합 PK | 관계가 가리키는 대상 wiki_documents 식별자 |
 | namespace_key | text | 필수 | 출발·대상 문서에 동일하게 적용되는 Namespace |
-| relation_type | text | 필수, 복합 PK | entity_relation, applies_concept, related_concept, alias_of |
-| metadata | jsonb | 자동, 빈 Object | Cardinality, 관계 이름, 병합 판단 등 확장 Metadata |
+| relation_type | text | 필수, 복합 PK | 기존 entity_relation, applies_concept, related_concept, alias_of와 instance_of, subtopic_of, part_of, located_in, occurs_in, affects, causes, associated_with |
+| metadata | jsonb | 자동, 빈 Object | 관계 이름, rationale, 대표 evidence와 Support 집계 등 확장 Metadata |
+| status | text | 자동, active | active 또는 superseded |
+| provenance_kind | text | 자동, source_explicit | source_explicit, semantic_inference, user_declared, system_rule |
+| confidence | numeric(8,6) | 자동, 1 | 현재 대표 판정 신뢰도, 0~1 |
+| review_status | text | 자동, unreviewed | unreviewed, accepted, rejected |
+| model_name | text | 선택 | 대표 판정을 생성한 Model 이름 |
+| model_version | text | 선택 | 대표 판정 Model 버전 |
+| prompt_key | text | 선택 | 대표 판정 Prompt 식별자 |
+| prompt_version | text | 선택 | 대표 판정 Prompt 버전 |
 | created_at | timestamptz | 자동 | 관계 생성 시각 |
+| updated_at | timestamptz | 자동 | 대표 판정·수명주기 마지막 갱신 시각 |
+| superseded_at | timestamptz | 선택 | active support가 없어 Head를 대체 상태로 바꾼 시각 |
 
 자기 자신을 대상으로 하는 관계는 금지되며, 복합 FK가 서로 다른
-Namespace의 문서를 연결하지 못하게 막습니다.
+Namespace의 문서를 연결하지 못하게 막습니다. active이면 superseded_at은 반드시
+NULL이고 superseded이면 반드시 값이 있어야 합니다.
+
+### wiki_relation_supports
+
+관계 Head를 지지하는 사용자 원본 Version·Build별 evidence와 판정 이력을 저장합니다.
+같은 논리 원본의 새 Version을 처리하면 과거 active Support를 supersede하고 이번
+Build에서 실제 관측한 Support만 active로 upsert합니다.
+
+| 컬럼 | 타입 | 필수·기본값 | 설명 |
+|---|---|---|---|
+| id | uuid | 자동, PK | 관계 Support 이력 식별자 |
+| relation_id | uuid | 필수, FK | 대상 wiki_document_relations Head 식별자 |
+| namespace_key | text | 필수 | 관계 Head·사용자 원본과 동일한 Namespace |
+| source_document_version_id | uuid | 필수, FK, Unique 구성 | 관계를 관측·추론한 사용자 원본 Version |
+| build_job_id | uuid | 필수, FK, Unique 구성 | 판정을 실행한 agent_jobs 식별자 |
+| provenance_kind | text | 필수 | source_explicit, semantic_inference, user_declared, system_rule |
+| confidence | numeric(8,6) | 필수 | 이 Support 판정 신뢰도, 0~1 |
+| review_status | text | 자동, unreviewed | unreviewed, accepted, rejected |
+| evidence | text | 선택 | 원문 인용 또는 사용자 선언·System Rule 근거 |
+| model_name | text | 선택 | 판정 Model 이름 |
+| model_version | text | 선택 | 판정 Model 버전 |
+| prompt_key | text | 선택 | 판정 Prompt 식별자 |
+| prompt_version | text | 선택 | 판정 Prompt 버전 |
+| metadata | jsonb | 자동, 빈 Object | rationale와 추가 판정 Metadata |
+| status | text | 자동, active | active 또는 superseded |
+| created_at | timestamptz | 자동 | Support 최초 생성 시각 |
+| updated_at | timestamptz | 자동 | Support 마지막 갱신 시각 |
+| superseded_at | timestamptz | 선택 | 이 Support가 더 이상 현재 근거가 아니게 된 시각 |
+
+`relation_id + source_document_version_id + build_job_id`는 Unique입니다. 원본 삭제로
+마지막 active Support가 Cascade 삭제되면 Trigger가 관계 Head도 superseded로 바꿉니다.
 
 ### wiki_chunks
 

@@ -10,6 +10,7 @@ from fastapi import status
 
 from app.exceptions import AgentApiError, ErrorDetail
 from app.schemas.mvp import (
+    PersonalWikiResetResponse,
     WikiDocumentDeletionResponse,
     WikiSourceDeletionRequest,
 )
@@ -18,7 +19,7 @@ from app.schemas.wiki import (
     WikiDocumentDetailResponse,
     WikiDocumentListResponse,
 )
-from domain.personal_wiki.documents.api import pwiki_003, pwiki_006
+from domain.personal_wiki.documents.api import pwiki_003, pwiki_006, pwiki_013
 from infrastructure.persistence.api import WikiDocumentNotFoundError
 
 
@@ -58,6 +59,12 @@ class WikiDocumentRepository(Protocol):
         memo: str | None,
     ) -> Mapping[str, object]:
         """delete 이벤트를 기록하고 문서를 soft-delete한다."""
+        ...
+
+    async def reset_wiki(
+        self, user_id: str, *, request_id: str
+    ) -> Mapping[str, object]:
+        """사용자의 개인 LLM Wiki 파생 상태를 초기화한다."""
         ...
 
 
@@ -164,4 +171,19 @@ class WikiDocumentService:
                     "unsearchable_chunk_count",
                 }
             },
+        )
+
+    async def reset_wiki(
+        self, user_id: str, *, request_id: str
+    ) -> PersonalWikiResetResponse:
+        """사용자 원본을 보존하고 개인 LLM Wiki 파생 상태를 초기화한다."""
+        result = await pwiki_013(
+            self._repository,
+            user_id,
+            request_id=request_id,
+        )
+        return PersonalWikiResetResponse(
+            user_id=user_id,
+            request_id=request_id,
+            **dict(result),
         )

@@ -1,6 +1,6 @@
 """PostgreSQL 기반 Publish Snapshot 저장소.
 
-개발 Seed와 실제 Worker가 저장한 Snapshot을 Service Worker API에 제공하고,
+Worker가 저장한 Snapshot을 Service Worker API에 제공하고,
 발행 ACK를 Snapshot 상태 및 시도 이력과 같은 트랜잭션으로 기록한다.
 """
 

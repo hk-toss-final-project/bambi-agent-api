@@ -63,6 +63,18 @@ DUPLICATED_VERSION_REPAIR_MIGRATION_PATH = (
     / "migrations"
     / "0016_reconcile_duplicated_version_12.sql"
 )
+WIKI_RELATION_LIFECYCLE_MIGRATION_PATH = (
+    PROJECT_ROOT
+    / "database"
+    / "migrations"
+    / "0017_wiki_relation_lifecycle.sql"
+)
+PERSONAL_WIKI_RESET_MIGRATION_PATH = (
+    PROJECT_ROOT
+    / "database"
+    / "migrations"
+    / "0018_personal_wiki_reset.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
@@ -74,6 +86,7 @@ MIGRATION_PATHS = (
     USER_CONTEXT_SELECTION_MIGRATION_PATH,
     CHANGE_HISTORY_MIGRATION_PATH,
     DUPLICATED_VERSION_REPAIR_MIGRATION_PATH,
+    WIKI_RELATION_LIFECYCLE_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
@@ -82,22 +95,6 @@ TABLE_CATALOG_PATH = PROJECT_ROOT / "docs" / "agent-db-table-catalog.md"
 COLUMN_DICTIONARY_PATH = PROJECT_ROOT / "docs" / "agent-db-column-dictionary.md"
 COMPOSE_PATH = PROJECT_ROOT / "compose.yaml"
 DATABASE_README_PATH = PROJECT_ROOT / "database" / "README.md"
-SEED_PATH = PROJECT_ROOT / "database" / "seeds" / "0001_dev_publish_snapshots.sql"
-BATCH_SEED_PATH = (
-    PROJECT_ROOT / "database" / "seeds" / "0002_dev_publish_snapshot_batch.sql"
-)
-CLIPPING_SEED_PATH = (
-    PROJECT_ROOT / "database" / "seeds" / "0003_dev_web_clippings.sql"
-)
-CLIPPING_SEED_GENERATOR_PATH = (
-    PROJECT_ROOT / "scripts" / "generate_web_clipping_seed.py"
-)
-CLIPPING_DUMMY_PATH = PROJECT_ROOT / "dummy" / "clippings"
-USER_URL_SEED_PATH = PROJECT_ROOT / "database" / "seeds" / "0004_dev_user_urls.sql"
-USER_URL_SEED_GENERATOR_PATH = (
-    PROJECT_ROOT / "scripts" / "generate_user_url_seed.py"
-)
-USER_URL_DUMMY_PATH = PROJECT_ROOT / "dummy" / "urls" / "url.txt"
 MIGRATION_RUNNER_PATH = PROJECT_ROOT / "scripts" / "run_agent_db_migrations.sh"
 DATABASE_INITIALIZER_PATH = PROJECT_ROOT / "scripts" / "initialize_agent_db.sh"
 DATABASE_STARTER_PATH = PROJECT_ROOT / "scripts" / "start_agent_db.sh"
@@ -184,6 +181,7 @@ def test_migration_contains_all_agent_db_feature_tables() -> None:
         "wiki_document_versions",
         "wiki_document_sources",
         "wiki_document_relations",
+        "wiki_relation_supports",
         "wiki_chunks",
         "wiki_embeddings",
         "wiki_versions",
@@ -398,7 +396,7 @@ def test_column_dictionary_documents_every_migration_column() -> None:
 
 
 def test_compose_requires_secret_and_runs_database_initializer() -> None:
-    """Compose가 DB 시작마다 Migration과 선택적 개발 Seed를 같은 경로로 실행한다."""
+    """Compose가 DB 시작마다 Migration Initializer를 실행하는지 검증한다."""
     compose = _read(COMPOSE_PATH)
 
     # PostgreSQL 17.9 미만은 UTF-8 본문 substring()이 깨진다(BUG #19406).
@@ -406,7 +404,8 @@ def test_compose_requires_secret_and_runs_database_initializer() -> None:
     assert "AGENT_DB_PASSWORD:?" in compose
     assert "127.0.0.1:${AGENT_DB_PORT:-5432}:5432" in compose
     assert "./database/migrations:/opt/bambi/migrations:ro" in compose
-    assert "./database/seeds:/opt/bambi/seeds:ro" in compose
+    assert "database/seeds" not in compose
+    assert "AGENT_DB_APPLY_DEV_SEEDS" not in compose
     assert (
         "./scripts/run_agent_db_migrations.sh:"
         "/usr/local/bin/run-agent-db-migrations:ro" in compose
@@ -491,34 +490,45 @@ def test_every_migration_records_its_own_version() -> None:
     assert not_transactional == [], f"트랜잭션이 없습니다: {not_transactional}"
 
 
-def test_database_initializer_runs_migrations_before_dev_seeds() -> None:
-    """DB 시작 경로가 Schema 후 변경된 개발 Seed만 적용하는지 검증한다."""
+def test_personal_wiki_reset_migration_blocks_cancelled_build_writes() -> None:
+    """초기화와 경합한 취소 Build가 Wiki Version을 저장하지 못하는지 검증한다."""
+    migration = _read(PERSONAL_WIKI_RESET_MIGRATION_PATH)
+
+    assert "'onboarding_seed', 'reset'" in migration
+    assert "CREATE FUNCTION agent.reject_cancelled_wiki_build()" in migration
+    assert "job.status = 'cancelled'" in migration
+    assert "ON agent.wiki_document_versions" in migration
+
+
+def test_database_initializer_runs_only_migrations() -> None:
+    """DB 초기화 경로가 Migration Runner만 실행하는지 검증한다."""
     initializer = _read(DATABASE_INITIALIZER_PATH)
 
-    migration_position = initializer.index('/bin/sh "$migration_runner" "$MODE"')
-    seed_position = initializer.index('expected_checksum="$(seed_checksum)"')
-
-    assert migration_position < seed_position
-    assert "AGENT_DB_APPLY_DEV_SEEDS:-true" in initializer
-    assert "run_psql -X -v ON_ERROR_STOP=1" in initializer
-    assert "sha256sum" in initializer
-    assert "flock -x" in initializer
-    assert 'if [ "$MODE" = "--check" ]' in initializer
+    assert '/bin/sh "$migration_runner" "$MODE"' in initializer
     assert "AGENT_DB_MIGRATION_RUNNER_PATH" in initializer
+    assert "SEED" not in initializer
 
 
-def test_database_initializer_tracks_deploy_seed_checksum_in_database() -> None:
-    """배포 Initializer가 DB 잠금과 최신 Checksum으로 Seed를 한 번만 적용하는지 검증한다."""
-    initializer = _read(DATABASE_INITIALIZER_PATH)
+def test_database_initializer_delegates_check_mode_to_migration_runner(
+    tmp_path: Path,
+) -> None:
+    """배포 Initializer가 검증 모드를 Migration Runner에 그대로 전달한다."""
+    runner = tmp_path / "migration-runner.sh"
+    runner.write_text('#!/bin/sh\nprintf \'%s\\n\' "$1"\n', encoding="utf-8")
+    environment = os.environ.copy()
+    environment["AGENT_DB_MIGRATION_RUNNER_PATH"] = str(runner)
 
-    assert "AGENT_DB_SEED_STATE_BACKEND" in initializer
-    assert "pg_advisory_lock" in initializer
-    assert "pg_advisory_unlock" in initializer
-    assert "agent.audit_logs" in initializer
-    assert "agent-db-initializer" in initializer
-    assert "development_seed_applied" in initializer
-    assert "ORDER BY created_at DESC, id DESC" in initializer
-    assert "-v seed_checksum=" in initializer
+    result = subprocess.run(
+        ["/bin/sh", str(DATABASE_INITIALIZER_PATH), "--check"],
+        cwd=PROJECT_ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "--check"
 
 
 def test_runtime_image_contains_database_initialization_client() -> None:
@@ -581,8 +591,8 @@ def test_database_readme_uses_starter_for_repeatable_initialization() -> None:
     assert readme.count("./scripts/start_agent_db.sh") >= 2
     assert "이미 실행 중인 컨테이너" in readme
     assert "`post_start`가 다시 실행되지 않으므로" in readme
-    assert "AGENT_DB_SEED_STATE_BACKEND=database" in readme
-    assert "`agent.audit_logs`" in readme
+    assert "AGENT_DB_MIGRATION_DIR=/app/database/migrations" in readme
+    assert "AGENT_DB_SEED" not in readme
     assert "API·Worker를 먼저 기동하지 않습니다" in readme
 
 
@@ -593,27 +603,6 @@ def test_project_readme_uses_database_starter() -> None:
     assert "./scripts/start_agent_db.sh" in readme
     assert "이미 실행 중인 DB에도" in readme
 
-
-def test_dev_seed_builds_service_worker_snapshot_dependency_chain() -> None:
-    """개발 Seed가 Snapshot 외래키 원천과 고정 연동 데이터를 순서대로 생성하는지 검증한다."""
-    seed = _read(SEED_PATH)
-    required_inserts = [
-        "INSERT INTO agent.user_context_snapshots",
-        "INSERT INTO agent.agent_jobs",
-        "INSERT INTO agent.generation_requests",
-        "INSERT INTO agent.generation_runs",
-        "INSERT INTO agent.generated_content_candidates",
-        "INSERT INTO agent.citations",
-        "INSERT INTO agent.publish_snapshots",
-    ]
-
-    positions = [seed.index(statement) for statement in required_inserts]
-
-    assert positions == sorted(positions)
-    assert "mock-user-001" in seed
-    assert "mock-content-001" in seed
-    assert "ON CONFLICT" in seed
-    assert '"citation_id"' in seed
 
 
 def test_batch_migration_defines_claim_lease_and_retry_contract() -> None:
@@ -696,134 +685,6 @@ def test_structured_wiki_migration_models_vault_files_and_snapshots() -> None:
     )
     assert "VALUES (5, 'Structure LLM Wiki documents and snapshots')" in migration
 
-
-def test_batch_seed_provides_three_resettable_mock_snapshots() -> None:
-    """Batch Seed가 세 콘텐츠를 준비하고 반복 적용 시 Claim 상태를 초기화하는지 검증한다."""
-    seed = _read(BATCH_SEED_PATH)
-
-    assert "mock-content-002" in seed
-    assert "mock-content-003" in seed
-    assert "mock-user-002" in seed
-    assert "mock-user-003" in seed
-    assert "DELETE FROM agent.publish_attempts" in seed
-    assert "attempt_count = 0" in seed
-    assert "claim_id = NULL" in seed
-    assert "status = 'ready'" in seed
-
-
-def test_web_clipping_seed_is_generated_from_every_dummy_markdown() -> None:
-    """생성된 Seed가 dummy/clippings의 모든 Markdown과 동기화됐는지 검증한다."""
-    result = subprocess.run(
-        [sys.executable, str(CLIPPING_SEED_GENERATOR_PATH), "--check"],
-        cwd=PROJECT_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    seed = _read(CLIPPING_SEED_PATH)
-    clipping_paths = sorted(CLIPPING_DUMMY_PATH.glob("*.md"))
-
-    assert result.returncode == 0, result.stderr
-    assert clipping_paths
-    for clipping_path in clipping_paths:
-        relative_path = clipping_path.relative_to(PROJECT_ROOT).as_posix()
-        assert relative_path in seed
-
-
-def test_web_clipping_seed_builds_resettable_worker_dependency_chain() -> None:
-    """클리핑 Seed가 사용자·Job·Event·원본문서·Version을 순서대로 준비하는지 검증한다."""
-    seed = _read(CLIPPING_SEED_PATH)
-    required_inserts = [
-        "INSERT INTO agent.user_context_snapshots",
-        "INSERT INTO agent.agent_jobs",
-        "INSERT INTO agent.wiki_source_events",
-        "INSERT INTO agent.user_source_documents",
-        "INSERT INTO agent.user_source_document_versions",
-    ]
-    positions = [seed.index(statement) for statement in required_inserts]
-
-    assert positions == sorted(positions)
-    assert "mock-clipping-user" in seed
-    assert "'28'" in seed
-    assert "'user/28'" in seed
-    assert "personal_wiki_build" in seed
-    assert "'queued'" in seed
-    assert "'received'" in seed
-    assert "'markdown'" in seed
-    assert '"source_document_id"' in seed
-    assert '"source_document_version_id"' in seed
-    assert "INSERT INTO agent.wiki_documents (" not in seed
-    assert "INSERT INTO agent.wiki_document_versions (" not in seed
-    assert "DELETE FROM agent.agent_job_attempts" in seed
-    assert "DELETE FROM agent.wiki_documents AS document" in seed
-    assert "ON CONFLICT (id) DO UPDATE" in seed
-
-
-def test_web_clipping_seed_preserves_existing_user_context_snapshot() -> None:
-    """클리핑 Seed가 기존 사용자의 같은 버전 Context Snapshot을 덮어쓰지 않는지 검증한다."""
-    seed = _read(CLIPPING_SEED_PATH)
-    context_insert_start = seed.index("INSERT INTO agent.user_context_snapshots")
-    context_insert_end = seed.index("INSERT INTO agent.agent_jobs")
-    context_insert = seed[context_insert_start:context_insert_end]
-
-    assert "ON CONFLICT (user_id, context_version) DO NOTHING" in context_insert
-    assert "ON CONFLICT (id) DO UPDATE" not in context_insert
-
-
-def test_web_clipping_seed_preserves_wiki_documents_referenced_by_citations() -> None:
-    """클리핑 Seed가 Citation이 참조하는 Wiki 문서를 삭제 대상에서 제외하는지 검증한다."""
-    seed = _read(CLIPPING_SEED_PATH)
-    cleanup_start = seed.index("DELETE FROM agent.wiki_documents AS document")
-    cleanup_end = seed.index("DELETE FROM agent.user_interest_profiles")
-    cleanup = seed[cleanup_start:cleanup_end]
-
-    assert "NOT EXISTS" in cleanup
-    assert "JOIN agent.citations AS citation" in cleanup
-    assert "citation.document_version_id = version.id" in cleanup
-    assert "citation.chunk_id = chunk.id" in cleanup
-
-
-def test_user_url_seed_is_generated_from_dummy_url_file() -> None:
-    """생성된 URL Seed가 dummy/urls의 목록과 동기화됐는지 검증한다."""
-    result = subprocess.run(
-        [sys.executable, str(USER_URL_SEED_GENERATOR_PATH), "--check"],
-        cwd=PROJECT_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    seed = _read(USER_URL_SEED_PATH)
-    urls = [
-        line.strip()
-        for line in _read(USER_URL_DUMMY_PATH).splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    ]
-
-    assert result.returncode == 0, result.stderr
-    assert urls
-    for url in urls:
-        assert url in seed
-
-
-def test_user_url_seed_registers_heads_without_overwriting_collection_results() -> None:
-    """URL Seed가 Event·문서 Head만 만들고 기존 수집 상태와 Version을 보존하는지 검증한다."""
-    seed = _read(USER_URL_SEED_PATH)
-    event_position = seed.index("INSERT INTO agent.wiki_source_events")
-    document_position = seed.index("INSERT INTO agent.user_source_documents")
-
-    assert event_position < document_position
-    assert "mock-clipping-user" in seed
-    assert "'28'" in seed
-    assert "'user/28'" in seed
-    assert "user-url-" in seed
-    assert "'url'" in seed
-    assert "ON CONFLICT (user_id, source_event_id) DO UPDATE" in seed
-    assert "payload = event.payload || EXCLUDED.payload" in seed
-    assert "ON CONFLICT (namespace_key, canonical_url)" in seed
-    assert "metadata = document.metadata || EXCLUDED.metadata" in seed
-    assert "INSERT INTO agent.user_source_document_versions" not in seed
-    assert "status = 'received'" not in seed
-    assert "error_code = NULL" not in seed
 
 
 def test_database_schema_contract_is_available() -> None:

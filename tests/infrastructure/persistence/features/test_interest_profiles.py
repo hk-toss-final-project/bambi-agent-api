@@ -115,6 +115,13 @@ def test_load_interest_documents_reads_weighted_relation_and_source_stats() -> N
     document_query = connection.executed[2][0]
     assert "FROM agent.wiki_document_relations AS relation" in document_query
     assert "WHEN 'related_concept' THEN 0.5" in document_query
+    assert "WHEN 'subtopic_of' THEN 1.0" in document_query
+    assert "WHEN 'associated_with' THEN 0.5" in document_query
+    assert "relation.status = 'active'" in document_query
+    assert "relation.review_status <> 'rejected'" in document_query
+    assert "SELECT SUM(neighbor.max_weight) AS degree" in document_query
+    assert ") AS max_weight" in document_query
+    assert "GROUP BY peer.id" in document_query
     assert "COUNT(DISTINCT source_document.id)" in document_query
     assert "document.document_kind IN ('entity', 'concept')" in document_query
     assert "document.status = 'active'" in document_query
@@ -234,6 +241,12 @@ def test_save_feedback_signals_deduplicates_by_event_id() -> None:
                     "topics": ["LangGraph"],
                     "content_id": "content-1",
                     "occurred_at": None,
+                    "metadata": {
+                        "axis": "topic",
+                        "dwell_seconds": 1.8,
+                        "scroll_ratio": 0.0,
+                        "source": {"surface": "report"},
+                    },
                 },
                 {
                     "source_event_id": "signal-1",
@@ -250,6 +263,13 @@ def test_save_feedback_signals_deduplicates_by_event_id() -> None:
     insert_sql = connection.executed[1][0]
     assert "'feedback'" in insert_sql
     assert "ON CONFLICT (user_id, source_event_id) DO NOTHING" in insert_sql
+    payload = connection.executed[1][1][-1].obj
+    assert payload["metadata"] == {
+        "axis": "topic",
+        "dwell_seconds": 1.8,
+        "scroll_ratio": 0.0,
+        "source": {"surface": "report"},
+    }
 
 
 def test_load_recent_feedback_signals_flattens_topics() -> None:
@@ -269,6 +289,10 @@ def test_load_recent_feedback_signals_flattens_topics() -> None:
                     "payload": {
                         "signal_type": "like",
                         "topics": ["LangGraph", "  ", "Python"],
+                        "metadata": {
+                            "axis": "angle",
+                            "dwell_seconds": 7.25,
+                        },
                     },
                     "occurred_at": occurred,
                 },
@@ -285,6 +309,16 @@ def test_load_recent_feedback_signals_flattens_topics() -> None:
     )
 
     assert signals == [
-        {"topic": "LangGraph", "signal_type": "like", "occurred_at": occurred},
-        {"topic": "Python", "signal_type": "like", "occurred_at": occurred},
+        {
+            "topic": "LangGraph",
+            "signal_type": "like",
+            "occurred_at": occurred,
+            "metadata": {"axis": "angle", "dwell_seconds": 7.25},
+        },
+        {
+            "topic": "Python",
+            "signal_type": "like",
+            "occurred_at": occurred,
+            "metadata": {"axis": "angle", "dwell_seconds": 7.25},
+        },
     ]

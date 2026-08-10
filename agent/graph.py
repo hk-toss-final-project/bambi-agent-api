@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from asyncio import to_thread
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from time import monotonic
 from typing import Any
@@ -34,6 +35,7 @@ from agent.report_builder.api import (
     related_keyword_fetch_limit,
     GLOBAL_NAMESPACE,
     critic_enabled,
+    embed_wiki_queries,
     is_pool_relevant,
     is_pool_sufficient,
     merge_context_documents,
@@ -47,28 +49,42 @@ from agent.report_builder.api import (
 from agent.change_history.api import change_history_available, chg_001
 from agent.state import ReportGenerationState, PersonalWikiBuildState
 from agent.wiki_builder.api import (
+    WikiGraphExpansionEdge,
+    WikiNodeIdentity,
+    build_relation_candidate_sets,
     classify_source_for_wiki,
     classify_wiki_source,
+    expand_wiki_graph,
+    generate_relation_query_embeddings,
+    link_wiki_relations,
     prepare_wiki_identity_resolution,
     resolve_wiki_identity_conflicts,
     validate_wiki_identity_quality,
     wba_003,
+    wba_011,
+    wba_014,
 )
 from domain.interests.api import int_011
 from domain.personal_wiki.documents.api import pwiki_002
 from domain.personal_wiki.retrieval.api import prag_003, prag_006, prag_007
 from infrastructure.persistence.api import (
     ConnectionInterestProfileRepository,
+    WikiGraphRelationSnapshot,
     get_user_source_document_version_for_agent,
     list_existing_wiki_entries,
     list_existing_wiki_relations,
+    list_onboarding_wiki_anchor_keys,
     list_related_wiki_keywords,
+    list_wiki_graph_relation_snapshot,
+    list_wiki_node_embeddings,
     load_global_document_freshness,
+    load_pinned_wiki_context,
     set_personal_wiki_scope,
     sync_wiki_interest_collection_targets,
 )
 from agent.assistant.api import resolve_topic_intent
 from shared.contracts import FeatureRequest
+from shared.wiki_models import ExistingWikiEntry
 
 logger = logging.getLogger("agent.graph")
 
@@ -83,10 +99,10 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
     """Personal Wiki Build 노드와 엣지를 조립해 컴파일된 그래프를 반환한다.
 
     load_source → classify → prepare_identity → (필요 시 resolve_identity) →
-    quality_gate → plan → persist → finalize 순서로 원본 조회부터 canonical
-    identity 판정, 문서·Chunk 저장, Job 결과 조립까지를 한 실행 경계로 묶는다.
-    Embedding 생성은 2026-07-20 결정으로 실행 경로에서 제외했으며(활용처인
-    Vector 검색 미도입), 재도입 시 persist 뒤에 embed 노드를 추가한다.
+    quality_gate → recall_candidates → link_relations → plan → validate_plan →
+    persist → embed → finalize 순서로 추출·관계 판정을 분리한다. Embedding은
+    기존 노드 후보 recall에만 쓰고, Edge는 원문 근거와 신뢰도를 검증한
+    Relation Linker만 확정한다.
     """
 
     async def load_source(state: PersonalWikiBuildState) -> dict[str, Any]:
@@ -117,11 +133,21 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
             existing_relations = await list_existing_wiki_relations(
                 connection, namespace_key=source.namespace_key
             )
+            onboarding_anchor_keys = await list_onboarding_wiki_anchor_keys(
+                connection, namespace_key=source.namespace_key
+            )
+            node_embeddings = await list_wiki_node_embeddings(
+                connection,
+                namespace_key=source.namespace_key,
+                model_name="text-embedding-3-small",
+            )
         return {
             "source": source,
             "existing_entities": existing_entities,
             "existing_concepts": existing_concepts,
             "existing_relations": existing_relations,
+            "onboarding_anchor_keys": onboarding_anchor_keys,
+            "node_embeddings": node_embeddings,
         }
 
     async def classify(state: PersonalWikiBuildState) -> dict[str, Any]:
@@ -198,12 +224,109 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
             ),
         }
 
+    async def recall_candidates(state: PersonalWikiBuildState) -> dict[str, Any]:
+        """표면형·어휘·Vector·Graph·온보딩 신호로 관계 판정 후보를 모은다."""
+        classification = state["classification"]
+        source = state["source"]
+        if source.source_type == "onboarding_seed":
+            # 온보딩 시드 자체는 LLM 없이 결정적으로 저장한다. 후속
+            # 클리핑이 들어올 때 이 노드가 anchor 후보로 제공된다.
+            return {
+                "relation_candidates": {},
+                "relation_candidate_count": 0,
+                "relation_recall_warnings": [],
+            }
+        query_texts = [
+            f"{entity.name}\n{entity.description}".strip()
+            for entity in classification.entities
+        ] + [
+            f"{concept.title}\n{concept.definition}".strip()
+            for concept in classification.concepts
+        ]
+        candidate_embeddings = {
+            WikiNodeIdentity(item.document_kind, item.document_key): item.embedding
+            for item in state.get("node_embeddings", [])
+        }
+        query_embeddings: dict[str, tuple[float, ...]] = {}
+        warnings: list[str] = []
+        if query_texts and candidate_embeddings:
+            try:
+                vectors = await to_thread(
+                    generate_relation_query_embeddings,
+                    query_texts,
+                    model="text-embedding-3-small",
+                )
+                query_embeddings = {
+                    f"N{index}": vector
+                    for index, vector in enumerate(vectors, start=1)
+                }
+            except Exception as error:  # noqa: BLE001 - lexical·anchor 폴백 유지
+                logger.warning(
+                    "Wiki 관계 Vector 후보 생성 실패, 비Vector 후보로 진행: %s",
+                    error,
+                )
+                warnings.append(f"Vector 관계 후보 생성 실패: {error}")
+        candidates = build_relation_candidate_sets(
+            classification=classification,
+            existing_entries=[
+                *state["existing_entities"],
+                *state["existing_concepts"],
+            ],
+            existing_relations=state["existing_relations"],
+            onboarding_anchor_ids=[
+                WikiNodeIdentity(kind, key)
+                for kind, key in state.get("onboarding_anchor_keys", [])
+            ],
+            query_embeddings=query_embeddings,
+            candidate_embeddings=candidate_embeddings,
+        )
+        return {
+            "relation_candidates": candidates,
+            "relation_candidate_count": sum(
+                len(items) for items in candidates.values()
+            ),
+            "relation_recall_warnings": warnings,
+        }
+
+    async def link_relations(state: PersonalWikiBuildState) -> dict[str, Any]:
+        """전체 후보를 항상 한 번 검토해 근거 있는 관계와 노드 처리를 확정한다."""
+        source = state["source"]
+        if source.source_type == "onboarding_seed":
+            return {
+                "relation_linker_model": "deterministic:onboarding-anchor-v1",
+            }
+        linked = await to_thread(
+            link_wiki_relations,
+            source_title=source.title,
+            source_content=source.raw_content,
+            classification=state["classification"],
+            candidates_by_node=state["relation_candidates"],
+            model=state["model"],
+        )
+        if state.get("relation_recall_warnings"):
+            linked = replace(
+                linked,
+                relation_warnings=list(
+                    dict.fromkeys(
+                        [
+                            *linked.relation_warnings,
+                            *state["relation_recall_warnings"],
+                        ]
+                    )
+                ),
+            )
+        return {
+            "classification": linked,
+            "relation_linker_model": state["model"],
+        }
+
     async def plan(state: PersonalWikiBuildState) -> dict[str, Any]:
         """분류 결과와 기존 Wiki 상태로 Build 계획을 만든다."""
         source = state["source"]
         model_trace = (
             f"{state.get('classification_model', state['model'])};"
-            f"identity={state['identity_resolution_model']}"
+            f"identity={state['identity_resolution_model']};"
+            f"relation={state.get('relation_linker_model', state['model'])}"
         )
         build_plan = await wba_003(
             source_title=source.title,
@@ -220,6 +343,39 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
         )
         return {"plan": build_plan}
 
+    async def validate_plan(state: PersonalWikiBuildState) -> dict[str, Any]:
+        """저장 예정 Snapshot의 중복·고립·관계 근거·Hub 품질을 Lint한다."""
+        entries = {
+            (entry.document_kind, entry.document_key): entry
+            for entry in [
+                *state["existing_entities"],
+                *state["existing_concepts"],
+            ]
+        }
+        for document in [*state["plan"].entities, *state["plan"].concepts]:
+            entries[(document.document_kind, document.document_key)] = ExistingWikiEntry(
+                document_kind=document.document_kind,
+                document_key=document.document_key,
+                title=document.title,
+                domain=document.domain,
+                summary=document.summary,
+                metadata=document.metadata,
+            )
+        report = await wba_014(list(entries.values()), state["plan"].relations)
+        if not report.passed:
+            errors = [
+                issue.message for issue in report.issues if issue.severity == "error"
+            ]
+            raise ValueError("Wiki 품질 게이트 실패: " + "; ".join(errors[:5]))
+        return {
+            "quality_metrics": dict(report.metrics),
+            "quality_warnings": [
+                issue.message
+                for issue in report.issues
+                if issue.severity == "warning"
+            ],
+        }
+
     async def persist(state: PersonalWikiBuildState) -> dict[str, Any]:
         """계획된 문서·관계·Chunk·Build Snapshot을 저장 Transaction으로 기록한다."""
         async with connection.transaction():
@@ -231,6 +387,34 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
                 job_id=state["job_id"],
             )
         return {"persisted": persisted}
+
+    async def embed(state: PersonalWikiBuildState) -> dict[str, Any]:
+        """변경된 Entity·Concept Chunk를 Vector로 갱신해 다음 Build 후보 검색에 쓴다."""
+        version_ids = [
+            document.document_version_id
+            for document in state["persisted"].affected_documents
+            if document.document_kind in {"entity", "concept"}
+            and document.action in {"create", "created", "update", "updated"}
+        ]
+        if not version_ids:
+            return {"embedding_count": 0, "embedding_warning": None}
+        try:
+            count = await wba_011(
+                connection,
+                namespace_key=state["source"].namespace_key,
+                document_version_ids=version_ids,
+                model="text-embedding-3-small",
+            )
+            return {"embedding_count": count, "embedding_warning": None}
+        except Exception as error:  # noqa: BLE001 - Wiki 저장은 이미 완료됨
+            logger.warning(
+                "Wiki Embedding 갱신 실패, 다음 Build는 비Vector 후보로 진행: %s",
+                error,
+            )
+            return {
+                "embedding_count": 0,
+                "embedding_warning": str(error),
+            }
 
     async def finalize(state: PersonalWikiBuildState) -> dict[str, Any]:
         """Job 결과 계약에 맞는 최종 Payload를 조립한다."""
@@ -248,6 +432,25 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
                 "stored_relation_count": persisted.stored_relation_count,
                 "isolated_node_count": build_plan.isolated_node_count,
                 "relation_warnings": build_plan.relation_warnings,
+                "relation_candidate_count": state.get(
+                    "relation_candidate_count", 0
+                ),
+                "node_dispositions": [
+                    {
+                        "node_name": item.node_name,
+                        "node_kind": item.node_kind,
+                        "disposition": item.disposition,
+                        "reason": item.reason,
+                        "matched_existing_key": item.matched_existing_key,
+                    }
+                    for item in build_plan.node_dispositions
+                ],
+                "quality": {
+                    "metrics": state.get("quality_metrics", {}),
+                    "warnings": state.get("quality_warnings", []),
+                },
+                "embedding_count": state.get("embedding_count", 0),
+                "embedding_warning": state.get("embedding_warning"),
                 "identity_resolution": {
                     "model": state["identity_resolution_model"],
                     "resolved_conflict_count": state["identity_conflict_count"],
@@ -280,8 +483,12 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
     graph.add_node("prepare_identity", prepare_identity)
     graph.add_node("resolve_identity", resolve_identity)
     graph.add_node("quality_gate", quality_gate)
+    graph.add_node("recall_candidates", recall_candidates)
+    graph.add_node("link_relations", link_relations)
     graph.add_node("plan", plan)
+    graph.add_node("validate_plan", validate_plan)
     graph.add_node("persist", persist)
+    graph.add_node("embed", embed)
     graph.add_node("finalize", finalize)
     graph.set_entry_point("load_source")
     graph.add_edge("load_source", "classify")
@@ -292,9 +499,13 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
         {"resolve": "resolve_identity", "quality": "quality_gate"},
     )
     graph.add_edge("resolve_identity", "quality_gate")
-    graph.add_edge("quality_gate", "plan")
-    graph.add_edge("plan", "persist")
-    graph.add_edge("persist", "finalize")
+    graph.add_edge("quality_gate", "recall_candidates")
+    graph.add_edge("recall_candidates", "link_relations")
+    graph.add_edge("link_relations", "plan")
+    graph.add_edge("plan", "validate_plan")
+    graph.add_edge("validate_plan", "persist")
+    graph.add_edge("persist", "embed")
+    graph.add_edge("embed", "finalize")
     graph.add_edge("finalize", END)
     return graph.compile()
 
@@ -367,6 +578,218 @@ _MIN_TOPIC_CONTEXT_DOCUMENTS = 3
 
 # 생성 프롬프트에 넣는 근거 문서 상한(REPORT-006 기본값과 같아야 한다).
 _MAX_REPORT_CONTEXTS = 12
+
+
+@dataclass(frozen=True, slots=True)
+class _WikiKeywordExpansion:
+    """검색 수집에 전달할 Graph 확장 제목과 품질 Gate 결과."""
+
+    keywords: tuple[str, ...]
+    mode: str
+    gate_passed: bool
+    maturity_reasons: tuple[str, ...] = ()
+
+
+def _expand_wiki_graph_keywords(
+    topic: str,
+    snapshot: list[WikiGraphRelationSnapshot],
+    *,
+    top_k: int,
+) -> _WikiKeywordExpansion:
+    """Persistence Snapshot을 Agent Edge로 바꿔 bounded PPR/1-hop을 계산한다."""
+    if top_k <= 0:
+        return _WikiKeywordExpansion((), "empty", False)
+
+    node_details: dict[WikiNodeIdentity, tuple[str, str | None]] = {}
+    relation_nodes: list[
+        tuple[WikiGraphRelationSnapshot, WikiNodeIdentity, WikiNodeIdentity]
+    ] = []
+    for relation in snapshot:
+        source = WikiNodeIdentity(
+            relation.source_document_kind,
+            relation.source_document_key,
+        )
+        target = WikiNodeIdentity(
+            relation.target_document_kind,
+            relation.target_document_key,
+        )
+        node_details[source] = (relation.source_title.strip(), relation.source_domain)
+        node_details[target] = (relation.target_title.strip(), relation.target_domain)
+        relation_nodes.append((relation, source, target))
+
+    normalized_topic = topic.strip().casefold()
+    seeds = tuple(
+        sorted(
+            (
+                node
+                for node, (title, _domain) in node_details.items()
+                if normalized_topic
+                and (
+                    title.casefold() == normalized_topic
+                    or node.document_key.casefold() == normalized_topic
+                )
+            ),
+            key=lambda node: (node.document_kind, node.document_key),
+        )
+    )
+    if not seeds:
+        return _WikiKeywordExpansion((), "empty", False, ("일치하는 Seed가 없습니다.",))
+
+    organization_nodes = {
+        node
+        for node, (_title, domain) in node_details.items()
+        if str(domain or "").casefold() == "organization"
+    }
+    edges: list[WikiGraphExpansionEdge] = []
+    for relation, source, target in relation_nodes:
+        # 기존 1-hop과 같이 조직은 보조 검색어·중간 경로에서 제외한다. 단, 사용자가
+        # 조직 자체를 주제로 요청한 경우 그 Seed에서 비조직 이웃으로 나가는 길은 둔다.
+        if (source in organization_nodes and source not in seeds) or (
+            target in organization_nodes and target not in seeds
+        ):
+            continue
+        edges.append(
+            WikiGraphExpansionEdge(
+                source=source,
+                target=target,
+                relation_type=relation.relation_type,
+                status=relation.status,
+                review_status=relation.review_status,
+                provenance_kind=relation.provenance_kind,
+                confidence=relation.confidence,
+                weight=relation.weight,
+                supported=relation.supported,
+            )
+        )
+
+    ranked_by_node: dict[WikiNodeIdentity, tuple[float, int]] = {}
+    modes: set[str] = set()
+    gate_passed = False
+    maturity_reasons: list[str] = []
+    for seed in seeds:
+        result = expand_wiki_graph(seed, edges, top_k=top_k, fallback="one_hop")
+        modes.add(result.mode)
+        gate_passed = gate_passed or result.gate_passed
+        maturity_reasons.extend(result.maturity.reasons)
+        for score in result.scores:
+            if score.node in seeds:
+                continue
+            current = ranked_by_node.get(score.node)
+            candidate = (score.score, score.hops)
+            if current is None or candidate[0] > current[0] or (
+                candidate[0] == current[0] and candidate[1] < current[1]
+            ):
+                ranked_by_node[score.node] = candidate
+
+    ranked_nodes = sorted(
+        ranked_by_node,
+        key=lambda node: (
+            -ranked_by_node[node][0],
+            ranked_by_node[node][1],
+            node.document_kind,
+            node.document_key,
+        ),
+    )
+    keywords: list[str] = []
+    seen_titles: set[str] = {normalized_topic}
+    for node in ranked_nodes:
+        title, domain = node_details.get(node, ("", None))
+        marker = title.casefold()
+        if (
+            not title
+            or marker in seen_titles
+            or str(domain or "").casefold() == "organization"
+        ):
+            continue
+        seen_titles.add(marker)
+        keywords.append(title)
+        if len(keywords) >= top_k:
+            break
+
+    if "bounded_ppr" in modes:
+        mode = "bounded_ppr"
+    elif keywords and "one_hop" in modes:
+        mode = "one_hop"
+    else:
+        mode = "empty"
+    return _WikiKeywordExpansion(
+        keywords=tuple(keywords),
+        mode=mode,
+        gate_passed=gate_passed,
+        maturity_reasons=tuple(dict.fromkeys(maturity_reasons)),
+    )
+
+
+async def _load_related_keyword_expansion(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    topic: str,
+    top_k: int,
+) -> _WikiKeywordExpansion:
+    """권위 Graph Snapshot을 조회하고 조회 실패 때만 기존 1-hop으로 폴백한다."""
+    if top_k <= 0:
+        return _WikiKeywordExpansion((), "empty", False)
+    try:
+        async with connection.transaction():
+            await set_personal_wiki_scope(connection, user_id=user_id)
+            snapshot = await list_wiki_graph_relation_snapshot(
+                connection,
+                namespace_key=f"user/{user_id}",
+            )
+    except Exception as error:  # noqa: BLE001 - Migration 전 1-hop 운영 호환
+        logger.warning(
+            "Wiki Graph Snapshot 조회 실패, 기존 1-hop으로 폴백한다 "
+            "(topic=%s): %s",
+            topic,
+            error,
+        )
+        related = None
+        for lifecycle_aware in (True, False):
+            try:
+                async with connection.transaction():
+                    await set_personal_wiki_scope(connection, user_id=user_id)
+                    related = await list_related_wiki_keywords(
+                        connection,
+                        user_id=user_id,
+                        topic=topic,
+                        limit=top_k,
+                        lifecycle_aware=lifecycle_aware,
+                    )
+                break
+            except Exception as fallback_error:  # noqa: BLE001 - 운영 폴백 격리
+                if lifecycle_aware:
+                    logger.warning(
+                        "Wiki lifecycle 1-hop 조회도 실패해 구버전 Schema SQL을 "
+                        "재시도한다 (topic=%s): %s",
+                        topic,
+                        fallback_error,
+                    )
+                    continue
+                logger.warning(
+                    "Wiki 기존 1-hop 조회도 실패해 원 키워드로 진행한다 "
+                    "(topic=%s): %s",
+                    topic,
+                    fallback_error,
+                )
+        if related is None:
+            return _WikiKeywordExpansion((), "empty", False)
+        return _WikiKeywordExpansion(
+            tuple(item.title for item in related[:top_k]),
+            "legacy_one_hop",
+            False,
+            ("Graph Snapshot 조회 실패",),
+        )
+
+    try:
+        return _expand_wiki_graph_keywords(topic, snapshot, top_k=top_k)
+    except Exception as error:  # noqa: BLE001 - 계산 실패는 원 키워드로 격리
+        logger.warning(
+            "Wiki Graph 확장 계산 실패, 원 키워드로 진행한다 (topic=%s): %s",
+            topic,
+            error,
+        )
+        return _WikiKeywordExpansion((), "empty", False, ("Graph 확장 계산 실패",))
 
 
 def _report_topics(state: ReportGenerationState) -> list[str]:
@@ -480,14 +903,15 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         }
 
     async def load_related_keywords(user_id: str, topic: str) -> list[str]:
-        """개인 Wiki 그래프에서 토픽과 1홉으로 연결된 이웃 키워드를 읽는다.
+        """개인 Wiki Graph Gate로 bounded PPR 또는 검증 1-hop 키워드를 읽는다.
 
         관심 키워드 하나로만 수집하면 '코스피' 리포트에 코스닥시장 기사가 걸리지
         않는데, 그 연결은 Wiki Builder가 이미 저장해 둔 것이다.
 
-        조회 실패는 리포트 생성을 막지 않는다 — 확장은 수집을 넓히는 보조 수단
-        이므로, 실패하면 원 키워드 하나로 진행한다. 개인 Wiki 검색과 Transaction을
-        분리한 것도 같은 이유다(여기서 실패해도 검색 결과를 되돌리지 않는다).
+        Snapshot 조회가 성공하면 active·accepted·active support·provenance별
+        confidence Gate를 통과한 Edge만 쓴다. 성숙한 Graph는 2-hop bounded PPR,
+        Gate 실패 Graph는 검증 1-hop/empty를 사용한다. Migration 미적용 등
+        Snapshot 조회 실패 때만 배포 호환을 위해 기존 1-hop SQL로 폴백한다.
 
         Args:
             user_id: 조회 대상 사용자 ID
@@ -499,47 +923,60 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         limit = related_keyword_fetch_limit()
         if limit <= 0:
             return []
-        try:
-            async with connection.transaction():
-                await set_personal_wiki_scope(connection, user_id=user_id)
-                related = await list_related_wiki_keywords(
-                    connection, user_id=user_id, topic=topic, limit=limit
-                )
-        except Exception as error:
-            logger.warning(
-                "Wiki 이웃 키워드 조회 실패, 원 키워드로 진행한다 (topic=%s): %s",
-                topic,
-                error,
-            )
-            return []
-        logger.info(
-            "Wiki 이웃 키워드 %d건 (topic=%s, 이웃=%s)",
-            len(related),
-            topic,
-            [item.title for item in related],
+        expansion = await _load_related_keyword_expansion(
+            connection,
+            user_id=user_id,
+            topic=topic,
+            top_k=limit,
         )
-        return [item.title for item in related]
+        logger.info(
+            "Wiki Graph 확장 %d건 (topic=%s, mode=%s, gate=%s, 이웃=%s, 사유=%s)",
+            len(expansion.keywords),
+            topic,
+            expansion.mode,
+            expansion.gate_passed,
+            list(expansion.keywords),
+            list(expansion.maturity_reasons),
+        )
+        return list(expansion.keywords)
 
     async def load_context(state: ReportGenerationState) -> dict[str, Any]:
         """조사원이 모은 자료를 생성용 Context로 다듬는다.
 
-        조사원이 자료를 모았으면 그대로 쓰고, 비었으면 기존 고정 경로(개인 Wiki
-        조회 → 풀 판정 → 부족하면 실시간 수집)를 그대로 수행한다.
+        관심사 Bundle이면 Job 접수 시 고정한 Wiki Version을 먼저 읽어 생성
+        Context에 보장한다. 조사원이 자료를 모았으면 그 뒤에 합치고, 비었으면 기존
+        고정 경로(개인 Wiki 조회 → 풀 판정 → 부족하면 실시간 수집)를 수행한다.
         """
         topics = _report_topics(state)
         if len(topics) > 1:
             return await _load_multi_topic_contexts(state, topics)
+        pinned_wiki = (
+            await load_pinned_wiki_context(
+                connection,
+                user_id=state["user_id"],
+                interest_bundle=state.get("interest_bundle"),
+            )
+            if state.get("generation_scope") == "INTEREST_BUNDLE"
+            else []
+        )
         researched = list(state.get("research_documents") or [])
         if researched:
             logger.info(
-                "조사원 자료 사용: topic=%s %d건 (도구 호출 %d회)",
+                "조사원 자료 사용: topic=%s %d건, 고정 Wiki %d건 (도구 호출 %d회)",
                 state["topic"],
                 len(researched),
+                len(pinned_wiki),
                 len(state.get("research_calls") or []),
             )
-            return await _finalize_contexts(state, researched)
+            research_contexts = (
+                merge_context_documents(pinned_wiki, researched)
+                if pinned_wiki
+                else researched
+            )
+            return await _finalize_contexts(state, research_contexts)
         bundle_keywords = _interest_bundle_keywords(state)
         search_queries = bundle_keywords or [state["topic"]]
+        query_embeddings = await to_thread(embed_wiki_queries, search_queries)
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=state["user_id"])
             search_groups = [
@@ -547,13 +984,15 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                     connection,
                     user_id=state["user_id"],
                     query=query,
+                    query_embedding=query_embeddings.get(query),
                 )
                 for query in search_queries
             ]
+            groups = [pinned_wiki, *search_groups] if pinned_wiki else search_groups
             hybrid = (
-                merge_context_documents(*search_groups)
-                if len(search_groups) > 1
-                else list(search_groups[0])
+                merge_context_documents(*groups)
+                if len(groups) > 1
+                else list(groups[0])
             )
             # 풀 문서의 신선도는 같은 조회 Transaction에서 함께 읽는다 — Scope가
             # 이미 설정돼 있고, 왕복을 늘리지 않는다.
@@ -697,10 +1136,14 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         )
         if researched:
             return researched
+        query_embeddings = await to_thread(embed_wiki_queries, [topic])
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=state["user_id"])
             hybrid = await prag_003(
-                connection, user_id=state["user_id"], query=topic
+                connection,
+                user_id=state["user_id"],
+                query=topic,
+                query_embedding=query_embeddings.get(topic),
             )
             pool_freshness = await load_global_document_freshness(
                 connection,

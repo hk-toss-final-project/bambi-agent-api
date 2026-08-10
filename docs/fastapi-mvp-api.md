@@ -37,6 +37,7 @@
 | `GET` | `/internal/v1/jobs/{job_id}` | `SVC-013` | `200` | Job 상태와 진행률을 조회합니다. |
 | `GET` | `/internal/v1/jobs/{job_id}/result` | `SVC-014` | `200` | 완료된 Job 결과를 조회합니다. 미완료 시 `409`를 반환합니다. |
 | `GET` | `/internal/v1/users/{user_id}/wiki/graph` | `PWIKI-003` | `200` | 현재 개인 Wiki 문서와 관계 Graph를 조회합니다. |
+| `DELETE` | `/internal/v1/users/{user_id}/wiki` | `PWIKI-013` | `200` | 사용자 원본을 보존한 채 개인 LLM Wiki 파생 데이터를 초기화합니다. |
 
 ### 개인 Wiki Graph 조회
 
@@ -45,9 +46,12 @@
 `app.user_id`와 `app.access_scope=user`를 설정해 다른 사용자의 문서를 차단합니다.
 
 응답의 `nodes`는 문서 ID, 종류, 논리 Key, 제목, subtype, 요약, 별칭, Vault 경로,
-Version, 수정 시각, Markdown 본문과 연결 차수를 포함합니다. `edges`는 source·target
-문서 ID와 `entity_relation`, `applies_concept`, `related_concept`, `alias_of` 관계 유형을
-포함합니다. `stats`는 Entity·Concept·관계·고립 Node 수를 제공합니다.
+Version, 수정 시각, Markdown 본문과 연결 차수를 포함합니다. 연결 차수는 active이며
+rejected가 아닌 관계가 잇는 **고유 이웃 수**라서 같은 이웃과 관계 유형이 여러 개여도
+1만 증가합니다. `edges`는 source·target 문서 ID와 기존 `entity_relation`,
+`applies_concept`, `related_concept`, `alias_of`, 의미 관계 `instance_of`,
+`subtopic_of`, `part_of`, `located_in`, `occurs_in`, `affects`, `causes`,
+`associated_with`를 포함합니다. `stats`는 Entity·Concept·관계·고립 Node 수를 제공합니다.
 
 `GET /wiki-graph?user_id={user_id}`는 이 API를 사용하는 내부 시각화 페이지입니다.
 브라우저는 표시와 일시적인 물리 좌표만 관리하며 Wiki 지식의 원본은 PostgreSQL입니다.
@@ -56,6 +60,20 @@ Swagger `Authorize`에 영속 저장된 `InternalBearer` 토큰을 재사용하�
 인증란에서 입력한 토큰을 브라우저 `localStorage`에 저장합니다. 서버 Secret은 HTML이나
 URL에 포함하지 않습니다. DB 연결이 준비되지 않은 Runtime은 Graph API에
 `SERVICE_NOT_READY`를 반환합니다.
+
+### 개인 LLM Wiki 초기화
+
+`DELETE /internal/v1/users/{user_id}/wiki`는 사용자 원본과 원본 Version을 보존한 채
+현재 활성 Wiki 문서·관계·Chunk 검색·Build Snapshot·관심사 Profile을 계정 단위로
+비활성화합니다. 대기·실행 중인 `personal_wiki_build` Job도 취소하며, 이미 실행 중인
+Worker가 초기화 뒤 결과를 저장하려 하면 DB Trigger가 취소 상태를 확인해 Transaction을
+거부합니다. 같은 사용자의 반복 호출은 성공하며 이미 빈 Wiki에서는 모든 반영 건수가 0입니다.
+
+응답은 `reset_document_count`, `reset_relation_count`,
+`unsearchable_chunk_count`, `retired_wiki_version_count`,
+`retired_interest_profile_count`, `cancelled_job_count`, `reset_at`,
+`request_id`를 반환합니다. 초기화 뒤 새 원본 입력이나 명시적 전체 재구성으로 Wiki를 다시
+만들 수 있습니다.
 
 ### 웹 클리핑 저장 계약
 
@@ -128,11 +146,13 @@ Chunking이나 Embedding을 수행하지 않습니다.
 1. `queued` 상태의 `personal_wiki_build` Job을 `FOR UPDATE SKIP LOCKED`로 Batch Claim합니다.
 2. `locked_by`, `locked_at`, `lease_expires_at`, `status=running`을 같은 Transaction에서 갱신합니다.
 3. Job Payload의 source_document_version_id로 저장된 Markdown과 Frontmatter를 조회합니다.
-4. 추출 결과를 canonical 표면형으로 정규화해 기존 title·aliases와 비교합니다. 동일 kind 단일 후보는 자동 병합하고 namespace 충돌·복수 후보에만 identity 판정 LLM을 호출합니다. 품질 게이트 통과 후 `document_kind + document_key`로 Entity·Concept·Schema Head를 멱등 Upsert하고 새 `wiki_document_versions`·원본 출처·문서 관계를 저장합니다.
-5. 생성된 Wiki Version을 Chunking하고 wiki_chunks를 멱등 Upsert합니다.
-6. Chunk별 Embedding을 생성해 wiki_embeddings에 설정 Version과 함께 멱등 Upsert합니다.
-7. `wiki_versions`와 `wiki_version_documents`에 현재 Vault의 문서 Version·파일 경로를 고정하고 관심사 재계산을 반영합니다.
-8. source_event와 Job을 completed로 전환하고 원본 ID, wiki_version_id, affected_documents 목록과 chunk_count를 Job 결과에 기록합니다.
+4. 추출 결과를 canonical 표면형으로 정규화해 기존 title·aliases와 비교합니다. 동일 kind 단일 후보는 자동 병합하고 namespace 충돌·복수 후보에만 identity 판정 LLM을 호출합니다.
+5. 신규·갱신 노드마다 표면형·어휘·trigram·선택적 Embedding·기존 Graph 1-hop·온보딩 Anchor 후보를 회수하고, Relation Linker가 추출 관계 유무와 무관하게 전체 후보를 검토합니다. 후보 점수만으로 Edge를 만들지 않습니다.
+6. WBA-014가 canonical 중복과 관계 endpoint·Ontology·근거·confidence·review·lifecycle을 검증한 뒤 `document_kind + document_key`로 Entity·Concept·Schema Head를 멱등 Upsert하고 새 `wiki_document_versions`·원본 출처·관계 Head·Support를 저장합니다.
+7. 생성된 Wiki Version을 Chunking하고 wiki_chunks를 멱등 Upsert합니다.
+8. `wiki_versions`와 `wiki_version_documents`에 현재 Vault의 문서 Version·파일 경로를 고정합니다.
+9. 변경된 Entity·Concept Chunk의 Embedding을 생성해 wiki_embeddings에 멱등 Upsert하고 관심사 재계산을 수행합니다. 두 파생 단계의 실패는 이미 저장된 Wiki를 되돌리지 않습니다.
+10. source_event와 Job을 completed로 전환하고 원본 ID, wiki_version_id, affected_documents, chunk_count, 관계·품질·Embedding 결과를 기록합니다.
 
 각 Job은 독립 Transaction과 재시도 횟수를 갖습니다. Embedding Provider 장애가 발생해도
 원본 Markdown Version은 유지하며, 재시도는 파생 Chunk·Embedding만 다시 생성합니다.

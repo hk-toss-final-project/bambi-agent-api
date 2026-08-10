@@ -5,6 +5,7 @@ Service API의 원본 접수와 Job 조회, 개발 실행기·Worker의 Lease·�
 이 계층의 책임이 아니며, acquire_connection으로 연결만 빌려준다.
 """
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date, datetime
@@ -22,8 +23,10 @@ from app.services.agent_jobs import (
     SubmittedGenerationJob,
     SubmittedSourceJob,
 )
+from domain.interests.api import ActiveWikiRequiredError, int_011
 from infrastructure.persistence.api import (
     ClaimedAgentJob,
+    ConnectionInterestProfileRepository,
     db_002,
     save_content_mark_and_enqueue,
     save_fetched_url_and_enqueue,
@@ -44,6 +47,8 @@ from infrastructure.persistence.api import (
 )
 
 type DictRow = dict[str, Any]
+
+logger = logging.getLogger(__name__)
 
 
 class PostgresAgentJobRepository:
@@ -198,11 +203,33 @@ class PostgresAgentJobRepository:
         user_id: str,
         signals: list[dict[str, Any]],
     ) -> int:
-        """행동 신호 Batch를 feedback 이벤트로 멱등 저장하고 신규 수를 반환한다."""
+        """행동 신호를 저장한 뒤 관심사 Profile 재계산을 best-effort로 수행한다.
+
+        이벤트 저장 Transaction을 먼저 확정하므로 활성 Wiki 부재나 재계산 오류가
+        발생해도 접수된 피드백은 롤백되지 않는다.
+        """
         async with self._pool.connection() as connection:
-            return await save_feedback_signals_for_user(
+            accepted = await save_feedback_signals_for_user(
                 connection, user_id=user_id, signals=signals
             )
+            if accepted == 0:
+                return 0
+            try:
+                await int_011(
+                    ConnectionInterestProfileRepository(connection),
+                    user_id,
+                )
+            except ActiveWikiRequiredError:
+                logger.info(
+                    "활성 Wiki가 없어 피드백 후 관심사 재계산을 건너뜁니다: user_id=%s",
+                    user_id,
+                )
+            except Exception:
+                logger.exception(
+                    "피드백은 저장했지만 관심사 재계산에 실패했습니다: user_id=%s",
+                    user_id,
+                )
+            return accepted
 
     async def submit_content_mark(
         self,

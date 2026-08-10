@@ -1,6 +1,6 @@
 # Wiki 그래프 기반 검색어 확장 설계 (Draft)
 
-> 상태: **구현됨(2026-08-06)** · 작성일 2026-07-27 · 갱신일 2026-08-06
+> 상태: **품질 Gate 기반 2-hop PPR 운영 연결(2026-08-07)** · 작성일 2026-07-27 · 갱신일 2026-08-07
 >
 > 구현 위치:
 > - 이웃 조회 `infrastructure/persistence/features/personal_wiki.py`
@@ -11,6 +11,12 @@
 > - 특정 관심분야 리포트는 `INT-012`가 접수 시 활성 관심사 근거 문서의 1홉
 >   이웃을 Job에 스냅샷하고, Worker는 현재 그래프를 재조회하지 않고 그 묶음을
 >   저장 검색·단일 실시간 보강에 사용한다.
+> - 2026-08-07에 Wiki Builder의 후보 회수·별도 Relation Linker·관계
+>   provenance/lifecycle·Lint를 구현했다. 실제 LLM 벤치마크는 아직 실행하지 않아
+>   아래 2026-07-28 누락률이 개선됐다고 단정하지 않는다.
+> - `agent/wiki_builder/features/graph_expansion.py`의 Graph 성숙도 Gate와 bounded
+>   2-hop personalized PageRank는 순수 모듈·테스트까지만 구현했으며 Report Builder
+>   검색에는 연결하지 않았다. 운영 동작은 계속 위 1-hop 경로다.
 >
 > 남은 선행 조건 3.2(고립 노드)는 미해결이다. 이웃이 없는 토픽은 기존과 똑같이
 > 검색어 하나로 동작하므로 회귀는 없고, 혜택만 받지 못한다.
@@ -82,7 +88,7 @@ Wiki 분류를 읽어 쓰는 패턴이 그대로 적용된다.
 관심사 20건의 score가 전부 `1.000`으로 나온다(정렬이 알파벳순인 것이 증상).
 
 ```
-실측(2026-07-27, mock-clipping-user):
+실측(2026-07-27, 로컬 검증 사용자):
   wiki_document_relations   61건 저장됨
   user_interests.degree     20건 전부 0.0
 ```
@@ -238,8 +244,8 @@ LLM은 호출하지 않았으므로 요약·유사도 필터 이후 구간은 �
 
 | 토픽 | Wiki 이웃 | 확장 전 | 확장 후 |
 |---|---|---|---|
-| 코스피 (`user/mock-clipping-user`) | 코스닥시장 | `코스피` | `코스피` + 코스닥시장 |
-| DDD 아키텍처 (`user/28`) | Application Layer | `DDD 아키텍처` | `DDD 아키텍처` + Application Layer |
+| 코스피 (검증 사용자 A) | 코스닥시장 | `코스피` | `코스피` + 코스닥시장 |
+| DDD 아키텍처 (검증 사용자 B) | Application Layer | `DDD 아키텍처` | `DDD 아키텍처` + Application Layer |
 
 - **개선 케이스**(§5-1): 코스피 수집 15건 → 30건(신규 15건, 중복 0).
 - **무영향 케이스**(§5-2): §3.2에서 관계 0건이던 DDD가 현재 1건이다. 회귀 없음.
@@ -292,3 +298,26 @@ LLM은 호출하지 않았으므로 요약·유사도 필터 이후 구간은 �
   못한다(예: DDD).
 - 따라서 남은 순서는 **3.2 관계 추출 개선 → 이 문서의 구현**이다.
 - 비용 때문에 Step 3(풀 소비 전환)과 묶는 것이 안전하다.
+
+## 7. 2026-08-07 Builder 개선 이후 적용 기준
+
+관계 추출 개선은 “같은 글에 나온 모든 노드를 연결”하는 방식이 아니다. 신규·갱신
+노드에 대해 표면형·어휘·trigram·선택적 Embedding·기존 Graph 1-hop·온보딩
+Anchor로 기존 Wiki 후보를 회수하고, 별도 Relation Linker가 원문 근거·provenance·
+confidence·review 상태를 검증한다. 추출 결과에 관계가 일부 있어도 Linker를 생략하지
+않으며, 공동 출현이나 cosine 점수만으로 Edge를 만들지 않는다.
+
+Graph API/UI의 `degree`는 active이며 rejected가 아닌 관계가 잇는 **고유 이웃 수**다.
+두 노드 사이에 여러 relation type이 있어도 한 이웃으로 계산한다. 관심사 구조 점수도
+고유 이웃별 가장 강한 관계 weight 하나만 반영해 같은 이웃을 중복 가산하지 않는다.
+
+P3 2-hop 모듈은 기본적으로 검증 Edge 3개 이상, verified 비율 0.75 이상, 단일 Hub
+편중 0.80 이하를 요구한다. active·accepted·지원 근거·provenance별 confidence·양수
+weight 조건을 통과한 Legacy 3종과 의미 관계 8종만 순회한다. Gate 실패 시 검증된
+1-hop 또는 빈 결과로 폴백한다. 일반 Report Builder의 실시간 수집 보조 검색어는 이
+Gate를 실제 사용한다. 조직 노드는 검색어와 경로에서 제외하고, relation lifecycle
+Snapshot 조회 자체가 실패한 경우에만 §5.1의 기존 active/non-rejected 1-hop SQL로
+호환 폴백한다. `INT-012` 관심사 묶음은 접수 시 고정한 1-hop Snapshot을 유지한다.
+
+전체 P0~P3 구현 상태와 남은 운영 배선은
+[LLM Wiki Builder P0~P3 개선 설계](wiki-builder-p0-p3-improvement.md)를 따른다.

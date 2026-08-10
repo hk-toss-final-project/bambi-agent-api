@@ -36,8 +36,12 @@ def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
         "prepare_identity",
         "resolve_identity",
         "quality_gate",
+        "recall_candidates",
+        "link_relations",
         "plan",
+        "validate_plan",
         "persist",
+        "embed",
         "finalize",
     ):
         assert node in diagrams["personal-wiki"].mermaid
