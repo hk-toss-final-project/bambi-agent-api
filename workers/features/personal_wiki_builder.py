@@ -9,7 +9,7 @@ from typing import Any
 
 from psycopg import AsyncConnection
 
-from agent.graph import run_personal_wiki_build
+from agent.graph import run_personal_wiki_build, run_personal_wiki_rebuild
 from agent.wiki_builder.api import wba_001
 from domain.jobs.api import job_007
 from infrastructure.persistence.api import (
@@ -31,17 +31,25 @@ async def _process_job(
     model: str,
 ) -> dict[str, object]:
     """점유한 Personal Wiki Job 하나를 그래프로 Build하고 완료 상태로 바꾼다."""
-    source_version_id = job.payload.get("source_document_version_id")
-    if not isinstance(source_version_id, str) or not source_version_id:
-        raise ValueError("Job Payload에 source_document_version_id가 없습니다.")
-    result = await wba_001(
-        run_personal_wiki_build,
-        connection,
-        user_id=job.user_id,
-        source_document_version_id=source_version_id,
-        job_id=job.job_id,
-        model=model,
-    )
+    if job.payload.get("mode") == "full_rebuild":
+        result = await run_personal_wiki_rebuild(
+            connection,
+            user_id=job.user_id,
+            job_id=job.job_id,
+            model=model,
+        )
+    else:
+        source_version_id = job.payload.get("source_document_version_id")
+        if not isinstance(source_version_id, str) or not source_version_id:
+            raise ValueError("Job Payload에 source_document_version_id가 없습니다.")
+        result = await wba_001(
+            run_personal_wiki_build,
+            connection,
+            user_id=job.user_id,
+            source_document_version_id=source_version_id,
+            job_id=job.job_id,
+            model=model,
+        )
     linked_result = await job_007(result)
     async with connection.transaction():
         await set_system_job_scope(connection)

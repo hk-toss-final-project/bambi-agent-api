@@ -111,6 +111,47 @@ def test_changed_onboarding_seed_runs_full_rebuild(
     assert result["superseded_document_count"] == 2
 
 
+def test_run_personal_wiki_rebuild_retires_wiki_when_no_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """마지막 활성 원본 해제는 빈 Wiki 상태와 관심사 retire를 결과에 반영한다."""
+    calls: list[str] = []
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """테스트 DB Scope 설정을 생략한다."""
+        calls.append("scope")
+
+    async def fake_sources(connection: Any, *, user_id: str) -> list[Any]:
+        """활성 원본이 없는 상태를 반환한다."""
+        return []
+
+    async def fake_retire(connection: Any, **kwargs: Any) -> dict[str, int]:
+        """기존 Wiki 파생물 비활성화 결과를 반환한다."""
+        calls.append("retire")
+        return {"superseded_document_count": 3, "unsearchable_chunk_count": 7}
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(
+        agent_graph, "list_user_source_versions_for_rebuild", fake_sources
+    )
+    monkeypatch.setattr(
+        agent_graph, "retire_personal_wiki_without_sources", fake_retire
+    )
+
+    result = asyncio.run(
+        agent_graph.run_personal_wiki_rebuild(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="rebuild-job-1",
+        )
+    )
+
+    assert calls == ["scope", "scope", "retire"]
+    assert result["full_rebuild"] is True
+    assert result["source_count"] == 0
+    assert result["superseded_document_count"] == 3
+
+
 def _graph_snapshot_relation(
     source_key: str,
     source_title: str,

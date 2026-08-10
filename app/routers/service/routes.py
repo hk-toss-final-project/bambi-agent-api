@@ -33,6 +33,7 @@ from app.schemas.interest_taxonomy import (
 )
 from app.schemas.mvp import (
     AcceptedJobResponse,
+    ContentMarkDeletionRequest,
     ContentMarkRequest,
     FeedbackSignalsRequest,
     FeedbackSignalsResponse,
@@ -68,6 +69,7 @@ from app.routers.service.api import (
     svc_002,
     svc_003,
     svc_004,
+    svc_004_delete,
     svc_006,
     svc_008,
     svc_013,
@@ -242,6 +244,28 @@ async def request_content_mark(
 ) -> AcceptedJobResponse:
     """[SVC-004] 사용자가 북마크한 리포트(작성자 무관)를 Wiki Build Job으로 등록한다."""
     return await svc_004(
+        service,
+        user_id=user_id,
+        payload=payload,
+        request_id=_request_id(request),
+    )
+
+
+@router.post(
+    "/users/{user_id}/wiki-sources/content-marks/deletions",
+    response_model=AcceptedJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    operation_id="svc_004_delete",
+    summary="리포트 북마크 Wiki 연결 해제 요청",
+)
+async def request_content_mark_deletion(
+    user_id: UserId,
+    payload: ContentMarkDeletionRequest,
+    request: Request,
+    service: AgentApiMvpService = Depends(get_mvp_service),
+) -> AcceptedJobResponse:
+    """[SVC-004] 북마크 연결을 해제하고 활성 원본 기준 재빌드 Job을 등록한다."""
+    return await svc_004_delete(
         service,
         user_id=user_id,
         payload=payload,

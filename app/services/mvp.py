@@ -13,6 +13,7 @@ from fastapi import status
 from app.exceptions import AgentApiError, ErrorDetail
 from app.schemas.mvp import (
     AcceptedJobResponse,
+    ContentMarkDeletionRequest,
     ContentMarkRequest,
     FeedbackSignalsRequest,
     FeedbackSignalsResponse,
@@ -42,6 +43,7 @@ from domain.interests.api import ActiveInterestRequiredError
 from domain.jobs.api import job_002
 from domain.personal_wiki.source_events.api import wse_001, wse_011, wse_014
 from infrastructure.persistence.api import (
+    ContentMarkBindingNotFoundError,
     GeneratedContentNotFoundError,
     InterestTaxonomyConflictError,
     StaleContextVersionError,
@@ -192,6 +194,34 @@ class AgentApiMvpService:
                 ErrorDetail(
                     code="GENERATED_CONTENT_NOT_FOUND",
                     message="북마크할 리포트를 찾을 수 없습니다.",
+                ),
+            ) from exc
+        return self._accepted_job_response(submission)
+
+    async def delete_content_mark(
+        self,
+        *,
+        user_id: str,
+        payload: ContentMarkDeletionRequest,
+        request_id: str,
+    ) -> AcceptedJobResponse:
+        """북마크 연결을 해제하고 남은 활성 원본 전체의 Wiki 재구성을 접수한다."""
+        try:
+            submission = await self._agent_jobs.delete_content_mark(
+                user_id=user_id,
+                source_event_id=payload.source_event_id,
+                marked_source_event_id=payload.marked_source_event_id,
+                content_id=payload.content_id,
+                occurred_at=payload.occurred_at,
+                memo=payload.memo,
+                request_id=request_id,
+            )
+        except ContentMarkBindingNotFoundError as exc:
+            raise AgentApiError(
+                status.HTTP_404_NOT_FOUND,
+                ErrorDetail(
+                    code="CONTENT_MARK_SOURCE_NOT_FOUND",
+                    message="해제할 활성 북마크 원본을 찾을 수 없습니다.",
                 ),
             ) from exc
         return self._accepted_job_response(submission)

@@ -28,6 +28,7 @@ from infrastructure.persistence.api import (
     ClaimedAgentJob,
     ConnectionInterestProfileRepository,
     db_002,
+    deactivate_content_mark_and_enqueue_rebuild,
     save_content_mark_and_enqueue,
     save_fetched_url_and_enqueue,
     save_feedback_signals_for_user,
@@ -265,6 +266,42 @@ class PostgresAgentJobRepository:
                 stored = await get_agent_job(connection, job_id=saved.job_id)
                 if stored is None:
                     raise RuntimeError(f"저장한 Wiki Job을 찾을 수 없습니다: {saved.job_id}")
+        return SubmittedSourceJob(
+            job=self._to_job_record(stored),
+            source_document_id=saved.source_document_id,
+            source_document_version_id=saved.source_document_version_id,
+        )
+
+    async def delete_content_mark(
+        self,
+        *,
+        user_id: str,
+        source_event_id: str,
+        marked_source_event_id: str,
+        content_id: str,
+        occurred_at: datetime | None,
+        memo: str | None,
+        request_id: str,
+    ) -> SubmittedSourceJob:
+        """북마크 연결 해제와 전체 Wiki 재구성 Job을 원자적으로 저장한다."""
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await set_system_job_scope(connection)
+                saved = await deactivate_content_mark_and_enqueue_rebuild(
+                    connection,
+                    user_id=user_id,
+                    source_event_id=source_event_id,
+                    marked_source_event_id=marked_source_event_id,
+                    content_id=content_id,
+                    occurred_at=occurred_at,
+                    memo=memo,
+                    request_id=request_id,
+                )
+                stored = await get_agent_job(connection, job_id=saved.job_id)
+                if stored is None:
+                    raise RuntimeError(
+                        f"저장한 Wiki 재구성 Job을 찾을 수 없습니다: {saved.job_id}"
+                    )
         return SubmittedSourceJob(
             job=self._to_job_record(stored),
             source_document_id=saved.source_document_id,

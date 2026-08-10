@@ -15,6 +15,7 @@ from shared.hashing import compute_content_hash
 from infrastructure.persistence.features.jobs import (
     EnqueuedWikiBuildJob,
     enqueue_personal_wiki_build_job,
+    enqueue_personal_wiki_rebuild_job,
     enqueue_url_collection_job,
 )
 from infrastructure.persistence.features.personal_wiki import (
@@ -59,6 +60,15 @@ class GeneratedContentNotFoundError(Exception):
         """찾지 못한 콘텐츠 식별자를 보관한다."""
         super().__init__(f"생성 콘텐츠를 찾을 수 없습니다: {content_id}")
         self.content_id = content_id
+
+
+class ContentMarkBindingNotFoundError(Exception):
+    """해제할 활성 북마크 원본 연결을 찾을 수 없을 때 발생한다."""
+
+    def __init__(self, source_event_id: str) -> None:
+        """찾지 못한 북마크 저장 이벤트 식별자를 보관한다."""
+        super().__init__(f"활성 북마크 원본 연결을 찾을 수 없습니다: {source_event_id}")
+        self.source_event_id = source_event_id
 
 
 def _event_payload(
@@ -243,6 +253,32 @@ async def _upsert_user_source_version(
             """,
             (source_version, content_hash, source_document_id),
         )
+    await connection.execute(
+        """
+        INSERT INTO agent.user_source_bindings (
+            user_id,
+            namespace_key,
+            source_document_id,
+            source_document_version_id,
+            source_event_row_id,
+            status,
+            deleted_at
+        ) VALUES (%s, %s, %s, %s, %s, 'active', NULL)
+        ON CONFLICT (source_event_row_id) DO UPDATE SET
+            source_document_id = EXCLUDED.source_document_id,
+            source_document_version_id = EXCLUDED.source_document_version_id,
+            status = 'active',
+            deleted_at = NULL,
+            updated_at = clock_timestamp()
+        """,
+        (
+            user_id,
+            namespace_key,
+            source_document_id,
+            source_document_version_id,
+            source_event_row_id,
+        ),
+    )
     return source_document_id, source_document_version_id, source_version
 
 
@@ -839,6 +875,157 @@ async def save_content_mark_and_enqueue(
         source_document_id=source_document_id,
         source_document_version_id=source_document_version_id,
         source_version=source_version,
+        source_event_row_id=source_event_row_id,
+        job_id=enqueued.job_id,
+        job_created=enqueued.created,
+    )
+
+
+async def deactivate_content_mark_and_enqueue_rebuild(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    source_event_id: str,
+    marked_source_event_id: str,
+    content_id: str,
+    occurred_at: datetime | None,
+    memo: str | None,
+    request_id: str,
+) -> PersistedSourceSubmission:
+    """북마크 이벤트의 활성 원본 연결만 해제하고 전체 재빌드 Job을 등록한다.
+
+    동일한 원본 Head가 다른 저장 이벤트에서도 참조될 수 있으므로 연결이 모두
+    사라졌을 때만 Head를 deleted로 전환한다. Wiki 노드·엣지는 직접 부분 삭제하지
+    않고 남은 활성 원본 전체를 재구성해 출처와 관계의 정합성을 보존한다.
+    """
+    existing_cursor = await connection.execute(
+        """
+        SELECT id, job_id, payload
+        FROM agent.wiki_source_events
+        WHERE user_id = %s AND source_event_id = %s AND source_type = 'delete'
+        FOR UPDATE
+        """,
+        (user_id, source_event_id),
+    )
+    existing = await existing_cursor.fetchone()
+    if existing is not None and existing["job_id"] is not None:
+        payload = dict(existing["payload"] or {})
+        return PersistedSourceSubmission(
+            source_document_id=str(payload["source_document_id"]),
+            source_document_version_id=str(payload["source_document_version_id"]),
+            source_version=None,
+            source_event_row_id=str(existing["id"]),
+            job_id=str(existing["job_id"]),
+            job_created=False,
+        )
+
+    binding_cursor = await connection.execute(
+        """
+        SELECT
+            binding.id,
+            binding.source_document_id,
+            binding.source_document_version_id
+        FROM agent.user_source_bindings AS binding
+        JOIN agent.wiki_source_events AS marked_event
+          ON marked_event.id = binding.source_event_row_id
+        JOIN agent.user_source_documents AS document
+          ON document.id = binding.source_document_id
+         AND document.namespace_key = binding.namespace_key
+        WHERE marked_event.user_id = %s
+          AND marked_event.source_event_id = %s
+          AND marked_event.source_type = 'content_mark'
+          AND marked_event.source_content_id = %s
+          AND binding.namespace_key = %s
+          AND binding.status = 'active'
+        FOR UPDATE OF binding, document
+        """,
+        (user_id, marked_source_event_id, content_id, f"user/{user_id}"),
+    )
+    binding = await binding_cursor.fetchone()
+    if binding is None:
+        raise ContentMarkBindingNotFoundError(marked_source_event_id)
+
+    source_document_id = str(binding["source_document_id"])
+    source_document_version_id = str(binding["source_document_version_id"])
+    payload = {
+        "marked_source_event_id": marked_source_event_id,
+        "source_document_id": source_document_id,
+        "source_document_version_id": source_document_version_id,
+        **({"memo": memo} if memo else {}),
+    }
+    event_cursor = await connection.execute(
+        """
+        INSERT INTO agent.wiki_source_events (
+            user_id,
+            source_event_id,
+            source_type,
+            occurred_at,
+            source_content_id,
+            object_uri,
+            payload,
+            status
+        ) VALUES (
+            %s, %s, 'delete', COALESCE(%s, clock_timestamp()), %s, %s, %s, 'received'
+        )
+        ON CONFLICT (user_id, source_event_id) DO UPDATE SET
+            payload = EXCLUDED.payload,
+            updated_at = clock_timestamp()
+        RETURNING id
+        """,
+        (
+            user_id,
+            source_event_id,
+            occurred_at,
+            content_id,
+            source_document_id,
+            Jsonb(payload),
+        ),
+    )
+    event = await event_cursor.fetchone()
+    source_event_row_id = str(event["id"])
+    await connection.execute(
+        """
+        UPDATE agent.user_source_bindings
+        SET status = 'deleted',
+            deleted_at = clock_timestamp(),
+            updated_at = clock_timestamp()
+        WHERE id = %s AND status = 'active'
+        """,
+        (binding["id"],),
+    )
+    active_cursor = await connection.execute(
+        """
+        SELECT COUNT(*) AS active_count
+        FROM agent.user_source_bindings
+        WHERE source_document_id = %s AND status = 'active'
+        """,
+        (source_document_id,),
+    )
+    active = await active_cursor.fetchone()
+    if int(active["active_count"]) == 0:
+        await connection.execute(
+            """
+            UPDATE agent.user_source_documents
+            SET status = 'deleted',
+                deleted_at = clock_timestamp(),
+                updated_at = clock_timestamp()
+            WHERE id = %s AND namespace_key = %s AND deleted_at IS NULL
+            """,
+            (source_document_id, f"user/{user_id}"),
+        )
+
+    enqueued = await enqueue_personal_wiki_rebuild_job(
+        connection,
+        user_id=user_id,
+        source_event_id=source_event_id,
+        source_event_row_id=source_event_row_id,
+        removed_source_document_id=source_document_id,
+        request_id=request_id,
+    )
+    return PersistedSourceSubmission(
+        source_document_id=source_document_id,
+        source_document_version_id=source_document_version_id,
+        source_version=None,
         source_event_row_id=source_event_row_id,
         job_id=enqueued.job_id,
         job_created=enqueued.created,

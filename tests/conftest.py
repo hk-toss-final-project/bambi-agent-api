@@ -35,6 +35,7 @@ from app.services.agent_jobs import (
 from app.services.mvp import AgentApiMvpService
 from app.services.publish_snapshots import PublishSnapshotService
 from infrastructure.persistence.api import (
+    ContentMarkBindingNotFoundError,
     GeneratedContentNotFoundError,
     InterestTaxonomyConflictError,
     StaleContextVersionError,
@@ -62,6 +63,7 @@ class InMemoryAgentJobRepository:
         self._jobs: dict[str, AgentJobRecord] = {}
         self._idempotency: dict[tuple[str, str, str], str] = {}
         self._generated_contents: set[tuple[str, str]] = set()
+        self._content_mark_bindings: dict[tuple[str, str], str] = {}
         self._feedback_events: set[tuple[str, str]] = set()
         self.feedback_signals: list[dict[str, Any]] = []
         self._taxonomies: dict[str, StoredInterestTaxonomyRecord] = {}
@@ -264,10 +266,42 @@ class InMemoryAgentJobRepository:
             idempotency_key=source_event_id,
             request_id=request_id,
         )
+        self._content_mark_bindings[(user_id, source_event_id)] = content_id
         return SubmittedSourceJob(
             job=record,
             source_document_id=f"source-{record.job_id[:8]}",
             source_document_version_id=f"version-{record.job_id[:8]}",
+        )
+
+    async def delete_content_mark(
+        self,
+        *,
+        user_id: str,
+        source_event_id: str,
+        marked_source_event_id: str,
+        content_id: str,
+        occurred_at: datetime | None,
+        memo: str | None,
+        request_id: str,
+    ) -> SubmittedSourceJob:
+        """활성 북마크 연결을 해제하고 멱등 재구성 Job을 반환한다."""
+        existing = self._idempotency.get(("SVC-004", user_id, source_event_id))
+        if existing is None:
+            binding_key = (user_id, marked_source_event_id)
+            if self._content_mark_bindings.get(binding_key) != content_id:
+                raise ContentMarkBindingNotFoundError(marked_source_event_id)
+            del self._content_mark_bindings[binding_key]
+        record, _created = self._submit_job(
+            feature_id="SVC-004",
+            job_type="personal_wiki_build",
+            user_id=user_id,
+            idempotency_key=source_event_id,
+            request_id=request_id,
+        )
+        return SubmittedSourceJob(
+            job=record,
+            source_document_id=f"source-{marked_source_event_id}",
+            source_document_version_id=f"version-{marked_source_event_id}",
         )
 
     async def submit_onboarding_seed(

@@ -431,6 +431,49 @@ async def supersede_personal_wiki_for_rebuild(
     return len(await cursor.fetchall())
 
 
+async def retire_personal_wiki_without_sources(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    job_id: str,
+) -> dict[str, int]:
+    """활성 원본이 하나도 없을 때 개인 Wiki 파생물을 검색·활성 상태에서 내린다."""
+    namespace_key = f"user/{user_id}"
+    superseded_document_count = await supersede_personal_wiki_for_rebuild(
+        connection, user_id=user_id, job_id=job_id
+    )
+    chunk_cursor = await connection.execute(
+        """
+        UPDATE agent.wiki_chunks
+        SET is_searchable = false
+        WHERE namespace_key = %s AND is_searchable
+        RETURNING id
+        """,
+        (namespace_key,),
+    )
+    unsearchable_chunk_count = len(await chunk_cursor.fetchall())
+    await connection.execute(
+        """
+        UPDATE agent.wiki_versions
+        SET status = 'retired'
+        WHERE user_id = %s AND status = 'active'
+        """,
+        (user_id,),
+    )
+    await connection.execute(
+        """
+        UPDATE agent.user_interest_profiles
+        SET status = 'retired'
+        WHERE user_id = %s AND status = 'active'
+        """,
+        (user_id,),
+    )
+    return {
+        "superseded_document_count": superseded_document_count,
+        "unsearchable_chunk_count": unsearchable_chunk_count,
+    }
+
+
 async def update_full_wiki_rebuild_summary(
     connection: AsyncConnection[DictRow],
     *,

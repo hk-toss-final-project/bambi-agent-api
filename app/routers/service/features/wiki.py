@@ -4,6 +4,7 @@ from typing import Protocol
 
 from app.schemas.mvp import (
     AcceptedJobResponse,
+    ContentMarkDeletionRequest,
     ContentMarkRequest,
     FeedbackSignalsRequest,
     FeedbackSignalsResponse,
@@ -32,6 +33,12 @@ class WikiSourceSubmissionService(Protocol):
         self, *, user_id: str, payload: ContentMarkRequest, request_id: str
     ) -> AcceptedJobResponse:
         """북마크한 리포트(작성자 무관)를 Wiki 처리 작업으로 접수한다."""
+        ...
+
+    async def delete_content_mark(
+        self, *, user_id: str, payload: ContentMarkDeletionRequest, request_id: str
+    ) -> AcceptedJobResponse:
+        """북마크 원본 연결 해제와 Wiki 재구성을 접수한다."""
         ...
 
     async def submit_feedback_signals(
@@ -89,6 +96,19 @@ async def svc_004(
     다른 사용자의 리포트를 구분하지 않고 content_id로 동일하게 편입한다.
     """
     return await service.submit_content_mark(
+        user_id=user_id, payload=payload, request_id=request_id
+    )
+
+
+async def svc_004_delete(
+    service: WikiSourceSubmissionService,
+    *,
+    user_id: str,
+    payload: ContentMarkDeletionRequest,
+    request_id: str,
+) -> AcceptedJobResponse:
+    """[SVC-004] 북마크 해제 후 활성 원본 기준 Wiki 재구성을 요청한다."""
+    return await service.delete_content_mark(
         user_id=user_id, payload=payload, request_id=request_id
     )
 
