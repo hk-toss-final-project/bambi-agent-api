@@ -6,7 +6,7 @@ Personal Wiki Worker가 PostgreSQL Job을 Lease로 점유하고, 각 시도의
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -710,6 +710,163 @@ async def enqueue_personal_wiki_rebuild_job(
         (job_id, source_event_row_id),
     )
     return EnqueuedWikiBuildJob(job_id=job_id, created=created)
+
+
+# 정기 유지보수 재구성 Job을 원본 제거 재구성과 구분하는 기능 ID.
+# agent_jobs 멱등 Unique가 (feature_id, user_id, idempotency_key)라 ID를 나눠야
+# 같은 날 두 경로가 서로의 Job을 재사용해 버리지 않는다.
+MAINTENANCE_REBUILD_FEATURE_ID = "WBA-002"
+
+
+async def list_users_for_maintenance_rebuild(
+    connection: AsyncConnection[DictRow],
+    *,
+    stale_after_hours: float,
+    limit: int,
+    now: datetime | None = None,
+) -> list[str]:
+    """정기 Wiki 재구성이 필요한 사용자를 오래된 순서로 조회한다.
+
+    증분 Build는 원본이 들어올 때만 돌아서 누적된 중복·고아 문서를 정리할
+    기회가 없다. 이 조회는 마지막 정기 재구성이 오래된(또는 한 번도 없는)
+    활성 Wiki 사용자를 고른다. 아직 대기·실행 중인 재구성이 있는 사용자는
+    제외해 같은 사용자에게 재구성이 쌓이지 않게 한다.
+
+    Args:
+        connection: 이미 열린 agent-db 커넥션 (조회 Transaction은 내부에서 연다)
+        stale_after_hours: 마지막 재구성으로부터 이 시간이 지나야 대상이 된다
+        limit: 한 번에 가져올 최대 사용자 수
+        now: 판정 기준 시각 (미지정 시 현재 UTC)
+
+    Returns:
+        재구성이 가장 시급한 순서의 사용자 ID 목록
+
+    Raises:
+        ValueError: stale_after_hours가 음수이거나 limit이 1 미만인 경우
+    """
+    if stale_after_hours < 0:
+        raise ValueError("stale_after_hours는 0 이상이어야 합니다.")
+    if limit < 1:
+        raise ValueError("limit은 1 이상이어야 합니다.")
+    moment = now or datetime.now(UTC)
+    cutoff = moment - timedelta(hours=stale_after_hours)
+    async with connection.transaction():
+        await set_system_job_scope(connection)
+        cursor = await connection.execute(
+            """
+            SELECT wiki.user_id
+            FROM agent.wiki_versions AS wiki
+            LEFT JOIN LATERAL (
+                SELECT job.created_at, job.status
+                FROM agent.agent_jobs AS job
+                WHERE job.user_id = wiki.user_id
+                  AND job.feature_id = %s
+                ORDER BY job.created_at DESC
+                LIMIT 1
+            ) AS last_job ON TRUE
+            WHERE wiki.status = 'active'
+              AND (
+                    last_job.created_at IS NULL
+                 OR (
+                        last_job.created_at < %s
+                    AND last_job.status NOT IN ('queued', 'running')
+                    )
+              )
+            ORDER BY last_job.created_at ASC NULLS FIRST, wiki.user_id ASC
+            LIMIT %s
+            """,
+            (MAINTENANCE_REBUILD_FEATURE_ID, cutoff, limit),
+        )
+        rows = await cursor.fetchall()
+    return [str(row["user_id"]) for row in rows]
+
+
+async def enqueue_personal_wiki_maintenance_rebuild_job(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    maintenance_key: str,
+    request_id: str | None = None,
+) -> EnqueuedWikiBuildJob:
+    """정기 유지보수용 Personal Wiki Full Rebuild Job을 멱등 등록한다.
+
+    원본 제거로 도는 재구성(`enqueue_personal_wiki_rebuild_job`)과 달리 계기가 된
+    Source Event가 없다. 따라서 이벤트 대신 주기 식별자로 멱등성을 잡고
+    `wiki_source_events`도 건드리지 않는다. Job 유형과 Payload의 ``mode``는
+    같은 값을 써서 기존 Worker와 상태 조회 계약을 그대로 재사용한다.
+
+    Args:
+        connection: 이미 열린 agent-db 커넥션
+        user_id: 재구성 대상 사용자 ID
+        maintenance_key: 같은 주기의 중복 등록을 막는 식별자 (예: "2026-08-10")
+        request_id: 추적용 요청 ID
+
+    Returns:
+        등록되었거나 이미 존재하던 재구성 Job
+
+    Raises:
+        ValueError: maintenance_key가 비어 있는 경우
+    """
+    if not maintenance_key:
+        raise ValueError("정기 재구성에 maintenance_key가 필요합니다.")
+    payload = {
+        "mode": "full_rebuild",
+        "trigger": "maintenance",
+        "maintenance_key": maintenance_key,
+    }
+    creation = await job_001(
+        feature_id=MAINTENANCE_REBUILD_FEATURE_ID,
+        job_type="personal_wiki_build",
+        user_id=user_id,
+        idempotency_parts=[maintenance_key, "maintenance-rebuild"],
+        payload=payload,
+        request_id=request_id,
+    )
+    cursor = await connection.execute(
+        """
+        INSERT INTO agent.agent_jobs (
+            feature_id,
+            job_type,
+            user_id,
+            idempotency_key,
+            status,
+            progress,
+            payload,
+            retryable,
+            request_id
+        ) VALUES (%s, 'personal_wiki_build', %s, %s, 'queued', 0, %s, true, %s)
+        ON CONFLICT (feature_id, COALESCE(user_id, ''), idempotency_key)
+        DO NOTHING
+        RETURNING id
+        """,
+        (
+            creation.feature_id,
+            creation.user_id,
+            creation.idempotency_key,
+            Jsonb(creation.payload),
+            creation.request_id,
+        ),
+    )
+    row = await cursor.fetchone()
+    if row is not None:
+        return EnqueuedWikiBuildJob(job_id=str(row["id"]), created=True)
+    cursor = await connection.execute(
+        """
+        SELECT id
+        FROM agent.agent_jobs
+        WHERE feature_id = %s
+          AND COALESCE(user_id, '') = %s
+          AND idempotency_key = %s
+        """,
+        (creation.feature_id, creation.user_id, creation.idempotency_key),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        raise RuntimeError(
+            "멱등 충돌한 정기 재구성 Job을 찾을 수 없습니다: "
+            f"{creation.idempotency_key}"
+        )
+    return EnqueuedWikiBuildJob(job_id=str(row["id"]), created=False)
 
 
 async def enqueue_personal_wiki_build_job(

@@ -159,6 +159,25 @@ class Settings(BaseModel):
             "이 시간이 지난 Profile만 재계산 대상이 된다"
         ),
     )
+    maintenance_rebuild_limit: int = Field(
+        default=5,
+        ge=0,
+        le=100,
+        description=(
+            "Scheduler tick마다 등록할 정기 Wiki 재구성 Job 수 (0이면 끔). "
+            "증분 Build는 원본이 들어올 때만 돌아 누적된 중복·고아 문서를 "
+            "정리할 기회가 없다. 실제 재구성은 상주 Worker가 수행한다"
+        ),
+    )
+    maintenance_rebuild_stale_hours: float = Field(
+        default=168.0,
+        ge=1.0,
+        le=8760.0,
+        description=(
+            "사용자별 정기 Wiki 재구성 간격(시간, 기본 7일). 재구성은 LLM 재분류 "
+            "비용이 크므로 관심사 재계산보다 훨씬 드물게 돈다"
+        ),
+    )
 
     @property
     def dev_agent_api_enabled(self) -> bool:
@@ -256,5 +275,9 @@ def load_settings() -> Settings:
         ),
         interest_recalculation_stale_hours=_float_env(
             "INTEREST_RECALCULATION_STALE_HOURS", 24.0
+        ),
+        maintenance_rebuild_limit=_integer_env("MAINTENANCE_REBUILD_LIMIT", 5),
+        maintenance_rebuild_stale_hours=_float_env(
+            "MAINTENANCE_REBUILD_STALE_HOURS", 168.0
         ),
     )

@@ -45,7 +45,7 @@ from .collection import (
     sch_004,
 )
 from .management import sch_021
-from .wiki import sch_010
+from .wiki import sch_010, schedule_personal_wiki_maintenance_rebuilds
 from workers.api import run_global_content_fetch_batch
 
 type DictRow = dict[str, Any]
@@ -75,6 +75,9 @@ CONTENT_FETCH_STEP = "content-fetch"
 
 # 관심사 주기 재계산 단계를 결과 목록에서 가리키는 이름.
 INTEREST_RECALCULATION_STEP = "interest-recalculation"
+
+# 정기 Wiki 재구성 등록 단계를 결과 목록에서 가리키는 이름.
+MAINTENANCE_REBUILD_STEP = "maintenance-rebuild"
 
 # 수동 실행이 큐에 넣는 수집 Job의 유형. 수동 실행 API는 이 Job만 등록하고 바로
 # 응답하며, 실제 수집은 Scheduler tick이 이 Job을 집어 처리한다.
@@ -148,6 +151,10 @@ class CollectionScheduler:
     interest_recalculation_limit: int = 0
     # 관심사 Profile을 다시 계산하기까지 기다리는 시간(시간).
     interest_recalculation_stale_hours: float = 24.0
+    # tick마다 등록할 정기 Wiki 재구성 Job 수. 0이면 재구성 등록을 건너뛴다.
+    maintenance_rebuild_limit: int = 0
+    # 사용자별 정기 Wiki 재구성 간격(시간).
+    maintenance_rebuild_stale_hours: float = 168.0
 
     async def run_once(
         self, *, now: datetime | None = None, force: bool = False
@@ -200,8 +207,63 @@ class CollectionScheduler:
         finally:
             await connection.close()
         results.extend(await self.recalculate_stale_interests(now=moment))
+        results.extend(await self.enqueue_maintenance_rebuilds(now=moment))
         results.extend(await self.fetch_pending_content())
         return results
+
+    async def enqueue_maintenance_rebuilds(
+        self, *, now: datetime | None = None
+    ) -> list[CollectionScheduleResult]:
+        """정기 Wiki 재구성이 밀린 사용자에게 Full Rebuild Job을 등록한다.
+
+        증분 Build는 원본이 들어올 때만 돌아서 누적된 중복·고아 문서를 정리할
+        기회가 없다. 이 단계는 Job 등록까지만 하고, 실제 재구성은 상주
+        Worker(WORKER-002)가 집어 수행한다 — 무거운 Build가 수집 tick을 붙잡지
+        않게 하려는 분리다.
+
+        등록은 사용자·주기 단위로 멱등이라 tick이 자주 돌아도 같은 재구성이
+        쌓이지 않는다. 이 단계의 실패는 수집 tick을 멈추지 않는다.
+
+        Args:
+            now: 판정 기준 시각 (미지정 시 현재 UTC)
+
+        Returns:
+            등록한 Job이 있으면 결과 한 건, 없으면 빈 목록
+        """
+        if self.maintenance_rebuild_limit <= 0:
+            return []
+        connection: AsyncConnection[DictRow] = await AsyncConnection.connect(
+            self.database_url,
+            row_factory=dict_row,
+        )
+        try:
+            enqueued = await schedule_personal_wiki_maintenance_rebuilds(
+                connection,
+                stale_after_hours=self.maintenance_rebuild_stale_hours,
+                limit=self.maintenance_rebuild_limit,
+                now=now,
+            )
+        except Exception as error:  # noqa: BLE001 - 다음 tick에서 다시 시도한다
+            return [
+                CollectionScheduleResult(
+                    provider=MAINTENANCE_REBUILD_STEP,
+                    source_key=None,
+                    status="skipped",
+                    reason=f"정기 Wiki 재구성 등록 실패: {error}",
+                )
+            ]
+        finally:
+            await connection.close()
+        if not enqueued:
+            return []
+        return [
+            CollectionScheduleResult(
+                provider=MAINTENANCE_REBUILD_STEP,
+                source_key=None,
+                status="completed",
+                results=[asdict(item) for item in enqueued],
+            )
+        ]
 
     async def recalculate_stale_interests(
         self, *, now: datetime | None = None
@@ -481,6 +543,8 @@ def build_scheduler(settings: Settings | None = None) -> CollectionScheduler:
         interest_recalculation_stale_hours=(
             resolved.interest_recalculation_stale_hours
         ),
+        maintenance_rebuild_limit=resolved.maintenance_rebuild_limit,
+        maintenance_rebuild_stale_hours=resolved.maintenance_rebuild_stale_hours,
     )
 
 

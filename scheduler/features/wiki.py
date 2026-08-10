@@ -8,10 +8,14 @@ SCH-009는 수집으로 누적된 personal_wiki_build Job의 실행 시각을
 SCH-010은 관심사 Profile이 오래된 사용자를 주기적으로 다시 계산한다.
 관심사 점수는 계산 시각 기준으로 최신성을 감쇠시키므로, 저장이 멈춘 사용자는
 재계산이 돌지 않으면 마지막 Build 시점 점수에 그대로 고정된다.
+
+정기 Wiki 재구성 등록(`schedule_personal_wiki_maintenance_rebuilds`)은 명세
+기능 ID가 없는 유지보수 단계다. 증분 Build가 원본 유입에만 반응해 누적된
+중복·고아 문서를 정리할 기회가 없으므로, 재구성을 시계로 돌린다.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 import logging
 from typing import Any, Literal
 
@@ -21,7 +25,9 @@ from domain.interests.api import ActiveWikiRequiredError, int_011
 from infrastructure.persistence.api import (
     ConnectionInterestProfileRepository,
     defer_user_wiki_build_jobs,
+    enqueue_personal_wiki_maintenance_rebuild_job,
     list_users_for_interest_recalculation,
+    list_users_for_maintenance_rebuild,
     release_user_wiki_build_jobs,
     sync_wiki_interest_collection_targets,
 )
@@ -164,6 +170,79 @@ async def sch_010(
                 version=version if isinstance(version, int) else None,
                 interest_count=len(interests),
                 subscribed_targets=tuple(subscribed),
+            )
+        )
+    return results
+
+
+@dataclass(frozen=True, slots=True)
+class MaintenanceRebuildResult:
+    """정기 유지보수 재구성 Job 등록 결과 한 건."""
+
+    user_id: str
+    status: Literal["enqueued", "existing", "failed"]
+    job_id: str | None = None
+    reason: str | None = None
+
+
+def _maintenance_key(moment: datetime) -> str:
+    """같은 날 중복 등록을 막는 주기 식별자를 만든다."""
+    return moment.astimezone(UTC).strftime("%Y-%m-%d")
+
+
+async def schedule_personal_wiki_maintenance_rebuilds(
+    connection: AsyncConnection[dict[str, Any]],
+    *,
+    stale_after_hours: float = 168.0,
+    limit: int = 5,
+    now: datetime | None = None,
+) -> list[MaintenanceRebuildResult]:
+    """정기 Wiki 재구성이 밀린 사용자에게 Full Rebuild Job을 등록한다.
+
+    증분 Build는 원본이 들어올 때만 돌아 누적된 중복·고아 문서를 정리할
+    기회가 없다. 이 단계는 그 정리를 시계로 돌린다. 실제 재구성은 등록된
+    Job을 상주 Worker(WORKER-002)가 집어 수행하므로 여기서는 LLM을 부르지
+    않는다.
+
+    사용자 한 명의 등록 실패가 나머지를 막지 않도록 사용자 단위로 격리한다.
+
+    Args:
+        connection: 이미 열린 agent-db 커넥션
+        stale_after_hours: 마지막 정기 재구성으로부터 기다릴 시간
+        limit: 한 번의 실행에서 등록할 최대 Job 수
+        now: 판정 기준 시각 (미지정 시 현재 UTC)
+
+    Returns:
+        사용자별 등록 결과 목록 (대상이 없으면 빈 목록)
+    """
+    users = await list_users_for_maintenance_rebuild(
+        connection,
+        stale_after_hours=stale_after_hours,
+        limit=limit,
+        now=now,
+    )
+    key = _maintenance_key(now or datetime.now(UTC))
+    results: list[MaintenanceRebuildResult] = []
+    for user_id in users:
+        try:
+            enqueued = await enqueue_personal_wiki_maintenance_rebuild_job(
+                connection, user_id=user_id, maintenance_key=key
+            )
+        except Exception as error:  # noqa: BLE001 - 다음 사용자 등록을 계속한다
+            logger.warning(
+                "정기 Wiki 재구성 등록 실패 (user=%s)", user_id, exc_info=True
+            )
+            results.append(
+                MaintenanceRebuildResult(
+                    user_id=user_id, status="failed", reason=str(error)
+                )
+            )
+            continue
+        results.append(
+            MaintenanceRebuildResult(
+                user_id=user_id,
+                status="enqueued" if enqueued.created else "existing",
+                job_id=enqueued.job_id,
             )
         )
     return results

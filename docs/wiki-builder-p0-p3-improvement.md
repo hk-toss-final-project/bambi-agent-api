@@ -153,9 +153,20 @@ Transaction에서 기존 파생 Wiki와 관계 support를 supersede하고 새 Sn
 저장한다. 중간 저장 실패는 Transaction rollback 대상이다. Embedding은 Wiki 교체 후
 best-effort로 갱신한다.
 
-현재 `wba_002` facade와 저장소 함수는 구현됐지만 Full Rebuild용 내부 API·Job 종류·
-Worker route는 연결되지 않았다. 실제 PostgreSQL을 사용한 전체 재구성 운영 검증도
-남아 있으므로 “수동 호출 가능한 구현”으로만 본다.
+실행 경로는 별도 Job 종류가 아니라 `personal_wiki_build` Job Payload의
+`mode=full_rebuild`이며, 상주 Worker(WORKER-002)가 이 플래그를 보고 재구성으로
+분기한다. 기존 Job 상태 조회 계약을 그대로 재사용하려는 선택이다.
+
+트리거는 두 가지다. ① 북마크 해제처럼 원본이 빠질 때 도는 이벤트 트리거
+(`enqueue_personal_wiki_rebuild_job`, 계기가 된 Source Event로 멱등) ② Scheduler가
+도는 정기 유지보수 트리거(`enqueue_personal_wiki_maintenance_rebuild_job`, 사용자·
+날짜 단위로 멱등). 증분 Build는 원본 유입에만 반응해 누적된 중복·고아 문서를 정리할
+기회가 없으므로 ②가 그 정리를 시계로 돌린다. 정기 트리거는 대기·실행 중인 재구성이
+있는 사용자를 건너뛰어 재구성이 쌓이지 않게 하고, 등록만 하고 실제 재구성은 Worker에
+맡겨 무거운 Build가 수집 tick을 붙잡지 않게 한다.
+
+실제 PostgreSQL을 사용한 전체 재구성 운영 검증과 정기 재구성의 LLM 비용 관측은
+아직 남아 있다.
 
 ## 6. Degree 의미
 
@@ -220,7 +231,7 @@ support Snapshot을 읽어 이 Gate를 실행한다. 통과하면 bounded PPR, �
 | P1 온보딩 Anchor | 후속 일반 Build 연결·폭염→날씨 실측 통과 | 운영 사용자 회귀 확인 |
 | P2 provenance·lifecycle | Migration·저장 동기화·로컬 DB 계약 검증 완료 | 배포 DB Migration·삭제/갱신 통합 검증 |
 | P2 WBA-014 Lint | Incremental·Full Rebuild에 연결됨 | 운영 임계값 관측과 조정 |
-| P2 WBA-002 Full Rebuild | facade 구현, 운영 route 미연결 | API/Job/Worker route와 DB E2E |
+| P2 WBA-002 Full Rebuild | 원본 제거·정기 유지보수 트리거 연결됨 | 배포 DB E2E와 정기 재구성 비용 관측 |
 | P3 WBA-011 Embedding | Build 후 best-effort 연결됨 | Provider 실패 재처리 운영 경로 |
 | P3 2-hop PPR Gate | 일반 Report 보조 검색어 경로 연결됨 | 실제 데이터 A/B 품질·지연 검증 |
 | PRAG-003 Vector 검색 | 미구현 | 사용자 Scope Vector 검색·결합·recall 실측 |

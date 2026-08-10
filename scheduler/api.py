@@ -23,9 +23,11 @@ from .features.collection import (
 )
 from .features.wiki import (
     InterestRecalculationResult,
+    MaintenanceRebuildResult,
     WikiScheduleResult,
     sch_009,
     sch_010,
+    schedule_personal_wiki_maintenance_rebuilds,
 )
 from .features.runtime import (
     CONTENT_FETCH_STEP,
@@ -62,7 +64,9 @@ __all__ = [
     "CollectionScheduler",
     "UnknownCollectionScheduleError",
     "InterestRecalculationResult",
+    "MaintenanceRebuildResult",
     "WikiScheduleResult",
+    "schedule_personal_wiki_maintenance_rebuilds",
     "build_collection_credentials",
     "build_scheduler",
     "next_collection_run_at",

@@ -1,6 +1,12 @@
-"""SCH-009 Wiki Build 스케줄 조정과 SCH-010 관심사 주기 재계산을 검증한다."""
+"""Wiki 유지 루프 스케줄 기능을 검증한다.
+
+SCH-009 Build 실행 시각 조정, SCH-010 관심사 주기 재계산과 정기 Wiki 재구성
+Job 등록을 함께 다룬다.
+"""
 
 import asyncio
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -250,3 +256,132 @@ def test_sch_010_returns_empty_when_no_stale_user(monkeypatch: MonkeyPatch) -> N
 
     assert results == []
     assert calls["int_011"] == []
+
+
+def _stub_maintenance(
+    monkeypatch: MonkeyPatch,
+    *,
+    users: list[str],
+    enqueued: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """정기 재구성 대상 조회와 Job 등록을 결정적 대역으로 바꾼다."""
+    calls: dict[str, Any] = {"list": [], "enqueue": []}
+
+    async def fake_list(connection: object, **kwargs: object) -> list[str]:
+        """대상 조회 인자를 기록하고 고정 사용자 목록을 반환한다."""
+        calls["list"].append(kwargs)
+        return users
+
+    async def fake_enqueue(
+        connection: object, *, user_id: str, maintenance_key: str
+    ) -> Any:
+        """등록 인자를 기록하고 고정 등록 결과를 반환한다."""
+        calls["enqueue"].append({"user_id": user_id, "key": maintenance_key})
+        result = (enqueued or {}).get(user_id)
+        if isinstance(result, Exception):
+            raise result
+        return result or SimpleNamespace(job_id=f"job-{user_id}", created=True)
+
+    monkeypatch.setattr(
+        wiki_scheduler, "list_users_for_maintenance_rebuild", fake_list
+    )
+    monkeypatch.setattr(
+        wiki_scheduler,
+        "enqueue_personal_wiki_maintenance_rebuild_job",
+        fake_enqueue,
+    )
+    return calls
+
+
+def test_maintenance_rebuild_enqueues_for_each_stale_user(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """정기 재구성이 밀린 사용자마다 Full Rebuild Job을 등록한다."""
+    calls = _stub_maintenance(monkeypatch, users=["user-1", "user-2"])
+
+    results = asyncio.run(
+        wiki_scheduler.schedule_personal_wiki_maintenance_rebuilds(
+            object(),  # type: ignore[arg-type]
+            now=datetime(2026, 8, 10, 3, 0, tzinfo=UTC),
+        )
+    )
+
+    assert [item.status for item in results] == ["enqueued", "enqueued"]
+    assert results[0].job_id == "job-user-1"
+    # 같은 날 등록은 같은 주기 키를 써서 멱등하게 겹쳐야 한다.
+    assert {call["key"] for call in calls["enqueue"]} == {"2026-08-10"}
+
+
+def test_maintenance_rebuild_reports_existing_job(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """이미 등록된 재구성은 새로 만들지 않고 기존 Job으로 보고한다."""
+    _stub_maintenance(
+        monkeypatch,
+        users=["user-1"],
+        enqueued={"user-1": SimpleNamespace(job_id="job-old", created=False)},
+    )
+
+    results = asyncio.run(
+        wiki_scheduler.schedule_personal_wiki_maintenance_rebuilds(
+            object()  # type: ignore[arg-type]
+        )
+    )
+
+    assert results[0].status == "existing"
+    assert results[0].job_id == "job-old"
+
+
+def test_maintenance_rebuild_isolates_one_user_failure(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """사용자 한 명의 등록 실패가 나머지 등록을 막지 않는다."""
+    _stub_maintenance(
+        monkeypatch,
+        users=["user-1", "user-2"],
+        enqueued={"user-1": RuntimeError("Job 등록 충돌")},
+    )
+
+    results = asyncio.run(
+        wiki_scheduler.schedule_personal_wiki_maintenance_rebuilds(
+            object()  # type: ignore[arg-type]
+        )
+    )
+
+    assert results[0].status == "failed"
+    assert "Job 등록 충돌" in (results[0].reason or "")
+    assert results[1].status == "enqueued"
+
+
+def test_maintenance_rebuild_passes_policy_to_target_query(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """재구성 간격·최대 등록 수 정책을 대상 조회에 그대로 넘긴다."""
+    calls = _stub_maintenance(monkeypatch, users=[])
+
+    asyncio.run(
+        wiki_scheduler.schedule_personal_wiki_maintenance_rebuilds(
+            object(),  # type: ignore[arg-type]
+            stale_after_hours=48.0,
+            limit=2,
+        )
+    )
+
+    assert calls["list"][0]["stale_after_hours"] == 48.0
+    assert calls["list"][0]["limit"] == 2
+
+
+def test_maintenance_rebuild_returns_empty_without_targets(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """재구성 대상이 없으면 Job을 등록하지 않는다."""
+    calls = _stub_maintenance(monkeypatch, users=[])
+
+    results = asyncio.run(
+        wiki_scheduler.schedule_personal_wiki_maintenance_rebuilds(
+            object()  # type: ignore[arg-type]
+        )
+    )
+
+    assert results == []
+    assert calls["enqueue"] == []

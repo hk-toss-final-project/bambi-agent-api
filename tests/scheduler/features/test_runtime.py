@@ -20,6 +20,7 @@ from scheduler.api import (
     CollectionCredentials,
     CollectionScheduleResult,
     InterestRecalculationResult,
+    MaintenanceRebuildResult,
     build_scheduler,
     run_collection_scheduler_loop,
 )
@@ -552,3 +553,92 @@ def test_run_once_isolates_interest_recalculation_failure(
     )
     assert step.status == "skipped"
     assert "관심사 DB 장애" in (step.reason or "")
+
+
+def _patch_maintenance_rebuild(
+    monkeypatch: pytest.MonkeyPatch, results: list[Any] | Exception
+) -> list[dict[str, Any]]:
+    """정기 재구성 등록 호출 인자를 기록하고 고정 결과를 돌려주도록 교체한다."""
+    calls: list[dict[str, Any]] = []
+
+    async def _fake_schedule(_connection: Any, **kwargs: Any) -> list[Any]:
+        """등록 호출 인자를 기록하고 고정 결과를 돌려준다."""
+        calls.append(kwargs)
+        if isinstance(results, Exception):
+            raise results
+        return results
+
+    monkeypatch.setattr(
+        runtime, "schedule_personal_wiki_maintenance_rebuilds", _fake_schedule
+    )
+    return calls
+
+
+def test_run_once_enqueues_maintenance_rebuilds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """tick이 정기 Wiki 재구성 Job을 등록하는지 검증한다.
+
+    증분 Build는 원본 유입에만 반응하므로, 이 단계가 없으면 누적된 중복·고아
+    문서를 정리할 기회가 영영 오지 않는다.
+    """
+    connection = _FakeConnection()
+    _patch_connection(monkeypatch, connection)
+    _patch_content_fetch(monkeypatch)
+    enqueued = MaintenanceRebuildResult(
+        user_id="user-1", status="enqueued", job_id="job-1"
+    )
+    calls = _patch_maintenance_rebuild(monkeypatch, [enqueued])
+    monkeypatch.setattr(runtime, "PROVIDER_SCHEDULES", {"naver": _completed("naver")})
+
+    settings = _settings(
+        maintenance_rebuild_limit=4,
+        maintenance_rebuild_stale_hours=72.0,
+    )
+    results = asyncio.run(build_scheduler(settings).run_once(now=_NOW))
+
+    assert calls == [{"stale_after_hours": 72.0, "limit": 4, "now": _NOW}]
+    step = next(
+        item for item in results if item.provider == runtime.MAINTENANCE_REBUILD_STEP
+    )
+    assert step.status == "completed"
+    assert step.results[0]["job_id"] == "job-1"
+
+
+def test_run_once_skips_maintenance_rebuild_when_limit_is_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """등록 수를 0으로 끄면 재구성 등록을 아예 부르지 않는지 검증한다."""
+    connection = _FakeConnection()
+    _patch_connection(monkeypatch, connection)
+    _patch_content_fetch(monkeypatch)
+    calls = _patch_maintenance_rebuild(monkeypatch, [])
+    monkeypatch.setattr(runtime, "PROVIDER_SCHEDULES", {"naver": _completed("naver")})
+
+    settings = _settings(maintenance_rebuild_limit=0)
+    results = asyncio.run(build_scheduler(settings).run_once(now=_NOW))
+
+    assert calls == []
+    assert [result.provider for result in results] == ["naver"]
+
+
+def test_run_once_isolates_maintenance_rebuild_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """재구성 등록이 실패해도 수집 결과와 tick이 살아남는지 검증한다."""
+    connection = _FakeConnection()
+    _patch_connection(monkeypatch, connection)
+    _patch_content_fetch(monkeypatch)
+    _patch_maintenance_rebuild(monkeypatch, RuntimeError("Job 등록 장애"))
+    monkeypatch.setattr(runtime, "PROVIDER_SCHEDULES", {"naver": _completed("naver")})
+
+    settings = _settings(maintenance_rebuild_limit=3)
+    results = asyncio.run(build_scheduler(settings).run_once(now=_NOW))
+
+    naver = next(item for item in results if item.provider == "naver")
+    assert naver.status == "completed"
+    step = next(
+        item for item in results if item.provider == runtime.MAINTENANCE_REBUILD_STEP
+    )
+    assert step.status == "skipped"
+    assert "Job 등록 장애" in (step.reason or "")

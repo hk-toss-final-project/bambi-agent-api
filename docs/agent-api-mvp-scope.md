@@ -158,7 +158,7 @@
 - [ ] `SW-007` service-db 콘텐츠 Upsert — ➖ service-worker 책임
 - [x] `SW-009` 발행 완료 ACK — 단건 + 부분 성공 Batch ACK
 - [x] `WBA-001` Incremental Wiki Build
-- [x] `WBA-002` Full Wiki Rebuild — ⚠️ 삭제되지 않은 원본 Head의 최신 Version 전체를 메모리에서 재분류·검증한 뒤 최종 Transaction에서 기존 파생 Wiki를 supersede하고 새 Snapshot을 저장하는 facade 구현. 내부 API·Job·Worker route와 실제 DB E2E는 미연결
+- [x] `WBA-002` Full Wiki Rebuild — ⚠️ 삭제되지 않은 원본 Head의 최신 Version 전체를 메모리에서 재분류·검증한 뒤 최종 Transaction에서 기존 파생 Wiki를 supersede하고 새 Snapshot을 저장한다. 실행 경로는 `personal_wiki_build` Job Payload의 `mode=full_rebuild`이며 상주 Worker(WORKER-002)가 처리한다. 트리거는 ① 북마크 해제 등 원본 제거(`enqueue_personal_wiki_rebuild_job`) ② Scheduler 정기 유지보수(`MAINTENANCE_REBUILD_LIMIT`, 기본 7일 간격) 두 가지다. 정기 트리거는 사용자·날짜 단위 멱등이며 대기·실행 중인 재구성이 있는 사용자는 건너뛴다. 실제 DB E2E 운영 검증은 남아 있다
 - [x] `WBA-003` Wiki 문서 정규화 — Build 파이프라인에 포함
 - [x] `WBA-011` Wiki 재임베딩 — ⚠️ Incremental Build와 Full Rebuild의 변경 Entity·Concept Chunk를 재임베딩한다. 저장 후 best-effort라 Provider 실패 시 Wiki Build는 유지하며 별도 재시도 Job은 없음
 - [x] `WBA-014` Wiki 품질 검증 — canonical 중복, endpoint·관계 유형, provenance·confidence·review·lifecycle·근거, 고아·모순·과밀 Hub를 결정적으로 검사하고 오류는 저장 전 차단
@@ -414,7 +414,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | ID | 기능 | 설명 |
 |---|---|---|
 | WBA-001 | Incremental Wiki Build | 새로 저장된 사용자 원본 Version만 증분 처리한다. |
-| WBA-002 | Full Wiki Rebuild | 활성 원본 전체를 메모리에서 재분류·검증하고 최종 Transaction에서 새 Wiki Snapshot으로 교체한다. 운영 API·Job route는 아직 연결하지 않는다. |
+| WBA-002 | Full Wiki Rebuild | 활성 원본 전체를 메모리에서 재분류·검증하고 최종 Transaction에서 새 Wiki Snapshot으로 교체한다. 원본 제거와 Scheduler 정기 유지보수가 `mode=full_rebuild` Job으로 트리거한다. |
 | WBA-003 | Wiki 문서 정규화 | 저장된 Markdown과 Metadata를 Chunking 가능한 공통 구조로 정리한다. |
 | WBA-011 | Wiki 재임베딩 | 변경된 Entity·Concept Chunk의 1536차원 Embedding을 생성·저장해 다음 관계 후보 recall에 사용한다. |
 | WBA-014 | Wiki 품질 검증 | 문서 중복과 관계 endpoint·Ontology·근거·confidence·review·lifecycle, 고아·모순·과밀 Hub를 검사한다. |

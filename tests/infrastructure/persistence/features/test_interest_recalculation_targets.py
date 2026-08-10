@@ -1,4 +1,7 @@
-"""관심사 주기 재계산 대상 조회(SCH-010 입력)를 검증한다."""
+"""유지 루프 대상 조회를 검증한다.
+
+관심사 주기 재계산(SCH-010)과 정기 Wiki 재구성 등록의 대상 선정 SQL을 다룬다.
+"""
 
 import asyncio
 from contextlib import asynccontextmanager
@@ -9,6 +12,9 @@ import pytest
 
 from infrastructure.persistence.features.interest_profiles import (
     list_users_for_interest_recalculation,
+)
+from infrastructure.persistence.features.jobs import (
+    list_users_for_maintenance_rebuild,
 )
 
 
@@ -114,6 +120,64 @@ def test_rejects_invalid_policy_values() -> None:
             list_users_for_interest_recalculation(
                 connection,  # type: ignore[arg-type]
                 stale_after_hours=24,
+                limit=0,
+            )
+        )
+
+
+def test_maintenance_targets_skip_users_with_running_rebuild() -> None:
+    """대기·실행 중인 재구성이 있는 사용자는 대상에서 제외한다."""
+    connection = _FakeConnection([])
+
+    asyncio.run(
+        list_users_for_maintenance_rebuild(
+            connection,  # type: ignore[arg-type]
+            stale_after_hours=168,
+            limit=5,
+            now=datetime(2026, 8, 10, 12, 0, tzinfo=UTC),
+        )
+    )
+
+    query, params = connection.executed[-1]
+    assert "wiki.status = 'active'" in query
+    assert "last_job.status NOT IN ('queued', 'running')" in query
+    assert "NULLS FIRST" in query
+    # 기능 ID·컷오프·limit 순서로 넘어가야 한다(7일 전 = 8월 3일).
+    assert params == ("WBA-002", datetime(2026, 8, 3, 12, 0, tzinfo=UTC), 5)
+
+
+def test_maintenance_targets_return_users_in_query_order() -> None:
+    """조회 결과 순서를 그대로 재구성 대상 순서로 반환한다."""
+    connection = _FakeConnection([{"user_id": "user-9"}, {"user_id": "user-3"}])
+
+    users = asyncio.run(
+        list_users_for_maintenance_rebuild(
+            connection,  # type: ignore[arg-type]
+            stale_after_hours=168,
+            limit=10,
+        )
+    )
+
+    assert users == ["user-9", "user-3"]
+
+
+def test_maintenance_targets_reject_invalid_policy_values() -> None:
+    """음수 경과 시간과 1 미만 limit은 조회 전에 거절한다."""
+    connection = _FakeConnection([])
+
+    with pytest.raises(ValueError, match="stale_after_hours"):
+        asyncio.run(
+            list_users_for_maintenance_rebuild(
+                connection,  # type: ignore[arg-type]
+                stale_after_hours=-1,
+                limit=5,
+            )
+        )
+    with pytest.raises(ValueError, match="limit"):
+        asyncio.run(
+            list_users_for_maintenance_rebuild(
+                connection,  # type: ignore[arg-type]
+                stale_after_hours=168,
                 limit=0,
             )
         )
