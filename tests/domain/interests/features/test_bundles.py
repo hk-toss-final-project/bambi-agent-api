@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 
 import pytest
 
-from domain.interests.api import ActiveInterestRequiredError, int_012
+from domain.interests.api import ActiveInterestRequiredError, int_012, int_013
 
 
 class _Repository:
@@ -17,13 +17,16 @@ class _Repository:
         active: Mapping[str, object] | None,
         snapshots: Sequence[Mapping[str, object]] = (),
         related: Sequence[Mapping[str, object]] = (),
+        matched_interest_id: str | None = None,
     ) -> None:
         """테스트 응답과 마지막 이웃 조회 인자를 보관한다."""
         self.active = active
         self.snapshots = snapshots
         self.related = related
+        self.matched_interest_id = matched_interest_id
         self.snapshot_call: tuple[str, tuple[str, ...]] | None = None
         self.related_call: tuple[str, tuple[str, ...], int] | None = None
+        self.match_call: tuple[str, str] | None = None
 
     async def load_active_interest(
         self, user_id: str, interest_id: str
@@ -51,6 +54,13 @@ class _Repository:
         """호출 인자를 기록하고 설정한 루트 Wiki Snapshot을 반환한다."""
         self.snapshot_call = (user_id, tuple(document_ids))
         return self.snapshots
+
+    async def find_active_interest_id(
+        self, user_id: str, topic: str
+    ) -> str | None:
+        """호출 인자를 기록하고 설정한 매칭 관심사 ID를 반환한다."""
+        self.match_call = (user_id, topic)
+        return self.matched_interest_id
 
 
 def _active_interest() -> dict[str, object]:
@@ -204,3 +214,35 @@ def test_int_012_validates_neighbor_limit(limit: int) -> None:
                 neighbor_limit=limit,
             )
         )
+
+
+def test_int_013_returns_matched_active_interest_id() -> None:
+    """주제 문자열이 활성 관심사와 일치하면 그 관심사 ID를 반환한다."""
+    repository = _Repository(active=None, matched_interest_id="interest-1")
+
+    interest_id = asyncio.run(int_013(repository, "user-1", "코스피"))
+
+    assert interest_id == "interest-1"
+    assert repository.match_call == ("user-1", "코스피")
+
+
+def test_int_013_returns_none_when_no_active_interest_matches() -> None:
+    """일치하는 활성 관심사가 없으면 None을 반환한다."""
+    repository = _Repository(active=None, matched_interest_id=None)
+
+    interest_id = asyncio.run(int_013(repository, "user-1", "환율"))
+
+    assert interest_id is None
+
+
+@pytest.mark.parametrize(
+    ("user_id", "topic"), [("", "코스피"), ("user-1", ""), (" ", " ")]
+)
+def test_int_013_rejects_blank_arguments(user_id: str, topic: str) -> None:
+    """user_id·topic이 비어 있으면 저장소를 조회하지 않고 거절한다."""
+    repository = _Repository(active=None, matched_interest_id="interest-1")
+
+    with pytest.raises(ValueError):
+        asyncio.run(int_013(repository, user_id, topic))
+
+    assert repository.match_call is None

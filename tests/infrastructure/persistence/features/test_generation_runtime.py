@@ -62,10 +62,11 @@ class _FakeConnection:
 
 
 def _connection_with_context() -> _FakeConnection:
-    """Context 조회, Job·생성 요청 INSERT 순서의 응답을 준비한다."""
+    """Context 조회, INT-013 매칭(없음), Job·생성 요청 INSERT 순서의 응답을 준비한다."""
     return _FakeConnection(
         [
             [{"id": "context-1", "plan": "free", "preferred_language": "ko"}],
+            [],  # SINGLE_TOPIC 접수 시 INT-013 매칭 조회 — 활성 관심사와 일치 없음
             [{"id": "job-1"}],
             [{"id": "request-1"}],
         ]
@@ -134,7 +135,7 @@ def test_enqueue_persists_scheduled_at_for_reserved_generation() -> None:
 
     assert submission.job_id == "job-1"
     assert submission.generation_request_id == "request-1"
-    insert_sql, insert_params = connection.executed[1]
+    insert_sql, insert_params = connection.executed[2]
     assert "scheduled_at" in insert_sql
     assert "COALESCE(%s, clock_timestamp())" in insert_sql
     assert insert_params is not None and insert_params[-1] == scheduled
@@ -156,7 +157,7 @@ def test_enqueue_defaults_to_immediate_execution_without_schedule() -> None:
         )
     )
 
-    _, insert_params = connection.executed[1]
+    _, insert_params = connection.executed[2]
     assert insert_params is not None and insert_params[-1] is None
 
 
@@ -181,7 +182,7 @@ def test_enqueue_carries_change_history_toggle_in_the_job_payload() -> None:
         )
     )
 
-    _, insert_params = connection.executed[1]
+    _, insert_params = connection.executed[2]
     assert insert_params is not None
     payload = insert_params[2].obj
     assert payload["change_history_enabled"] is True
@@ -203,7 +204,7 @@ def test_enqueue_defaults_change_history_toggle_to_off() -> None:
         )
     )
 
-    _, insert_params = connection.executed[1]
+    _, insert_params = connection.executed[2]
     assert insert_params is not None
     assert insert_params[2].obj["change_history_enabled"] is False
 
@@ -229,10 +230,10 @@ def test_enqueue_stores_report_type_for_the_publish_snapshot() -> None:
         )
     )
 
-    _, job_params = connection.executed[1]
+    _, job_params = connection.executed[2]
     assert job_params is not None
     assert job_params[2].obj["report_type"] == "MORNING_BRIEFING"
-    _, request_params = connection.executed[2]
+    _, request_params = connection.executed[3]
     assert request_params is not None
     assert request_params[-1].obj["report_type"] == "MORNING_BRIEFING"
 
@@ -354,6 +355,74 @@ def test_enqueue_snapshots_active_interest_bundle() -> None:
     assert request_params is not None
     assert request_params[3] == "생성형 AI"
     assert request_params[-1].obj["interest_bundle"] == payload["interest_bundle"]
+
+
+def test_enqueue_single_topic_snapshots_bundle_when_topic_matches_active_interest() -> None:
+    """SINGLE_TOPIC 주제가 활성 관심사와 일치하면 INT-012 묶음을 함께 고정한다.
+
+    interest-bundle-report-design.md §9 — 반응형 1홉 검색 대신 접수 시 고정
+    스냅샷을 쓰게 하는 판정 지점(INT-013)의 결과가 Job Payload에 실려야 한다.
+    """
+    connection = _FakeConnection(
+        [
+            [{"id": "context-1", "plan": "free", "preferred_language": "ko"}],
+            [{"interest_id": "33333333-3333-4333-8333-333333333333"}],
+            [
+                {
+                    "profile_id": "profile-1",
+                    "profile_version": 7,
+                    "topic": "코스피",
+                    "score": 0.91,
+                    "document_ids": [],
+                }
+            ],
+            [{"id": "job-1"}],
+            [{"id": "request-1"}],
+        ]
+    )
+
+    submission = asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-single-topic-matched",
+            topic="코스피",
+            content_type="interest_news_card",
+            language="ko",
+            request_id="request-1",
+        )
+    )
+
+    assert submission.job_id == "job-1"
+    _, job_params = connection.executed[3]
+    assert job_params is not None
+    payload = job_params[2].obj
+    assert payload["generation_scope"] == "SINGLE_TOPIC"
+    assert payload["topic_interest_bundles"]["코스피"]["interest_id"] == (
+        "33333333-3333-4333-8333-333333333333"
+    )
+    assert payload["topic_interest_bundles"]["코스피"]["keywords"] == ["코스피"]
+
+
+def test_enqueue_single_topic_leaves_bundle_empty_without_a_match() -> None:
+    """일치하는 활성 관심사가 없으면 topic_interest_bundles가 비어 있다."""
+    connection = _connection_with_context()
+
+    asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-single-topic-unmatched",
+            topic="환율",
+            content_type="interest_news_card",
+            language="ko",
+            request_id="request-1",
+        )
+    )
+
+    _, job_params = connection.executed[2]
+    assert job_params is not None
+    assert job_params[2].obj["topic_interest_bundles"] == {}
 
 
 def test_load_pinned_wiki_context_uses_exact_snapshot_versions() -> None:

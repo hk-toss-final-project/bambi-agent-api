@@ -53,6 +53,16 @@ async def _process_job(
     )
     if generation_scope == "INTEREST_BUNDLE" and interest_bundle is None:
         raise ValueError("INTEREST_BUNDLE Job Payload에 interest_bundle이 필요합니다.")
+    raw_topic_interest_bundles = job.payload.get("topic_interest_bundles")
+    topic_interest_bundles = (
+        {
+            str(key): dict(value)
+            for key, value in raw_topic_interest_bundles.items()
+            if isinstance(value, dict)
+        }
+        if isinstance(raw_topic_interest_bundles, dict)
+        else {}
+    )
     feature_result = await report_001(
         FeatureRequest(
             request_id=job.job_id,
@@ -72,6 +82,7 @@ async def _process_job(
                     change_history_enabled=change_history_enabled,
                     generation_scope=generation_scope,
                     interest_bundle=interest_bundle,
+                    topic_interest_bundles=topic_interest_bundles,
                 )
             },
         )

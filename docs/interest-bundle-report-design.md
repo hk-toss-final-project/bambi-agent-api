@@ -194,3 +194,91 @@ Graph 보조 검색어 확장에 가깝다.
 - Wiki Context 인용과 최신 외부 근거 인용
 - 기존 지식 반복이 아닌 변화·의미 서술
 - 지연시간·입출력 토큰·Embedding 비용
+
+## 9. SINGLE_TOPIC/topics 주제-관심사 매칭 (방향 합의, 2026-08-10)
+
+### 9.1 배경
+
+`INTEREST_BUNDLE`(`interest_id`)만 접수 시 관심사 범주 묶음(§3)을 고정 스냅샷으로
+받는다. `SINGLE_TOPIC`과 `topics`(§2 — 여러 독립 주제를 한 장에 담는 기존 경로,
+연결 노드를 섹션으로 만들지 않는다는 결정은 유지)는 주제 문자열을 그대로 검색어로
+써서, 검색이 부족할 때만 `load_related_keywords`(Worker 실행 시점 반응형 1홉
+조회)로 이웃을 붙인다.
+
+두 경로의 차이는 **주제가 이미 사용자의 활성 관심사와 같은 대상을 가리키는데도**
+`INTEREST_BUNDLE`만 그 사실을 알고 고정 스냅샷·구조화 관계(§8)를 쓴다는 점이다.
+`SINGLE_TOPIC`/`topics`는 이 매칭 여부를 확인하지 않는다.
+
+### 9.2 범위
+
+세 경로를 하나로 합치지 않는다. `topics`의 독립 섹션 원칙(§2)은 그대로 둔다.
+대신 접수 시점에 판정 지점 하나를 추가한다.
+
+```text
+SINGLE_TOPIC/topics 접수
+  → 주제마다 INT-013으로 활성 관심사 매칭 조회
+  → 매칭되면 그 주제만 INT-012로 스냅샷 구성 (root=매칭된 관심사)
+  → 매칭 안 되면 기존 경로 유지 (반응형 1홉 검색)
+```
+
+`generation_scope`는 바꾸지 않는다(`SINGLE_TOPIC`으로 접수된 요청은 매칭 여부와
+무관하게 `SINGLE_TOPIC`으로 남는다). 매칭 결과는 주제별 보조 데이터로만 붙는다.
+
+### 9.3 INT-013 계약
+
+```text
+int_013(repository, user_id, topic) -> interest_id | None
+```
+
+- 대소문자 무시 완전 일치만 본다(별칭·부분 일치는 이번 범위에서 제외 — 오탐이
+  검색 품질을 해칠 수 있어 벤치마크로 먼저 확인한다, §9.6).
+- 현재 활성 Profile(`status='active'`)의 비차단(`NOT is_blocked`) 관심사만
+  대상으로 한다. `INT-012`가 이미 강제하는 조건과 같다.
+- 매칭이 여러 개면(이론상 발생하지 않아야 하는 상태) 가장 높은 `score` 하나만
+  쓴다.
+
+### 9.4 접수 시점 처리
+
+`persist_generation_request`(`infrastructure/persistence/features/generation_runtime.py`)에서
+`generation_scope == "SINGLE_TOPIC"`일 때, `{resolved_topic, *resolved_topics}`
+각각에 `INT-013`을 적용한다. 매칭되면 그 주제 하나만 `INT-012`로 스냅샷을 만들어
+`job_payload["topic_interest_bundles"][topic]`에 저장한다(§3의 `interest_bundle`
+필드는 `INTEREST_BUNDLE` 전용으로 의미를 바꾸지 않는다). 매칭 안 된 주제는 이
+딕셔너리에 키 자체가 없다.
+
+Job 접수 시 고정하는 이유는 §3과 같다 — Worker 재시도 중 관심 프로필이 바뀌어도
+같은 Job은 같은 근거로 재현돼야 한다.
+
+### 9.5 Worker 실행 시점 처리
+
+`agent/graph.py`의 `load_context`(단일 주제)와 `_topic_documents`(다중 주제
+원소별)는 주제마다 `state["topic_interest_bundles"].get(topic)`을 먼저 본다.
+
+- 있으면 `load_pinned_wiki_context` + 그 주제의 `bundle_keywords`로 검색한다
+  (`INTEREST_BUNDLE`이 쓰는 것과 같은 함수).
+- 없으면 기존 그대로 `load_related_keywords` 반응형 검색을 쓴다.
+
+풀 부족 시 실시간 수집으로 넘어가는 규칙(§4, 오늘 커밋들이 `topics` 경로까지
+맞춘 부분)은 두 경우 모두 그대로 적용한다 — 이번 변경은 "이웃 키워드를 어떻게
+구하는가"만 바꾸고, "부족하면 실시간 수집한다"는 그대로 둔다.
+
+### 9.6 결정 필요/보류 사항
+
+- **매칭 기준 확대 여부**: 완전 일치만으로 실제 매칭률이 낮으면 별칭 포함 여부를
+  다시 논의한다. 먼저 완전 일치로 배포하고 매칭률을 관찰한다.
+- **LLM 벤치마크**: `INT-013` 자체는 LLM 호출이 없어 `bench/` 대상이 아니다.
+  다만 매칭된 주제가 실제로 반응형 검색보다 리포트 품질이 나은지는 별도로
+  측정해야 하며, 실행 전 케이스 수·비용을 사용자에게 먼저 고지한다(AGENTS.md
+  규칙 8).
+- `/dev/graphs` 레지스트리: `report_builder` 그래프의 노드·엣지 구성 자체는
+  바뀌지 않는다(`load_context`/`generate` 내부 분기만 추가). 레지스트리 갱신
+  대상 아님.
+
+### 9.7 검증 경계
+
+결정적 테스트로 다음을 검증한다.
+
+- `INT-013` 대소문자 무시 일치·비활성/차단 관심사 제외·매칭 없음
+- 접수 시 `topic_interest_bundles` 스냅샷 저장과 Job 재시도 시 값 불변
+- `load_context`/`_topic_documents`의 분기(매칭 있음/없음 각각 기존 §3, §4 경로와
+  동일한 함수를 타는지)

@@ -28,6 +28,7 @@ from .features.bundles import (
     InterestBundleRepository,
     InterestReportBundle,
     int_012,
+    int_013,
 )
 
 __all__ = [
@@ -46,6 +47,7 @@ __all__ = [
     "int_010",
     "int_011",
     "int_012",
+    "int_013",
     "ActiveInterestRequiredError",
     "InterestBundleNeighbor",
     "InterestBundleRepository",

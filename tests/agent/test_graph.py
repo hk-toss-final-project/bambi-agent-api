@@ -1482,6 +1482,112 @@ def test_multi_topic_report_collects_live_when_the_pool_is_thin(
     assert expanded == {"반도체": ["반도체-이웃"], "환율": ["환율-이웃"]}
 
 
+def test_multi_topic_report_uses_matched_bundle_for_one_topic_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """여러 독립 주제 중 접수 시 매칭된 주제만 스냅샷 구조를, 나머지는 반응형 검색을 쓴다.
+
+    interest-bundle-report-design.md §9 — topics의 독립 섹션 원칙(연결 노드를 묶어
+    섹션화하지 않는다)은 그대로 두고, 주제별 매칭 여부만 각자 판정한다.
+    """
+    pinned_calls: list[str] = []
+    searched: dict[str, list[str]] = {"코스피": [], "환율": []}
+    expansion_calls: list[str] = []
+    collected_with: dict[str, list[str]] = {}
+    bundle = {
+        "root": {
+            "keyword": "코스피",
+            "documents": [{"document_version_id": "version-root"}],
+        },
+        "neighbors": [
+            {"keyword": "코스닥시장", "document_version_id": "version-neighbor"},
+        ],
+        "keywords": ["코스피", "코스닥시장"],
+    }
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """DB 사용자 Scope 설정을 생략한다."""
+
+    async def fake_pinned_context(connection: Any, **kwargs: Any) -> list[Any]:
+        """매칭된 주제에서만 호출되는지 루트 키워드를 기록한다."""
+        interest_bundle = kwargs["interest_bundle"] or {}
+        pinned_calls.append(str(interest_bundle["root"]["keyword"]))
+        return []
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[Any]:
+        """창고가 비어 있는 상황을 만들고 검색어를 주제별로 기록한다."""
+        query = str(kwargs["query"])
+        topic_key = "코스피" if query in ("코스피", "코스닥시장") else "환율"
+        searched[topic_key].append(query)
+        return []
+
+    async def fake_freshness(connection: Any, ids: list[str]) -> dict[str, Any]:
+        """Global 문서가 없는 검색 결과의 신선도 조회를 생략한다."""
+        return {}
+
+    async def fake_prag_006(contexts: list[Any]) -> list[Any]:
+        """맥락화 단계를 통과시킨다."""
+        return contexts
+
+    async def fake_expansion(connection: Any, **kwargs: Any) -> Any:
+        """매칭 안 된 주제만 반응형 1홉 검색을 호출한다."""
+        expansion_calls.append(kwargs["topic"])
+        return SimpleNamespace(
+            keywords=("환헤지",),
+            mode="verified_one_hop",
+            gate_passed=True,
+            maturity_reasons=(),
+        )
+
+    def fake_collect(topic: str, user_id: str, **kwargs: Any) -> list[str]:
+        """실시간 수집에 주제별로 어떤 이웃 키워드가 전달되는지 기록한다."""
+        collected_with[topic] = list(kwargs.get("related_keywords") or [])
+        return [f"live-{topic}"]
+
+    def fake_generate(**kwargs: Any) -> str:
+        """고정 콘텐츠를 반환한다."""
+        return "generated"
+
+    async def fake_prag_007(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """저장 호출을 고정 결과로 대체한다."""
+        return {"content_candidate_id": "candidate-1"}
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "load_pinned_wiki_context", fake_pinned_context)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "load_global_document_freshness", fake_freshness)
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
+    monkeypatch.setattr(
+        agent_graph, "_load_related_keyword_expansion", fake_expansion
+    )
+    monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect)
+    monkeypatch.setattr(
+        agent_graph, "generate_report_content_with_quality", fake_generate
+    )
+    monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
+    _disable_research(monkeypatch)
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 관심사 요약",
+            topics=["코스피", "환율"],
+            content_type="interest_news_card",
+            language="ko",
+            model="test-model",
+            topic_interest_bundles={"코스피": bundle},
+        )
+    )
+
+    assert pinned_calls == ["코스피"]
+    assert searched == {"코스피": ["코스피", "코스닥시장"], "환율": ["환율"]}
+    assert expansion_calls == ["환율"]
+    assert collected_with == {"코스피": ["코스닥시장"], "환율": ["환헤지"]}
+
+
 def test_multi_topic_report_caps_live_collection_per_report(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1812,3 +1918,201 @@ def test_interest_bundle_fixed_path_searches_snapshot_keywords_only(
     assert generated_with["contexts"][0].context_role == "wiki_root"
     assert generated_with["contexts"][0].title == "생성형 AI 기준 지식"
     assert generated_with["interest_bundle"] == bundle
+
+
+def test_single_topic_uses_matched_interest_bundle_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SINGLE_TOPIC 주제가 접수 시 INT-013으로 매칭됐으면 스냅샷 구조를 쓴다.
+
+    interest-bundle-report-design.md §9 — 반응형 1홉 검색(list_related_wiki_keywords)
+    대신 접수 시 고정한 topic_interest_bundles의 루트·이웃 키워드로 검색한다.
+    """
+    searched: list[str] = []
+    collected_with: list[str] = []
+    bundle = {
+        "root": {
+            "keyword": "코스피",
+            "documents": [{"document_version_id": "version-root"}],
+        },
+        "neighbors": [
+            {"keyword": "코스닥시장", "document_version_id": "version-neighbor"},
+        ],
+        "keywords": ["코스피", "코스닥시장"],
+    }
+
+    async def fake_pinned_context(connection: Any, **kwargs: Any) -> list[Any]:
+        """고정 루트 Version을 검색 결과보다 먼저 반환한다."""
+        return [
+            ReportContextDocument(
+                reference="P1",
+                document_version_id="version-root",
+                chunk_id="chunk-root",
+                namespace_key="user/user-1",
+                title="코스피 기준 지식",
+                content="사용자가 저장한 기존 맥락",
+                url=None,
+                score=1.0,
+                context_role="wiki_root",
+            )
+        ]
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """DB 사용자 Scope 설정을 생략한다."""
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[Any]:
+        """검색어마다 고유한 개인 Wiki 근거를 반환한다."""
+        query = kwargs["query"]
+        searched.append(query)
+        number = len(searched)
+        return [
+            ReportContextDocument(
+                reference="P1",
+                document_version_id=f"version-{number}",
+                chunk_id=f"chunk-{number}",
+                namespace_key="user/user-1",
+                title=query,
+                content=f"{query} 근거",
+                url=None,
+                score=0.9,
+            )
+        ]
+
+    async def fake_freshness(connection: Any, ids: list[str]) -> dict[str, Any]:
+        """Global 문서가 없는 검색 결과의 신선도 조회를 생략한다."""
+        return {}
+
+    async def fake_prag_006(contexts: list[Any]) -> list[Any]:
+        """맥락화 단계를 통과시킨다."""
+        return contexts
+
+    async def fail_related(*args: Any, **kwargs: Any) -> list[Any]:
+        """현재 Wiki 이웃을 다시 조회하면 테스트를 실패시킨다."""
+        raise AssertionError("스냅샷 범주는 현재 Wiki 이웃을 다시 조회하면 안 된다.")
+
+    def fake_collect(topic: str, user_id: str, **kwargs: Any) -> list[Any]:
+        """실시간 수집에 스냅샷 이웃이 전달되는지 기록한다."""
+        collected_with.extend(kwargs["related_keywords"])
+        return []
+
+    def fake_generate(**kwargs: Any) -> str:
+        """생성 입력을 기록한다."""
+        return "generated"
+
+    async def fake_persist(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """저장 결과를 고정한다."""
+        return {"content_candidate_id": "candidate-1"}
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "load_pinned_wiki_context", fake_pinned_context)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "load_global_document_freshness", fake_freshness)
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
+    monkeypatch.setattr(agent_graph, "list_related_wiki_keywords", fail_related)
+    monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect)
+    monkeypatch.setattr(
+        agent_graph, "generate_report_content_with_quality", fake_generate
+    )
+    monkeypatch.setattr(agent_graph, "prag_007", fake_persist)
+    _disable_research(monkeypatch)
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="코스피",
+            content_type="interest_news_card",
+            language="ko",
+            topic_interest_bundles={"코스피": bundle},
+        )
+    )
+
+    assert searched == ["코스피", "코스닥시장"]
+    assert collected_with == ["코스닥시장"]
+
+
+def test_single_topic_falls_back_to_reactive_search_without_a_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """접수 시 매칭된 관심사가 없으면 고정 Wiki 없이 기존 반응형 1홉 검색을 쓴다."""
+    searched: list[str] = []
+    expansion_calls: list[str] = []
+    collected_with: list[str] = []
+
+    async def fake_pinned_context(connection: Any, **kwargs: Any) -> list[Any]:
+        """호출되면 테스트를 실패시킨다 — 매칭이 없으면 고정 Wiki를 읽지 않는다."""
+        raise AssertionError("매칭 없는 주제는 고정 Wiki Version을 읽으면 안 된다.")
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """DB 사용자 Scope 설정을 생략한다."""
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[Any]:
+        """검색어를 기록하고 빈 결과를 반환해 실시간 수집으로 넘어가게 한다."""
+        searched.append(kwargs["query"])
+        return []
+
+    async def fake_freshness(connection: Any, ids: list[str]) -> dict[str, Any]:
+        """Global 문서가 없는 검색 결과의 신선도 조회를 생략한다."""
+        return {}
+
+    async def fake_prag_006(contexts: list[Any]) -> list[Any]:
+        """맥락화 단계를 통과시킨다."""
+        return contexts
+
+    async def fake_expansion(connection: Any, **kwargs: Any) -> Any:
+        """기존 반응형 1홉 검색이 호출됐음을 기록하고 이웃 키워드를 돌려준다."""
+        expansion_calls.append(kwargs["topic"])
+        return SimpleNamespace(
+            keywords=("환헤지",),
+            mode="verified_one_hop",
+            gate_passed=True,
+            maturity_reasons=(),
+        )
+
+    def fake_collect(topic: str, user_id: str, **kwargs: Any) -> list[Any]:
+        """실시간 수집에 반응형 이웃 키워드가 전달되는지 기록한다."""
+        collected_with.extend(kwargs["related_keywords"])
+        return []
+
+    def fake_generate(**kwargs: Any) -> str:
+        """생성 입력을 고정 콘텐츠로 대체한다."""
+        return "generated"
+
+    async def fake_persist(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """저장 결과를 고정한다."""
+        return {"content_candidate_id": "candidate-1"}
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "load_pinned_wiki_context", fake_pinned_context)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "load_global_document_freshness", fake_freshness)
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
+    monkeypatch.setattr(
+        agent_graph, "_load_related_keyword_expansion", fake_expansion
+    )
+    monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect)
+    monkeypatch.setattr(
+        agent_graph, "generate_report_content_with_quality", fake_generate
+    )
+    monkeypatch.setattr(agent_graph, "prag_007", fake_persist)
+    _disable_research(monkeypatch)
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="환율",
+            content_type="interest_news_card",
+            language="ko",
+            # 매칭된 주제("코스피")가 있어도 이 요청의 주제("환율")와 다르면 쓰지 않는다.
+            topic_interest_bundles={"코스피": {"keywords": ["코스피"]}},
+        )
+    )
+
+    assert searched == ["환율"]
+    assert expansion_calls == ["환율"]
+    assert collected_with == ["환헤지"]

@@ -39,6 +39,12 @@ class InterestBundleRepository(Protocol):
         """관심 근거 문서의 현재 Version과 요약을 입력 순서대로 조회한다."""
         ...
 
+    async def find_active_interest_id(
+        self, user_id: str, topic: str
+    ) -> str | None:
+        """주제 문자열과 대소문자 무시 일치하는 활성·비차단 관심사 ID를 찾는다."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class InterestBundleNode:
@@ -347,4 +353,37 @@ async def int_012(
         root_document_ids=document_ids,
         root_documents=root_documents,
         neighbors=tuple(neighbors),
+    )
+
+
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
+async def int_013(
+    repository: InterestBundleRepository, user_id: str, topic: str
+) -> str | None:
+    """[INT-013] 리포트 주제 문자열이 현재 활성 관심사와 일치하는지 조회한다.
+
+    `SINGLE_TOPIC`/`topics` 요청이 이미 사용자의 활성 관심사와 같은 대상을
+    다루는지 접수 시 확인해, 일치하면 반응형 1홉 검색 대신 `INT-012` 스냅샷
+    구조를 쓸 수 있게 한다. 대소문자 무시 완전 일치만 본다 — 별칭·부분 일치는
+    오탐 위험이 있어 이번 범위에서 제외한다.
+
+    Args:
+        repository: 활성 관심사를 조회할 저장소 경계
+        user_id: 관심사 소유 사용자 ID
+        topic: 리포트 요청에 들어온 주제 문자열
+
+    Returns:
+        일치하는 활성·비차단 관심사의 ID. 없으면 None.
+
+    Raises:
+        ValueError: user_id 또는 topic이 비어 있는 경우
+    """
+    normalized_user_id = user_id.strip()
+    normalized_topic = topic.strip()
+    if not normalized_user_id:
+        raise ValueError("INT-013에 user_id가 필요합니다.")
+    if not normalized_topic:
+        raise ValueError("INT-013에 topic이 필요합니다.")
+    return await repository.find_active_interest_id(
+        normalized_user_id, normalized_topic
     )

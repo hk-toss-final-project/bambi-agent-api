@@ -108,6 +108,11 @@ def build_wiki_graph_payload(
     }
 
 
+def _escape_like(term: str) -> str:
+    """ILIKE 패턴에서 %, _, \\를 리터럴 문자로 취급하도록 escape한다."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 class PostgresWikiGraphRepository:
     """PostgreSQL에서 사용자별 현재 Wiki Graph를 조회한다."""
 
@@ -307,6 +312,7 @@ class PostgresWikiGraphRepository:
     ) -> Sequence[Mapping[str, object]]:
         """사용자 Namespace의 공개 Wiki 문서를 제목·요약·본문 부분 일치로 검색한다."""
         namespace_key = f"user/{user_id}"
+        like_pattern = f"%{_escape_like(query)}%"
         async with self._pool.connection() as connection:
             async with connection.transaction():
                 await self._set_user_scope(connection, user_id=user_id)
@@ -327,23 +333,33 @@ class PostgresWikiGraphRepository:
                       AND document.document_kind IN ('document', 'entity', 'concept')
                       AND document.status = 'active'
                       AND document.deleted_at IS NULL
-                      AND position(
-                            lower(%s) IN lower(concat_ws(
-                                ' ', version.title, version.summary,
-                                document.document_key, version.normalized_content
-                            ))
-                          ) > 0
+                      AND (
+                            version.title ILIKE %s
+                         OR version.summary ILIKE %s
+                         OR document.document_key ILIKE %s
+                         OR version.normalized_content ILIKE %s
+                          )
                     ORDER BY
                         CASE
                             WHEN lower(version.title) = lower(%s) THEN 0
-                            WHEN position(lower(%s) IN lower(version.title)) > 0 THEN 1
-                            WHEN position(lower(%s) IN lower(COALESCE(version.summary, ''))) > 0 THEN 2
+                            WHEN version.title ILIKE %s THEN 1
+                            WHEN version.summary ILIKE %s THEN 2
                             ELSE 3
                         END,
                         document.updated_at DESC
                     LIMIT %s
                     """,
-                    (namespace_key, query, query, query, query, limit),
+                    (
+                        namespace_key,
+                        like_pattern,
+                        like_pattern,
+                        like_pattern,
+                        like_pattern,
+                        query,
+                        like_pattern,
+                        like_pattern,
+                        limit,
+                    ),
                 )
                 rows = await cursor.fetchall()
         return [

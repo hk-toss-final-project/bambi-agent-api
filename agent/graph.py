@@ -981,6 +981,31 @@ def _report_topics(state: ReportGenerationState) -> list[str]:
     return [topic for topic in topics if topic] or [state["topic"]]
 
 
+def _topic_bundle(
+    state: ReportGenerationState, topic: str
+) -> dict[str, object] | None:
+    """주제에 연결된 관심사 범주 묶음을 찾는다.
+
+    INTEREST_BUNDLE 요청은 접수 시 고정한 state["interest_bundle"]을 그 요청의
+    대표 주제(state["topic"])에만 쓴다. SINGLE_TOPIC/topics 요청은 INT-013으로
+    매칭된 주제만 state["topic_interest_bundles"]에서 찾는다 — 매칭 안 된 주제는
+    키 자체가 없어 None을 받는다(interest-bundle-report-design.md §9).
+    """
+    if state.get("generation_scope") == "INTEREST_BUNDLE" and topic == state["topic"]:
+        bundle = state.get("interest_bundle")
+        return bundle if bundle else None
+    return (state.get("topic_interest_bundles") or {}).get(topic)
+
+
+def _bundle_search_keywords(bundle: dict[str, object] | None) -> list[str]:
+    """묶음 Payload에서 루트 우선 검색 키워드 목록을 반환한다."""
+    if not bundle:
+        return []
+    return [
+        str(keyword) for keyword in bundle.get("keywords") or () if str(keyword).strip()
+    ]
+
+
 def _interest_bundle_keywords(state: ReportGenerationState) -> list[str]:
     """Job에 고정된 관심사 범주 검색 키워드를 루트 우선으로 반환한다."""
     if state.get("generation_scope") != "INTEREST_BUNDLE":
@@ -1122,20 +1147,23 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
     async def load_context(state: ReportGenerationState) -> dict[str, Any]:
         """조사원이 모은 자료를 생성용 Context로 다듬는다.
 
-        관심사 Bundle이면 Job 접수 시 고정한 Wiki Version을 먼저 읽어 생성
-        Context에 보장한다. 조사원이 자료를 모았으면 그 뒤에 합치고, 비었으면 기존
-        고정 경로(개인 Wiki 조회 → 풀 판정 → 부족하면 실시간 수집)를 수행한다.
+        관심사 Bundle이면(INTEREST_BUNDLE 요청이거나, SINGLE_TOPIC/topics 요청의
+        주제가 INT-013으로 활성 관심사와 매칭됐으면) Job 접수 시 고정한 Wiki
+        Version을 먼저 읽어 생성 Context에 보장한다. 조사원이 자료를 모았으면 그
+        뒤에 합치고, 비었으면 기존 고정 경로(개인 Wiki 조회 → 풀 판정 → 부족하면
+        실시간 수집)를 수행한다.
         """
         topics = _report_topics(state)
         if len(topics) > 1:
             return await _load_multi_topic_contexts(state, topics)
+        topic_bundle = _topic_bundle(state, state["topic"])
         pinned_wiki = (
             await load_pinned_wiki_context(
                 connection,
                 user_id=state["user_id"],
-                interest_bundle=state.get("interest_bundle"),
+                interest_bundle=topic_bundle,
             )
-            if state.get("generation_scope") == "INTEREST_BUNDLE"
+            if topic_bundle
             else []
         )
         researched = list(state.get("research_documents") or [])
@@ -1153,7 +1181,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 else researched
             )
             return await _finalize_contexts(state, research_contexts)
-        bundle_keywords = _interest_bundle_keywords(state)
+        bundle_keywords = _bundle_search_keywords(topic_bundle)
         search_queries = bundle_keywords or [state["topic"]]
         query_embeddings = await to_thread(embed_wiki_queries, search_queries)
         async with connection.transaction():
@@ -1248,7 +1276,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         if not skip_live:
             related_keywords = (
                 bundle_keywords[1:]
-                if state.get("generation_scope") == "INTEREST_BUNDLE"
+                if topic_bundle
                 else await load_related_keywords(state["user_id"], state["topic"])
             )
         if already_collected_live and not pool_is_enough:
@@ -1315,6 +1343,10 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         도구로 노출하지 않는다(researcher.py). 그래서 창고에 없는 주제는 영영
         근거가 0건이었다(2026-08-10 실측: '환율' 섹션이 통째로 빠졌다).
 
+        접수 시 INT-013으로 이 주제가 활성 관심사와 매칭됐으면(`_topic_bundle`)
+        고정 Wiki Version과 묶음 키워드로 검색한다. 매칭 안 됐으면 주제 문자열
+        하나로만 검색한다(interest-bundle-report-design.md §9).
+
         Args:
             allow_live: 이 리포트에 실시간 수집 예산이 남았는지. 주제마다 외부
                 수집을 돌리면 Worker lease(600초)를 넘길 수 있어 호출자가 제한한다.
@@ -1329,14 +1361,33 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         )
         if researched:
             return researched, False
-        query_embeddings = await to_thread(embed_wiki_queries, [topic])
+        topic_bundle = _topic_bundle(state, topic)
+        pinned_wiki = (
+            await load_pinned_wiki_context(
+                connection, user_id=state["user_id"], interest_bundle=topic_bundle
+            )
+            if topic_bundle
+            else []
+        )
+        bundle_keywords = _bundle_search_keywords(topic_bundle)
+        search_queries = bundle_keywords or [topic]
+        query_embeddings = await to_thread(embed_wiki_queries, search_queries)
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=state["user_id"])
-            hybrid = await prag_003(
-                connection,
-                user_id=state["user_id"],
-                query=topic,
-                query_embedding=query_embeddings.get(topic),
+            search_groups = [
+                await prag_003(
+                    connection,
+                    user_id=state["user_id"],
+                    query=query,
+                    query_embedding=query_embeddings.get(query),
+                )
+                for query in search_queries
+            ]
+            groups = [pinned_wiki, *search_groups] if pinned_wiki else search_groups
+            hybrid = (
+                merge_context_documents(*groups)
+                if len(groups) > 1
+                else list(groups[0])
             )
             pool_freshness = await load_global_document_freshness(
                 connection,
@@ -1374,8 +1425,12 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         # 단일 주제 경로와 같은 확장이다. 주제 이름 하나로만 수집하면 '코스피'
         # 리포트에 코스닥시장 기사가 안 걸리는데, 그 연결은 Wiki Builder가 이미
         # 저장해 둔 것이다. 수집을 실제로 돌 때만 조회한다 — 건너뛸 거면 DB 왕복이
-        # 낭비다.
-        related_keywords = await load_related_keywords(state["user_id"], topic)
+        # 낭비다. 이미 매칭된 묶음이 있으면 그 이웃 키워드를 그대로 쓴다.
+        related_keywords = (
+            bundle_keywords[1:]
+            if topic_bundle
+            else await load_related_keywords(state["user_id"], topic)
+        )
         live = await to_thread(
             collect_live_context,
             topic,
@@ -1756,6 +1811,7 @@ async def run_report_generation(
     change_history_enabled: bool = False,
     generation_scope: str = "SINGLE_TOPIC",
     interest_bundle: dict[str, object] | None = None,
+    topic_interest_bundles: dict[str, dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Report Builder Generation 그래프를 실행하고 저장 결과 Payload를 반환한다.
 
@@ -1764,6 +1820,8 @@ async def run_report_generation(
     Args:
         change_history_enabled: 변경점(Delta) 추적 경로 사용 여부. 기본값은
             꺼짐이며, 꺼진 실행은 지금까지와 완전히 같은 경로를 탄다.
+        topic_interest_bundles: SINGLE_TOPIC/topics 요청에서 접수 시 활성
+            관심사와 매칭된 주제의 INT-012 스냅샷(키: 주제 문자열).
     """
     graph = build_report_generation_graph(connection)
     state = await graph.ainvoke(
@@ -1775,6 +1833,7 @@ async def run_report_generation(
             "topics": list(topics or []),
             "generation_scope": generation_scope,
             "interest_bundle": dict(interest_bundle or {}),
+            "topic_interest_bundles": dict(topic_interest_bundles or {}),
             "content_type": content_type,
             "language": language,
             "model": model,

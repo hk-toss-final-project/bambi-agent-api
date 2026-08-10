@@ -55,6 +55,36 @@ def test_repository_loads_only_active_unblocked_interest() -> None:
     assert params == ("user-1", "interest-1")
 
 
+def test_repository_finds_matching_active_interest_by_topic() -> None:
+    """주제 문자열이 일치하는 활성·비차단 관심사 ID를 SQL로 조회한다."""
+    connection = _Connection([[{"interest_id": "interest-1"}]])
+    repository = ConnectionInterestBundleRepository(connection)  # type: ignore[arg-type]
+
+    interest_id = asyncio.run(
+        repository.find_active_interest_id("user-1", "코스피")
+    )
+
+    query, params = connection.executed[0]
+    assert interest_id == "interest-1"
+    assert "profile.status = 'active'" in query
+    assert "NOT interest.is_blocked" in query
+    assert "lower(interest.topic) = lower(%s)" in query
+    assert "ORDER BY interest.score DESC" in query
+    assert params == ("user-1", "코스피")
+
+
+def test_repository_returns_none_when_no_active_interest_matches_topic() -> None:
+    """일치하는 활성 관심사가 없으면 None을 반환한다."""
+    connection = _Connection([[]])
+    repository = ConnectionInterestBundleRepository(connection)  # type: ignore[arg-type]
+
+    interest_id = asyncio.run(
+        repository.find_active_interest_id("user-1", "환율")
+    )
+
+    assert interest_id is None
+
+
 def test_repository_snapshots_current_root_versions_in_input_order() -> None:
     """루트 Wiki는 현재 Version·요약·별칭·갱신 시각을 입력 순서대로 조회한다."""
     connection = _Connection(

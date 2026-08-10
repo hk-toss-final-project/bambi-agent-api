@@ -58,6 +58,10 @@ class ReportGenerationState(TypedDict):
     # 둔다. 실행 중 현재 Profile을 다시 조회하지 않아 같은 Job의 재시도가 같다.
     generation_scope: NotRequired[str]
     interest_bundle: NotRequired[dict[str, object]]
+    # SINGLE_TOPIC/topics 요청도 접수 시 INT-013으로 활성 관심사와 매칭된 주제는
+    # 이 dict에 그 주제의 INT-012 스냅샷을 담는다(키: 주제 문자열). 매칭 안 된
+    # 주제는 키 자체가 없다 — interest-bundle-report-design.md §9.
+    topic_interest_bundles: NotRequired[dict[str, dict[str, object]]]
     content_type: str
     language: str
     model: str

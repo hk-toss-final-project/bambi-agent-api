@@ -68,6 +68,32 @@ class ConnectionInterestBundleRepository:
         row = await cursor.fetchone()
         return dict(row) if row is not None else None
 
+    async def find_active_interest_id(
+        self, user_id: str, topic: str
+    ) -> str | None:
+        """주제 문자열과 대소문자 무시 일치하는 활성·비차단 관심사 ID를 찾는다.
+
+        일치가 여러 건이면 점수가 가장 높은 관심사 하나만 반환한다.
+        """
+        cursor = await self._connection.execute(
+            """
+            SELECT interest.id::text AS interest_id
+            FROM agent.user_interest_profiles AS profile
+            JOIN agent.user_interests AS interest
+              ON interest.profile_id = profile.id
+             AND interest.user_id = profile.user_id
+            WHERE profile.user_id = %s
+              AND profile.status = 'active'
+              AND NOT interest.is_blocked
+              AND lower(interest.topic) = lower(%s)
+            ORDER BY interest.score DESC
+            LIMIT 1
+            """,
+            (user_id, topic),
+        )
+        row = await cursor.fetchone()
+        return str(row["interest_id"]) if row is not None else None
+
     async def list_node_snapshots(
         self,
         user_id: str,

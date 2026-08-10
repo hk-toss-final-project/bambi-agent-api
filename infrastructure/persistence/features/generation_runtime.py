@@ -6,6 +6,7 @@ Wiki와 Global 문서를 검색해 만든 콘텐츠·Citation·Publish Snapshot�
 
 import hashlib
 import json
+import logging
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -16,10 +17,12 @@ from uuid import UUID
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
-from domain.interests.api import int_012
+from domain.interests.api import ActiveInterestRequiredError, int_012, int_013
 from infrastructure.persistence.features.interest_bundles import (
     ConnectionInterestBundleRepository,
 )
+
+logger = logging.getLogger(__name__)
 from infrastructure.persistence.features.personal_wiki import set_personal_wiki_scope
 from shared.report_models import ReportContextDocument, GeneratedReportContent
 
@@ -333,6 +336,49 @@ async def upsert_user_context_snapshot(
     )
 
 
+async def _match_topic_interest_bundles(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    topics: Sequence[str],
+) -> dict[str, dict[str, object]]:
+    """주제마다 활성 관심사 일치 여부를 확인하고, 일치하면 범주 묶음을 스냅샷한다.
+
+    SINGLE_TOPIC/topics 요청도 이미 사용자의 활성 관심사를 다루면 반응형 1홉
+    검색 대신 INT-012 스냅샷 구조를 쓰게 한다(interest-bundle-report-design.md
+    §9). Job 접수 시 고정해 Worker 재시도 중 관심 프로필이 바뀌어도 같은 Job은
+    같은 근거로 재현되게 한다.
+
+    매칭 이후 관심사가 비활성화되는 등 드문 경합으로 묶음 구성이 실패해도 이
+    Job 등록 자체를 막지 않는다 — 그 주제만 기존 반응형 검색 경로로 남는다.
+    """
+    repository = ConnectionInterestBundleRepository(connection)
+    bundles: dict[str, dict[str, object]] = {}
+    seen: set[str] = set()
+    for topic in topics:
+        marker = topic.casefold()
+        if not topic or marker in seen:
+            continue
+        seen.add(marker)
+        interest_id = await int_013(repository, user_id, topic)
+        if not interest_id:
+            continue
+        try:
+            bundle = await int_012(
+                repository, user_id, interest_id=interest_id, neighbor_limit=2
+            )
+        except ActiveInterestRequiredError:
+            logger.warning(
+                "주제-관심사 매칭 후 묶음 구성 실패, 반응형 검색으로 폴백한다: "
+                "topic=%s interest_id=%s",
+                topic,
+                interest_id,
+            )
+            continue
+        bundles[topic] = bundle.to_payload()
+    return bundles
+
+
 async def enqueue_report_generation_job(
     connection: AsyncConnection[DictRow],
     *,
@@ -375,6 +421,7 @@ async def enqueue_report_generation_job(
         raise UserContextRequiredError(user_id)
     resolved_language = language or context["preferred_language"]
     interest_bundle: dict[str, object] | None = None
+    topic_interest_bundles: dict[str, dict[str, object]] = {}
     resolved_topic = (topic or "").strip()
     resolved_topics = list(topics or [])
     if generation_scope == "INTEREST_BUNDLE":
@@ -411,6 +458,12 @@ async def enqueue_report_generation_job(
         resolved_topics = []
     elif generation_scope != "SINGLE_TOPIC":
         raise ValueError(f"지원하지 않는 generation_scope입니다: {generation_scope}")
+    else:
+        topic_interest_bundles = await _match_topic_interest_bundles(
+            connection,
+            user_id=user_id,
+            topics=[t for t in (resolved_topic, *resolved_topics) if t],
+        )
     if not resolved_topic:
         raise ValueError("Report Builder 생성에는 topic이 필요합니다.")
     job_payload = {
@@ -420,6 +473,8 @@ async def enqueue_report_generation_job(
         "generation_scope": generation_scope,
         "interest_id": interest_id,
         "interest_bundle": interest_bundle,
+        # INT-013으로 활성 관심사와 매칭된 주제만 담는다. 없으면 빈 dict.
+        "topic_interest_bundles": topic_interest_bundles,
         "content_type": content_type,
         "report_type": report_type,
         "language": resolved_language,
