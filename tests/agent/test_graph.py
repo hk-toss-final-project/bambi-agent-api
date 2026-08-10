@@ -1472,7 +1472,8 @@ def test_multi_topic_report_caps_live_collection_per_report(
 
     수집 한 번이 뉴스·YouTube·Reddit 호출과 LLM 요약을 포함해 수십 초 걸린다.
     주제 수만큼 돌리면 Worker lease(600초)를 넘겨 같은 Job이 죽은 것으로 판정되고
-    리포트가 중복 생성된다.
+    리포트가 중복 생성된다. 아침·온디맨드가 보내는 3개까지는 전부 채우고, 계약
+    상한인 5개가 오면 거기서 끊는다.
     """
     collected: list[str] = []
 
@@ -1516,14 +1517,101 @@ def test_multi_topic_report_caps_live_collection_per_report(
             job_id="job-1",
             attempt_number=1,
             topic="오늘의 관심사 요약",
-            topics=["반도체", "환율", "프로야구", "웹툰"],
+            topics=["반도체", "환율", "프로야구", "웹툰", "금리"],
             content_type="interest_news_card",
             language="ko",
             model="test-model",
         )
     )
 
-    assert collected == ["반도체", "환율"]
+    assert collected == ["반도체", "환율", "프로야구"]
+
+
+def test_live_budget_is_spent_only_when_collection_actually_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """창고로 해결된 주제는 실시간 수집 예산을 쓰지 않는다.
+
+    무조건 깎으면 앞 주제들이 수집을 한 번도 안 했는데도 뒤쪽 주제가 예산 부족으로
+    못 돈다. 상한(3)보다 주제가 많을 때 실제로 필요한 주제가 밀려난다.
+    """
+    collected: list[str] = []
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """DB 사용자 Scope 설정을 생략한다."""
+        return None
+
+    def pool_doc(topic: str, index: int) -> ReportContextDocument:
+        """창고 판정을 통과할 수 있는 풀 문서 하나를 만든다."""
+        reference = f"G{topic}{index}"
+        return ReportContextDocument(
+            reference=reference,
+            document_version_id=f"ver-{reference}",
+            chunk_id=f"chunk-{reference}",
+            namespace_key="global",
+            title=f"{topic} 기사 {index}",
+            content=f"{topic} 관련 본문",
+            url=f"https://example.com/{reference}",
+            score=0.5,
+        )
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[Any]:
+        """'금리'만 창고가 비어 있고 나머지는 충분한 풀 자료가 잡히게 한다."""
+        query = kwargs["query"]
+        if query == "금리":
+            return []
+        # POOL_MIN_DOCUMENTS(3)을 넘겨야 "창고가 충분하다"로 판정된다.
+        return [pool_doc(query, index) for index in range(3)]
+
+    async def fake_prag_006(contexts: list[str]) -> list[str]:
+        """검색 Context를 변경 없이 반환한다."""
+        return contexts
+
+    def fake_collect(topic: str, user_id: str, **_kwargs: Any) -> list[str]:
+        """실시간 수집을 대체하고 주제를 기록한다."""
+        collected.append(topic)
+        return [f"live-{topic}"]
+
+    def fake_generate(**kwargs: Any) -> str:
+        """고정 콘텐츠를 반환한다."""
+        return "generated"
+
+    async def fake_prag_007(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """저장 호출을 고정 결과로 대체한다."""
+        return {"content_candidate_id": "candidate-1"}
+
+    async def fake_freshness(connection: Any, ids: Any) -> dict[str, Any]:
+        """발행일 조회를 생략한다(신선도 검사는 이 테스트의 대상이 아니다)."""
+        return {}
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
+    monkeypatch.setattr(agent_graph, "load_global_document_freshness", fake_freshness)
+    monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect)
+    monkeypatch.setattr(agent_graph, "generate_report_content_with_quality", fake_generate)
+    monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
+    # 주제 관련성 판정은 임베딩을 부르므로 대역으로 바꾼다.
+    monkeypatch.setattr(agent_graph, "is_pool_relevant", lambda *a, **k: True)
+    _disable_research(monkeypatch)
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 관심사 요약",
+            # 상한(3)보다 많은 5개. 앞 넷은 창고에 자료가 있어 수집이 필요 없다.
+            topics=["반도체", "환율", "프로야구", "웹툰", "금리"],
+            content_type="interest_news_card",
+            language="ko",
+            model="test-model",
+        )
+    )
+
+    # 앞 넷이 예산을 먹지 않았으므로 마지막 주제도 수집할 수 있다.
+    assert collected == ["금리"]
 
 
 def test_single_topic_report_keeps_the_existing_path(
