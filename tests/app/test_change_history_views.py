@@ -11,6 +11,7 @@ from app.config import Settings
 from app.main import create_app
 from app.routers.development.change_history_views import (
     _render_section,
+    _split_into_sentences_with_citations,
     highlight_before_after,
     split_report_sections,
 )
@@ -108,3 +109,21 @@ def test_single_value_line_is_not_marked_as_a_change() -> None:
 
     assert '<span class="value">1450원 돌파</span>' in marked
     assert "before" not in marked
+
+
+def test_split_into_sentences_with_citations_keeps_citations_attached() -> None:
+    """문장 마침표 뒤에 오는 [L1], [L2] 출처 인용구가 잘리지 않고 끝에 잘 붙어서 개행되는지 검증한다."""
+    text = "확산되고 있습니다. [L1][L2] 시중은행의 정기예금 잔액이 증가했습니다 [L3]."
+    sentences = _split_into_sentences_with_citations(text)
+    assert len(sentences) == 2
+    assert sentences[0] == "확산되고 있습니다. [L1][L2]"
+    assert sentences[1] == "시중은행의 정기예금 잔액이 증가했습니다 [L3]."
+
+
+def test_split_into_sentences_with_citations_handles_decimal_numbers() -> None:
+    """43.3% 같은 소수점 숫자의 점(.)을 문장 종결로 착각해 자르지 않는지 검증한다."""
+    text = "지지율이 43.3%로 최저치를 경신했다 [L1]. 코스피가 1.5% 상승했다."
+    sentences = _split_into_sentences_with_citations(text)
+    assert len(sentences) == 2
+    assert sentences[0] == "지지율이 43.3%로 최저치를 경신했다 [L1]."
+    assert sentences[1] == "코스피가 1.5% 상승했다."

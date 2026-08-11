@@ -38,7 +38,7 @@ from .validation import ValidatedFact
 _CITATION_REF = re.compile(r"\[([PGL]\d+)\]")
 
 UPDATES_HEADING = "## 이번에 달라진 점"
-OVERVIEW_HEADING = "## 핵심 요약·맥락"
+OVERVIEW_HEADING = "## 보고서 내용"
 IMPLICATIONS_HEADING = "## 주목할 점"
 TIMELINE_HEADING = "## 타임라인"
 
@@ -54,30 +54,21 @@ NO_WATCH_ITEMS_NOTICE = "이번에 특별히 주목할 사항은 없습니다."
 
 
 def _changed_line(item: ValidatedFact) -> str:
-    """달라진 사실 한 줄을 `이전 → 오늘` 형태로 만든다.
-
-    before는 코드가 DB에서 읽은 과거값이라 LLM이 손댈 수 없다. 두 값을 백틱으로
-    나란히 붙여, 읽는 쪽이 무엇이 무엇으로 바뀌었는지 한눈에 보게 한다.
-    """
+    """달라진 사실을 (기존)과 (변경) 텍스트로 위아래 렌더링한다."""
     fact = item.fact
     marker = f" [{fact.source_reference}]" if fact.source_reference else ""
     before = item.before_value or "(이전 값 없음)"
-    after = fact.fact_value or "(값 없음)"
     return (
-        f"- **{fact.subject} · {fact.attribute}** — `{before}` → `{after}`{marker}\n"
-        f"  - {fact.today_statement}"
+        f"- (기존) ~~{before}~~\n"
+        f"  (변경) `{fact.today_statement}`{marker}"
     )
 
 
 def _new_line(item: ValidatedFact) -> str:
-    """새로 확인된 사실 한 줄을 만든다(비교 대상이 없으므로 값 하나만 적는다)."""
+    """새로 확인된 사실을 배경색 없는 일반 텍스트로 만든다."""
     fact = item.fact
     marker = f" [{fact.source_reference}]" if fact.source_reference else ""
-    value = fact.fact_value or "(값 없음)"
-    return (
-        f"- **{fact.subject} · {fact.attribute}** — `{value}`{marker}\n"
-        f"  - {fact.today_statement}"
-    )
+    return f"- {fact.today_statement}{marker}"
 
 
 def _timeline_lines(facts: Sequence[ValidatedFact]) -> list[str]:
@@ -92,6 +83,18 @@ def _timeline_lines(facts: Sequence[ValidatedFact]) -> list[str]:
             f"- **{item.occurred_on.isoformat()}**{suffix} — {item.timeline_description}"
         )
     return lines
+
+
+def _deduplicate_facts(facts: Sequence[ValidatedFact]) -> list[ValidatedFact]:
+    """동일 서술문이 중복되거나 유사 팩트가 겹칠 경우 첫 팩트만 남기고 정제한다."""
+    seen_statements: set[str] = set()
+    result: list[ValidatedFact] = []
+    for item in facts:
+        stmt = item.fact.today_statement.strip()
+        if stmt not in seen_statements:
+            seen_statements.add(stmt)
+            result.append(item)
+    return result
 
 
 def build_delta_markdown(
@@ -130,7 +133,7 @@ def build_delta_markdown(
     if title.strip():
         blocks.append(f"# {title.strip()}")
     if summary.strip():
-        blocks.append(f"### 핵심 요약\n{summary.strip()}")
+        blocks.append(f"> {summary.strip()}")
 
     blocks.append(UPDATES_HEADING)
     if is_first_run:
@@ -138,15 +141,15 @@ def build_delta_markdown(
     if no_change:
         blocks.append(NO_CHANGE_NOTICE)
     else:
-        changed = [item for item in highlight_facts if item.fact.verdict == UPDATED]
-        fresh = [item for item in highlight_facts if item.fact.verdict != UPDATED]
+        changed = _deduplicate_facts([item for item in highlight_facts if item.fact.verdict == UPDATED])
+        fresh = _deduplicate_facts([item for item in highlight_facts if item.fact.verdict != UPDATED])[:5]
         # 달라진 것을 먼저 보여준다 — 이 보고서를 여는 이유가 그것이다.
         if changed:
             blocks.append(f"{CHANGED_SUBHEADING} ({len(changed)}건)")
-            blocks.extend(_changed_line(item) for item in changed)
+            blocks.append("\n\n".join(_changed_line(item) for item in changed))
         if fresh:
             blocks.append(f"{NEW_SUBHEADING} ({len(fresh)}건)")
-            blocks.extend(_new_line(item) for item in fresh)
+            blocks.append("\n\n".join(_new_line(item) for item in fresh))
 
     blocks.append(OVERVIEW_HEADING)
     blocks.append(compose.overview.strip() or "정리할 내용이 없습니다.")
@@ -156,7 +159,7 @@ def build_delta_markdown(
         blocks.append(impact.implications.strip())
         if impact.actions:
             blocks.append("**확인이 필요한 부분**")
-            blocks.extend(f"- {action}" for action in impact.actions)
+            blocks.append("\n".join(f"- {action}" for action in impact.actions))
     else:
         blocks.append(NO_WATCH_ITEMS_NOTICE)
 
