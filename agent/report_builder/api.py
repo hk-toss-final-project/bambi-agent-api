@@ -42,6 +42,15 @@ from .features.researcher import (
     search_global_documents,
 )
 from .features.wiki_retrieval import embed_wiki_queries
+from .features.read_loop import (
+    LANGGRAPH_READ_PIPELINE_VERSION,
+    LEGACY_READ_PIPELINE_VERSION,
+    READ_PIPELINE_VERSIONS,
+    build_wiki_read_graph_v2,
+    research_context_for_version,
+    run_wiki_read_graph_v2,
+    select_wiki_seed_candidates,
+)
 from .features.generation import (
     ReportContextDocument,
     GeneratedReportContent,
@@ -104,4 +113,11 @@ __all__ = [
     "embed_wiki_queries",
     "focus_documents_on_topic",
     "generate_topic_facets",
+    "LANGGRAPH_READ_PIPELINE_VERSION",
+    "LEGACY_READ_PIPELINE_VERSION",
+    "READ_PIPELINE_VERSIONS",
+    "build_wiki_read_graph_v2",
+    "research_context_for_version",
+    "run_wiki_read_graph_v2",
+    "select_wiki_seed_candidates",
 ]

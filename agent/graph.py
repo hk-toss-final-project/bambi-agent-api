@@ -41,8 +41,10 @@ from agent.report_builder.api import (
     is_pool_sufficient,
     merge_context_documents,
     navigation_packet_documents,
+    LEGACY_READ_PIPELINE_VERSION,
     research_agent_enabled,
     research_context,
+    research_context_for_version,
     review_report,
     select_personal_documents,
     select_pool_documents,
@@ -1158,12 +1160,18 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         calls: list[dict[str, object]] = []
         research_stats: list[dict[str, Any]] = []
         collected_live = False
+        read_pipeline_version = str(
+            state.get("read_pipeline_version") or LEGACY_READ_PIPELINE_VERSION
+        )
         for topic in topics:
             intents[topic] = await to_thread(
                 resolve_topic_intent, topic, state["user_id"]
             )
             documents_by_topic[topic] = []
-            if not research_agent_enabled():
+            if (
+                read_pipeline_version == LEGACY_READ_PIPELINE_VERSION
+                and not research_agent_enabled()
+            ):
                 continue
             topic_started = monotonic()
             try:
@@ -1191,7 +1199,14 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 planned_versions = _bundle_wiki_version_ids(topic_bundle)
                 if planned_versions:
                     research_kwargs["planned_wiki_version_ids"] = planned_versions
-                outcome = await research_context(connection, **research_kwargs)
+                if read_pipeline_version == LEGACY_READ_PIPELINE_VERSION:
+                    outcome = await research_context(connection, **research_kwargs)
+                else:
+                    outcome = await research_context_for_version(
+                        connection,
+                        pipeline_version=read_pipeline_version,
+                        **research_kwargs,
+                    )
             except Exception:
                 # 주제 하나가 실패해도 나머지 주제는 계속 조사한다. 실패한 주제는
                 # load_context가 고정 경로로 다시 시도한다.
@@ -1207,6 +1222,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             research_stats.append(
                 {
                     "topic": topic,
+                    "pipeline_version": read_pipeline_version,
                     "elapsed_ms": int((monotonic() - topic_started) * 1000),
                     "tools": [
                         {"tool": name, "calls": count, "elapsed_ms": elapsed}
@@ -2248,6 +2264,9 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         research_stats = state.get("research_stats")
         if research_stats:
             result["research_stats"] = list(research_stats)
+        result["read_pipeline_version"] = str(
+            state.get("read_pipeline_version") or LEGACY_READ_PIPELINE_VERSION
+        )
         return {"result": result}
 
     graph = StateGraph(ReportGenerationState)
@@ -2297,6 +2316,7 @@ async def run_report_generation(
     topic_interest_bundles: dict[str, dict[str, object]] | None = None,
     wiki_version_id: str | None = None,
     wiki_navigation_snapshots: dict[str, dict[str, object]] | None = None,
+    read_pipeline_version: str = LEGACY_READ_PIPELINE_VERSION,
 ) -> dict[str, object]:
     """Report Builder Generation 그래프를 실행하고 저장 결과 Payload를 반환한다.
 
@@ -2309,6 +2329,7 @@ async def run_report_generation(
             관심사와 매칭된 주제의 INT-012 스냅샷(키: 주제 문자열).
         wiki_version_id: Job 접수 시 고정한 활성 Wiki Build UUID
         wiki_navigation_snapshots: 첫 Reader 실행이 Topic별로 고정한 Packet Metadata
+        read_pipeline_version: Job 접수 시 고정한 읽기 루프 버전. 과거 Job은 V1
     """
     graph = build_report_generation_graph(connection)
     state = await graph.ainvoke(
@@ -2323,6 +2344,7 @@ async def run_report_generation(
             "topic_interest_bundles": dict(topic_interest_bundles or {}),
             "wiki_version_id": wiki_version_id,
             "wiki_navigation_snapshots": dict(wiki_navigation_snapshots or {}),
+            "read_pipeline_version": read_pipeline_version,
             "content_type": content_type,
             "language": language,
             "model": model,

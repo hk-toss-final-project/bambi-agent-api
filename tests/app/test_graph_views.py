@@ -21,11 +21,12 @@ def _dev_client() -> TestClient:
 
 
 def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
-    """네 에이전트 그래프의 Mermaid 정의를 연결 없이 추출한다."""
+    """모든 에이전트 그래프의 Mermaid 정의를 연결 없이 추출한다."""
     diagrams = {d.slug: d for d in list_graph_diagrams()}
 
     assert set(diagrams) == {
         "personal-wiki",
+        "wiki-read-v2",
         "report-generation",
         "assistant",
         "change-history",
@@ -47,6 +48,16 @@ def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
     ):
         assert node in diagrams["personal-wiki"].mermaid
     assert "load_context" in diagrams["report-generation"].mermaid
+    for node in (
+        "restore_or_locate",
+        "select_seed",
+        "navigate",
+        "search_global",
+        "assess",
+        "collect_live",
+        "finalize",
+    ):
+        assert node in diagrams["wiki-read-v2"].mermaid
     # 토글이 켜졌을 때 generate를 대체하는 분기가 그래프에 실제로 있어야 한다.
     assert "change_history" in diagrams["report-generation"].mermaid
     assert "reformulate" in diagrams["assistant"].mermaid
@@ -126,12 +137,13 @@ def test_graphs_page_renders_all_diagrams() -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     body = response.text
-    assert body.count('<pre class="mermaid">') == 4
-    assert body.count('class="node-panel"') == 4
+    assert body.count('<pre class="mermaid">') == 5
+    assert body.count('class="node-panel"') == 5
     assert body.count('class="node-detail"') == sum(
         len(diagram.nodes) for diagram in list_graph_diagrams()
     )
     assert "Personal Wiki Build" in body
+    assert "Wiki Read Loop V2" in body
     assert "키워드 비서 리서치 에이전트" in body
     assert "변경점(Delta) 추적" in body
     assert 'data-node-id="load_source"' in body

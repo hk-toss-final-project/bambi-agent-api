@@ -10,6 +10,7 @@ from typing import Any
 from psycopg import AsyncConnection
 
 from agent.report_builder.api import (
+    LEGACY_READ_PIPELINE_VERSION,
     report_001,
     report_context_from_mapping,
     stage_report_generation_batch,
@@ -109,6 +110,9 @@ async def _process_job(
         else {}
     )
     wiki_version_id = str(job.payload.get("wiki_version_id") or "").strip() or None
+    read_pipeline_version = str(
+        job.payload.get("read_pipeline_version") or LEGACY_READ_PIPELINE_VERSION
+    )
     raw_navigation_snapshots = job.payload.get("wiki_navigation_snapshots")
     wiki_navigation_snapshots = (
         {
@@ -141,6 +145,7 @@ async def _process_job(
                     topic_interest_bundles=topic_interest_bundles,
                     wiki_version_id=wiki_version_id,
                     wiki_navigation_snapshots=wiki_navigation_snapshots,
+                    read_pipeline_version=read_pipeline_version,
                 )
             },
         )
