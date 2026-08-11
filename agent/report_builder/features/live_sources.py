@@ -111,6 +111,10 @@ def _to_context_document(item: dict[str, object], number: int) -> ReportContextD
 
     sources = [s for s in (item.get("sources") or []) if isinstance(s, dict)]
     primary_url = str(sources[0].get("url") or "") if sources else ""
+    primary_image_url = next(
+        (str(source.get("image_url")) for source in sources if source.get("image_url")),
+        None,
+    )
     # 실시간 자료는 Wiki 문서 Version이 없어서 Citation 저장 시 URL이 유일한 출처
     # 증빙이다(agent.citations는 document_version_id 또는 url을 요구한다).
     if not primary_url:
@@ -136,6 +140,7 @@ def _to_context_document(item: dict[str, object], number: int) -> ReportContextD
         content=content,
         url=primary_url,
         score=score,
+        image_url=primary_image_url,
     )
 
 

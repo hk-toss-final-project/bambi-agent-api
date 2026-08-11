@@ -77,6 +77,7 @@ async def _process_job(
             title=fetched.title,
             markdown=fetched.markdown,
             resolved_url=fetched.resolved_url,
+            image_url=fetched.image_url,
             published_at=_parse_published_at(fetched.published_time),
         )
 

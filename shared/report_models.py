@@ -26,6 +26,8 @@ class ReportContextDocument:
     context_role: str = "retrieved"
     # 개인 Wiki 지식이 어느 시점 기준인지 생성기와 실행 추적에 전달한다.
     source_updated_at: str | None = None
+    # 원문에서 수집한 대표 이미지. 리포트가 실제로 인용한 문서만 상단 후보가 된다.
+    image_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

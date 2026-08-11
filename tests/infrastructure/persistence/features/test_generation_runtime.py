@@ -767,6 +767,7 @@ def _connection_for_persist(
     job_payload: dict[str, Any] | None = None,
     cited_taxonomy_rows: list[dict[str, Any]] | None = None,
     catalog: list[dict[str, Any]] | None = None,
+    citation_count: int = 0,
 ) -> _FakeConnection:
     """인용 없는 리포트 저장 경로가 실행할 질의 순서대로 응답을 준비한다.
 
@@ -791,6 +792,7 @@ def _connection_for_persist(
         [{"next_version": 1}],  # 다음 content 버전
         [],  # 이전 후보 superseded
         [{"id": "cand-1", "created_at": datetime(2026, 7, 30, tzinfo=UTC)}],
+        *[[{"id": f"citation-{index}"}] for index in range(citation_count)],
         [],  # generation_runs completed
         [],  # generation_requests completed
         cited,  # taxonomy 파생 ① 인용 원본
@@ -892,6 +894,47 @@ def test_publish_payload_carries_request_topic_as_interest_tag() -> None:
     _persist(connection)
 
     assert _publish_payload(connection)["tags"] == ["코스피"]
+
+
+def test_publish_payload_carries_cover_image_from_used_citation() -> None:
+    """실제로 인용한 외부 출처의 이미지만 발행 Snapshot 상단 이미지가 된다."""
+    connection = _connection_for_persist("코스피", citation_count=1)
+    context = ReportContextDocument(
+        reference="G1",
+        document_version_id="gsrc:00000000-0000-0000-0000-000000000001",
+        chunk_id="gsrc:00000000-0000-0000-0000-000000000001",
+        namespace_key="global",
+        title="코스피 기사",
+        content="코스피가 상승했다.",
+        url="https://news.example/kospi",
+        score=1.0,
+        image_url="https://cdn.example/kospi.jpg",
+    )
+
+    asyncio.run(
+        persist_report_generation(
+            connection,  # type: ignore[arg-type]
+            job_id="job-1",
+            user_id="user-1",
+            attempt_number=1,
+            content_type="interest_news_card",
+            generated=GeneratedReportContent(
+                title="제목",
+                summary="요약",
+                body="코스피 동향이다 [G1]",
+                citation_references=("G1",),
+            ),
+            contexts=[context],
+            latency_ms=100,
+        )
+    )
+
+    assert _publish_payload(connection)["cover_image"] == {
+        "url": "https://cdn.example/kospi.jpg",
+        "source_url": "https://news.example/kospi",
+        "source_title": "코스피 기사",
+        "reference": "G1",
+    }
 
 
 def test_publish_payload_derives_taxonomy_topics_from_cited_sources() -> None:
@@ -1435,6 +1478,7 @@ def test_snapshot_row_mapping_tolerates_snapshots_saved_before_new_fields() -> N
     assert snapshot.source_interest_id == ""
     assert snapshot.interest_profile_id == ""
     assert snapshot.bundle_keywords == []
+    assert snapshot.cover_image is None
 
 
 def test_snapshot_save_payload_preserves_interest_bundle_fields() -> None:
@@ -1457,6 +1501,12 @@ def test_snapshot_save_payload_preserves_interest_bundle_fields() -> None:
         interest_profile_id="profile-1",
         bundle_keywords=["생성형 AI", "RAG"],
         request_idempotency_key="interest-bundle:2026-08-10:user-1:interest-1",
+        cover_image={
+            "url": "https://cdn.example/cover.jpg",
+            "source_url": "https://news.example/article",
+            "source_title": "기사",
+            "reference": "G1",
+        },
         created_at=datetime(2026, 8, 7, tzinfo=UTC),
     )
 
@@ -1470,6 +1520,12 @@ def test_snapshot_save_payload_preserves_interest_bundle_fields() -> None:
     assert payload["source_interest_id"] == "interest-1"
     assert payload["interest_profile_id"] == "profile-1"
     assert payload["bundle_keywords"] == ["생성형 AI", "RAG"]
+    assert payload["cover_image"] == {
+        "url": "https://cdn.example/cover.jpg",
+        "source_url": "https://news.example/article",
+        "source_title": "기사",
+        "reference": "G1",
+    }
 
 
 def _run_metadata(connection: _FakeConnection) -> dict[str, Any]:

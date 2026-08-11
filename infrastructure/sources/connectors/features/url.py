@@ -4,8 +4,11 @@ COL-011 기능의 실제 구현 위치와, 사용자 입력 URL 본문을
 Jina Reader(r.jina.ai)로 정제해 가져오는 수집 함수를 제공한다.
 """
 
+import html
 import os
+import re
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -34,6 +37,47 @@ class JinaReadResult:
     title: str
     published_time: str | None
     markdown: str
+    image_url: str | None = None
+
+
+def extract_jina_image(text: str) -> str | None:
+    """Jina 응답에서 대표 이미지로 쓸 수 있는 HTTP(S) URL을 하나 고른다.
+
+    Jina의 ``Image N:`` 헤더와 본문 Markdown 이미지를 순서대로 확인한다.
+    로고·아이콘·트래킹 픽셀처럼 대표 이미지가 아닌 흔한 후보는 제외하고,
+    확장자가 명확한 이미지 URL을 우선한다. 이미지가 없거나 안전한 외부 URL로
+    해석할 수 없으면 ``None``을 반환한다.
+
+    Args:
+        text: Jina Reader의 헤더 포함 원문 응답
+
+    Returns:
+        대표 이미지 HTTP(S) URL. 적합한 후보가 없으면 ``None``
+    """
+    candidates = re.findall(r"^Image \d+:\s*(https?://\S+)", text, flags=re.MULTILINE)
+    candidates += re.findall(r"!\[[^\]]*\]\((https?://[^)]+)\)", text)
+    preferred: list[str] = []
+    fallback: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        url = html.unescape(candidate).strip().strip("<>\"'")
+        if url in seen:
+            continue
+        seen.add(url)
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
+        lowered = url.lower()
+        if any(
+            marker in lowered
+            for marker in ("logo", "icon", "sprite", "1x1", "blank", "avatar", "pixel")
+        ):
+            continue
+        if re.search(r"\.(?:avif|gif|jpe?g|png|webp)(?:[?#]|$)", lowered):
+            preferred.append(url)
+        else:
+            fallback.append(url)
+    return next(iter(preferred or fallback), None)
 
 
 def parse_jina_reader_response(text: str, *, requested_url: str) -> JinaReadResult:
@@ -83,6 +127,7 @@ def parse_jina_reader_response(text: str, *, requested_url: str) -> JinaReadResu
         title=title or requested_url,
         published_time=published_time,
         markdown=markdown,
+        image_url=extract_jina_image(text),
     )
 
 

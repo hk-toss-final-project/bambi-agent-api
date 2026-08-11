@@ -182,7 +182,7 @@ SNS 글은 Global Namespace의 wiki_documents 계열에 정규화해 저장하�
 |---|---|---|---|---|---|
 | global_sources | Master | RSS, News API, SNS 등 Connector 설정과 수집 정책 | source_key Unique, Secret 원문 대신 secret_ref, schedule/trust/quota | 없음 | Schema only |
 | global_collection_runs | History/Operational | Source별 수집 Cursor, 처리 건수와 오류 이력 | source_id FK, 선택적 job_id FK, running~failed 상태 | 없음 | Schema only |
-| global_source_documents | Cache/Operational | 수집한 외부 기사 URL과 Jina 본문의 소유권 없는 공유 캐시 | canonical_url·url_key Unique, content_status 상태 머신(pending~failed), FTS·trgm 검색 인덱스 | 읽기 전체 허용, 쓰기 system Scope | Collector·Fetcher Worker, Report Builder 검색, 비서 본문 재사용 |
+| global_source_documents | Cache/Operational | 수집한 외부 기사 URL·Jina 본문·대표 이미지의 소유권 없는 공유 캐시 | canonical_url·url_key Unique, content_status 상태 머신(pending~failed), FTS·trgm 검색 인덱스 | 읽기 전체 허용, 쓰기 system Scope | Collector·Fetcher Worker, Report Builder 검색·대표 이미지, 비서 본문 재사용 |
 | global_trends | Derived | 시간 구간별 Global Topic과 신선도·중요도 점수 | 종료 시각이 시작 시각보다 커야 함, 점수 0~1 | 없음 | Schema only |
 | global_trend_documents | Relation | Trend와 근거 Global 문서의 다대다 연결 | trend_id + document_id Composite PK, 양쪽 Cascade | 없음 | Schema only |
 | discovery_candidates | Derived/Operational | 생성·추천 Pipeline에 넘길 Trend 또는 문서 후보 | trend_id 또는 document_id 필수, 점수 0~1, 만료 시각 | 없음 | Schema only |

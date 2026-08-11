@@ -820,6 +820,7 @@ async def save_fetched_article_content(
     title: str,
     markdown: str,
     published_at: datetime | None,
+    image_url: str | None = None,
 ) -> dict[str, object]:
     """Jina Reader가 수집한 본문을 캐시 문서에 채우고 fetched로 전환한다.
 
@@ -832,6 +833,7 @@ async def save_fetched_article_content(
         resolved_url: Jina Reader가 리다이렉트까지 반영한 최종 URL
         title: 수집한 본문 제목
         markdown: 수집한 전체 본문 Markdown
+        image_url: 원문 대표 이미지 URL. 찾지 못했으면 None
         published_at: 본문에서 파싱한 게시 시각 (없으면 None)
 
     Returns:
@@ -853,6 +855,7 @@ async def save_fetched_article_content(
             search_body = %s,
             content_hash = %s,
             resolved_url = %s,
+            image_url = %s,
             published_at = COALESCE(%s, published_at),
             content_status = 'fetched',
             fetched_at = clock_timestamp()
@@ -865,6 +868,7 @@ async def save_fetched_article_content(
             search_body,
             content_hash,
             resolved_url,
+            image_url,
             published_at,
             document_id,
         ),

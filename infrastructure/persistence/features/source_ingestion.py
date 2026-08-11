@@ -1146,6 +1146,7 @@ async def save_fetched_url_and_enqueue(
     markdown: str,
     resolved_url: str,
     published_at: datetime | None,
+    image_url: str | None = None,
     quiet_minutes: int = 0,
     max_wait_minutes: int = 30,
 ) -> dict[str, object]:
@@ -1166,6 +1167,7 @@ async def save_fetched_url_and_enqueue(
         title=title,
         raw_content=markdown,
         resolved_url=resolved_url,
+        image_url=image_url,
         published_at=published_at,
     )
     if saved is None:

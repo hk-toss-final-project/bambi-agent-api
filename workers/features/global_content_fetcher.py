@@ -44,6 +44,7 @@ from infrastructure.sources.connectors.api import (
     JinaReadError,
     JinaReadResult,
     fetch_url_via_jina,
+    thumbnail_url,
 )
 
 type DictRow = dict[str, Any]
@@ -86,6 +87,7 @@ class _DownloadedBody:
     resolved_url: str | None = None
     title: str | None = None
     markdown: str | None = None
+    image_url: str | None = None
     published_at: datetime | None = None
     error_code: str | None = None
     error_message: str | None = None
@@ -171,7 +173,11 @@ async def _download_youtube_transcript(
         )
     # 자막 저장은 제목을 주지 않는다 — 수집 때 저장한 영상 제목을 덮어쓰지 않기
     # 위해서다(save_fetched_article_content의 COALESCE 참고).
-    return _DownloadedBody(resolved_url=article.url, markdown=transcript)
+    return _DownloadedBody(
+        resolved_url=article.url,
+        markdown=transcript,
+        image_url=thumbnail_url(video_id),
+    )
 
 
 async def _download_one(
@@ -207,6 +213,7 @@ async def _download_one(
         resolved_url=fetched.resolved_url,
         title=fetched.title,
         markdown=fetched.markdown,
+        image_url=fetched.image_url,
         published_at=_parse_published_at(fetched.published_time),
     )
 
@@ -261,6 +268,7 @@ async def _persist_one(
             resolved_url=body.resolved_url,
             title=body.title,
             markdown=body.markdown,
+            image_url=body.image_url,
             published_at=body.published_at,
         )
     return {"url": article.url, "status": "completed", **saved}

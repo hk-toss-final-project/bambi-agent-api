@@ -149,6 +149,32 @@ def test_content_fetch_returns_empty_when_no_pending(
     assert results == []
 
 
+def test_downloaded_article_keeps_jina_image() -> None:
+    """Jina가 찾은 대표 이미지는 본문과 함께 저장 단계까지 전달된다."""
+    article = fetcher.GlobalArticleToFetch(
+        document_id="d1",
+        url="https://news.example/article",
+        provider="news",
+    )
+
+    downloaded = asyncio.run(
+        fetcher._download_one(
+            article,
+            url_fetcher=lambda url: JinaReadResult(
+                requested_url=url,
+                resolved_url=url,
+                title="기사",
+                published_time=None,
+                markdown="기사 본문입니다. " * 30,
+                image_url="https://cdn.example/article.webp",
+            ),
+            transcript_fetcher=lambda _: None,
+        )
+    )
+
+    assert downloaded.image_url == "https://cdn.example/article.webp"
+
+
 def test_youtube_document_uses_transcript_as_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

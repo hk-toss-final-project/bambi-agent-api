@@ -90,6 +90,9 @@ OPENAI_BATCH_MIGRATION_PATH = (
 WAITING_PROVIDER_MIGRATION_PATH = (
     PROJECT_ROOT / "database" / "migrations" / "0025_waiting_provider_jobs.sql"
 )
+GLOBAL_SOURCE_IMAGE_MIGRATION_PATH = (
+    PROJECT_ROOT / "database" / "migrations" / "0026_global_source_image_url.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
@@ -107,6 +110,7 @@ MIGRATION_PATHS = (
     PROVIDER_RATE_GOVERNOR_MIGRATION_PATH,
     OPENAI_BATCH_MIGRATION_PATH,
     WAITING_PROVIDER_MIGRATION_PATH,
+    GLOBAL_SOURCE_IMAGE_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
