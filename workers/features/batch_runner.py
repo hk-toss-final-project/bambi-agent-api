@@ -35,7 +35,6 @@ from workers.runtime.api import (
     wc_003,
     wc_006,
     wc_007,
-    wc_013,
     wc_014,
 )
 
@@ -285,7 +284,7 @@ async def run_job_batch(
     error_code_prefix: str,
     process: JobProcessor,
 ) -> list[dict[str, object]]:
-    """지정 유형의 Job Batch를 점유해 제한된 동시성으로 실행한다.
+    """지정 유형의 Job을 빈 실행 슬롯만큼 점유해 제한된 동시성으로 실행한다.
 
     Args:
         database_url: Agent DB 연결 문자열
@@ -302,6 +301,8 @@ async def run_job_batch(
     Returns:
         Job별 완료·실패·lease_lost 결과 목록
     """
+    if limit < 1:
+        raise ValueError("Job Batch limit은 1 이상이어야 합니다.")
     if concurrency < 1:
         raise ValueError("Job 실행 concurrency는 1 이상이어야 합니다.")
     pool = AsyncConnectionPool(
@@ -313,37 +314,48 @@ async def run_job_batch(
     )
     await pool.open(wait=True)
     try:
-        async with pool.connection() as claim_connection:
-            async with claim_connection.transaction():
-                await set_system_job_scope(claim_connection)
-                jobs = await wc_002(
-                    claim_connection,
-                    job_type=job_type,
-                    worker_id=worker_id,
-                    limit=limit,
-                    lease_seconds=lease_seconds,
-                )
+        claim_lock = asyncio.Lock()
+        claimed_count = 0
+        queue_exhausted = False
+        results_by_index: dict[int, dict[str, object]] = {}
 
-        heartbeat_controls: dict[
-            str, tuple[asyncio.Event, asyncio.Task[None]]
-        ] = {}
-        for job in jobs:
-            stop_event = asyncio.Event()
-            heartbeat_controls[job.job_id] = (
-                stop_event,
-                asyncio.create_task(
-                    maintain_job_lease(
-                        pool,
-                        job=job,
-                        worker_id=worker_id,
-                        lease_seconds=lease_seconds,
-                        stop_event=stop_event,
-                    )
-                ),
-            )
+        async def claim_next_job() -> tuple[int, ClaimedAgentJob] | None:
+            """빈 실행 슬롯 하나가 처리할 다음 Job을 짧은 Transaction으로 점유한다."""
+            nonlocal claimed_count, queue_exhausted
+            async with claim_lock:
+                if queue_exhausted or claimed_count >= limit:
+                    return None
+                async with pool.connection() as claim_connection:
+                    async with claim_connection.transaction():
+                        await set_system_job_scope(claim_connection)
+                        jobs = await wc_002(
+                            claim_connection,
+                            job_type=job_type,
+                            worker_id=worker_id,
+                            limit=1,
+                            lease_seconds=lease_seconds,
+                        )
+                if not jobs:
+                    queue_exhausted = True
+                    return None
+                if len(jobs) != 1:
+                    raise RuntimeError("단일 슬롯 Claim이 Job 하나를 초과했습니다.")
+                index = claimed_count
+                claimed_count += 1
+                return index, jobs[0]
 
         async def process_claimed_job(job: ClaimedAgentJob) -> dict[str, object]:
             """점유한 Job 하나를 실행하고 완료·실패 결과로 변환한다."""
+            stop_event = asyncio.Event()
+            heartbeat_task = asyncio.create_task(
+                maintain_job_lease(
+                    pool,
+                    job=job,
+                    worker_id=worker_id,
+                    lease_seconds=lease_seconds,
+                    stop_event=stop_event,
+                )
+            )
             observations: list[LlmCallObservation] = []
             try:
                 with capture_llm_calls() as observations:
@@ -370,7 +382,6 @@ async def run_job_batch(
                                         key=key,
                                     )
 
-                    stop_event, heartbeat_task = heartbeat_controls[job.job_id]
                     result = await _run_with_job_heartbeat(
                         operation=operation,
                         heartbeat_task=heartbeat_task,
@@ -392,6 +403,9 @@ async def run_job_batch(
                         error=error,
                         error_code_prefix=error_code_prefix,
                     )
+            finally:
+                stop_event.set()
+                await asyncio.gather(heartbeat_task, return_exceptions=True)
             if rate_limit_policy is not None:
                 await observe_job_provider_limits(
                     pool,
@@ -400,18 +414,18 @@ async def run_job_batch(
                 )
             return {"job_id": job.job_id, "status": "completed", **result}
 
-        try:
-            return await wc_013(
-                jobs,
-                process_claimed_job,
-                max_concurrency=concurrency,
-            )
-        finally:
-            for stop_event, _ in heartbeat_controls.values():
-                stop_event.set()
-            await asyncio.gather(
-                *(task for _, task in heartbeat_controls.values()),
-                return_exceptions=True,
-            )
+        async def run_slot() -> None:
+            """한 실행 슬롯에서 Job 완료 직후 다음 Job을 동적으로 보충한다."""
+            while True:
+                claimed = await claim_next_job()
+                if claimed is None:
+                    return
+                index, job = claimed
+                results_by_index[index] = await process_claimed_job(job)
+
+        await asyncio.gather(
+            *(run_slot() for _ in range(min(concurrency, limit)))
+        )
+        return [results_by_index[index] for index in sorted(results_by_index)]
     finally:
         await pool.close()

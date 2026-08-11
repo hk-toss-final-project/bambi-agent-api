@@ -30,6 +30,7 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("WIKI_EMBEDDING_BATCH_THRESHOLD", "80")
     monkeypatch.setenv("PERSONAL_WIKI_WORKER_BATCH_SIZE", "3")
     monkeypatch.setenv("PERSONAL_WIKI_JOB_CONCURRENCY", "2")
+    monkeypatch.setenv("REPORT_WORKER_BATCH_SIZE", "7")
     monkeypatch.setenv("REPORT_JOB_CONCURRENCY", "4")
     monkeypatch.setenv("OPENAI_DEFAULT_RPM", "120")
     monkeypatch.setenv("OPENAI_DEFAULT_TPM", "90000")
@@ -82,6 +83,7 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     assert settings.openai_batch_poll_limit == 20
     assert settings.openai_batch_poll_interval_seconds == 45
     assert settings.openai_batch_poll_lease_seconds == 90
+    assert settings.report_worker_batch_size == 7
     assert settings.personal_wiki_job_lease_seconds == 900
     assert settings.wiki_build_quiet_minutes == 15
     assert settings.wiki_build_max_wait_minutes == 45
@@ -101,6 +103,18 @@ def test_wiki_pipeline_versions_default_to_langgraph_v2() -> None:
 
     assert settings.wiki_read_pipeline_version == "langgraph_v2"
     assert settings.wiki_maintenance_pipeline_version == "langgraph_v2"
+
+
+def test_report_batch_size_falls_back_to_personal_wiki_batch_size(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """전용 설정이 없는 기존 배포는 종전 Worker Batch 크기를 유지한다."""
+    monkeypatch.setenv("PERSONAL_WIKI_WORKER_BATCH_SIZE", "9")
+    monkeypatch.delenv("REPORT_WORKER_BATCH_SIZE", raising=False)
+
+    settings = load_settings()
+
+    assert settings.report_worker_batch_size == 9
 
 
 def test_create_container_uses_postgres_for_publish_snapshots() -> None:

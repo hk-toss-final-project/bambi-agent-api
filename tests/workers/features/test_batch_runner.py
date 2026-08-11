@@ -333,7 +333,7 @@ def test_run_job_batch_processes_each_job_and_isolates_failures(
             self.closed = True
             await connection.close()
 
-    claimed = [_job("job-1"), _job("job-2")]
+    claim_queue = [_job("job-1"), _job("job-2")]
 
     async def fake_scope(conn: Any) -> None:
         """테스트에서 DB 시스템 Scope 설정을 생략한다."""
@@ -343,7 +343,8 @@ def test_run_job_batch_processes_each_job_and_isolates_failures(
         """Claim 인자를 검증하고 준비된 Job 목록을 반환한다."""
         assert kwargs["job_type"] == "report_generation"
         assert kwargs["worker_id"] == "worker-1"
-        return claimed
+        assert kwargs["limit"] == 1
+        return [claim_queue.pop(0)] if claim_queue else []
 
     async def fake_fail(conn: Any, **kwargs: Any) -> str:
         """Job 실패 후 재시도 대기 상태를 반환한다."""
@@ -382,3 +383,83 @@ def test_run_job_batch_processes_each_job_and_isolates_failures(
     assert results[1]["status"] == "queued"
     assert results[1]["error_code"] == "REPORT_GENERATION_RETRYABLE"
     assert connection.closed is True
+
+
+def test_run_job_batch_claims_only_when_an_execution_slot_is_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """실행 중인 슬롯 수를 넘겨 Job을 미리 점유하지 않고 완료 직후 보충한다."""
+    connection = _FakeConnection()
+    claim_queue = [_job("job-1"), _job("job-2"), _job("job-3")]
+    claimed_ids: list[str] = []
+    started_ids: list[str] = []
+    two_started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _FakeAsyncConnectionPool:
+        """동적 Claim 순서 검증에 쓰는 연결 Pool 대역."""
+
+        def __init__(self, **kwargs: Any) -> None:
+            """실제 Pool 생성 인자를 허용한다."""
+
+        async def open(self, *, wait: bool = False) -> None:
+            """실제 DB 연결 없이 Pool을 연다."""
+
+        @asynccontextmanager
+        async def connection(self) -> AsyncIterator[_FakeConnection]:
+            """고정 연결 대역을 빌려준다."""
+            yield connection
+
+        async def close(self) -> None:
+            """테스트 Pool을 닫는다."""
+
+    async def fake_scope(conn: Any) -> None:
+        """테스트에서는 시스템 Scope SQL을 생략한다."""
+
+    async def fake_claim(conn: Any, **kwargs: Any) -> list[ClaimedAgentJob]:
+        """호출마다 Job 하나만 점유하고 점유 순서를 기록한다."""
+        assert kwargs["limit"] == 1
+        if not claim_queue:
+            return []
+        job = claim_queue.pop(0)
+        claimed_ids.append(job.job_id)
+        return [job]
+
+    async def process(conn: Any, job: ClaimedAgentJob) -> dict[str, object]:
+        """처음 두 슬롯을 막아 세 번째 Job의 선점 여부를 관찰한다."""
+        started_ids.append(job.job_id)
+        if len(started_ids) == 2:
+            two_started.set()
+        await release.wait()
+        return {}
+
+    monkeypatch.setattr(
+        batch_runner, "AsyncConnectionPool", _FakeAsyncConnectionPool
+    )
+    monkeypatch.setattr(batch_runner, "set_system_job_scope", fake_scope)
+    monkeypatch.setattr(batch_runner, "wc_002", fake_claim)
+
+    async def scenario() -> list[dict[str, object]]:
+        """두 슬롯이 찬 동안 점유 수를 확인한 뒤 실행을 끝낸다."""
+        task = asyncio.create_task(
+            batch_runner.run_job_batch(
+                database_url="postgresql://test",
+                job_type="report_generation",
+                worker_id="worker-1",
+                limit=3,
+                concurrency=2,
+                lease_seconds=600,
+                error_code_prefix="REPORT_GENERATION",
+                process=process,
+            )
+        )
+        await asyncio.wait_for(two_started.wait(), timeout=1)
+        await asyncio.sleep(0)
+        assert claimed_ids == ["job-1", "job-2"]
+        release.set()
+        return await task
+
+    results = asyncio.run(scenario())
+
+    assert claimed_ids == ["job-1", "job-2", "job-3"]
+    assert [result["job_id"] for result in results] == claimed_ids

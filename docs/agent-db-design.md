@@ -230,10 +230,10 @@ COMMIT;
 ### Agent Job Batch Claim
 
 - 생성 Job 등록은 service 계층 스케줄러가 사용자 지정 시각에 SVC-008 멱등 등록(`schedule window + user_id + content_type` 키, 필요 시 `scheduled_at` 예약)으로 전달합니다. Agent Scheduler는 수집·정리 등 내부 정기 작업만 등록합니다.
-- Worker는 하나의 짧은 Transaction에서 실행 가능한 Job을 `priority, scheduled_at, created_at` 순으로 조회하고 `FOR UPDATE SKIP LOCKED LIMIT :batch_size`로 Batch Claim합니다.
+- Worker는 빈 실행 슬롯마다 하나의 짧은 Transaction에서 실행 가능한 Job을 `priority, scheduled_at, created_at` 순으로 조회하고 `FOR UPDATE SKIP LOCKED`로 Claim합니다. Job 완료 직후 다음 Job을 보충하되 한 실행에서 처리하는 전체 수는 `*_WORKER_BATCH_SIZE`를 넘지 않습니다.
 - Claim 시 `status = running`, `locked_by`, `locked_at`, `lease_expires_at`을 함께 갱신합니다. `lease_expires_at`은 기존 `0001_initial.sql`을 수정하지 않고 `0002_publish_snapshot_batches.sql`에서 `agent_jobs`에 추가합니다.
 - DB Transaction은 Claim 직후 종료하고 검색·LLM 호출·콘텐츠 생성은 Transaction 밖에서 실행합니다. 장시간 Transaction으로 Connection과 Row Lock을 점유하지 않습니다.
-- Claim Batch 크기와 실제 Job·LLM 호출 동시성은 독립 설정입니다. 예를 들어 여러 Job을 미리 점유하더라도 Provider Rate Limit과 비용 Budget에 맞춰 더 작은 동시성으로 실행합니다.
+- 한 실행에서 처리할 최대 Job 수와 실제 Job·LLM 호출 동시성은 독립 설정입니다. Worker는 실행 슬롯을 넘는 Job을 미리 점유하지 않고 Provider Rate Limit과 비용 Budget에 맞춰 빈 슬롯만 보충합니다.
 - Worker Heartbeat가 Lease를 갱신하며, 프로세스 종료나 Heartbeat 유실로 Lease가 만료된 Job은 재시도 정책에 따라 다시 `queued`로 전환합니다.
 - 각 Job은 독립적인 `agent_job_attempts` Row와 결과 Transaction을 가지며 한 Job의 실패가 같은 Batch의 다른 Job을 Rollback하지 않습니다.
 

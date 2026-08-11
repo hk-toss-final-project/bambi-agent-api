@@ -127,6 +127,12 @@ class Settings(BaseModel):
         le=50,
         description="Personal Wiki Worker의 실제 동시 Job 실행 수",
     )
+    report_worker_batch_size: int = Field(
+        default=1,
+        ge=1,
+        le=100,
+        description="Report Builder Worker가 한 실행에서 처리할 최대 Job 수",
+    )
     report_job_concurrency: int = Field(
         default=1,
         ge=1,
@@ -360,6 +366,10 @@ def load_settings() -> Settings:
         ),
         personal_wiki_job_concurrency=_integer_env(
             "PERSONAL_WIKI_JOB_CONCURRENCY", 1
+        ),
+        report_worker_batch_size=_integer_env(
+            "REPORT_WORKER_BATCH_SIZE",
+            _integer_env("PERSONAL_WIKI_WORKER_BATCH_SIZE", 1),
         ),
         report_job_concurrency=_integer_env("REPORT_JOB_CONCURRENCY", 1),
         openai_default_rpm=_integer_env("OPENAI_DEFAULT_RPM", 60),

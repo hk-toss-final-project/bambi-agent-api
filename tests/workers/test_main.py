@@ -136,6 +136,38 @@ def test_run_batch_once_dispatches_openai_batch_worker(
     assert recorded["poll_interval_seconds"] == 45
 
 
+def test_run_batch_once_uses_dedicated_report_batch_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Report Worker가 Personal Wiki와 분리된 Batch 상한을 사용한다."""
+    recorded: dict[str, Any] = {}
+
+    async def fake_report_worker(**kwargs: Any) -> list[dict[str, object]]:
+        """Report Worker 실행 인자를 기록한다."""
+        recorded.update(kwargs)
+        return []
+
+    monkeypatch.setattr(worker_main, "worker_003", fake_report_worker)
+    args = Namespace(
+        worker="report-generation",
+        model=None,
+        limit=None,
+        concurrency=None,
+        lease_seconds=None,
+    )
+    settings = Settings(
+        agent_database_url="postgresql://test",
+        personal_wiki_worker_batch_size=20,
+        report_worker_batch_size=6,
+        report_job_concurrency=2,
+    )
+
+    asyncio.run(worker_main._run_batch_once(args, settings, "report-worker-1"))
+
+    assert recorded["limit"] == 6
+    assert recorded["concurrency"] == 2
+
+
 def test_run_loop_dispatches_resident_url_collection_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
