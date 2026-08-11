@@ -181,6 +181,19 @@ def _reddit_documents(keyword: str, now: datetime, window_hours: float) -> list[
     return docs
 
 
+def _source_metadata(document: dict[str, object]) -> dict[str, object]:
+    """선별된 문서에서 출처와 대표 이미지 메타데이터를 보존한다."""
+    image_url = str(
+        document.get("image_url") or document.get("thumbnail_url") or ""
+    ).strip()
+    return {
+        "title": str(document.get("title") or ""),
+        "url": str(document.get("url") or ""),
+        "source_type": str(document.get("source_type") or ""),
+        "image_url": image_url or None,
+    }
+
+
 # 수집을 시도하는 소스 수(뉴스·YouTube·Reddit). "몇 개가 실패했는지"를 판단할 때
 # 분모로 쓴다. 소스를 늘리면 이 값도 함께 늘어난다.
 SOURCE_COUNT = 3
@@ -711,14 +724,7 @@ def run_daily(
                 {
                     "title": str(rep.get("title") or ""),
                     "summary": summary,
-                    "sources": [
-                        {
-                            "title": str(m.get("title") or ""),
-                            "url": str(m.get("url") or ""),
-                            "source_type": str(m.get("source_type") or ""),
-                        }
-                        for m in cluster["members"]
-                    ],
+                    "sources": [_source_metadata(m) for m in cluster["members"]],
                     "published": published.isoformat() if isinstance(published, datetime) else "",
                     "published_method": str(rep.get("published_method") or ""),
                     "score": round(cluster["final_score"], 4),

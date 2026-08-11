@@ -58,6 +58,44 @@ def test_collect_live_context_converts_items(monkeypatch) -> None:
     assert document.namespace_key == "live-source"
 
 
+def test_collect_live_context_keeps_image_and_source_url_paired(monkeypatch) -> None:
+    """대표 이미지는 그 이미지를 제공한 원문 URL과 함께 Context에 연결한다."""
+    monkeypatch.setattr(
+        live_sources,
+        "assist_daily_agent",
+        lambda topic, user_id, model="gpt-4.1-mini", **kwargs: {
+            "mode": "daily",
+            "items": [
+                {
+                    "title": "다낭 여행의 새로운 매력",
+                    "summary": "새로운 웰빙 관광지가 주목받고 있다.",
+                    "sources": [
+                        {
+                            "source_type": "news",
+                            "title": "이미지 없는 기사",
+                            "url": "https://news.example/without-image",
+                            "image_url": None,
+                        },
+                        {
+                            "source_type": "news",
+                            "title": "이미지 있는 기사",
+                            "url": "https://news.example/with-image",
+                            "image_url": "https://cdn.example/danang.jpg",
+                        },
+                    ],
+                }
+            ],
+        },
+    )
+
+    documents = live_sources.collect_live_context("다낭 여행", "minji")
+
+    assert len(documents) == 1
+    assert documents[0].url == "https://news.example/with-image"
+    assert documents[0].image_url == "https://cdn.example/danang.jpg"
+    assert "https://news.example/without-image" in documents[0].content
+
+
 def test_collect_live_context_does_not_pollute_history_or_write_report(monkeypatch) -> None:
     """리포트 근거 수집은 이력을 기록하지 않고 브리핑도 생성하지 않는다.
 

@@ -100,6 +100,29 @@ def test_daily_mode_selects_clusters_above_threshold(monkeypatch) -> None:
     assert any(stage == "similarity_filter" and "low_similarity" in reason for stage, reason in reasons)
 
 
+def test_daily_items_preserve_source_image_metadata(monkeypatch) -> None:
+    """클러스터 출처가 뉴스 이미지와 YouTube 썸네일을 잃지 않는다."""
+    _seed_collect_history()
+    monkeypatch.setattr(pipeline, "resolve_topic_intent", lambda topic, user_id="": "news")
+
+    def docs_with_images() -> list[dict[str, object]]:
+        """서로 다른 이미지 필드명을 가진 수집 문서를 만든다."""
+        docs = _make_docs()
+        docs[0]["image_url"] = "https://cdn.example/news.jpg"
+        docs[1]["thumbnail_url"] = "https://cdn.example/youtube.jpg"
+        return docs
+
+    _patch_collect(monkeypatch, docs_with_images)
+
+    result = pipeline.run_daily(_TOPIC, "minji", reference_now=_NOW)
+
+    sources = result["items"][0]["sources"]
+    assert [source["image_url"] for source in sources] == [
+        "https://cdn.example/news.jpg",
+        "https://cdn.example/youtube.jpg",
+    ]
+
+
 def test_duplicate_cluster_is_excluded(monkeypatch) -> None:
     """최근 7일 보고서에 실린 것과 사실상 같은 클러스터는 '이미 다룬 소식'으로 뺀다."""
     _seed_collect_history()

@@ -110,10 +110,19 @@ def _to_context_document(item: dict[str, object], number: int) -> ReportContextD
         return None
 
     sources = [s for s in (item.get("sources") or []) if isinstance(s, dict)]
-    primary_url = str(sources[0].get("url") or "") if sources else ""
-    primary_image_url = next(
-        (str(source.get("image_url")) for source in sources if source.get("image_url")),
+    primary_source = next(
+        (
+            source
+            for source in sources
+            if source.get("url") and source.get("image_url")
+        ),
         None,
+    ) or next((source for source in sources if source.get("url")), None)
+    primary_url = str(primary_source.get("url") or "") if primary_source else ""
+    primary_image_url = (
+        str(primary_source.get("image_url") or "").strip() or None
+        if primary_source
+        else None
     )
     # 실시간 자료는 Wiki 문서 Version이 없어서 Citation 저장 시 URL이 유일한 출처
     # 증빙이다(agent.citations는 document_version_id 또는 url을 요구한다).
