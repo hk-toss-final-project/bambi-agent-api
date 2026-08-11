@@ -95,12 +95,12 @@ def test_settings_uses_dedicated_mcp_port_by_default() -> None:
     assert settings.mcp_server_url == "http://localhost:8100/mcp"
 
 
-def test_wiki_pipeline_versions_default_to_legacy() -> None:
-    """새 배포가 명시적인 전환 전에는 기존 읽기·유지 루프를 사용한다."""
+def test_wiki_pipeline_versions_default_to_langgraph_v2() -> None:
+    """새 Job은 Wiki 읽기·유지 LangGraph V2를 기본 실행 경로로 사용한다."""
     settings = Settings()
 
-    assert settings.wiki_read_pipeline_version == "legacy_v1"
-    assert settings.wiki_maintenance_pipeline_version == "legacy_v1"
+    assert settings.wiki_read_pipeline_version == "langgraph_v2"
+    assert settings.wiki_maintenance_pipeline_version == "langgraph_v2"
 
 
 def test_create_container_uses_postgres_for_publish_snapshots() -> None:
