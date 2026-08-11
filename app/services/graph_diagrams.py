@@ -87,7 +87,7 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
 
     Wiki·Report·변경점 추적 그래프 빌더는 DB 연결을 인자로 받지만 빌드 시점에는
     연결을 사용하지 않고 노드 클로저만 구성하므로, 구조 추출에는 None을 넘긴다.
-    이 전제는 tests/app/test_graph_diagrams.py가 회귀를 감지한다.
+    이 전제는 tests/app/test_graph_views.py가 회귀를 감지한다.
     """
     return (
         _diagram(
@@ -100,7 +100,8 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                 "(resolve_identity) → canonical 중복 품질 검증(quality_gate) → "
                 "하이브리드 관계 후보(recall_candidates) → 관계 판정(link_relations) → "
                 "반영 계획(plan) → Snapshot Lint(validate_plan) → "
-                "문서·Chunk 저장(persist) → Vector 갱신(embed) → Job 결과 조립(finalize)"
+                "문서·Chunk 저장(persist) → Vector 생성 또는 Batch 등록(embed) → "
+                "Job 결과 조립(finalize)"
             ),
             compiled=build_personal_wiki_graph(None),
             nodes=(
@@ -195,10 +196,11 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                 ),
                 GraphNodeDescription(
                     node_id="embed",
-                    title="변경 Chunk Vector 갱신",
+                    title="변경 Chunk Embedding 처리",
                     description=(
-                        "변경된 Entity·Concept Chunk를 재임베딩해 다음 Build의 "
-                        "의미 후보 recall에 사용합니다."
+                        "변경된 Entity·Concept Chunk를 즉시 재임베딩하거나, 설정된 "
+                        "임계값 이상이면 OpenAI Batch Item으로 등록합니다. 완료된 "
+                        "Vector는 다음 Build의 의미 후보 recall에 사용됩니다."
                     ),
                 ),
                 GraphNodeDescription(
@@ -215,16 +217,15 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
             slug="report-generation",
             title="Report Builder Generation",
             description=(
-                "조사원 에이전트가 도구(search_pool·collect_live)를 골라 근거 "
-                "수집(research) → 생성용 Context 선별(load_context) → "
-                "콘텐츠 생성(generate) → 검토자 에이전트가 도구(get_source·"
-                "search_pool)로 인용을 원문과 대조(review) → Citation·Snapshot "
-                "저장(persist). 검토자가 사실관계 문제를 찾으면 generate로 "
-                "되돌려 한 번 다시 쓰게 하고, research가 자료를 못 모으면 "
-                "load_context가 기존 고정 경로로 되돌아간다. 변경점 추적 토글이 "
-                "켜진 요청은 generate 대신 change_history 서브그래프가 본문을 "
-                "만들고(꺼져 있으면 기존 경로 그대로), 그쪽이 실패하면 generate로 "
-                "되돌아간다."
+                "조사원 에이전트가 wiki_search·wiki_read로 개인 Wiki를 읽고 "
+                "search_pool로 Global 저장 근거를 찾은 뒤, 코드가 부족 여부를 "
+                "판정해 필요할 때 실시간 수집(research) → 주제별 근거 집중·중복 "
+                "제거·상한 배정(load_context) → 콘텐츠 생성(generate) 또는 변경점 "
+                "추적(change_history) → 검토자 에이전트가 get_source·search_pool로 "
+                "인용을 원문과 대조(review) → Citation·Snapshot 저장(persist). "
+                "일반 리포트의 사실관계 문제는 최대 한 번 재생성하고, 조사 실패는 "
+                "load_context의 고정 경로로, 변경점 추적 전체 실패는 generate로 "
+                "복구한다."
             ),
             compiled=build_report_generation_graph(None),
             nodes=(
@@ -232,17 +233,20 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                     node_id="research",
                     title="근거 조사",
                     description=(
-                        "조사원 에이전트가 주제별로 search_pool·collect_live 도구를 "
-                        "선택해 근거를 모읍니다. 실패하거나 빈손이면 다음 노드가 고정 "
-                        "수집 경로로 복구합니다."
+                        "조사원 에이전트가 주제별로 wiki_search·wiki_read·search_pool "
+                        "도구를 사용해 근거를 모읍니다. 도구 루프가 끝나면 코드가 Global "
+                        "근거의 개수와 관련성을 판정해 부족할 때만 실시간 수집하며, 실패하거나 "
+                        "빈손이면 다음 노드가 고정 수집 경로로 복구합니다."
                     ),
                 ),
                 GraphNodeDescription(
                     node_id="load_context",
                     title="생성 Context 선별",
                     description=(
-                        "조사 결과를 생성용 Context로 정리합니다. 조사 자료가 없으면 개인 "
-                        "Wiki와 Global 풀을 검색하고, 필요할 때만 실시간 수집을 수행합니다."
+                        "단일 주제는 조사 결과나 고정 검색 경로에서 Context를 선별합니다. "
+                        "여러 주제는 주제별 저장·실시간 근거를 모아 관련 문장만 남기고, "
+                        "중복을 제외한 뒤 근거 상한을 배분하며 근거 없는 주제는 생성에서 "
+                        "제외합니다."
                     ),
                 ),
                 GraphNodeDescription(
@@ -258,7 +262,9 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                     title="변경점 리포트 생성",
                     description=(
                         "변경점 추적 토글이 켜졌을 때 일반 생성 대신 서브그래프로 직전 "
-                        "보고서 이후의 변화를 만듭니다. 실패하면 generate로 복구합니다."
+                        "보고서 이후의 변화를 만듭니다. 여러 주제는 근거를 확보한 주제마다 "
+                        "따로 실행해 성공 결과를 합치고, 전부 실패했을 때만 generate로 "
+                        "복구합니다."
                     ),
                 ),
                 GraphNodeDescription(
@@ -284,12 +290,14 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
             title="변경점(Delta) 추적",
             description=(
                 "Base 조회(prepare) → 판단(supervisor) → 팩트 추출·과거 대조"
-                "(diff, search_base_facts 도구 보유) → 종합·타임라인 생성"
-                "(compose) → 파급효과 추론(impact) → 정합성·날짜 검증(validate, "
-                "코드) → 섹션 조립(assemble, 코드) → 델타 팩트 저장(store). "
-                "워커는 끝나면 항상 supervisor로 돌아가고, supervisor가 첫 실행·"
-                "변화 없음·워커 1회 재작업 세 갈래를 판단한다. 조립 결과는 상위 "
-                "그래프의 review(Critic)로 이어진다."
+                "(diff, search_base_facts 도구 보유) → 신규·갱신·유지 전체로 종합·"
+                "타임라인 생성(compose) → 신규·갱신이 있을 때만 파급효과 추론"
+                "(impact) → 전체 팩트의 정합성·날짜·인용 검증(validate, 코드) → "
+                "정보요약과 변경점 섹션 조립(assemble, 코드) → 신규·갱신 팩트만 "
+                "저장(store). 팩트를 하나도 추출하지 못하면 상위 그래프가 일반 "
+                "생성으로 복구하고, 전부 유지인 경우에는 impact만 건너뛴다. 검증 "
+                "문제가 난 워커는 한 번만 재작업하며 조립 결과는 상위 그래프의 "
+                "review(Critic)로 이어진다."
             ),
             compiled=build_change_history_graph(None),
             nodes=(
@@ -305,8 +313,9 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                     node_id="supervisor",
                     title="다음 작업 결정",
                     description=(
-                        "완료 상태·실패·재작업 예산을 코드로 판단해 diff, compose, impact, "
-                        "validate, assemble 중 다음 노드를 선택합니다. LLM은 호출하지 않습니다."
+                        "완료 상태·팩트 유무·변경 여부·실패·재작업 예산을 코드로 판단해 "
+                        "diff, compose, impact, validate, assemble 중 다음 노드를 선택합니다. "
+                        "팩트가 없으면 실패로 처리하고, 전부 유지면 impact를 건너뜁니다."
                     ),
                 ),
                 GraphNodeDescription(
@@ -321,16 +330,17 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                     node_id="compose",
                     title="개요와 타임라인 생성",
                     description=(
-                        "중복을 제외한 팩트와 직전 보고서 요약을 사용해 Overview와 시간순 "
-                        "타임라인을 한 번의 LLM 호출로 작성합니다."
+                        "신규·갱신·유지 팩트 전체와 직전 보고서 요약을 사용해 현재 상황의 "
+                        "Overview와 시간순 타임라인을 한 번의 LLM 호출로 작성합니다."
                     ),
                 ),
                 GraphNodeDescription(
                     node_id="impact",
-                    title="파급효과와 행동 지침 추론",
+                    title="파급효과와 확인 사항 추론",
                     description=(
-                        "정제된 변경 팩트를 바탕으로 의미·파급효과·권장 행동을 추론하며, "
-                        "필요하면 이 노드만 더 강한 모델을 사용합니다."
+                        "신규·갱신 팩트만 바탕으로 의미·파급효과·확인 사항을 추론하며, "
+                        "필요하면 이 노드만 더 강한 모델을 사용합니다. 전부 유지인 "
+                        "실행에서는 이 노드를 건너뜁니다."
                     ),
                 ),
                 GraphNodeDescription(
@@ -343,18 +353,20 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                 ),
                 GraphNodeDescription(
                     node_id="assemble",
-                    title="Markdown 리포트 조립",
+                    title="정보요약 리포트 조립",
                     description=(
-                        "검증을 통과한 개요·타임라인·파급효과에 섹션 헤더를 붙여 하나의 "
-                        "Markdown으로 만들고 기존 무료 품질 검사를 적용합니다."
+                        "전체 팩트로 만든 개요를 유지하고 신규·갱신만 변경점 섹션에 넣어 "
+                        "Markdown으로 조립합니다. 전부 유지인 경우에도 정상 정보요약을 "
+                        "만들고 기존 무료 품질 검사를 적용합니다."
                     ),
                 ),
                 GraphNodeDescription(
                     node_id="store",
                     title="델타 실행과 팩트 저장",
                     description=(
-                        "이번 실행 메타데이터와 유효 팩트를 다음 실행의 비교 기준으로 "
-                        "저장합니다. 저장 실패는 경고만 남기고 보고서 발행은 계속합니다."
+                        "이번 실행 메타데이터와 신규·갱신 팩트만 다음 실행의 비교 기준으로 "
+                        "저장하고 유지 팩트는 중복 저장하지 않습니다. 저장 실패는 경고만 "
+                        "남기고 보고서 발행은 계속합니다."
                     ),
                 ),
             ),
