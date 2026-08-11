@@ -1524,6 +1524,7 @@ async def persist_report_generation(
     latency_ms: int,
     review_outcome: str = "",
     review_problem: str = "",
+    change_history_used: bool = False,
 ) -> dict[str, object]:
     """생성 Run·후보·Citation·Publish Snapshot·Outbox를 한 트랜잭션에 저장한다.
 
@@ -1532,6 +1533,13 @@ async def persist_report_generation(
     없어서 함께 남긴다 — 검토자는 실패해도 발행을 막지 않기 때문이다
     (2026-08-05 실측: 인용이 엉뚱한 리포트가 발행됐는데 검토자가 돌았는지조차
     로그 없이는 알 수 없었다).
+
+    change_history_used는 **요청이 토글을 켰는지가 아니라, 델타 경로가 실제로
+    이 본문을 만들었는지**다. 호출자(agent/graph.py의 persist 노드)가
+    change_history 노드의 성공 여부로 판단해 넘긴다. 요청 파라미터를 그대로
+    읽으면 서버 차단 스위치(CHANGE_HISTORY_ENABLED=0)나 델타 경로 자체 실패로
+    기존 generate() 본문이 나갔을 때도 값이 true로 남아 body 구조와 어긋난다
+    (2026-08-11 풀스택 피드백).
     """
     # 요청 멱등키는 Job 행이 원문 그대로 갖고 있으므로 여기서 함께 읽는다
     # (2026-08-06 협의: Service가 generation_pendings와 완료 카드를 잇는 열쇠).
@@ -1754,10 +1762,12 @@ async def persist_report_generation(
         generation_request.get("request_idempotency_key") or ""
     )
     generation_scope = str(parameters.get("generation_scope") or "SINGLE_TOPIC")
-    # 요청 접수 시 고정한 토글값을 그대로 돌려준다. Service가 이 값으로 본문이
-    # "이번에 달라진 점" 폼인지 기존 폼인지 구분해 렌더링 규칙을 고를 수 있게
-    # 한다 — 헤더 문자열을 파싱해 추측하게 하면 안 된다.
-    change_history_enabled = bool(parameters.get("change_history_enabled") or False)
+    # 요청 파라미터가 아니라 호출자가 넘긴 실제 실행 결과를 싣는다 — 서버 차단
+    # 스위치나 델타 경로 실패로 body가 기존 형식으로 나갔는데 값만 true로 남는
+    # 것을 막기 위해서다. Service가 이 값으로 본문이 "이번에 달라진 점" 폼인지
+    # 기존 폼인지 구분해 렌더링 규칙을 고를 수 있게 한다 — 헤더 문자열을 파싱해
+    # 추측하게 하면 안 된다.
+    change_history_enabled = change_history_used
     source_interest_id = str(parameters.get("interest_id") or "")
     raw_interest_bundle = parameters.get("interest_bundle")
     interest_bundle = (

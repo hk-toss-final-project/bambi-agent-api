@@ -90,11 +90,14 @@ def test_merged_summary_lists_each_topic() -> None:
     assert merged.title == "오늘의 브리핑 요약 (2026-08-11)"
 
 
-def test_single_surviving_topic_is_returned_unwrapped() -> None:
-    """주제가 하나만 남으면 굳이 감싸지 않고 그 보고서를 그대로 쓴다.
+def test_single_surviving_topic_is_still_wrapped_and_demoted() -> None:
+    """주제가 하나만 남아도 감싸고 헤딩을 내린다 — 살아남은 수로 구조가 갈리면 안 된다.
 
-    나머지 주제가 근거 부족으로 빠진 경우다. 한 주제짜리 본문에 주제 헤더를
-    덧씌우면 단일 주제 리포트와 형태가 달라진다.
+    이 함수가 불렸다는 것 자체가 다주제 델타 요청이었다는 뜻이다. 다른 주제가
+    근거 부족으로 빠져 결과가 1건이 됐다고 감싸지 않으면, 프론트가 요청
+    시점에는 알 수 없는 "생성 후 살아남은 주제 수"에 따라 `##`/`###` 헤딩
+    단계가 갈린다(2026-08-11 풀스택 피드백). 다주제 요청이면 결과가 몇 건이든
+    항상 같은 구조여야 한다.
     """
     only = _report("반도체", citations=("G1",))
 
@@ -102,7 +105,9 @@ def test_single_surviving_topic_is_returned_unwrapped() -> None:
         [("반도체", only)], topic="오늘의 브리핑", reference_date=REFERENCE_DATE
     )
 
-    assert merged is only
+    assert merged is not only
+    assert "## 반도체" in merged.body
+    assert "### Overview" in merged.body  # ## → ### 로 내려간다
 
 
 def test_empty_report_list_is_rejected() -> None:

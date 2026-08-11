@@ -862,7 +862,9 @@ def _publish_payload(connection: _FakeConnection) -> dict[str, Any]:
     raise AssertionError("publish_snapshots INSERT를 찾지 못했다.")
 
 
-def _persist(connection: _FakeConnection) -> None:
+def _persist(
+    connection: _FakeConnection, *, change_history_used: bool = False
+) -> None:
     """인용 없는 최소 리포트 한 건을 저장 경로에 통과시킨다."""
     asyncio.run(
         persist_report_generation(
@@ -879,6 +881,7 @@ def _persist(connection: _FakeConnection) -> None:
             ),
             contexts=[],
             latency_ms=100,
+            change_history_used=change_history_used,
         )
     )
 
@@ -1162,23 +1165,38 @@ def test_publish_payload_keeps_report_type_empty_for_older_requests() -> None:
     assert _publish_payload(connection)["report_type"] == ""
 
 
-def test_publish_payload_echoes_the_change_history_toggle() -> None:
-    """요청 접수 시 고정한 change_history_enabled를 발행 Snapshot에 그대로 싣는다.
+def test_publish_payload_reflects_that_the_delta_path_actually_ran() -> None:
+    """change_history_enabled는 호출자가 넘긴 실제 실행 결과를 싣는다.
 
     이 값이 없으면 Service가 body를 "이번에 달라진 점" 4단 구조로 볼지 기존
     자유 형식으로 볼지 헤더 문자열을 파싱해 추측해야 한다.
+    """
+    connection = _connection_for_persist("코스피")
+
+    _persist(connection, change_history_used=True)
+
+    assert _publish_payload(connection)["change_history_enabled"] is True
+
+
+def test_publish_payload_ignores_the_requested_toggle_when_the_delta_path_did_not_run() -> None:
+    """요청 파라미터가 켜져 있어도, 실제로 델타 경로를 안 탔으면 false로 나간다.
+
+    서버 차단 스위치(CHANGE_HISTORY_ENABLED=0)나 델타 경로 실패로 기존
+    generate() 본문이 나갔을 때, 요청 파라미터만 보고 true를 실으면 값과 body
+    구조가 어긋난다(2026-08-11 풀스택 피드백). 호출자가 넘긴 실행 결과만
+    신뢰해야 한다.
     """
     connection = _connection_for_persist(
         "코스피", {"change_history_enabled": True}
     )
 
-    _persist(connection)
+    _persist(connection, change_history_used=False)
 
-    assert _publish_payload(connection)["change_history_enabled"] is True
+    assert _publish_payload(connection)["change_history_enabled"] is False
 
 
 def test_publish_payload_keeps_change_history_toggle_off_by_default() -> None:
-    """토글 값이 없던 요청 행은 False로 안전하게 읽힌다(회귀 0)."""
+    """호출자가 실행 결과를 안 넘기면 False로 안전하게 처리된다(회귀 0)."""
     connection = _connection_for_persist("코스피")
 
     _persist(connection)

@@ -2173,6 +2173,16 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
 
     async def persist(state: ReportGenerationState) -> dict[str, Any]:
         """생성 Run·후보·Citation·Snapshot·Outbox를 저장 Transaction으로 기록한다."""
+        # 요청 토글이 아니라 델타 경로가 **실제로 이 본문을 만들었는지**를 판단해
+        # 넘긴다. change_history 노드는 성공하면 summary.failed=False를 채우고,
+        # 서버 차단 스위치로 아예 안 탔거나 실패해 generate()로 되돌아갔으면 이
+        # 키 자체가 없거나 failed=True다 — 요청 파라미터를 그대로 읽으면
+        # CHANGE_HISTORY_ENABLED=0일 때 값과 body 구조가 어긋난다(2026-08-11
+        # 풀스택 피드백).
+        change_history_result = state.get("change_history")
+        change_history_used = isinstance(change_history_result, dict) and not bool(
+            change_history_result.get("failed", True)
+        )
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=state["user_id"])
             citations = await prag_007(
@@ -2186,6 +2196,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 latency_ms=state["latency_ms"],
                 review_outcome=str(state.get("review_outcome") or ""),
                 review_problem=str(state.get("review_problem") or ""),
+                change_history_used=change_history_used,
             )
             persisted = await report_018(
                 FeatureRequest(
