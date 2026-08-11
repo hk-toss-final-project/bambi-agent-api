@@ -102,6 +102,7 @@ class WikiReadLoopState(TypedDict):
     wiki_version_id: str | None
     job_id: str | None
     navigation_snapshot: Mapping[str, object] | None
+    defer_live: bool
     normalized_queries: NotRequired[list[str]]
     candidates: NotRequired[list[WikiNavigationCandidate]]
     selected_version_ids: NotRequired[list[str]]
@@ -363,10 +364,13 @@ def build_wiki_read_graph_v2() -> Any:
         }
 
     def route_after_assess(state: WikiReadLoopState) -> str:
-        """Global 근거가 충분하고 관련 있으면 Live 수집을 건너뛴다."""
+        """근거가 충분하거나 상위에서 병렬 수집할 때 Live 노드를 건너뛴다."""
         return (
             "finalize"
-            if state.get("pool_sufficient") and state.get("pool_relevant")
+            if (
+                state.get("pool_sufficient") and state.get("pool_relevant")
+            )
+            or state["defer_live"]
             else "collect_live"
         )
 
@@ -424,6 +428,9 @@ def build_wiki_read_graph_v2() -> Any:
                 packets=[packet],
             )
         stats = _append_stat(state, node="finalize", started=started)
+        requires_live = not (
+            state.get("pool_sufficient") and state.get("pool_relevant")
+        ) and not state.get("collected_live")
         return {
             "node_stats": stats,
             "outcome": ResearchOutcome(
@@ -433,6 +440,7 @@ def build_wiki_read_graph_v2() -> Any:
                 ),
                 stop_reason=LANGGRAPH_READ_PIPELINE_VERSION,
                 collected_live=bool(state.get("collected_live")),
+                requires_live=requires_live,
                 wiki_packets=(packet,) if packet is not None else (),
                 tool_stats=tuple(stats),
             ),
@@ -476,8 +484,9 @@ async def run_wiki_read_graph_v2(
     wiki_version_id: str | None = None,
     job_id: str | None = None,
     navigation_snapshot: Mapping[str, object] | None = None,
+    defer_live: bool = False,
 ) -> ResearchOutcome:
-    """Wiki 읽기 V2 그래프를 실행해 기존 ResearchOutcome 계약으로 반환한다."""
+    """Wiki 읽기 V2를 실행하고 선택적으로 Live 보강을 상위 병렬 단계로 미룬다."""
     graph = build_wiki_read_graph_v2()
     final = await graph.ainvoke(
         {
@@ -490,6 +499,7 @@ async def run_wiki_read_graph_v2(
             "wiki_version_id": wiki_version_id,
             "job_id": job_id,
             "navigation_snapshot": navigation_snapshot,
+            "defer_live": defer_live,
         },
         context=WikiReadRuntimeContext(connection=connection),
     )
@@ -513,6 +523,7 @@ async def research_context_for_version(
     wiki_version_id: str | None = None,
     job_id: str | None = None,
     navigation_snapshot: Mapping[str, object] | None = None,
+    defer_live: bool = False,
 ) -> ResearchOutcome:
     """Job에 고정된 버전에 따라 V1 Researcher 또는 LangGraph V2를 실행한다."""
     if pipeline_version == LEGACY_READ_PIPELINE_VERSION:
@@ -541,5 +552,6 @@ async def research_context_for_version(
             wiki_version_id=wiki_version_id,
             job_id=job_id,
             navigation_snapshot=navigation_snapshot,
+            defer_live=defer_live,
         )
     raise ValueError(f"지원하지 않는 Wiki 읽기 파이프라인 버전입니다: {pipeline_version}")

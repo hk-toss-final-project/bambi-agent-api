@@ -10,16 +10,25 @@ import hashlib
 import logging
 from asyncio import to_thread
 from collections.abc import Sequence
-from typing import Any, Protocol
+from dataclasses import asdict
+from datetime import date
+from typing import Any, Mapping, Protocol
 
 from agent.report_builder.api import (
     DEFAULT_BRIEFING_CANDIDATE_LIMIT,
     DEFAULT_BRIEFING_TOPIC_COUNT,
     CandidateMaterial,
+    ReportContextDocument,
     build_interest_context,
     select_briefing_topics,
 )
-from app.schemas.briefing_topics import BriefingTopicsResponse
+from app.schemas.briefing_topics import (
+    BriefingPreparationRequest,
+    BriefingTopicsResponse,
+)
+from app.schemas.mvp import AcceptedJobResponse, JobStatus
+from app.services.agent_jobs import AgentJobRepository
+from infrastructure.persistence.api import StoredBriefingTopicSnapshot
 
 logger = logging.getLogger("app.services.briefing_topics")
 
@@ -56,22 +65,47 @@ class BriefingCandidateRepository(Protocol):
         """Wiki Node 후보와 각 후보의 요약·출처·저장 시각을 읽는다."""
         ...
 
+    async def load_briefing_topic_snapshot(
+        self, user_id: str, *, briefing_date: date
+    ) -> StoredBriefingTopicSnapshot | None:
+        """사용자·날짜별로 준비된 브리핑 Snapshot을 조회한다."""
+        ...
+
+    async def save_briefing_topic_snapshot(
+        self,
+        user_id: str,
+        *,
+        briefing_date: date,
+        topics: Sequence[str],
+        reason: str,
+        candidate_count: int,
+        contexts_by_topic: Mapping[str, Sequence[Mapping[str, object]]],
+        prepared_by_job_id: str,
+    ) -> StoredBriefingTopicSnapshot:
+        """선정 주제와 사전 수집 근거를 날짜별 Snapshot으로 저장한다."""
+        ...
+
 
 class BriefingTopicsService:
     """개인 Wiki 맥락을 읽어 아침 브리핑 주제를 고른다."""
 
-    def __init__(self, repository: BriefingCandidateRepository) -> None:
+    def __init__(
+        self,
+        repository: BriefingCandidateRepository,
+        agent_jobs: AgentJobRepository | None = None,
+    ) -> None:
         """후보 조회 Repository를 주입한다."""
         self._repository = repository
+        self._agent_jobs = agent_jobs
 
     async def get_topics(
         self,
         user_id: str,
         *,
+        briefing_date: date,
         limit: int = DEFAULT_BRIEFING_TOPIC_COUNT,
-        candidate_limit: int = DEFAULT_BRIEFING_CANDIDATE_LIMIT,
     ) -> BriefingTopicsResponse:
-        """맥락을 읽고 아침에 받아볼 주제를 고른다.
+        """준비 Worker가 저장한 날짜별 주제를 LLM 호출 없이 조회한다.
 
         **빈 목록을 정상 응답으로 돌려준다.** Wiki가 없는 신규 사용자가 여기에
         해당하며, 계약상 Service는 `topics`가 비면 아침 요청을 보내지 않고
@@ -80,11 +114,41 @@ class BriefingTopicsService:
         Args:
             user_id: 조회 대상 사용자 ID
             limit: 고를 주제 수
-            candidate_limit: 선정자에게 넘길 후보 수
-
         Returns:
-            고른 주제와 사유, 검토한 후보 수
+            준비된 주제와 사유. Snapshot이 없으면 빈 목록
         """
+        snapshot = await self._repository.load_briefing_topic_snapshot(
+            user_id, briefing_date=briefing_date
+        )
+        if snapshot is None:
+            return BriefingTopicsResponse(user_id=user_id)
+        return BriefingTopicsResponse(
+            user_id=user_id,
+            topics=list(snapshot.topics[:limit]),
+            reason=snapshot.reason,
+            candidate_count=snapshot.candidate_count,
+        )
+
+    async def get_preparation_snapshot(
+        self,
+        user_id: str,
+        *,
+        briefing_date: date,
+    ) -> StoredBriefingTopicSnapshot | None:
+        """Worker의 멱등 재실행을 위해 날짜별 준비 Snapshot을 조회한다."""
+        return await self._repository.load_briefing_topic_snapshot(
+            user_id,
+            briefing_date=briefing_date,
+        )
+
+    async def select_topics(
+        self,
+        user_id: str,
+        *,
+        limit: int = DEFAULT_BRIEFING_TOPIC_COUNT,
+        candidate_limit: int = DEFAULT_BRIEFING_CANDIDATE_LIMIT,
+    ) -> BriefingTopicsResponse:
+        """준비 Worker에서만 Wiki 맥락을 읽고 브리핑 주제를 새로 선정한다."""
         materials = await self._repository.load_briefing_candidates(
             user_id, limit=candidate_limit
         )
@@ -172,3 +236,52 @@ class BriefingTopicsService:
             )
         except Exception:  # noqa: BLE001 - 저장 실패가 응답을 막지 않는다
             logger.warning("아침 주제 캐시 저장 실패: user=%s", user_id)
+
+    async def enqueue_preparation(
+        self,
+        user_id: str,
+        payload: BriefingPreparationRequest,
+        *,
+        request_id: str,
+    ) -> AcceptedJobResponse:
+        """사용자·날짜별 브리핑 준비 Job을 Agent Queue에 멱등 등록한다."""
+        if self._agent_jobs is None:
+            raise RuntimeError("브리핑 준비 Job 저장소가 구성되지 않았습니다.")
+        job = await self._agent_jobs.submit_briefing_preparation(
+            user_id=user_id,
+            briefing_date=payload.briefing_date,
+            idempotency_key=payload.idempotency_key,
+            limit=payload.limit,
+            request_id=request_id,
+        )
+        return AcceptedJobResponse(
+            job_id=job.job_id,
+            feature_id=job.feature_id,
+            status=JobStatus(job.status),
+            request_id=job.request_id,
+            created_at=job.created_at,
+        )
+
+    async def save_preparation(
+        self,
+        user_id: str,
+        *,
+        briefing_date: date,
+        selection: BriefingTopicsResponse,
+        contexts_by_topic: Mapping[str, Sequence[ReportContextDocument]],
+        prepared_by_job_id: str,
+    ) -> StoredBriefingTopicSnapshot:
+        """Worker가 고른 주제와 Context 문서를 JSON Snapshot으로 저장한다."""
+        serialized = {
+            topic: [asdict(context) for context in contexts]
+            for topic, contexts in contexts_by_topic.items()
+        }
+        return await self._repository.save_briefing_topic_snapshot(
+            user_id,
+            briefing_date=briefing_date,
+            topics=selection.topics,
+            reason=selection.reason,
+            candidate_count=selection.candidate_count,
+            contexts_by_topic=serialized,
+            prepared_by_job_id=prepared_by_job_id,
+        )

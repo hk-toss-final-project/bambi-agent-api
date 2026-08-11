@@ -6,7 +6,7 @@ wiki_document_relations를 읽어 Obsidian 스타일 Graph 응답으로 조립�
 
 import hashlib
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from psycopg.rows import dict_row
@@ -21,6 +21,7 @@ from domain.personal_wiki.source_events.api import wse_010
 from infrastructure.persistence.api import (
     StoredBriefingTopicSelection,
     delete_wiki_document_and_record_event,
+    load_briefing_topic_snapshot,
     enqueue_wiki_rebuild_for_source,
     load_briefing_topic_selection,
     load_interest_documents_for_user,
@@ -29,6 +30,8 @@ from infrastructure.persistence.api import (
     reset_personal_wiki,
     save_interest_profile_for_user,
     save_mcp_source_submission,
+    StoredBriefingTopicSnapshot,
+    upsert_briefing_topic_snapshot,
 )
 from infrastructure.sources.connectors.api import LatestArticle
 from shared.wiki_navigation_models import WikiNavigationPacket
@@ -306,6 +309,45 @@ class PostgresWikiGraphRepository:
                     reason=reason,
                     candidate_count=candidate_count,
                     topic_limit=topic_limit,
+                )
+
+    async def load_briefing_topic_snapshot(
+        self, user_id: str, *, briefing_date: date
+    ) -> StoredBriefingTopicSnapshot | None:
+        """사용자·날짜별로 준비된 아침 브리핑 Snapshot을 조회한다."""
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await self._set_user_scope(connection, user_id=user_id)
+                return await load_briefing_topic_snapshot(
+                    connection,
+                    user_id=user_id,
+                    briefing_date=briefing_date,
+                )
+
+    async def save_briefing_topic_snapshot(
+        self,
+        user_id: str,
+        *,
+        briefing_date: date,
+        topics: Sequence[str],
+        reason: str,
+        candidate_count: int,
+        contexts_by_topic: Mapping[str, Sequence[Mapping[str, object]]],
+        prepared_by_job_id: str,
+    ) -> StoredBriefingTopicSnapshot:
+        """선정 주제와 사전 수집 근거를 날짜별 Snapshot으로 저장한다."""
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await self._set_user_scope(connection, user_id=user_id)
+                return await upsert_briefing_topic_snapshot(
+                    connection,
+                    user_id=user_id,
+                    briefing_date=briefing_date,
+                    topics=topics,
+                    reason=reason,
+                    candidate_count=candidate_count,
+                    contexts_by_topic=contexts_by_topic,
+                    prepared_by_job_id=prepared_by_job_id,
                 )
 
     async def get_graph(self, user_id: str) -> Mapping[str, object]:

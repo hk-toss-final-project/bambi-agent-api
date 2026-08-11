@@ -30,6 +30,7 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("WIKI_EMBEDDING_BATCH_THRESHOLD", "80")
     monkeypatch.setenv("PERSONAL_WIKI_WORKER_BATCH_SIZE", "3")
     monkeypatch.setenv("PERSONAL_WIKI_JOB_CONCURRENCY", "2")
+    monkeypatch.setenv("REPORT_WORKER_BATCH_SIZE", "7")
     monkeypatch.setenv("REPORT_JOB_CONCURRENCY", "4")
     monkeypatch.setenv("OPENAI_DEFAULT_RPM", "120")
     monkeypatch.setenv("OPENAI_DEFAULT_TPM", "90000")
@@ -37,6 +38,8 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("WIKI_OPENAI_TOKENS_PER_JOB", "24000")
     monkeypatch.setenv("REPORT_OPENAI_REQUESTS_PER_JOB", "10")
     monkeypatch.setenv("REPORT_OPENAI_TOKENS_PER_JOB", "45000")
+    monkeypatch.setenv("BRIEFING_OPENAI_REQUESTS_PER_JOB", "7")
+    monkeypatch.setenv("BRIEFING_OPENAI_TOKENS_PER_JOB", "28000")
     monkeypatch.setenv("OPENAI_BATCH_MAX_ITEMS", "400")
     monkeypatch.setenv("OPENAI_BATCH_MAX_SUBMISSIONS", "2")
     monkeypatch.setenv("OPENAI_BATCH_POLL_LIMIT", "20")
@@ -77,11 +80,14 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     assert settings.wiki_openai_tokens_per_job == 24_000
     assert settings.report_openai_requests_per_job == 10
     assert settings.report_openai_tokens_per_job == 45_000
+    assert settings.briefing_openai_requests_per_job == 7
+    assert settings.briefing_openai_tokens_per_job == 28_000
     assert settings.openai_batch_max_items == 400
     assert settings.openai_batch_max_submissions == 2
     assert settings.openai_batch_poll_limit == 20
     assert settings.openai_batch_poll_interval_seconds == 45
     assert settings.openai_batch_poll_lease_seconds == 90
+    assert settings.report_worker_batch_size == 7
     assert settings.personal_wiki_job_lease_seconds == 900
     assert settings.wiki_build_quiet_minutes == 15
     assert settings.wiki_build_max_wait_minutes == 45
@@ -95,12 +101,24 @@ def test_settings_uses_dedicated_mcp_port_by_default() -> None:
     assert settings.mcp_server_url == "http://localhost:8100/mcp"
 
 
-def test_wiki_pipeline_versions_default_to_legacy() -> None:
-    """새 배포가 명시적인 전환 전에는 기존 읽기·유지 루프를 사용한다."""
+def test_wiki_pipeline_versions_default_to_langgraph_v2() -> None:
+    """새 Job은 Wiki 읽기·유지 LangGraph V2를 기본 실행 경로로 사용한다."""
     settings = Settings()
 
-    assert settings.wiki_read_pipeline_version == "legacy_v1"
-    assert settings.wiki_maintenance_pipeline_version == "legacy_v1"
+    assert settings.wiki_read_pipeline_version == "langgraph_v2"
+    assert settings.wiki_maintenance_pipeline_version == "langgraph_v2"
+
+
+def test_report_batch_size_falls_back_to_personal_wiki_batch_size(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """전용 설정이 없는 기존 배포는 종전 Worker Batch 크기를 유지한다."""
+    monkeypatch.setenv("PERSONAL_WIKI_WORKER_BATCH_SIZE", "9")
+    monkeypatch.delenv("REPORT_WORKER_BATCH_SIZE", raising=False)
+
+    settings = load_settings()
+
+    assert settings.report_worker_batch_size == 9
 
 
 def test_create_container_uses_postgres_for_publish_snapshots() -> None:

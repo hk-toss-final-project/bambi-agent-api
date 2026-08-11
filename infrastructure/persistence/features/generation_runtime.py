@@ -10,7 +10,7 @@ import logging
 import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Sequence
 from uuid import UUID
 
@@ -552,6 +552,7 @@ async def enqueue_report_generation_job(
     interest_id: str | None = None,
     content_type: str,
     report_type: str = "",
+    briefing_date: date | None = None,
     language: str | None,
     scheduled_at: datetime | None = None,
     request_id: str,
@@ -684,6 +685,10 @@ async def enqueue_report_generation_job(
         "read_pipeline_version": read_pipeline_version,
         "content_type": content_type,
         "report_type": report_type,
+        # report_type 의미를 해석하지 않고, Service가 명시한 날짜가 있을 때만
+        # REPORT-022 Snapshot 재사용을 시도한다. Worker는 주제 목록까지 일치해야
+        # 이 값을 신뢰하고, 불일치·미준비 상태에서는 일반 조사로 폴백한다.
+        "briefing_date": briefing_date.isoformat() if briefing_date else None,
         "language": resolved_language,
         "change_history_enabled": change_history_enabled,
         "execution_mode": execution_mode,
@@ -758,6 +763,9 @@ async def enqueue_report_generation_job(
                 {
                     "retrieval": "personal-wiki-global-cache-keyword-v2",
                     "report_type": report_type,
+                    "briefing_date": (
+                        briefing_date.isoformat() if briefing_date else None
+                    ),
                     "generation_scope": generation_scope,
                     "interest_id": interest_id,
                     "interest_bundle": interest_bundle,

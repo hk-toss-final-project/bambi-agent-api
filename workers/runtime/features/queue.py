@@ -183,6 +183,42 @@ async def consume_report_generation_jobs(
     )
 
 
+async def consume_briefing_preparation_jobs(
+    *,
+    database_url: str,
+    worker_id: str,
+    limit: int,
+    concurrency: int = 1,
+    rate_limit_policy: ProviderRateLimitPolicy | None = None,
+    lease_seconds: int,
+    model: str,
+    interval_seconds: int = 60,
+    max_batches: int | None = None,
+    batch_runner: BatchRunner | None = None,
+    on_batch: BatchObserver | None = None,
+) -> BatchResults:
+    """실행 가능한 브리핑 준비 Job Batch를 반복해서 가져와 처리한다."""
+    if batch_runner is None:
+        from workers.api import run_briefing_preparation_batch
+
+        batch_runner = run_briefing_preparation_batch
+    return await _consume_job_batches(
+        batch_runner=batch_runner,
+        runner_kwargs={
+            "database_url": database_url,
+            "worker_id": worker_id,
+            "limit": limit,
+            "concurrency": concurrency,
+            "rate_limit_policy": rate_limit_policy,
+            "lease_seconds": lease_seconds,
+            "model": model,
+        },
+        interval_seconds=interval_seconds,
+        max_batches=max_batches,
+        on_batch=on_batch,
+    )
+
+
 async def consume_url_collection_jobs(
     *,
     database_url: str,
@@ -244,6 +280,7 @@ async def wc_001(
         "personal_wiki_url",
         "personal_wiki_build",
         "report_generation",
+        "briefing_preparation",
     ):
         raise ValueError("WC-001이 지원하지 않는 job_type입니다.")
     if job_type == "personal_wiki_url":
@@ -270,6 +307,8 @@ async def wc_001(
     }
     if job_type == "report_generation":
         return await consume_report_generation_jobs(**common_kwargs)
+    if job_type == "briefing_preparation":
+        return await consume_briefing_preparation_jobs(**common_kwargs)
     return await consume_personal_wiki_jobs(
         **common_kwargs,
         embedding_batch_threshold=embedding_batch_threshold,

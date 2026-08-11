@@ -5,6 +5,8 @@ Lease로 점유한 report_generation Job을 LangGraph 오케스트레이션
 저장한다. 개발 API(`/dev/.../report-generations`)와 같은 그래프를 사용한다.
 """
 
+import logging
+from datetime import date
 from typing import Any
 
 from psycopg import AsyncConnection
@@ -23,6 +25,8 @@ from infrastructure.persistence.api import (
     CompleteAgentJobCommand,
     db_026,
     defer_agent_job_for_provider,
+    load_briefing_topic_snapshot,
+    set_personal_wiki_scope,
     set_system_job_scope,
 )
 from shared.contracts import FeatureRequest
@@ -30,6 +34,62 @@ from workers.features.batch_runner import run_job_batch
 from workers.runtime.api import JobInputError, ProviderRateLimitPolicy
 
 type DictRow = dict[str, Any]
+
+logger = logging.getLogger("workers.report_generation")
+
+
+async def _load_prewarmed_contexts(
+    connection: AsyncConnection[DictRow],
+    *,
+    job: ClaimedAgentJob,
+    topic: str,
+    topics: list[str],
+) -> dict[str, list[Any]]:
+    """Job 날짜와 주제 목록이 일치하는 REPORT-022 근거 Snapshot을 복원한다."""
+    raw_date = str(job.payload.get("briefing_date") or "").strip()
+    if not raw_date:
+        return {}
+    try:
+        briefing_date = date.fromisoformat(raw_date)
+    except ValueError as error:
+        raise JobInputError("Report Job의 briefing_date가 잘못됐습니다.") from error
+    async with connection.transaction():
+        await set_personal_wiki_scope(connection, user_id=job.user_id)
+        snapshot = await load_briefing_topic_snapshot(
+            connection,
+            user_id=job.user_id,
+            briefing_date=briefing_date,
+        )
+    if snapshot is None:
+        logger.info(
+            "브리핑 준비 Snapshot 없음, 일반 조사로 폴백: user=%s date=%s",
+            job.user_id,
+            briefing_date,
+        )
+        return {}
+    requested_topics = topics or [topic]
+    if list(snapshot.topics) != requested_topics:
+        logger.warning(
+            "브리핑 준비 주제 불일치, 일반 조사로 폴백: user=%s prepared=%s requested=%s",
+            job.user_id,
+            list(snapshot.topics),
+            requested_topics,
+        )
+        return {}
+    restored: dict[str, list[Any]] = {}
+    try:
+        for requested_topic in requested_topics:
+            raw_contexts = snapshot.contexts_by_topic.get(requested_topic) or []
+            contexts = [
+                report_context_from_mapping(context) for context in raw_contexts
+            ]
+            if contexts:
+                restored[requested_topic] = contexts
+    except (TypeError, ValueError) as error:
+        raise JobInputError(
+            f"브리핑 준비 Snapshot Context가 잘못됐습니다: {error}"
+        ) from error
+    return restored
 
 
 async def _process_job(
@@ -144,6 +204,12 @@ async def _process_job(
         if isinstance(raw_navigation_snapshots, dict)
         else {}
     )
+    prewarmed_contexts_by_topic = await _load_prewarmed_contexts(
+        connection,
+        job=job,
+        topic=topic,
+        topics=topics,
+    )
     feature_result = await report_001(
         FeatureRequest(
             request_id=job.job_id,
@@ -167,6 +233,7 @@ async def _process_job(
                     wiki_version_id=wiki_version_id,
                     wiki_navigation_snapshots=wiki_navigation_snapshots,
                     read_pipeline_version=read_pipeline_version,
+                    prewarmed_contexts_by_topic=prewarmed_contexts_by_topic,
                 )
             },
         )

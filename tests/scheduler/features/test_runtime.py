@@ -602,7 +602,7 @@ def test_run_once_enqueues_maintenance_rebuilds(
             "stale_after_hours": 72.0,
             "limit": 4,
             "now": _NOW,
-            "maintenance_pipeline_version": "legacy_v1",
+            "maintenance_pipeline_version": "langgraph_v2",
         }
     ]
     step = next(

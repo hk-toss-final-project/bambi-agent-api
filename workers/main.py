@@ -14,6 +14,7 @@ from app.logging_config import configure_logging
 from workers.api import (
     consume_openai_batches,
     run_global_content_fetch_batch,
+    run_briefing_preparation_batch,
     run_url_collection_batch,
     run_openai_batch_cycle,
     worker_001,
@@ -50,6 +51,7 @@ def _parse_args() -> argparse.Namespace:
             "personal-wiki",
             "url-collection",
             "report-generation",
+            "briefing-preparation",
             "global-collector",
             "global-content",
             "openai-batch",
@@ -181,7 +183,7 @@ async def _run_batch_once(
         return await worker_003(
             database_url=settings.agent_database_url,
             worker_id=worker_id,
-            limit=args.limit or settings.personal_wiki_worker_batch_size,
+            limit=args.limit or settings.report_worker_batch_size,
             concurrency=args.concurrency or settings.report_job_concurrency,
             lease_seconds=(
                 args.lease_seconds or settings.personal_wiki_job_lease_seconds
@@ -192,6 +194,24 @@ async def _run_batch_once(
                 model=model,
                 estimated_requests=settings.report_openai_requests_per_job,
                 estimated_tokens=settings.report_openai_tokens_per_job,
+            ),
+        )
+    if args.worker == "briefing-preparation":
+        model = args.model or settings.report_llm_model
+        return await run_briefing_preparation_batch(
+            database_url=settings.agent_database_url,
+            worker_id=worker_id,
+            limit=args.limit or settings.report_worker_batch_size,
+            concurrency=args.concurrency or settings.report_job_concurrency,
+            lease_seconds=(
+                args.lease_seconds or settings.personal_wiki_job_lease_seconds
+            ),
+            model=model,
+            rate_limit_policy=_openai_rate_policy(
+                settings,
+                model=model,
+                estimated_requests=settings.briefing_openai_requests_per_job,
+                estimated_tokens=settings.briefing_openai_tokens_per_job,
             ),
         )
     model = args.model or settings.wiki_llm_model
@@ -271,7 +291,7 @@ async def _run() -> None:
         await wc_001(
             database_url=settings.agent_database_url,
             worker_id=worker_id,
-            limit=args.limit or settings.personal_wiki_worker_batch_size,
+            limit=args.limit or settings.report_worker_batch_size,
             concurrency=args.concurrency or settings.report_job_concurrency,
             lease_seconds=(
                 args.lease_seconds or settings.personal_wiki_job_lease_seconds
@@ -286,6 +306,29 @@ async def _run() -> None:
             interval_seconds=args.interval_seconds,
             max_batches=None,
             job_type="report_generation",
+            on_batch=on_batch,
+        )
+        return
+    if args.worker == "briefing-preparation":
+        model = args.model or settings.report_llm_model
+        await wc_001(
+            database_url=settings.agent_database_url,
+            worker_id=worker_id,
+            limit=args.limit or settings.report_worker_batch_size,
+            concurrency=args.concurrency or settings.report_job_concurrency,
+            lease_seconds=(
+                args.lease_seconds or settings.personal_wiki_job_lease_seconds
+            ),
+            model=model,
+            rate_limit_policy=_openai_rate_policy(
+                settings,
+                model=model,
+                estimated_requests=settings.briefing_openai_requests_per_job,
+                estimated_tokens=settings.briefing_openai_tokens_per_job,
+            ),
+            interval_seconds=args.interval_seconds,
+            max_batches=None,
+            job_type="briefing_preparation",
             on_batch=on_batch,
         )
         return

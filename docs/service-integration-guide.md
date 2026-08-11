@@ -129,6 +129,7 @@ flowchart LR
 | `topics` | X | 서로 독립된 여러 주제를 한 장에 묶는 기존 아침요약 입력. `INTEREST_BUNDLE`과 함께 사용 불가 |
 | `content_type` | X | 기본 `interest_news_card` |
 | `report_type` | X | Service 소유 생성 맥락. Agent가 해석하지 않고 Snapshot에 반환 |
+| `briefing_date` | X | REPORT-022 준비 Snapshot을 재사용할 KST 날짜(`YYYY-MM-DD`). 아침 브리핑에서만 명시하며, 같은 사용자·주제 목록이 일치할 때만 재사용 |
 | `language` | X | 생략 시 컨텍스트의 선호 언어 사용 |
 | `scheduled_at` | X | 실행 예약 시각. **시간대 필수** (`2026-07-21T07:00:00+09:00`). 시간대 없으면 `422`. 생략 시 즉시 실행 대상 |
 
@@ -141,6 +142,19 @@ flowchart LR
   "interest_id": "33333333-3333-4333-8333-333333333333",
   "content_type": "interest_news_card",
   "report_type": "ON_DEMAND"
+}
+```
+
+아침 브리핑은 준비 Job 완료 후 같은 날짜와 주제를 생성 요청에 고정합니다.
+
+```json
+{
+  "idempotency_key": "morning:2026-08-12:user-1",
+  "topic": "오늘의 관심사 브리핑",
+  "topics": ["반도체", "프로야구"],
+  "content_type": "interest_news_card",
+  "report_type": "MORNING_BRIEFING",
+  "briefing_date": "2026-08-12"
 }
 ```
 

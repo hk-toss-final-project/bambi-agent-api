@@ -100,13 +100,13 @@ class Settings(BaseModel):
         default="gpt-4.1-mini", description="Report Builder 콘텐츠 생성 모델"
     )
     wiki_read_pipeline_version: Literal["legacy_v1", "langgraph_v2"] = Field(
-        default="legacy_v1",
+        default="langgraph_v2",
         description="새 Report Job에 고정할 Wiki 읽기 루프 버전",
     )
     wiki_maintenance_pipeline_version: Literal[
         "legacy_v1", "langgraph_v2"
     ] = Field(
-        default="legacy_v1",
+        default="langgraph_v2",
         description="새 Wiki 유지보수 Job에 고정할 실행 루프 버전",
     )
     wiki_embedding_model: str = Field(
@@ -126,6 +126,12 @@ class Settings(BaseModel):
         ge=1,
         le=50,
         description="Personal Wiki Worker의 실제 동시 Job 실행 수",
+    )
+    report_worker_batch_size: int = Field(
+        default=1,
+        ge=1,
+        le=100,
+        description="Report Builder Worker가 한 실행에서 처리할 최대 Job 수",
     )
     report_job_concurrency: int = Field(
         default=1,
@@ -162,6 +168,16 @@ class Settings(BaseModel):
         default=50_000,
         ge=0,
         description="Report Job 하나의 보수적 OpenAI Token 예약량",
+    )
+    briefing_openai_requests_per_job: int = Field(
+        default=8,
+        ge=1,
+        description="브리핑 준비 Job 하나의 보수적 OpenAI 요청 예약량",
+    )
+    briefing_openai_tokens_per_job: int = Field(
+        default=30_000,
+        ge=0,
+        description="브리핑 준비 Job 하나의 보수적 OpenAI Token 예약량",
     )
     openai_batch_max_items: int = Field(
         default=500,
@@ -344,10 +360,10 @@ def load_settings() -> Settings:
         wiki_llm_model=os.getenv("WIKI_LLM_MODEL", "gpt-4.1-mini"),
         report_llm_model=os.getenv("REPORT_LLM_MODEL", "gpt-4.1-mini"),
         wiki_read_pipeline_version=os.getenv(
-            "WIKI_READ_PIPELINE_VERSION", "legacy_v1"
+            "WIKI_READ_PIPELINE_VERSION", "langgraph_v2"
         ),
         wiki_maintenance_pipeline_version=os.getenv(
-            "WIKI_MAINTENANCE_PIPELINE_VERSION", "legacy_v1"
+            "WIKI_MAINTENANCE_PIPELINE_VERSION", "langgraph_v2"
         ),
         wiki_embedding_model=os.getenv(
             "WIKI_EMBEDDING_MODEL", "text-embedding-3-small"
@@ -360,6 +376,10 @@ def load_settings() -> Settings:
         ),
         personal_wiki_job_concurrency=_integer_env(
             "PERSONAL_WIKI_JOB_CONCURRENCY", 1
+        ),
+        report_worker_batch_size=_integer_env(
+            "REPORT_WORKER_BATCH_SIZE",
+            _integer_env("PERSONAL_WIKI_WORKER_BATCH_SIZE", 1),
         ),
         report_job_concurrency=_integer_env("REPORT_JOB_CONCURRENCY", 1),
         openai_default_rpm=_integer_env("OPENAI_DEFAULT_RPM", 60),
@@ -375,6 +395,12 @@ def load_settings() -> Settings:
         ),
         report_openai_tokens_per_job=_integer_env(
             "REPORT_OPENAI_TOKENS_PER_JOB", 50_000
+        ),
+        briefing_openai_requests_per_job=_integer_env(
+            "BRIEFING_OPENAI_REQUESTS_PER_JOB", 8
+        ),
+        briefing_openai_tokens_per_job=_integer_env(
+            "BRIEFING_OPENAI_TOKENS_PER_JOB", 30_000
         ),
         openai_batch_max_items=_integer_env("OPENAI_BATCH_MAX_ITEMS", 500),
         openai_batch_max_submissions=_integer_env(

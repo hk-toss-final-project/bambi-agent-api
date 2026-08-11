@@ -1,5 +1,7 @@
 """Service API 연동 FastAPI MVP 엔드포인트를 검증한다."""
 
+from datetime import date
+
 from fastapi.testclient import TestClient
 
 from tests.conftest import InMemoryAgentJobRepository
@@ -369,6 +371,26 @@ def test_generation_request_allows_omitting_report_type(
 
     assert accepted.status_code == 202
     assert agent_jobs_fake.last_report_type == ""
+
+
+def test_generation_request_forwards_briefing_date_to_the_repository(
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
+) -> None:
+    """아침 생성 요청은 준비 Snapshot을 찾을 KST 날짜를 저장소까지 전달한다."""
+    _put_context(client, "user-morning")
+
+    accepted = client.post(
+        "/internal/v1/users/user-morning/generations",
+        json={
+            "idempotency_key": "generation-prewarmed-morning",
+            "topic": "오늘의 관심사 브리핑",
+            "topics": ["반도체", "프로야구"],
+            "briefing_date": "2026-08-12",
+        },
+    )
+
+    assert accepted.status_code == 202
+    assert agent_jobs_fake.last_briefing_date == date(2026, 8, 12)
 
 
 def test_generation_request_forwards_explicit_batch_mode(

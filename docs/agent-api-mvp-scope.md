@@ -135,6 +135,7 @@
 - [x] `REPORT-018` 생성 콘텐츠 후보 저장 — `generation_runs`·`generated_content_candidates`
 - [x] `REPORT-020` 콘텐츠 완료 이벤트 — `CONTENT_READY`를 `event_outbox`에 기록까지 구현. **Event Bus 발행 Relay(`WORKER-012`)는 보류**(2026-07-24 결정): 이벤트를 받는 쪽이 service-api(full stack 팀)라 전달 방식·payload 형식 합의와 양쪽 동시 테스트가 필요하다. full stack 연동 시점에 함께 진행한다.
 - [x] `REPORT-021` 자동 Wiki 편입 금지 — 생성 결과는 후보 테이블에만 저장
+- [x] `REPORT-022` 아침 브리핑 사전 준비 — 날짜별 주제 선정과 Wiki·Global·Live 근거 수집을 비동기 Job으로 수행하고 Snapshot으로 고정한다. 같은 사용자·날짜는 멱등 재사용하며, Worker Batch 크기와 실제 동시성·OpenAI RPM/TPM 예약을 분리한다.
 - [x] `IMG-013` 대표 이미지 선택 — Provider·원본 HTML의 Open Graph/Twitter Card/Schema.org·기사 DOM 순서로 수집한 이미지가 있을 때 실제 인용 외부 자료와 본문 첫 등장 순서로 한 건을 골라 발행 Snapshot에 포함
 
 ### 변경점 추적 (Change History)
@@ -394,6 +395,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | REPORT-018 | 생성 콘텐츠 후보 저장 | 발행 전 콘텐츠를 agent-db에 저장한다. |
 | REPORT-020 | 콘텐츠 완료 이벤트 | 생성 완료 사실을 Integration Event로 발행한다. |
 | REPORT-021 | 자동 Wiki 편입 금지 | 생성된 콘텐츠를 사용자 선택 없이 개인 Wiki에 넣지 않는다. |
+| REPORT-022 | 아침 브리핑 사전 준비 | 날짜별 주제와 생성 근거를 미리 수집해 Snapshot으로 고정한다. |
 | IMG-013 | 대표 이미지 선택 | 실제 인용한 출처 이미지 중 리포트 상단에 표시할 한 건을 선택한다. |
 
 ### 5-1. 변경점 추적 (Change History)

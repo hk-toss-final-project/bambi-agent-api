@@ -48,6 +48,11 @@ Context Packet만 반환하고, 최종 리포트 추론과 작성은 Report Buil
 후보 선택은 exact/alias/RRF 순서의 결정적 정책을 사용해 V1의 반복적인 Tool LLM
 왕복을 제거한다.
 
+여러 주제를 묶은 리포트는 하나의 DB 연결에서 Topic별 Wiki·Global 조회와 판정을
+짧게 끝낸 뒤, 저장 근거가 부족한 Topic의 Live 수집만 최대 3개까지 병렬 실행한다.
+Topic별 결과는 원래 입력 순서로 다시 조립하며, 문서 중복은 Topic마다 다시 매겨지는
+참조 번호가 아니라 원본 Version·Chunk 식별자로 제거한다.
+
 ## 3. 유지 루프 계약
 
 환경변수 `WIKI_MAINTENANCE_PIPELINE_VERSION`이 새 Full Rebuild Job의
@@ -82,11 +87,9 @@ Embedding만 빠진 Wiki는 `repair_derivatives`로 끝내 불필요한 전체 L
 
 ## 5. 출시 순서
 
-1. V1 기본값으로 V2 코드를 배포하고 결정적 테스트를 통과한다.
-2. 동일한 입력을 V2로 제한 실행해 지연, 근거 수, Live 수집률과 실패율을 비교한다.
-3. Canary 사용자 또는 Worker부터 V2 기본값을 적용한다.
-4. 회귀가 없을 때 전체 기본값을 V2로 바꾼다.
-5. 문제 발생 시 기본값을 V1으로 되돌린다. 진행 중 Job은 고정 버전으로 마친다.
+1. V2를 새 Job의 기본값으로 사용하고 결정적 테스트를 통과한다.
+2. 동일한 입력의 V1 기준선과 지연, 근거 수, Live 수집률과 실패율을 비교한다.
+3. 문제 발생 시 기본값을 V1으로 되돌린다. 진행 중 Job은 고정 버전으로 마친다.
 
 Reader 또는 Graph 구조를 바꾸면 `bench/wiki_navigation/` 평가를 갱신한다. 실제
 Provider를 호출하는 벤치마크는 케이스 수와 예상 Token·비용을 먼저 고지한 뒤에만
