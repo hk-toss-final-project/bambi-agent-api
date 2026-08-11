@@ -46,7 +46,6 @@ from agent.report_builder.api import (
     select_personal_documents,
     select_pool_documents,
     focus_documents_on_topic,
-    generate_topic_facets,
     select_generation_context,
     search_global_documents,
 )
@@ -1242,26 +1241,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             "research_stats": research_stats,
         }
 
-    def _topic_context_hint(documents: Sequence[Any], topic: str) -> str:
-        """이미 조회한 문서에서 이 주제가 무엇인지 알려줄 한 줄을 뽑는다.
-
-        주제어만으로는 보조 검색어가 헛돈다(2026-08-11 실측: `코리`에 "최신 뉴스",
-        "활동 소식"이 생성됐다 — 제약 기업인지 모르니 아무 데나 붙는 말이 나왔다).
-        개인 Wiki 문서에 그 설명이 이미 들어 있으므로 DB를 다시 부르지 않는다.
-        """
-        marker = "".join(topic.split()).casefold()
-        for document in documents:
-            title = str(getattr(document, "title", "") or "")
-            if "".join(title.split()).casefold() != marker:
-                continue
-            content = " ".join(str(getattr(document, "content", "") or "").split())
-            if content:
-                return content[:200]
-        return ""
-
-    async def load_related_keywords(
-        user_id: str, topic: str, *, intent: str = "news", context: str = ""
-    ) -> list[str]:
+    async def load_related_keywords(user_id: str, topic: str) -> list[str]:
         """개인 Wiki Graph Gate로 bounded PPR 또는 검증 1-hop 키워드를 읽는다.
 
         관심 키워드 하나로만 수집하면 '코스피' 리포트에 코스닥시장 기사가 걸리지
@@ -1297,28 +1277,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             list(expansion.keywords),
             list(expansion.maturity_reasons),
         )
-        keywords = list(expansion.keywords)
-        # 이웃이 모자란 자리만 보조 검색어로 채운다. 방금 생긴 관심사는 Wiki에
-        # 이웃이 없어 주제어 하나로만 수집하는데, 그런 주제일수록 창고도 얕아
-        # 결과가 홍보성 자료로 채워진다(2026-08-11 실측: '다낭 여행').
-        # 이웃이 충분하면 부르지 않는다 — LLM 호출을 아낀다.
-        if len(keywords) < limit:
-            facets = await to_thread(
-                generate_topic_facets,
-                topic,
-                intent=intent,
-                context=context,
-                limit=limit - len(keywords),
-            )
-            existing = {"".join(topic.split()).casefold()} | {
-                "".join(keyword.split()).casefold() for keyword in keywords
-            }
-            keywords.extend(
-                facet
-                for facet in facets
-                if "".join(facet.split()).casefold() not in existing
-            )
-        return keywords
+        return list(expansion.keywords)
 
     async def load_bundle_navigation_context(
         state: ReportGenerationState,
@@ -1508,12 +1467,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             related_keywords = (
                 bundle_keywords[1:]
                 if topic_bundle
-                else await load_related_keywords(
-                    state["user_id"],
-                    state["topic"],
-                    intent=str(state.get("topic_intent") or "news"),
-                    context=_topic_context_hint(personal_documents, state["topic"]),
-                )
+                else await load_related_keywords(state["user_id"], state["topic"])
             )
         if already_collected_live and not pool_is_enough:
             logger.info(
@@ -1713,12 +1667,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         related_keywords = (
             bundle_keywords[1:]
             if topic_bundle
-            else await load_related_keywords(
-                state["user_id"],
-                topic,
-                intent=topic_intent,
-                context=_topic_context_hint(stored, topic),
-            )
+            else await load_related_keywords(state["user_id"], topic)
         )
         _record("related_keywords", keywords_started)
         live_started = monotonic()

@@ -57,7 +57,6 @@ from .features.generation import (
     parse_report_generation,
 )
 from .features.topic_focus import focus_documents_on_topic
-from .features.topic_facets import generate_topic_facets
 from .features.quality import QualityVerdict, evaluate_report
 from .features.citations import report_011
 from .features.validation import report_013, report_014, report_015, report_016
@@ -103,5 +102,4 @@ __all__ = [
     "search_global_documents",
     "embed_wiki_queries",
     "focus_documents_on_topic",
-    "generate_topic_facets",
 ]

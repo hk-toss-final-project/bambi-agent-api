@@ -577,9 +577,6 @@ def _disable_research(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: False)
     monkeypatch.setattr(agent_graph, "resolve_topic_intent", lambda *args: "news")
-    # 보조 검색어 생성도 LLM을 부른다. 대체하지 않으면 그래프 테스트가 실제
-    # OpenAI를 호출한다.
-    monkeypatch.setattr(agent_graph, "generate_topic_facets", lambda *a, **k: ())
     monkeypatch.setattr(agent_graph, "embed_wiki_queries", lambda queries: {})
     _disable_critic(monkeypatch)
 
