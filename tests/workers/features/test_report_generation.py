@@ -131,6 +131,24 @@ def test_worker_defaults_the_toggle_off_for_jobs_without_the_flag(
     )
 
     assert captured["change_history_enabled"] is False
+    assert captured["read_pipeline_version"] == "legacy_v1"
+
+
+def test_worker_passes_pinned_read_pipeline_version_to_the_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """운영 Worker는 현재 설정이 아니라 Job Payload에 고정된 V2 버전을 전달한다."""
+    captured = _run_worker_job(
+        monkeypatch,
+        {
+            "topic": "반도체",
+            "content_type": "interest_news_card",
+            "language": "ko",
+            "read_pipeline_version": "langgraph_v2",
+        },
+    )
+
+    assert captured["read_pipeline_version"] == "langgraph_v2"
 
 
 def test_worker_stages_explicit_batch_report_and_releases_job_lease(

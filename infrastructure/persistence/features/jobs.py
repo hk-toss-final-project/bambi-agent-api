@@ -296,6 +296,54 @@ async def claim_personal_wiki_jobs(
     )
 
 
+async def extend_agent_job_lease(
+    connection: AsyncConnection[DictRow],
+    *,
+    job: ClaimedAgentJob,
+    worker_id: str,
+    lease_seconds: int,
+) -> datetime | None:
+    """현재 Attempt를 소유한 Worker의 실행 중 Job Lease를 연장한다.
+
+    Job ID와 Worker뿐 아니라 Attempt 번호까지 확인해, 같은 Worker ID가 다시
+    점유한 새 Attempt를 이전 heartbeat가 잘못 연장하지 못하게 한다.
+    """
+    if not 30 <= lease_seconds <= 3600:
+        raise ValueError("Job Lease는 30초에서 3600초 사이여야 합니다.")
+    cursor = await connection.execute(
+        """
+        UPDATE agent.agent_jobs
+        SET
+            lease_expires_at = clock_timestamp() + (%s * interval '1 second'),
+            updated_at = clock_timestamp()
+        WHERE id = %s
+          AND status = 'running'
+          AND locked_by = %s
+          AND attempt_count = %s
+          AND lease_expires_at > clock_timestamp()
+        RETURNING lease_expires_at
+        """,
+        (lease_seconds, job.job_id, worker_id, job.attempt_number),
+    )
+    row = await cursor.fetchone()
+    if row is not None:
+        return row["lease_expires_at"]
+    completed_cursor = await connection.execute(
+        """
+        SELECT 1
+        FROM agent.agent_job_attempts
+        WHERE job_id = %s
+          AND attempt_number = %s
+          AND worker_id = %s
+          AND status = 'completed'
+        """,
+        (job.job_id, job.attempt_number, worker_id),
+    )
+    if await completed_cursor.fetchone() is not None:
+        return None
+    raise RuntimeError(f"Job Lease 소유권이 없습니다: {job.job_id}")
+
+
 async def get_agent_job(
     connection: AsyncConnection[DictRow], *, job_id: str
 ) -> StoredAgentJob | None:
@@ -733,14 +781,22 @@ async def enqueue_personal_wiki_rebuild_job(
     source_event_row_id: str,
     removed_source_document_id: str,
     request_id: str | None = None,
+    maintenance_pipeline_version: str = "legacy_v1",
 ) -> EnqueuedWikiBuildJob:
     """활성 원본 전체를 다시 읽는 Personal Wiki Full Rebuild Job을 멱등 등록한다.
 
     기존 Worker와 상태 조회 계약을 재사용하기 위해 Job 유형은
     ``personal_wiki_build``를 유지하고 Payload의 ``mode``로 전체 재빌드를 구분한다.
     """
+    if maintenance_pipeline_version not in {"legacy_v1", "langgraph_v2"}:
+        raise ValueError(
+            "지원하지 않는 Wiki 유지 파이프라인 버전입니다: "
+            f"{maintenance_pipeline_version}"
+        )
     payload = {
         "mode": "full_rebuild",
+        "trigger": "source_deleted",
+        "maintenance_pipeline_version": maintenance_pipeline_version,
         "source_event_id": source_event_id,
         "source_event_row_id": source_event_row_id,
         "removed_source_document_id": removed_source_document_id,
@@ -884,6 +940,7 @@ async def enqueue_personal_wiki_maintenance_rebuild_job(
     user_id: str,
     maintenance_key: str,
     request_id: str | None = None,
+    maintenance_pipeline_version: str = "legacy_v1",
 ) -> EnqueuedWikiBuildJob:
     """정기 유지보수용 Personal Wiki Full Rebuild Job을 멱등 등록한다.
 
@@ -906,10 +963,16 @@ async def enqueue_personal_wiki_maintenance_rebuild_job(
     """
     if not maintenance_key:
         raise ValueError("정기 재구성에 maintenance_key가 필요합니다.")
+    if maintenance_pipeline_version not in {"legacy_v1", "langgraph_v2"}:
+        raise ValueError(
+            "지원하지 않는 Wiki 유지 파이프라인 버전입니다: "
+            f"{maintenance_pipeline_version}"
+        )
     payload = {
         "mode": "full_rebuild",
         "trigger": "maintenance",
         "maintenance_key": maintenance_key,
+        "maintenance_pipeline_version": maintenance_pipeline_version,
     }
     creation = await job_001(
         feature_id=MAINTENANCE_REBUILD_FEATURE_ID,

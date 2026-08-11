@@ -217,6 +217,49 @@ def test_enqueue_defaults_change_history_toggle_to_off() -> None:
     assert insert_params[2].obj["change_history_enabled"] is False
 
 
+def test_enqueue_pins_read_pipeline_version_in_job_payload() -> None:
+    """Report Job은 접수 시점의 읽기 루프 버전을 Payload에 고정한다."""
+    connection = _connection_with_context()
+
+    asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-v2-reader",
+            topic="반도체",
+            content_type="interest_news_card",
+            language="ko",
+            request_id="request-1",
+            read_pipeline_version="langgraph_v2",
+        )
+    )
+
+    _, insert_params = connection.executed[2]
+    assert insert_params is not None
+    assert insert_params[2].obj["read_pipeline_version"] == "langgraph_v2"
+
+
+def test_enqueue_defaults_missing_read_pipeline_version_to_legacy() -> None:
+    """전환 설정을 생략한 접수는 V1 호환 버전을 명시적으로 저장한다."""
+    connection = _connection_with_context()
+
+    asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-v1-reader",
+            topic="반도체",
+            content_type="interest_news_card",
+            language="ko",
+            request_id="request-1",
+        )
+    )
+
+    _, insert_params = connection.executed[2]
+    assert insert_params is not None
+    assert insert_params[2].obj["read_pipeline_version"] == "legacy_v1"
+
+
 def test_enqueue_batch_report_freezes_database_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

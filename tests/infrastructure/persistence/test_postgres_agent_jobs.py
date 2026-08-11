@@ -27,12 +27,16 @@ def _repository(
     *,
     wiki_build_quiet_minutes: int = 0,
     wiki_build_max_wait_minutes: int = 30,
+    wiki_read_pipeline_version: str = "legacy_v1",
+    wiki_maintenance_pipeline_version: str = "legacy_v1",
 ) -> PostgresAgentJobRepository:
     """실제 DB Pool 생성 없이 피드백·조용 시간 메서드만 시험할 저장소를 만든다."""
     repository = PostgresAgentJobRepository.__new__(PostgresAgentJobRepository)
     repository._pool = _Pool(connection)  # type: ignore[assignment]
     repository._wiki_build_quiet_minutes = wiki_build_quiet_minutes
     repository._wiki_build_max_wait_minutes = wiki_build_max_wait_minutes
+    repository._wiki_read_pipeline_version = wiki_read_pipeline_version
+    repository._wiki_maintenance_pipeline_version = wiki_maintenance_pipeline_version
     return repository
 
 
@@ -149,6 +153,8 @@ def test_repository_defaults_quiet_window_to_immediate() -> None:
 
     assert repository._wiki_build_quiet_minutes == 0
     assert repository._wiki_build_max_wait_minutes == 30
+    assert repository._wiki_read_pipeline_version == "legacy_v1"
+    assert repository._wiki_maintenance_pipeline_version == "legacy_v1"
 
 
 def test_repository_stores_configured_quiet_window() -> None:
@@ -157,10 +163,14 @@ def test_repository_stores_configured_quiet_window() -> None:
         "postgresql://fake",
         wiki_build_quiet_minutes=5,
         wiki_build_max_wait_minutes=20,
+        wiki_read_pipeline_version="langgraph_v2",
+        wiki_maintenance_pipeline_version="langgraph_v2",
     )
 
     assert repository._wiki_build_quiet_minutes == 5
     assert repository._wiki_build_max_wait_minutes == 20
+    assert repository._wiki_read_pipeline_version == "langgraph_v2"
+    assert repository._wiki_maintenance_pipeline_version == "langgraph_v2"
 
 
 def test_submit_web_clipping_forwards_configured_quiet_window(

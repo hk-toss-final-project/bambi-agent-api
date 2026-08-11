@@ -10,7 +10,12 @@ from typing import Any
 from psycopg import AsyncConnection
 
 from agent.graph import run_personal_wiki_build, run_personal_wiki_rebuild
-from agent.wiki_builder.api import wba_001
+from agent.wiki_builder.api import (
+    LEGACY_MAINTENANCE_PIPELINE_VERSION,
+    MAINTENANCE_PIPELINE_VERSIONS,
+    run_wiki_maintenance_for_version,
+    wba_001,
+)
 from domain.jobs.api import job_007
 from infrastructure.persistence.api import (
     ClaimedAgentJob,
@@ -19,7 +24,7 @@ from infrastructure.persistence.api import (
     set_system_job_scope,
 )
 from workers.features.batch_runner import run_job_batch
-from workers.runtime.api import ProviderRateLimitPolicy
+from workers.runtime.api import JobInputError, ProviderRateLimitPolicy
 
 type DictRow = dict[str, Any]
 
@@ -39,17 +44,31 @@ async def _process_job(
 ) -> dict[str, object]:
     """점유한 Personal Wiki Job 하나를 그래프로 Build하고 완료 상태로 바꾼다."""
     if job.payload.get("mode") == "full_rebuild":
-        result = await run_personal_wiki_rebuild(
+        pipeline_version = str(
+            job.payload.get("maintenance_pipeline_version")
+            or LEGACY_MAINTENANCE_PIPELINE_VERSION
+        )
+        if pipeline_version not in MAINTENANCE_PIPELINE_VERSIONS:
+            raise JobInputError(
+                "지원하지 않는 Wiki 유지 파이프라인 버전입니다: "
+                f"{pipeline_version}"
+            )
+        result = await run_wiki_maintenance_for_version(
             connection,
+            pipeline_version=pipeline_version,
             user_id=job.user_id,
             job_id=job.job_id,
+            trigger=str(job.payload.get("trigger") or "legacy_full_rebuild"),
+            rebuild_runner=run_personal_wiki_rebuild,
             model=model,
             embedding_batch_threshold=embedding_batch_threshold,
         )
     else:
         source_version_id = job.payload.get("source_document_version_id")
         if not isinstance(source_version_id, str) or not source_version_id:
-            raise ValueError("Job Payload에 source_document_version_id가 없습니다.")
+            raise JobInputError(
+                "Job Payload에 source_document_version_id가 없습니다."
+            )
         result = await wba_001(
             run_personal_wiki_build,
             connection,

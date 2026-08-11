@@ -165,6 +165,13 @@ best-effort로 갱신한다.
 있는 사용자를 건너뛰어 재구성이 쌓이지 않게 하고, 등록만 하고 실제 재구성은 Worker에
 맡겨 무거운 Build가 수집 tick을 붙잡지 않게 한다.
 
+유지 루프 V2는 `Audit → Plan → Execute → Finalize` LangGraph로 이 트리거를
+소비한다. 활성 원본·Snapshot·품질 Metric·Embedding 누락을 먼저 감사해 건강하면
+`noop`, 검색 파생값만 빠졌으면 `repair_derivatives`, 원본 또는 구조가 달라졌으면
+`full_rebuild`를 선택한다. 전체 재구성은 위의 V1 원자 교체 실행기를 재사용한다.
+Job 접수 시 `maintenance_pipeline_version`을 고정하므로 V2 적용 뒤에도 새 Job의
+기본값을 `legacy_v1`로 되돌려 즉시 롤백할 수 있다.
+
 실제 PostgreSQL을 사용한 전체 재구성 운영 검증과 정기 재구성의 LLM 비용 관측은
 아직 남아 있다.
 
@@ -231,7 +238,7 @@ support Snapshot을 읽어 이 Gate를 실행한다. 통과하면 bounded PPR, �
 | P1 온보딩 Anchor | 후속 일반 Build 연결·폭염→날씨 실측 통과 | 운영 사용자 회귀 확인 |
 | P2 provenance·lifecycle | Migration·저장 동기화·로컬 DB 계약 검증 완료 | 배포 DB Migration·삭제/갱신 통합 검증 |
 | P2 WBA-014 Lint | Incremental·Full Rebuild에 연결됨 | 운영 임계값 관측과 조정 |
-| P2 WBA-002 Full Rebuild | 원본 제거·정기 유지보수 트리거 연결됨 | 배포 DB E2E와 정기 재구성 비용 관측 |
+| P2 WBA-002 Full Rebuild | V1 원자 교체와 V2 Audit 기반 최소 유지 실행 연결됨 | 배포 DB E2E와 V1/V2 비용·지연 비교 |
 | P3 WBA-011 Embedding | Build 후 best-effort 연결됨 | Provider 실패 재처리 운영 경로 |
 | P3 2-hop PPR Gate | 일반 Report 보조 검색어 경로 연결됨 | 실제 데이터 A/B 품질·지연 검증 |
 | PRAG-003 Vector 검색 | 미구현 | 사용자 Scope Vector 검색·결합·recall 실측 |

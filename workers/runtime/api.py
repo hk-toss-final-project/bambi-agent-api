@@ -12,7 +12,7 @@ from .features.queue import (
 )
 from .features.heartbeat import wc_003, wc_004
 from .features.progress import wc_005
-from .features.retry import wc_006, wc_007, wc_008
+from .features.retry import JobInputError, wc_006, wc_007, wc_008
 from .features.idempotency import wc_009, wc_010
 from .features.control import wc_011, wc_012
 from .features.concurrency import ProviderRateLimitPolicy, wc_013, wc_014
@@ -35,6 +35,7 @@ __all__ = [
     "wc_013",
     "wc_014",
     "ProviderRateLimitPolicy",
+    "JobInputError",
     "wc_015",
     "wc_016",
     "wc_017",
