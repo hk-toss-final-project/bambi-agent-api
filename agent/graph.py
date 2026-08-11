@@ -2264,9 +2264,11 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         research_stats = state.get("research_stats")
         if research_stats:
             result["research_stats"] = list(research_stats)
-        result["read_pipeline_version"] = str(
+        read_pipeline_version = str(
             state.get("read_pipeline_version") or LEGACY_READ_PIPELINE_VERSION
         )
+        if read_pipeline_version != LEGACY_READ_PIPELINE_VERSION:
+            result["read_pipeline_version"] = read_pipeline_version
         return {"result": result}
 
     graph = StateGraph(ReportGenerationState)

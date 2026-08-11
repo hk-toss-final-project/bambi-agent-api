@@ -427,11 +427,7 @@ async def run_wiki_maintenance_for_version(
             model=model,
             embedding_batch_threshold=embedding_batch_threshold,
         )
-        return {
-            **result,
-            "maintenance_pipeline_version": LEGACY_MAINTENANCE_PIPELINE_VERSION,
-            "maintenance_action": WikiMaintenanceAction.FULL_REBUILD.value,
-        }
+        return dict(result)
     if pipeline_version == LANGGRAPH_MAINTENANCE_PIPELINE_VERSION:
         return await run_wiki_maintenance_graph_v2(
             connection,

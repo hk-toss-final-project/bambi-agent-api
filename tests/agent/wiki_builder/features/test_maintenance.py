@@ -276,8 +276,8 @@ def test_v2_source_deletion_reuses_legacy_atomic_rebuild(
     assert result["maintenance_action"] == "full_rebuild"
 
 
-def test_version_router_keeps_legacy_runner_and_marks_result() -> None:
-    """버전 필드가 없는 과거 Job은 V1 실행기를 그대로 쓰고 실행 버전을 남긴다."""
+def test_version_router_keeps_legacy_runner_result_contract() -> None:
+    """버전 필드가 없는 과거 Job은 V1 실행기와 결과 Payload를 그대로 유지한다."""
     calls: list[str] = []
 
     async def fake_rebuild(connection: Any, **kwargs: Any) -> dict[str, object]:
@@ -296,8 +296,7 @@ def test_version_router_keeps_legacy_runner_and_marks_result() -> None:
     )
 
     assert calls == ["job-1"]
-    assert result["maintenance_pipeline_version"] == "legacy_v1"
-    assert result["maintenance_action"] == "full_rebuild"
+    assert result == {"full_rebuild": True}
 
 
 def test_version_router_rejects_unknown_maintenance_version() -> None:
