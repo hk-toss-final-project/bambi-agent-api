@@ -8,6 +8,7 @@ Transaction을 소유하고, LLM 노드는 Transaction 밖(스레드)에서 실�
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from asyncio import to_thread
 from dataclasses import dataclass, replace
@@ -2002,37 +2003,47 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         """주제마다 델타를 따로 돌리고 하나의 본문으로 합친다.
 
         비교축이 (user_id, topic)이라 여러 주제를 한 축으로 묶으면 주제별 변화가
-        구분되지 않는다(팩트가 대표 문자열 하나에 섞여 쌓인다). 주제마다 돌리면
-        LLM 호출이 주제 수만큼 늘지만, 그러지 않으면 이 경로에서 기능 자체가
-        성립하지 않는다.
+        구분되지 않는다(팩트가 대표 문자열 하나에 섞여 쌓인다).
 
-        주제 하나가 실패해도 나머지는 계속 돈다 — 한 주제 때문에 브리핑 전체가
-        기존 생성으로 되돌아가면 손해가 더 크다. 전부 실패했을 때만 되돌린다.
+        asyncio.gather와 Semaphore(3)로 주제별 델타를 동시 병렬 처리하여 지연 시간을 단축한다.
+        단일 DB connection 상의 트랜잭션 충돌을 방지하기 위해 db_lock을 전달한다.
         """
         contexts_by_topic = state.get("contexts_by_topic") or {}
+        db_lock = asyncio.Lock()
+        semaphore = asyncio.Semaphore(3)
+
+        async def _run_topic_delta(topic: str) -> tuple[str, dict[str, Any] | None]:
+            contexts = list(contexts_by_topic.get(topic) or [])
+            if not contexts:
+                return topic, None
+            async with semaphore:
+                try:
+                    outcome = await chg_001(
+                        connection,
+                        user_id=state["user_id"],
+                        job_id=state["job_id"],
+                        topic=topic,
+                        contexts=contexts,
+                        model=state["model"],
+                        db_lock=db_lock,
+                    )
+                    return topic, outcome
+                except Exception:
+                    logger.exception("주제 델타에 실패해 이 주제는 빼고 진행합니다: topic=%s", topic)
+                    return topic, None
+
+        results = await asyncio.gather(*[_run_topic_delta(t) for t in topics])
         collected: list[tuple[str, Any]] = []
         outcomes: list[dict[str, Any]] = []
         skipped: list[str] = []
-        for topic in topics:
-            contexts = list(contexts_by_topic.get(topic) or [])
-            if not contexts:
+
+        for topic, outcome in results:
+            if outcome is None:
                 skipped.append(topic)
-                continue
-            try:
-                outcome = await chg_001(
-                    connection,
-                    user_id=state["user_id"],
-                    job_id=state["job_id"],
-                    topic=topic,
-                    contexts=contexts,
-                    model=state["model"],
-                )
-            except Exception:
-                logger.exception("주제 델타에 실패해 이 주제는 빼고 진행합니다: topic=%s", topic)
-                skipped.append(topic)
-                continue
-            collected.append((topic, outcome["generated"]))
-            outcomes.append(outcome)
+            else:
+                collected.append((topic, outcome["generated"]))
+                outcomes.append(outcome)
+
         if not collected:
             logger.warning("모든 주제의 델타가 실패해 기존 생성 경로로 되돌립니다.")
             return {"change_history": {"failed": True}}
@@ -2194,7 +2205,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 connection,
                 job_id=state["job_id"],
                 user_id=state["user_id"],
-                attempt_number=state["attempt_number"],
+                attempt_number=state.get("attempt_number", 1),
                 content_type=state["content_type"],
                 generated=state["generated"],
                 contexts=state["contexts"],

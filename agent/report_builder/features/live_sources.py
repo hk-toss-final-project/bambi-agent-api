@@ -127,7 +127,7 @@ def _fill_missing_source_images(items: Sequence[dict[str, object]]) -> None:
         ]
         for source, url, future in futures:
             try:
-                image_url = future.result()
+                image_url = future.result(timeout=2.0)
             except Exception as error:
                 logger.warning(
                     "실시간 기사 대표 이미지 조회 실패, 이미지 없이 계속한다: %s: %s",
