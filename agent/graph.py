@@ -1704,6 +1704,20 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             )
             elapsed["focus"] = int((monotonic() - focus_started) * 1000)
             focused = len(documents)
+            # 앞 주제가 이미 가져간 문서는 **상한을 적용하기 전에** 뺀다. 뒤에서
+            # 거르면 상한이 중복 문서로 다 차서, 그 주제만의 근거가 남아 있어도
+            # 확보 0건이 되어 섹션이 통째로 빠진다(2026-08-11 실측: '폭염'이 근거를
+            # 7건 모으고 선별도 통과했는데 상한 4건이 전부 '코스닥'과 겹쳐 사라졌다).
+            #
+            # 겹친 문서를 그냥 두 주제에 같이 쓸 수는 없다. focus가 앞 주제 기준으로
+            # 본문을 이미 잘라놔서, 뒤 주제가 그 문서를 인용하면 자기 주제와 무관한
+            # 문장을 근거로 삼게 된다.
+            documents = [
+                document
+                for document in documents
+                if str(getattr(document, "reference", None) or document) not in seen
+            ]
+            deduped = len(documents)
             finalize_started = monotonic()
             finalized = await _finalize_contexts(state, documents, max_documents=quota)
             elapsed["finalize"] = int((monotonic() - finalize_started) * 1000)
@@ -1727,6 +1741,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                     "topic": topic,
                     "gathered": gathered,
                     "after_focus": focused,
+                    "after_dedupe": deduped,
                     "selected": selected,
                     "picked": picked,
                     "quota": quota,
@@ -1738,11 +1753,13 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 }
             )
             logger.info(
-                "주제별 근거 배정: topic=%s 몫=%d건 수집=%d건 선별후=%d건 확보=%d건 %dms %s",
+                "주제별 근거 배정: topic=%s 몫=%d건 수집=%d건 선별후=%d건 "
+                "중복제외후=%d건 확보=%d건 %dms %s",
                 topic,
                 quota,
                 gathered,
                 focused,
+                deduped,
                 picked,
                 int((monotonic() - topic_started) * 1000),
                 elapsed,

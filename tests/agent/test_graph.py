@@ -1457,6 +1457,68 @@ def test_multi_topic_report_drops_topics_without_evidence(
     assert generated_with["contexts"] == ["context-반도체", "context-프로야구"]
 
 
+def test_multi_topic_report_keeps_a_topic_whose_top_evidence_is_already_used(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """앞 주제와 겹치는 근거는 상한을 적용하기 전에 뺀다.
+
+    2026-08-11 실측: '폭염'이 근거를 7건 모으고 선별도 통과했는데, 상한 4건이
+    전부 '코스닥'이 먼저 가져간 문서라 확보 0건이 되어 섹션이 통째로 빠졌다.
+    그 주제만의 근거가 남아 있었는데도 상한이 중복으로 다 찬 것이다.
+    """
+    generated_with: dict[str, Any] = {}
+    shared = [f"shared-{index}" for index in range(4)]
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """DB 사용자 Scope 설정을 생략한다."""
+        return None
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[str]:
+        """뒤 주제가 앞 주제와 겹치는 문서에 더해 자기 근거를 하나 갖게 한다."""
+        query = kwargs["query"]
+        return shared if query == "코스닥" else [*shared, f"only-{query}"]
+
+    async def fake_prag_006(contexts: list[str]) -> list[str]:
+        """검색 Context를 변경 없이 반환한다."""
+        return contexts
+
+    def fake_generate(**kwargs: Any) -> str:
+        """생성 입력을 붙잡아 두고 고정 콘텐츠를 반환한다."""
+        generated_with.update(kwargs)
+        return "generated"
+
+    async def fake_prag_007(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """저장 호출을 고정 결과로 대체한다."""
+        return {"content_candidate_id": "candidate-1"}
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
+    monkeypatch.setattr(agent_graph, "generate_report_content_with_quality", fake_generate)
+    monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
+    monkeypatch.setattr(agent_graph, "collect_live_context", lambda *a, **k: [])
+    _disable_research(monkeypatch)
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 관심사 브리핑",
+            topics=["코스닥", "폭염", "다낭 여행"],
+            content_type="interest_news_card",
+            language="ko",
+            model="test-model",
+        )
+    )
+
+    # 겹치는 문서를 먼저 빼면 뒤 주제도 자기 근거로 섹션을 얻는다.
+    assert generated_with["topics"] == ["코스닥", "폭염", "다낭 여행"]
+    assert "only-폭염" in generated_with["contexts"]
+    assert "only-다낭 여행" in generated_with["contexts"]
+
+
 def test_multi_topic_report_collects_live_when_the_pool_is_thin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
