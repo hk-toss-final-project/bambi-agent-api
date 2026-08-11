@@ -13,6 +13,10 @@ from shared.retry import exponential_backoff_delay
 from shared.contracts import FeatureRequest, FeatureResult
 
 
+class JobInputError(ValueError):
+    """재시도해도 바뀌지 않는 Job Payload 계약 오류."""
+
+
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def wc_006(
     connection: AsyncConnection[dict[str, Any]],

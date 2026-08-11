@@ -21,6 +21,7 @@ from infrastructure.persistence.features.jobs import (
     defer_agent_job_for_provider,
     enqueue_global_collection_run_job,
     enqueue_personal_wiki_build_job,
+    extend_agent_job_lease,
     fail_agent_job,
     get_agent_jobs,
     release_user_wiki_build_jobs,
@@ -156,6 +157,86 @@ def test_claim_personal_wiki_jobs_validates_limits() -> None:
                 lease_seconds=600,
             )
         )
+
+
+def test_extend_agent_job_lease_checks_worker_and_attempt_ownership() -> None:
+    """Heartbeat가 현재 Worker·Attempt 소유권을 확인하고 새 만료 시각을 반환한다."""
+    expires_at = datetime(2026, 8, 11, 12, 10, tzinfo=UTC)
+    connection = _FakeConnection([[{"lease_expires_at": expires_at}]])
+    job = ClaimedAgentJob(
+        job_id="job-1",
+        user_id="user-1",
+        feature_id="SVC-008",
+        job_type="report_generation",
+        attempt_number=2,
+        max_attempts=3,
+    )
+
+    result = asyncio.run(
+        extend_agent_job_lease(
+            connection,  # type: ignore[arg-type]
+            job=job,
+            worker_id="worker-1",
+            lease_seconds=600,
+        )
+    )
+
+    assert result == expires_at
+    sql, params = connection.executed[0]
+    assert "status = 'running'" in sql
+    assert "locked_by = %s" in sql
+    assert "attempt_count = %s" in sql
+    assert "lease_expires_at > clock_timestamp()" in sql
+    assert params == (600, "job-1", "worker-1", 2)
+
+
+def test_extend_agent_job_lease_rejects_lost_ownership() -> None:
+    """이미 만료되거나 재점유된 Job은 이전 heartbeat가 연장하지 못한다."""
+    connection = _FakeConnection([[], []])
+    job = ClaimedAgentJob(
+        job_id="job-1",
+        user_id="user-1",
+        feature_id="SVC-008",
+        job_type="report_generation",
+        attempt_number=1,
+        max_attempts=3,
+    )
+
+    with pytest.raises(RuntimeError, match="Lease 소유권"):
+        asyncio.run(
+            extend_agent_job_lease(
+                connection,  # type: ignore[arg-type]
+                job=job,
+                worker_id="stale-worker",
+                lease_seconds=600,
+            )
+        )
+
+
+def test_extend_agent_job_lease_accepts_same_attempt_completion() -> None:
+    """동일 Worker·Attempt가 방금 완료한 Job은 heartbeat 소유권 오류가 아니다."""
+    connection = _FakeConnection([[], [{"exists": 1}]])
+    job = ClaimedAgentJob(
+        job_id="job-1",
+        user_id="user-1",
+        feature_id="SVC-008",
+        job_type="report_generation",
+        attempt_number=2,
+        max_attempts=3,
+    )
+
+    result = asyncio.run(
+        extend_agent_job_lease(
+            connection,  # type: ignore[arg-type]
+            job=job,
+            worker_id="worker-1",
+            lease_seconds=600,
+        )
+    )
+
+    assert result is None
+    assert "agent.agent_job_attempts" in connection.executed[1][0]
+    assert connection.executed[1][1] == ("job-1", 2, "worker-1")
 
 
 def test_claim_runnable_agent_jobs_parameterizes_job_type() -> None:

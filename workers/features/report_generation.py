@@ -11,6 +11,7 @@ from psycopg import AsyncConnection
 
 from agent.report_builder.api import (
     LEGACY_READ_PIPELINE_VERSION,
+    READ_PIPELINE_VERSIONS,
     report_001,
     report_context_from_mapping,
     stage_report_generation_batch,
@@ -26,7 +27,7 @@ from infrastructure.persistence.api import (
 )
 from shared.contracts import FeatureRequest
 from workers.features.batch_runner import run_job_batch
-from workers.runtime.api import ProviderRateLimitPolicy
+from workers.runtime.api import JobInputError, ProviderRateLimitPolicy
 
 type DictRow = dict[str, Any]
 
@@ -48,7 +49,9 @@ async def _process_job(
     content_type = str(job.payload.get("content_type") or "").strip()
     language = str(job.payload.get("language") or "ko").strip()
     if not topic or not content_type:
-        raise ValueError("Report Builder Job Payload에 topic과 content_type이 필요합니다.")
+        raise JobInputError(
+            "Report Builder Job Payload에 topic과 content_type이 필요합니다."
+        )
     # 변경점 추적 토글. 개발 API(AgentWorkflowService)와 같은 키를 읽어야 요청이
     # 어느 경로로 실행되든 결과가 같다. 이 키가 없는 기존 Job(플래그 도입 이전
     # 등록분)은 지금까지와 같은 생성 경로로 실행된다.
@@ -59,20 +62,33 @@ async def _process_job(
         dict(raw_interest_bundle) if isinstance(raw_interest_bundle, dict) else None
     )
     if generation_scope == "INTEREST_BUNDLE" and interest_bundle is None:
-        raise ValueError("INTEREST_BUNDLE Job Payload에 interest_bundle이 필요합니다.")
+        raise JobInputError(
+            "INTEREST_BUNDLE Job Payload에 interest_bundle이 필요합니다."
+        )
     if str(job.payload.get("execution_mode") or "sync") == "batch":
         if change_history_enabled:
-            raise ValueError("변경점 추적 Report는 OpenAI Batch 실행을 지원하지 않습니다.")
+            raise JobInputError(
+                "변경점 추적 Report는 OpenAI Batch 실행을 지원하지 않습니다."
+            )
         raw_contexts = job.payload.get("batch_contexts")
         if not isinstance(raw_contexts, list) or not raw_contexts:
-            raise ValueError("Batch Report Job에는 고정 batch_contexts가 필요합니다.")
-        contexts = [
-            report_context_from_mapping(value)
-            for value in raw_contexts
-            if isinstance(value, dict)
-        ]
+            raise JobInputError(
+                "Batch Report Job에는 고정 batch_contexts가 필요합니다."
+            )
+        try:
+            contexts = [
+                report_context_from_mapping(value)
+                for value in raw_contexts
+                if isinstance(value, dict)
+            ]
+        except (TypeError, ValueError) as error:
+            raise JobInputError(
+                f"Batch Report Context가 잘못됐습니다: {error}"
+            ) from error
         if len(contexts) != len(raw_contexts):
-            raise ValueError("Batch Report Context 중 객체가 아닌 값이 있습니다.")
+            raise JobInputError(
+                "Batch Report Context 중 객체가 아닌 값이 있습니다."
+            )
         async with connection.transaction():
             await set_system_job_scope(connection)
             stored = await stage_report_generation_batch(
@@ -113,6 +129,11 @@ async def _process_job(
     read_pipeline_version = str(
         job.payload.get("read_pipeline_version") or LEGACY_READ_PIPELINE_VERSION
     )
+    if read_pipeline_version not in READ_PIPELINE_VERSIONS:
+        raise JobInputError(
+            "지원하지 않는 Wiki 읽기 파이프라인 버전입니다: "
+            f"{read_pipeline_version}"
+        )
     raw_navigation_snapshots = job.payload.get("wiki_navigation_snapshots")
     wiki_navigation_snapshots = (
         {

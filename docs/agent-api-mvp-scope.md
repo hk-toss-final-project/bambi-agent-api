@@ -172,6 +172,7 @@
 - [x] `JOB-010` Agent Job Idempotency
 - [x] `WC-001` Queue Job Consume — 상주 소비 루프
 - [x] `WC-002` Job Claim — `FOR UPDATE SKIP LOCKED` + Lease
+- [x] `WC-003` Worker Heartbeat — 실행·동시성 대기 중 별도 DB 연결로 현재 Attempt의 Lease를 최대 60초 간격으로 연장하며, 소유권을 잃으면 해당 실행을 중단한다
 - [x] `WC-006` Retry 정책 — retryable 실패 시 지연 후 queued 복귀
 - [x] `WC-007` Exponential Backoff — OpenAI `Retry-After`를 최소값으로 존중하고
   지수 Backoff+jitter를 적용한다. quota·billing 오류는 재시도하지 않는다
@@ -435,6 +436,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | JOB-010 | Agent Job Idempotency | 동일 클리핑 요청이 Worker Job을 중복 생성하지 않도록 한다. |
 | WC-001 | Queue Job Consume | Worker가 실행 가능한 Personal Wiki Job Batch를 가져온다. |
 | WC-002 | Job Claim | FOR UPDATE SKIP LOCKED와 Lease로 Job Batch를 점유한다. |
+| WC-003 | Worker Heartbeat | Claim한 Job이 동시성·Provider 대기 또는 LLM 실행 중일 때 현재 Attempt의 Lease를 주기적으로 연장한다. |
 | WC-006 | Retry 정책 | 재시도 가능한 Chunking·Embedding 실패를 Backoff 후 다시 처리한다. |
 | WC-009 | Idempotency 처리 | 같은 원본을 다시 처리해도 document_kind+document_key, Wiki·출처·관계·Snapshot Row가 중복되지 않게 한다. |
 | WC-013 | Concurrency 제어 | Claim 크기와 Embedding 동시 실행 수를 별도로 제한한다. |

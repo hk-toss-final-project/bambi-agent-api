@@ -93,6 +93,7 @@ from .features.jobs import (
     list_users_for_maintenance_rebuild,
     enqueue_url_collection_job,
     fail_agent_job,
+    extend_agent_job_lease,
     get_agent_job,
     get_agent_jobs,
     list_runnable_agent_jobs,
@@ -272,4 +273,5 @@ __all__ = [
     "sync_wiki_relation_supports",
     "reset_personal_wiki",
     "get_agent_jobs",
+    "extend_agent_job_lease",
 ]

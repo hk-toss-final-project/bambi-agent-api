@@ -29,8 +29,10 @@ from infrastructure.persistence.api import (
     set_system_job_scope,
 )
 from workers.runtime.api import (
+    JobInputError,
     ProviderRateLimitPolicy,
     wc_002,
+    wc_003,
     wc_006,
     wc_007,
     wc_013,
@@ -42,6 +44,7 @@ type JobProcessor = Callable[
     [AsyncConnection[DictRow], ClaimedAgentJob], Awaitable[dict[str, object]]
 ]
 type JobSerializationKey = Callable[[ClaimedAgentJob], str | None]
+type JobOperation = Callable[[], Awaitable[dict[str, object]]]
 
 logger = logging.getLogger("workers.batch_runner")
 
@@ -136,6 +139,85 @@ async def _unlock_job_serialization_key(
         logger.warning("Job 직렬화 Advisory Lock이 이미 해제됐습니다: %s", key)
 
 
+def _job_heartbeat_interval(lease_seconds: int) -> float:
+    """Lease의 3분의 1 주기를 사용하되 DB 갱신 간격을 1~60초로 제한한다."""
+    return max(1.0, min(60.0, lease_seconds / 3))
+
+
+async def maintain_job_lease(
+    pool: AsyncConnectionPool,
+    *,
+    job: ClaimedAgentJob,
+    worker_id: str,
+    lease_seconds: int,
+    stop_event: asyncio.Event,
+    interval_seconds: float | None = None,
+) -> None:
+    """Job이 대기·실행되는 동안 별도 Pool 연결로 Claim Lease를 주기적으로 연장한다."""
+    interval = (
+        _job_heartbeat_interval(lease_seconds)
+        if interval_seconds is None
+        else interval_seconds
+    )
+    if interval <= 0:
+        raise ValueError("Job heartbeat 간격은 0보다 커야 합니다.")
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            return
+        except TimeoutError:
+            async with pool.connection() as connection:
+                async with connection.transaction():
+                    await set_system_job_scope(connection)
+                    expires_at = await wc_003(
+                        connection,
+                        job=job,
+                        worker_id=worker_id,
+                        lease_seconds=lease_seconds,
+                    )
+                    if expires_at is None:
+                        return
+
+
+async def _run_with_job_heartbeat(
+    *,
+    operation: JobOperation,
+    heartbeat_task: asyncio.Task[None],
+    stop_event: asyncio.Event,
+) -> dict[str, object]:
+    """heartbeat 실패 시 실행을 취소하고, 실행 완료 시 heartbeat를 즉시 정리한다."""
+    if heartbeat_task.done():
+        error = heartbeat_task.exception()
+        if error is None:
+            raise RuntimeError("Job heartbeat가 예기치 않게 종료됐습니다.")
+        raise error
+    operation_task = asyncio.create_task(operation())
+    try:
+        done, _ = await asyncio.wait(
+            (operation_task, heartbeat_task),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        # Job 완료 SQL까지 성공했다면 동시 종료한 heartbeat의 소유권 오류보다
+        # 완료 결과가 우선이다. Lease를 잃었다면 완료 SQL 자체가 실패한다.
+        if operation_task in done:
+            return operation_task.result()
+        error = heartbeat_task.exception()
+        if error is None:
+            # Processor가 같은 Attempt를 완료해 heartbeat가 정상 종료한 경우다.
+            # 완료 뒤 Advisory Lock 해제 같은 짧은 정리 작업은 끝까지 기다린다.
+            return await operation_task
+        raise error
+    finally:
+        stop_event.set()
+        if not operation_task.done():
+            operation_task.cancel()
+        await asyncio.gather(
+            operation_task,
+            heartbeat_task,
+            return_exceptions=True,
+        )
+
+
 async def record_job_failure(
     connection: AsyncConnection[DictRow],
     *,
@@ -146,12 +228,13 @@ async def record_job_failure(
 ) -> dict[str, object]:
     """Job 실패를 기록하고, 기록조차 못 해도 Batch 실행을 계속하게 한다.
 
-    ValueError는 입력 오류(_INPUT_INVALID, 재시도 불가)로, 그 외 예외는
-    _RETRYABLE로 기록한다. Lease가 이미 만료돼 실패 기록의 소유권 검증에
-    걸리면(RuntimeError) Worker 프로세스를 죽이는 대신 lease_lost 결과로
-    보고한다. 해당 Job은 Lease 만료 후 다른 Claim이 다시 처리한다.
+    JobInputError만 입력 오류(_INPUT_INVALID, 재시도 불가)로 보고, 모델 출력
+    파싱 오류 같은 일반 ValueError를 포함한 실행 오류에는 재시도 정책을 적용한다.
+    Lease가 이미 만료돼 실패 기록의 소유권 검증에 걸리면(RuntimeError) Worker
+    프로세스를 죽이는 대신 lease_lost 결과로 보고한다. 해당 Job은 Lease 만료 후
+    다른 Claim이 다시 처리한다.
     """
-    input_invalid = isinstance(error, ValueError)
+    input_invalid = isinstance(error, JobInputError)
     retryable = not input_invalid and is_retryable_openai_error(error)
     if input_invalid:
         error_code = f"{error_code_prefix}_INPUT_INVALID"
@@ -224,7 +307,7 @@ async def run_job_batch(
     pool = AsyncConnectionPool(
         conninfo=database_url,
         min_size=1,
-        max_size=max(2, concurrency + 1),
+        max_size=max(3, concurrency * 2 + 1),
         kwargs={"row_factory": dict_row},
         open=False,
     )
@@ -241,28 +324,58 @@ async def run_job_batch(
                     lease_seconds=lease_seconds,
                 )
 
+        heartbeat_controls: dict[
+            str, tuple[asyncio.Event, asyncio.Task[None]]
+        ] = {}
+        for job in jobs:
+            stop_event = asyncio.Event()
+            heartbeat_controls[job.job_id] = (
+                stop_event,
+                asyncio.create_task(
+                    maintain_job_lease(
+                        pool,
+                        job=job,
+                        worker_id=worker_id,
+                        lease_seconds=lease_seconds,
+                        stop_event=stop_event,
+                    )
+                ),
+            )
+
         async def process_claimed_job(job: ClaimedAgentJob) -> dict[str, object]:
             """점유한 Job 하나를 실행하고 완료·실패 결과로 변환한다."""
             observations: list[LlmCallObservation] = []
             try:
-                if rate_limit_policy is not None:
-                    await wait_for_provider_capacity(pool, policy=rate_limit_policy)
                 with capture_llm_calls() as observations:
-                    async with pool.connection() as job_connection:
-                        key = serialization_key(job) if serialization_key else None
-                        if key:
-                            await _lock_job_serialization_key(
-                                job_connection,
-                                key=key,
+                    async def operation() -> dict[str, object]:
+                        """Provider 대기와 Job DB 연결 사용을 heartbeat 감시 안에서 실행한다."""
+                        if rate_limit_policy is not None:
+                            await wait_for_provider_capacity(
+                                pool,
+                                policy=rate_limit_policy,
                             )
-                        try:
-                            result = await process(job_connection, job)
-                        finally:
+                        async with pool.connection() as job_connection:
+                            key = serialization_key(job) if serialization_key else None
                             if key:
-                                await _unlock_job_serialization_key(
+                                await _lock_job_serialization_key(
                                     job_connection,
                                     key=key,
                                 )
+                            try:
+                                return await process(job_connection, job)
+                            finally:
+                                if key:
+                                    await _unlock_job_serialization_key(
+                                        job_connection,
+                                        key=key,
+                                    )
+
+                    stop_event, heartbeat_task = heartbeat_controls[job.job_id]
+                    result = await _run_with_job_heartbeat(
+                        operation=operation,
+                        heartbeat_task=heartbeat_task,
+                        stop_event=stop_event,
+                    )
             except Exception as error:
                 if rate_limit_policy is not None:
                     await observe_job_provider_limits(
@@ -287,10 +400,18 @@ async def run_job_batch(
                 )
             return {"job_id": job.job_id, "status": "completed", **result}
 
-        return await wc_013(
-            jobs,
-            process_claimed_job,
-            max_concurrency=concurrency,
-        )
+        try:
+            return await wc_013(
+                jobs,
+                process_claimed_job,
+                max_concurrency=concurrency,
+            )
+        finally:
+            for stop_event, _ in heartbeat_controls.values():
+                stop_event.set()
+            await asyncio.gather(
+                *(task for _, task in heartbeat_controls.values()),
+                return_exceptions=True,
+            )
     finally:
         await pool.close()
