@@ -26,6 +26,8 @@ from typing import Any
 
 from psycopg import AsyncConnection
 
+from time import monotonic
+
 from agent.llm.api import ToolCallRecord, ToolSpec, run_tool_loop
 from domain.personal_wiki.navigation.api import (
     wnav_001,
@@ -136,6 +138,9 @@ class ResearchOutcome:
     input_tokens: int = 0
     output_tokens: int = 0
     wiki_packets: tuple[WikiNavigationPacket, ...] = ()
+    # 도구별 (호출 수, 누적 ms). 조사 노드가 리포트 시간의 대부분을 쓰는데
+    # 안이 안 보여 어디를 줄일지 판단할 수 없었다(2026-08-11, 이송우 협의).
+    tool_stats: tuple[tuple[str, int, int], ...] = ()
 
 
 @dataclass(slots=True)
@@ -591,6 +596,26 @@ def merge_context_documents(
     return list(collector.documents)
 
 
+def _timed_tool(tool: ToolSpec, stats: dict[str, list[int]]) -> ToolSpec:
+    """도구 실행을 감싸 호출 횟수와 누적 소요 시간을 기록한다.
+
+    `stats[이름] = [호출 수, 누적 ms]` 로 쌓는다. 실패한 호출도 시간을 쓰므로
+    예외가 나도 기록한 뒤 다시 올린다.
+    """
+    run = tool.run
+
+    async def _run(*args: object, **kwargs: object) -> str:
+        started = monotonic()
+        try:
+            return await run(*args, **kwargs)
+        finally:
+            entry = stats.setdefault(tool.name, [0, 0])
+            entry[0] += 1
+            entry[1] += int((monotonic() - started) * 1000)
+
+    return replace(tool, run=_run)
+
+
 def build_research_tools(
     connection: AsyncConnection[DictRow],
     *,
@@ -872,6 +897,11 @@ async def research_context(
         wiki_version_id=wiki_version_id,
         allow_wiki_navigation=not wiki_selection_fixed,
     )
+    # 도구별 호출 횟수와 소요 시간을 잰다. 3주제 리포트 336초 중 320초가 이
+    # 노드였는데 안이 안 보여 어디를 줄일지 판단할 수 없었다(2026-08-11 실측,
+    # 이송우 협의). 도구 실행만 감싸고 루프 로직은 건드리지 않는다.
+    tool_stats: dict[str, list[int]] = {}
+    tools = [_timed_tool(tool, tool_stats) for tool in tools]
     planned_note = (
         "\n아래 검색어는 요청에서 확정되어 이미 저장 자료 검색을 마쳤다: "
         + ", ".join([topic, *normalized_planned])
@@ -943,4 +973,7 @@ async def research_context(
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
         wiki_packets=tuple(navigation_session.packets),
+        tool_stats=tuple(
+            (name, calls, elapsed) for name, (calls, elapsed) in sorted(tool_stats.items())
+        ),
     )

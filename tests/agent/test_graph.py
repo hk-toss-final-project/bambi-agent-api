@@ -865,7 +865,7 @@ def test_run_report_generation_chains_search_generate_persist(
         "generate",
         "persist",
     ]
-    assert result == {"content_candidate_id": "candidate-1"}
+    assert result["content_candidate_id"] == "candidate-1"
     # 이웃 조회는 개인 Wiki 검색과 Transaction을 분리한다(실패 격리).
     assert connection.transactions == 3
 
@@ -957,7 +957,7 @@ def test_research_agent_output_becomes_generation_context(
 
     assert order == ["research", "generate", "persist"]
     assert used_contexts == [["doc-1", "doc-2"]]
-    assert result == {"content_candidate_id": "candidate-1"}
+    assert result["content_candidate_id"] == "candidate-1"
 
 
 def test_interest_bundle_snapshot_reaches_research_and_generation(
@@ -1092,7 +1092,7 @@ def test_research_failure_falls_back_to_fixed_collection_path(
     result = _run_generation()
 
     assert order == ["research", "load_context", "collect_live", "generate", "persist"]
-    assert result == {"content_candidate_id": "candidate-1"}
+    assert result["content_candidate_id"] == "candidate-1"
 
 
 def _patch_for_review(
@@ -1176,7 +1176,7 @@ def test_critic_revision_sends_the_draft_back_to_generate(
 
     assert order == ["generate", "review", "generate", "review", "persist"]
     assert corrections == ["", "급락 폭을 본문에 넣으세요"]
-    assert result == {"content_candidate_id": "candidate-1"}
+    assert result["content_candidate_id"] == "candidate-1"
 
 
 def test_critic_revision_is_capped_at_one_round(
@@ -1205,7 +1205,7 @@ def test_critic_revision_is_capped_at_one_round(
     result = _run_generation()
 
     assert order == ["generate", "review", "generate", "review", "persist"]
-    assert result == {"content_candidate_id": "candidate-1"}
+    assert result["content_candidate_id"] == "candidate-1"
 
 
 def test_critic_failure_does_not_block_publishing(
@@ -1231,7 +1231,7 @@ def test_critic_failure_does_not_block_publishing(
     result = _run_generation()
 
     assert order == ["generate", "review", "persist"]
-    assert result == {"content_candidate_id": "candidate-1"}
+    assert result["content_candidate_id"] == "candidate-1"
 
 
 def test_research_node_is_skipped_when_disabled(
@@ -1262,7 +1262,7 @@ def test_research_node_is_skipped_when_disabled(
     result = _run_generation()
 
     assert order[0] == "load_context"
-    assert result == {"content_candidate_id": "candidate-1"}
+    assert result["content_candidate_id"] == "candidate-1"
 
 
 def test_legacy_path_skips_live_collection_when_researcher_already_tried(
@@ -1310,7 +1310,7 @@ def test_legacy_path_skips_live_collection_when_researcher_already_tried(
 
     assert order == ["research", "load_context", "generate", "persist"]
     assert "collect_live" not in order
-    assert result == {"content_candidate_id": "candidate-1"}
+    assert result["content_candidate_id"] == "candidate-1"
 
 
 def test_multi_topic_report_gathers_evidence_per_topic(

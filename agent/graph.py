@@ -1149,6 +1149,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         documents_by_topic: dict[str, list[Any]] = {}
         notes: list[str] = []
         calls: list[dict[str, object]] = []
+        research_stats: list[dict[str, Any]] = []
         collected_live = False
         for topic in topics:
             intents[topic] = await to_thread(
@@ -1157,6 +1158,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             documents_by_topic[topic] = []
             if not research_agent_enabled():
                 continue
+            topic_started = monotonic()
             try:
                 research_kwargs: dict[str, Any] = {
                     "topic": topic,
@@ -1192,6 +1194,22 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 continue
             documents_by_topic[topic] = list(outcome.documents)
             collected_live = collected_live or outcome.collected_live
+            # 조사 노드가 리포트 시간의 대부분을 쓰는데 안이 안 보였다
+            # (2026-08-11 실측: 336초 중 320초). 도구별 호출 수·소요 시간을
+            # 작업 결과까지 실어 서버 로그 없이 확인한다.
+            research_stats.append(
+                {
+                    "topic": topic,
+                    "elapsed_ms": int((monotonic() - topic_started) * 1000),
+                    "tools": [
+                        {"tool": name, "calls": count, "elapsed_ms": elapsed}
+                        # 도구 통계가 없는 형태(테스트 더미 등)도 그대로 통과시킨다.
+                        for name, count, elapsed in getattr(outcome, "tool_stats", ())
+                    ],
+                    "stop_reason": str(getattr(outcome, "stop_reason", "")),
+                    "documents": len(outcome.documents),
+                }
+            )
             if outcome.notes:
                 notes.append(
                     outcome.notes if len(topics) == 1 else f"[{topic}] {outcome.notes}"
@@ -1220,6 +1238,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             "research_notes": "\n".join(notes),
             "research_collected_live": collected_live,
             "research_calls": calls,
+            "research_stats": research_stats,
         }
 
     async def load_related_keywords(user_id: str, topic: str) -> list[str]:
@@ -2148,6 +2167,9 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         trace = state.get("evidence_trace")
         if trace:
             result["evidence_trace"] = list(trace)
+        research_stats = state.get("research_stats")
+        if research_stats:
+            result["research_stats"] = list(research_stats)
         return {"result": result}
 
     graph = StateGraph(ReportGenerationState)
