@@ -48,7 +48,12 @@ from agent.report_builder.api import (
     select_generation_context,
     search_global_documents,
 )
-from agent.change_history.api import change_history_available, chg_001
+from agent.change_history.api import (
+    change_history_available,
+    chg_001,
+    current_reference_date,
+    merge_topic_delta_reports,
+)
 from agent.state import ReportGenerationState, PersonalWikiBuildState
 from agent.wiki_builder.api import (
     WikiGraphExpansionEdge,
@@ -1636,6 +1641,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         merged: list[Any] = []
         seen: set[str] = set()
         covered: list[str] = []
+        by_topic: dict[str, list[Any]] = {}
         live_budget = _MAX_LIVE_COLLECT_TOPICS
         for topic in topics:
             documents, collected_live = await _topic_documents(
@@ -1653,6 +1659,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                     continue
                 seen.add(key)
                 merged.append(context)
+                by_topic.setdefault(topic, []).append(context)
                 picked += 1
             if picked:
                 covered.append(topic)
@@ -1670,7 +1677,11 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 "근거 없는 주제를 생성에서 제외: %s",
                 ", ".join(topic for topic in topics if topic not in covered),
             )
-        return {"contexts": merged, "covered_topics": covered}
+        return {
+            "contexts": merged,
+            "covered_topics": covered,
+            "contexts_by_topic": by_topic,
+        }
 
     async def _finalize_contexts(
         state: ReportGenerationState,
@@ -1799,16 +1810,105 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             return "change_history"
         return "generate"
 
+    def _delta_topics(state: ReportGenerationState) -> list[str]:
+        """델타를 따로 돌릴 주제 목록을 정한다.
+
+        여러 주제를 묶는 요청은 근거를 실제로 확보한 주제(covered_topics)만
+        비교한다 — 근거 0건인 주제로 델타를 돌리면 매번 "변화 없음"만 쌓인다.
+        """
+        topics = _report_topics(state)
+        if len(topics) <= 1:
+            return topics
+        covered = [topic for topic in (state.get("covered_topics") or []) if topic]
+        return covered or topics
+
+    async def _multi_topic_change_history(
+        state: ReportGenerationState, topics: list[str]
+    ) -> dict[str, Any]:
+        """주제마다 델타를 따로 돌리고 하나의 본문으로 합친다.
+
+        비교축이 (user_id, topic)이라 여러 주제를 한 축으로 묶으면 주제별 변화가
+        구분되지 않는다(팩트가 대표 문자열 하나에 섞여 쌓인다). 주제마다 돌리면
+        LLM 호출이 주제 수만큼 늘지만, 그러지 않으면 이 경로에서 기능 자체가
+        성립하지 않는다.
+
+        주제 하나가 실패해도 나머지는 계속 돈다 — 한 주제 때문에 브리핑 전체가
+        기존 생성으로 되돌아가면 손해가 더 크다. 전부 실패했을 때만 되돌린다.
+        """
+        contexts_by_topic = state.get("contexts_by_topic") or {}
+        collected: list[tuple[str, Any]] = []
+        outcomes: list[dict[str, Any]] = []
+        skipped: list[str] = []
+        for topic in topics:
+            contexts = list(contexts_by_topic.get(topic) or [])
+            if not contexts:
+                skipped.append(topic)
+                continue
+            try:
+                outcome = await chg_001(
+                    connection,
+                    user_id=state["user_id"],
+                    job_id=state["job_id"],
+                    topic=topic,
+                    contexts=contexts,
+                    model=state["model"],
+                )
+            except Exception:
+                logger.exception("주제 델타에 실패해 이 주제는 빼고 진행합니다: topic=%s", topic)
+                skipped.append(topic)
+                continue
+            collected.append((topic, outcome["generated"]))
+            outcomes.append(outcome)
+        if not collected:
+            logger.warning("모든 주제의 델타가 실패해 기존 생성 경로로 되돌립니다.")
+            return {"change_history": {"failed": True}}
+        generated = merge_topic_delta_reports(
+            collected,
+            topic=state["topic"],
+            reference_date=current_reference_date(),
+        )
+        summary: dict[str, Any] = {
+            "failed": False,
+            "topics": [topic for topic, _ in collected],
+            "skipped_topics": skipped,
+            "is_first_run": all(bool(item.get("is_first_run")) for item in outcomes),
+            "no_change": all(bool(item.get("no_change")) for item in outcomes),
+        }
+        for key in (
+            "fact_count",
+            "duplicate_count",
+            "stored_fact_count",
+            "input_tokens",
+            "output_tokens",
+        ):
+            summary[key] = sum(int(item.get(key) or 0) for item in outcomes)
+        summary["dropped_flags"] = [
+            flag for item in outcomes for flag in (item.get("dropped_flags") or [])
+        ]
+        return {"generated": generated, "change_history": summary}
+
     async def change_history(state: ReportGenerationState) -> dict[str, Any]:
         """직전 보고서 이후의 변화를 판별해 델타 보고서를 만든다(generate 대체).
 
         서브그래프가 조립한 markdown을 기존 review 노드가 읽는 것과 **같은 키**
         (`generated`)에 넣어, 그대로 Critic 검증과 기존 persist로 이어지게 한다.
 
+        주제가 여럿이면 주제마다 따로 돌려 합친다. 주제가 하나면 지금까지와
+        완전히 같은 단일 호출이다(회귀 0).
+
         델타 경로가 실패하면 예외를 올리지 않고 기존 generate 경로로 되돌린다 —
         토글은 보고서를 더 낫게 만들려는 장치지, 켰다고 발행이 막히면 안 된다.
         """
         started = monotonic()
+        # 주제가 하나로 줄어든 경우(나머지가 근거 부족)에도 묶음 경로로 보낸다 —
+        # 그래야 대표 문자열이 아니라 실제 주제로 비교축이 잡힌다.
+        if len(_report_topics(state)) > 1:
+            result = await _multi_topic_change_history(state, _delta_topics(state))
+            if "generated" not in result:
+                return result
+            result["review_correction"] = ""
+            result["latency_ms"] = int((monotonic() - started) * 1000)
+            return result
         try:
             outcome = await chg_001(
                 connection,

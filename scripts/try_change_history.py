@@ -134,7 +134,7 @@ async def run_day(
     if result["is_first_run"]:
         print("→ 첫 실행입니다(대조할 과거 팩트가 없어 전부 신규로 처리).")
     if result["no_change"]:
-        print("→ 유의미한 변화가 없어 '변화 없음' 보고서로 갔습니다.")
+        print("→ 이번엔 달라진 점이 없습니다. 요약 보고서는 정상적으로 나갑니다.")
 
     facts = result["facts"]
     print(f"\n판정 결과 ({len(facts)}건):")

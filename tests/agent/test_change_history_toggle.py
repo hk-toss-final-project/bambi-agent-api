@@ -185,6 +185,165 @@ def test_server_switch_overrides_the_request_toggle(
     assert order == ["generate", "persist"]
 
 
+def _patch_per_topic_documents(monkeypatch: pytest.MonkeyPatch) -> None:
+    """주제마다 서로 다른 근거 문서가 잡히도록 검색 경계를 바꾼다.
+
+    기본 대역은 모든 주제에 같은 문서를 돌려줘서 중복 제거에 걸린다. 주제별
+    근거 배정을 확인하려면 주제마다 다른 문서가 나와야 한다.
+    """
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[Any]:
+        """검색어(주제)마다 다른 근거 문서를 돌려준다."""
+        query = str(kwargs["query"])
+        document = _context()
+        object.__setattr__(document, "reference", f"G-{query}")
+        return [document]
+
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(
+        agent_graph,
+        "select_generation_context",
+        lambda personal, live, **kwargs: list(personal),
+    )
+
+
+def test_multi_topic_request_runs_a_delta_per_topic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """주제가 여럿이면 주제마다 델타를 돌리고 한 본문으로 합친다.
+
+    비교축이 (user_id, topic)이라 한 축으로 묶으면 주제별 변화가 구분되지
+    않는다 — 대표 문자열 하나에 서로 다른 주제의 팩트가 섞여 쌓인다.
+    """
+    order: list[str] = []
+    captured = _patch_common(monkeypatch, order)
+    _patch_per_topic_documents(monkeypatch)
+    calls: list[tuple[str, list[str]]] = []
+
+    async def fake_change_history(connection: Any, **kwargs: Any) -> dict[str, Any]:
+        """주제별 호출을 기록하고 그 주제의 델타 보고서를 돌려준다."""
+        topic = str(kwargs["topic"])
+        calls.append(
+            (topic, [document.reference for document in kwargs["contexts"]])
+        )
+        return {
+            "generated": GeneratedReportContent(
+                title=f"{topic} 변경점",
+                summary=f"{topic} 요약",
+                body=f"## Overview\n\n{topic} 브리핑 [G-{topic}]",
+                citation_references=(f"G-{topic}",),
+            ),
+            "fact_count": 1,
+            "input_tokens": 10,
+        }
+
+    monkeypatch.setattr(agent_graph, "chg_001", fake_change_history)
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 브리핑",
+            topics=["반도체", "환율"],
+            content_type="article",
+            language="ko",
+            model="test-model",
+            change_history_enabled=True,
+        )
+    )
+
+    # 대표 문자열("오늘의 브리핑")이 아니라 실제 주제로 비교축이 잡혀야 한다.
+    assert [topic for topic, _ in calls] == ["반도체", "환율"]
+    assert calls[0][1] == ["G-반도체"]
+    assert calls[1][1] == ["G-환율"]
+    body = captured["generated"].body
+    assert "## 반도체" in body and "## 환율" in body
+    assert order == ["persist"]  # generate는 돌지 않는다
+
+
+def test_multi_topic_delta_keeps_going_when_one_topic_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """주제 하나가 실패해도 나머지 주제로 보고서를 만든다.
+
+    한 주제 때문에 브리핑 전체가 기존 생성으로 되돌아가면 손해가 더 크다.
+    """
+    order: list[str] = []
+    captured = _patch_common(monkeypatch, order)
+    _patch_per_topic_documents(monkeypatch)
+
+    async def flaky_change_history(connection: Any, **kwargs: Any) -> dict[str, Any]:
+        """첫 주제만 실패시킨다."""
+        topic = str(kwargs["topic"])
+        if topic == "반도체":
+            raise RuntimeError("delta down")
+        return {
+            "generated": GeneratedReportContent(
+                title=f"{topic} 변경점",
+                summary=f"{topic} 요약",
+                body=f"## Overview\n\n{topic} 브리핑 [G-{topic}]",
+                citation_references=(f"G-{topic}",),
+            ),
+            "fact_count": 1,
+        }
+
+    monkeypatch.setattr(agent_graph, "chg_001", flaky_change_history)
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 브리핑",
+            topics=["반도체", "환율"],
+            content_type="article",
+            language="ko",
+            model="test-model",
+            change_history_enabled=True,
+        )
+    )
+
+    assert order == ["persist"]
+    # 살아남은 주제가 하나면 그 보고서를 그대로 쓴다.
+    assert captured["generated"].title == "환율 변경점"
+
+
+def test_multi_topic_delta_falls_back_when_every_topic_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """모든 주제의 델타가 실패하면 기존 생성 경로로 되돌아간다."""
+    order: list[str] = []
+    captured = _patch_common(monkeypatch, order)
+    _patch_per_topic_documents(monkeypatch)
+
+    async def broken_change_history(connection: Any, **kwargs: Any) -> dict[str, Any]:
+        """모든 주제를 실패시킨다."""
+        raise RuntimeError("delta down")
+
+    monkeypatch.setattr(agent_graph, "chg_001", broken_change_history)
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 브리핑",
+            topics=["반도체", "환율"],
+            content_type="article",
+            language="ko",
+            model="test-model",
+            change_history_enabled=True,
+        )
+    )
+
+    assert order == ["generate", "persist"]
+    assert captured["generated"].title == "일반 리포트"
+
+
 def test_delta_failure_falls_back_to_the_existing_generate_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

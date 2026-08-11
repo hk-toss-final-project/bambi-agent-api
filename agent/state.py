@@ -88,6 +88,10 @@ class ReportGenerationState(TypedDict):
     # 근거 없는 주제를 남기면 LLM이 그 섹션을 일반론으로 채운다.
     covered_topics: NotRequired[list[str]]
     contexts: NotRequired[list[object]]
+    # 주제마다 실제로 배정된 근거. contexts를 주제별로 쪼갠 것이라 합집합은
+    # contexts와 같다. 델타 경로가 주제별로 비교하려면 어느 근거가 어느 주제
+    # 몫인지 알아야 한다 — 여러 주제를 묶는 경로에서만 채운다.
+    contexts_by_topic: NotRequired[dict[str, list[object]]]
     # 변경점(Delta) 추적 토글. 요청이 켜서 보낼 때만 True이며, 기본값은 꺼짐이라
     # 이 키가 없으면 기존 generate 경로로 그대로 간다(회귀 0).
     change_history_enabled: NotRequired[bool]

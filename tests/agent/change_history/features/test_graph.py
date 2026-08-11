@@ -2,6 +2,12 @@
 
 LLM(diff·compose·impact)과 DB(prepare·validate·store)를 모두 대체하고,
 Supervisor가 상태에 따라 실제로 다른 경로를 택하는지 확인한다.
+
+이 보고서는 "달라진 것만" 보여주는 문서가 아니라 평소 요약 보고서 + 달라진 점
+하이라이트라는 전제가 라우팅에도 반영된다 — 전부 유지(중복)뿐이어도 Compose는
+돌아 정상 요약을 쓰고, Impact만 건너뛴다. 반대로 팩트를 아예 못 뽑았으면(수집
+실패) 요약을 쓸 재료 자체가 없으므로 예외를 올려 호출자가 기존 generate()로
+되돌아가게 한다.
 """
 
 from __future__ import annotations
@@ -75,8 +81,13 @@ def _patch_graph(
     base_available: bool = True,
     diff_outcomes: list[DiffOutcome] | None = None,
     validations: list[ValidationOutcome] | None = None,
+    captured: dict[str, Any] | None = None,
 ) -> None:
-    """서브그래프의 LLM·DB 경계를 모두 대체한다."""
+    """서브그래프의 LLM·DB 경계를 모두 대체한다.
+
+    captured를 넘기면 compose·impact가 실제로 어떤 facts를 받았는지 기록한다
+    (Compose는 전체, Impact는 하이라이트만 받는지 검증하는 데 쓴다).
+    """
     diff_queue = list(
         diff_outcomes or [DiffOutcome(facts=(_fact(),))]
     )
@@ -108,6 +119,8 @@ def _patch_graph(
     async def fake_compose(**kwargs: Any) -> ComposeOutcome:
         """Compose worker 호출을 기록한다."""
         order.append("compose")
+        if captured is not None:
+            captured["compose_facts"] = kwargs.get("facts")
         return ComposeOutcome(
             title="제목",
             summary="요약",
@@ -125,6 +138,8 @@ def _patch_graph(
     async def fake_impact(**kwargs: Any) -> ImpactOutcome:
         """Impact worker 호출을 기록한다."""
         order.append("impact")
+        if captured is not None:
+            captured["impact_facts"] = kwargs.get("facts")
         return ImpactOutcome(implications="파급 [G1]", actions=("확인",))
 
     async def fake_validate(connection: Any, **kwargs: Any) -> ValidationOutcome:
@@ -196,10 +211,49 @@ def test_first_run_skips_base_lookup_but_still_stores_facts(
     assert "최초 실행" in result["generated"].body
 
 
-def test_all_duplicates_take_the_short_no_change_path(
+def test_compose_gets_every_fact_impact_gets_highlights_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """전부 중복이면 Compose·Impact를 건너뛰고 짧은 보고서로 간다."""
+    """Compose는 유지 팩트까지 전체로 받고, Impact는 신규·갱신만 받는다.
+
+    Compose가 쓰는 "핵심 요약·맥락"은 전체 그림을 그려야 하므로 유지(중복)
+    팩트도 필요하지만, Impact의 "주목할 점"은 실제로 달라진 것에 대한
+    해석이라 유지 팩트를 줄 이유가 없다.
+    """
+    order: list[str] = []
+    stored: list[dict[str, Any]] = []
+    captured: dict[str, Any] = {}
+    _patch_graph(
+        monkeypatch,
+        order=order,
+        stored=stored,
+        diff_outcomes=[DiffOutcome(facts=(_fact("new"), _fact("duplicate")))],
+        validations=[
+            ValidationOutcome(
+                facts=(
+                    ValidatedFact(fact=_fact("new")),
+                    ValidatedFact(fact=_fact("duplicate")),
+                )
+            )
+        ],
+        captured=captured,
+    )
+
+    _run()
+
+    assert len(captured["compose_facts"]) == 2  # 신규 + 유지 전체
+    assert len(captured["impact_facts"]) == 1  # 신규만
+    assert captured["impact_facts"][0].verdict == "new"
+
+
+def test_all_duplicates_run_compose_but_skip_impact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """전부 유지(중복)여도 Compose는 돌려 정상 요약을 쓰고, Impact만 건너뛴다.
+
+    "달라진 게 없다"가 "요약을 안 쓴다"는 뜻이 아니다 — 평소와 같은
+    정보요약보고서는 그대로 나가고, 해석할 변화가 없는 Impact만 생략한다.
+    """
     order: list[str] = []
     stored: list[dict[str, Any]] = []
     _patch_graph(
@@ -207,15 +261,46 @@ def test_all_duplicates_take_the_short_no_change_path(
         order=order,
         stored=stored,
         diff_outcomes=[DiffOutcome(facts=(_fact("duplicate"), _fact("duplicate")))],
+        validations=[
+            ValidationOutcome(
+                facts=(
+                    ValidatedFact(fact=_fact("duplicate")),
+                    ValidatedFact(fact=_fact("duplicate")),
+                )
+            )
+        ],
     )
 
     result = _run()
 
-    assert order == ["diff", "store"]  # LLM 2콜을 아낀다
+    assert order == ["diff", "compose", "validate", "store"]  # impact만 생략
     assert result["no_change"] is True
+    assert result["fact_count"] == 0
     assert stored[0]["outcome"] == "no_change"
     assert stored[0]["duplicate_fact_count"] == 2
-    assert stored[0]["facts"] == []
+    assert stored[0]["facts"] == []  # 유지 팩트는 다시 저장하지 않는다
+    # 요약 보고서 자체는 정상적으로 나간다 — 비어 있는 대체 문구가 아니다.
+    assert "브리핑 [G1]" in result["generated"].body
+
+
+def test_empty_facts_raises_so_the_caller_falls_back_to_generate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """오늘 자료에서 팩트를 하나도 못 뽑으면 요약을 쓸 재료가 없다.
+
+    "달라진 게 없다"와는 다른 실패다 — 예외를 올려 상위 change_history 노드가
+    기존 generate() 경로로 되돌아가게 한다.
+    """
+    order: list[str] = []
+    stored: list[dict[str, Any]] = []
+    _patch_graph(
+        monkeypatch, order=order, stored=stored, diff_outcomes=[DiffOutcome(facts=())]
+    )
+
+    with pytest.raises(RuntimeError):
+        _run()
+
+    assert order == ["diff"]  # compose까지 가지 않는다
 
 
 def test_validation_failure_retries_only_the_failing_worker_once(
@@ -311,14 +396,14 @@ def test_missing_citation_retries_only_the_impact_worker(
     assert order.count("diff") == 1
 
 
-def test_no_change_report_skips_the_quality_check(
+def test_no_change_report_still_runs_the_quality_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """'변화 없음' 보고서에는 기존 품질 검사를 적용하지 않는다.
+    """달라진 점이 없어도 이제는 기존 품질 검사를 그대로 받는다.
 
-    쓸 팩트가 없어 인용도 없는 것이 정상인데, quality는 인용 0개를 무조건
-    no_citations(재생성 대상)로 본다. 고칠 수 없는 실패를 매번 기록하면
-    로그와 지표가 오염된다.
+    예전에는 이 경로가 "짧은 보고서"라 인용 없는 것이 정상이라 검사를
+    건너뛰었다. 지금은 Compose가 유지 팩트로도 실제 요약을 쓰므로, 그 요약이
+    품질 기준(길이·인용률)을 충족하는지 그대로 확인해야 한다.
     """
     order: list[str] = []
     stored: list[dict[str, Any]] = []
@@ -327,15 +412,17 @@ def test_no_change_report_skips_the_quality_check(
         order=order,
         stored=stored,
         diff_outcomes=[DiffOutcome(facts=(_fact("duplicate"),))],
+        validations=[ValidationOutcome(facts=(ValidatedFact(fact=_fact("duplicate")),))],
     )
 
     result = _run()
 
     assert result["no_change"] is True
-    assert result["quality_outcome"] == graph_module.QUALITY_SKIPPED_NO_CHANGE
+    assert result["quality_outcome"]  # 판정 자체는 실제로 수행됐다
+    assert result["quality_outcome"] != "skipped_no_change"  # 더는 건너뛰지 않는다
 
 
-def test_normal_report_still_runs_the_quality_check(
+def test_normal_report_runs_the_quality_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """팩트가 있는 보고서는 기존 품질 검사를 그대로 거친다."""
@@ -345,4 +432,5 @@ def test_normal_report_still_runs_the_quality_check(
 
     result = _run()
 
-    assert result["quality_outcome"] != graph_module.QUALITY_SKIPPED_NO_CHANGE
+    assert result["quality_outcome"]
+    assert result["quality_outcome"] != "skipped_no_change"

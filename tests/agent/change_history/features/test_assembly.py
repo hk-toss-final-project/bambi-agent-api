@@ -1,8 +1,10 @@
 """델타 보고서 조립(코드)의 섹션 구성과 Citation 처리를 검증한다.
 
-이 단계는 LLM을 쓰지 않으므로 완전히 결정적이다. 확인하는 것은 네 섹션이 모두
-나오는지, 갱신 팩트가 before/after로 대비되는지, 근거 목록에 없는 참조가
-저장으로 새어 나가지 않는지다.
+이 단계는 LLM을 쓰지 않으므로 완전히 결정적이다. 이 보고서는 "달라진 것만"
+보여주는 문서가 아니라 평소 요약 보고서 + 달라진 점 하이라이트라, 확인하는 것도
+그에 맞춘다 — 핵심 요약은 달라진 점이 없어도 항상 채워지는지, "이번에 달라진
+점"에는 신규·갱신만 들어가는지, 타임라인은 확정 날짜가 있을 때만 나오는지,
+근거 목록에 없는 참조가 저장으로 새어 나가지 않는지, 이모지가 섞이지 않는지다.
 """
 
 from __future__ import annotations
@@ -13,6 +15,8 @@ from agent.change_history.features.assembly import (
     CHANGED_SUBHEADING,
     IMPLICATIONS_HEADING,
     NEW_SUBHEADING,
+    NO_CHANGE_NOTICE,
+    NO_WATCH_ITEMS_NOTICE,
     OVERVIEW_HEADING,
     TIMELINE_HEADING,
     UPDATES_HEADING,
@@ -82,11 +86,11 @@ def _new_item() -> ValidatedFact:
 
 
 def _compose() -> ComposeOutcome:
-    """Overview 생성 결과를 만든다."""
+    """핵심 요약 생성 결과를 만든다."""
     return ComposeOutcome(
-        title="반도체 변경점",
+        title="반도체 요약",
         summary="양산 일정이 밀렸습니다 [G1].",
-        overview="어제까지는 2026-2Q였지만 오늘 연기가 확인됐습니다 [G1].",
+        overview="B사는 여전히 HBM4를 개발 중이며 [P1], 양산 시점이 밀렸습니다 [G1].",
     )
 
 
@@ -98,24 +102,46 @@ def _impact() -> ImpactOutcome:
     )
 
 
-def test_report_contains_all_four_sections() -> None:
-    """조립 결과에 네 섹션이 모두 들어간다."""
+def test_report_has_the_four_sections_in_order() -> None:
+    """조립 결과는 달라진 점 → 핵심 요약 → 주목할 점 → 타임라인 순서로 나온다."""
     content = assemble_delta_report(
         topic="반도체",
         reference_date=REFERENCE_DATE,
-        facts=[_updated_item(), _new_item()],
+        highlight_facts=[_updated_item(), _new_item()],
         compose=_compose(),
         impact=_impact(),
         contexts=CONTEXTS,
     )
 
+    body = content.body
     for heading in (
-        OVERVIEW_HEADING,
         UPDATES_HEADING,
-        TIMELINE_HEADING,
+        OVERVIEW_HEADING,
         IMPLICATIONS_HEADING,
+        TIMELINE_HEADING,
     ):
-        assert heading in content.body
+        assert heading in body
+    assert (
+        body.index(UPDATES_HEADING)
+        < body.index(OVERVIEW_HEADING)
+        < body.index(IMPLICATIONS_HEADING)
+        < body.index(TIMELINE_HEADING)
+    )
+
+
+def test_no_heading_or_body_text_contains_emoji() -> None:
+    """이모지·장식 기호가 섞이지 않는다(요청한 폼 형식의 핵심 조건)."""
+    content = assemble_delta_report(
+        topic="반도체",
+        reference_date=REFERENCE_DATE,
+        highlight_facts=[_updated_item(), _new_item()],
+        compose=_compose(),
+        impact=_impact(),
+        contexts=CONTEXTS,
+    )
+
+    for char in content.body:
+        assert ord(char) < 0x1F000, f"이모지로 보이는 문자가 있습니다: {char!r}"
 
 
 def test_updated_fact_shows_before_and_after() -> None:
@@ -123,7 +149,7 @@ def test_updated_fact_shows_before_and_after() -> None:
     content = assemble_delta_report(
         topic="반도체",
         reference_date=REFERENCE_DATE,
-        facts=[_updated_item()],
+        highlight_facts=[_updated_item()],
         compose=_compose(),
         impact=_impact(),
         contexts=CONTEXTS,
@@ -136,13 +162,13 @@ def test_updated_fact_shows_before_and_after() -> None:
 def test_changed_and_new_facts_go_into_separate_subsections() -> None:
     """달라진 사실과 새로 확인된 사실을 소제목으로 갈라 놓는다.
 
-    한 목록에 섞으면 "무엇이 달라졌나"가 눈에 들어오지 않는다 — 이 보고서의
-    존재 이유가 그것이므로 섹션부터 나눈다. 달라진 쪽을 먼저 보여준다.
+    한 목록에 섞으면 "무엇이 달라졌나"가 눈에 들어오지 않는다. 달라진 쪽을
+    먼저 보여준다.
     """
     content = assemble_delta_report(
         topic="반도체",
         reference_date=REFERENCE_DATE,
-        facts=[_new_item(), _updated_item()],
+        highlight_facts=[_new_item(), _updated_item()],
         compose=_compose(),
         impact=_impact(),
         contexts=CONTEXTS,
@@ -151,10 +177,9 @@ def test_changed_and_new_facts_go_into_separate_subsections() -> None:
     body = content.body
     assert f"{CHANGED_SUBHEADING} (1건)" in body
     assert f"{NEW_SUBHEADING} (1건)" in body
-    # 입력 순서와 무관하게 달라진 사실이 먼저 온다.
     assert body.index(CHANGED_SUBHEADING) < body.index(NEW_SUBHEADING)
-    # 신규 팩트에는 이전 값이 없으므로 화살표 표기가 붙지 않는다.
-    new_block = body[body.index(NEW_SUBHEADING) : body.index(TIMELINE_HEADING)]
+    updates_section = body[body.index(UPDATES_HEADING) : body.index(OVERVIEW_HEADING)]
+    new_block = updates_section[updates_section.index(NEW_SUBHEADING) :]
     assert "→" not in new_block
 
 
@@ -163,7 +188,7 @@ def test_subsection_is_omitted_when_that_kind_has_no_fact() -> None:
     content = assemble_delta_report(
         topic="반도체",
         reference_date=REFERENCE_DATE,
-        facts=[_new_item()],
+        highlight_facts=[_new_item()],
         compose=_compose(),
         impact=_impact(),
         contexts=CONTEXTS,
@@ -178,7 +203,7 @@ def test_timeline_is_sorted_by_absolute_date() -> None:
     content = assemble_delta_report(
         topic="반도체",
         reference_date=REFERENCE_DATE,
-        facts=[_updated_item(), _new_item()],
+        highlight_facts=[_updated_item(), _new_item()],
         compose=_compose(),
         impact=_impact(),
         contexts=CONTEXTS,
@@ -188,6 +213,34 @@ def test_timeline_is_sorted_by_absolute_date() -> None:
     assert body.index("2026-08-01") < body.index("2026-08-04")
     # 구간으로만 아는 날짜는 정밀도를 함께 표시한다.
     assert "(quarter)" in body
+
+
+def test_timeline_section_is_omitted_when_no_dated_item_exists() -> None:
+    """확정 가능한 날짜가 없으면 타임라인 섹션 자체를 뺀다.
+
+    빈 자리표시 문구를 남기지 않는다 — 폼 형식이 요구한 "숨김" 동작이다.
+    """
+    undated = ValidatedFact(
+        fact=DiffFact(
+            verdict="new",
+            subject="C사 HBM4",
+            attribute="공급 계획",
+            fact_value="확대 검토",
+            today_statement="C사가 공급 확대를 검토 중이다.",
+            source_reference="G1",
+        )
+    )
+
+    content = assemble_delta_report(
+        topic="반도체",
+        reference_date=REFERENCE_DATE,
+        highlight_facts=[undated],
+        compose=_compose(),
+        impact=_impact(),
+        contexts=CONTEXTS,
+    )
+
+    assert TIMELINE_HEADING not in content.body
 
 
 def test_citations_are_limited_to_available_references() -> None:
@@ -206,7 +259,7 @@ def test_first_run_notice_is_stated_in_the_body() -> None:
     content = assemble_delta_report(
         topic="반도체",
         reference_date=REFERENCE_DATE,
-        facts=[_new_item()],
+        highlight_facts=[_new_item()],
         compose=_compose(),
         impact=_impact(),
         contexts=CONTEXTS,
@@ -216,21 +269,47 @@ def test_first_run_notice_is_stated_in_the_body() -> None:
     assert "최초 실행" in content.body
 
 
-def test_no_change_report_still_has_every_section() -> None:
-    """변화가 없어도 네 섹션 구조와 안내 문구를 유지한다."""
+def test_no_highlight_facts_still_produces_a_full_summary_report() -> None:
+    """달라진 점이 없어도 핵심 요약·주목할 점은 정상적으로 채워진다.
+
+    이 보고서는 "달라진 것만" 보여주는 문서가 아니라 평소 요약 보고서다.
+    Compose·Impact가 실제로 돌았다는 전제로, 그 결과가 그대로 나가는지 본다.
+    """
     content = assemble_delta_report(
         topic="반도체",
         reference_date=REFERENCE_DATE,
-        facts=[],
-        compose=ComposeOutcome(),
-        impact=ImpactOutcome(),
+        highlight_facts=[],
+        compose=_compose(),
+        impact=ImpactOutcome(),  # 달라진 게 없으면 Impact는 돌지 않는다
         contexts=CONTEXTS,
-        no_change=True,
     )
 
-    assert "새로 확인된 변화가 없습니다" in content.body
-    assert UPDATES_HEADING in content.body
-    assert content.citation_references == ()
+    body = content.body
+    assert NO_CHANGE_NOTICE in body
+    assert NO_WATCH_ITEMS_NOTICE in body
+    # 핵심 요약은 Compose가 실제로 쓴 전체 맥락 문단 그대로다 — 짧아지지 않는다.
+    assert _compose().overview in body
+    # overview가 인용한 참조가 등장 순서대로 남는다(유지 팩트 인용 포함).
+    assert content.citation_references == ("P1", "G1")
     # 제목·요약이 비어도 코드가 기본값을 채워 저장이 실패하지 않는다.
     assert content.title
     assert content.summary
+
+
+def test_title_and_summary_come_from_compose() -> None:
+    """카드 제목·한 줄 결론은 Compose가 쓴 값을 그대로 쓴다.
+
+    이 보고서는 평소 요약 보고서와 같은 자리에 나가므로, "달라진 점 몇 건"이
+    아니라 실제 결론이 카드 제목·미리보기에 보여야 한다.
+    """
+    content = assemble_delta_report(
+        topic="반도체",
+        reference_date=REFERENCE_DATE,
+        highlight_facts=[_updated_item()],
+        compose=_compose(),
+        impact=_impact(),
+        contexts=CONTEXTS,
+    )
+
+    assert content.title == "반도체 요약"
+    assert content.summary == "양산 일정이 밀렸습니다 [G1]."

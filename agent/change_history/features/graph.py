@@ -9,11 +9,19 @@ generate가 도는 게 아니다). 즉 여기서 쓰는 글은 아직 아무도 
 Supervisor는 순서대로 호출하는 라우터가 아니라 **상태를 보고 실제로 다른 경로를
 택하는 판단 노드**다.
 
+이 보고서는 "달라진 것만" 보여주는 게 아니라 **평소와 같은 정보요약보고서 +
+달라진 점 하이라이트**다. 그래서 Diff가 뽑은 팩트(신규·갱신·유지) 전부가
+Compose까지 흘러가 "핵심 요약·맥락"의 재료가 되고, "이번에 달라진 점" 섹션에만
+신규·갱신 팩트가 따로 추려 들어간다.
+
   ① Base 팩트가 없으면(첫 실행) Diff worker의 **과거 대조만** 생략한다.
      worker 자체를 건너뛰지 않는 이유는 구조화 출력 형식이 유지돼야 Compose
      입력과 델타 테이블 저장에 그대로 쓸 수 있기 때문이다.
-  ② Diff 결과가 전부 중복이면 Compose·Impact를 건너뛰고 "변화 없음" 짧은
-     보고서 경로로 간다(LLM 2콜 절약).
+  ② 오늘 팩트를 하나도 못 뽑았으면(수집 실패 등) 요약을 쓸 재료가 없다 — 이건
+     "달라진 게 없다"와 다른 **실패**다. 예외를 올려 호출자가 기존 generate()
+     경로로 되돌아가게 한다. 반대로 팩트는 있는데 전부 유지(중복)뿐이면 실패가
+     아니다 — Compose는 정상적으로 돌려 요약을 쓰되, 신규·갱신이 없으니 Impact와
+     "이번에 달라진 점" 섹션만 건너뛴다.
   ③ 검증 실패 시 전체 재시도가 아니라 문제가 난 워커만 1회 재작업시킨다.
      재작업 후에도 실패하면 무한 루프를 돌지 말고 해당 항목을 드롭 + 플래그를
      남기고 통과한다.
@@ -22,7 +30,7 @@ Supervisor는 순서대로 호출하는 라우터가 아니라 **상태를 보�
 from __future__ import annotations
 
 import logging
-from datetime import UTC, date, datetime
+from datetime import date
 from typing import Any
 
 from langgraph.graph import END, StateGraph
@@ -42,7 +50,7 @@ from shared.report_models import GeneratedReportContent, ReportContextDocument
 
 from .assembly import chg_006
 from .compose import ComposeOutcome, chg_003
-from .config import impact_model
+from .config import current_reference_date, impact_model
 from .diff import DiffFact, chg_002
 from .impact import ImpactOutcome, chg_004
 from .validation import (
@@ -60,10 +68,6 @@ type DictRow = dict[str, Any]
 # 워커 하나당 재작업 상한. 재작업 후에도 실패하면 드롭 + 플래그로 통과시킨다 —
 # 검증이 계속 흠을 잡으면 리포트 하나에 LLM 호출이 무한히 늘어난다.
 WORKER_MAX_RETRIES = 1
-
-# "변화 없음" 보고서의 품질 판정값. 인용 0개가 정상인 경로라 기존 quality 검사를
-# 적용하지 않는다는 뜻이며, "통과(pass)"와는 구분해서 남긴다.
-QUALITY_SKIPPED_NO_CHANGE = "skipped_no_change"
 
 _DIFF_CORRECTION = (
     "이전 시도에서 갱신 대상으로 찍은 과거 팩트 ID가 실제 기록에 없었다. "
@@ -141,13 +145,25 @@ def build_change_history_graph(connection: AsyncConnection[DictRow]) -> Any:
             "dropped_flags": [],
         }
 
-    def _writable_facts(state: ChangeHistoryState) -> list[DiffFact]:
-        """중복을 뺀, 보고서에 쓸 팩트만 추린다."""
+    def _all_facts(state: ChangeHistoryState) -> list[DiffFact]:
+        """오늘 확인된 팩트 전체(신규·갱신·유지)를 반환한다.
+
+        Compose는 이걸 받아 "핵심 요약·맥락"을 쓴다 — 안 바뀐 사실도 배경으로
+        자연스럽게 녹여야 정보요약보고서 역할을 하기 때문이다.
+        """
         return [
             fact
             for fact in (state.get("diff_facts") or [])
-            if isinstance(fact, DiffFact) and fact.verdict != DUPLICATE
+            if isinstance(fact, DiffFact)
         ]
+
+    def _highlight_facts(state: ChangeHistoryState) -> list[DiffFact]:
+        """이번에 달라진 팩트(신규·갱신)만 추린다.
+
+        "이번에 달라진 점" 섹션·Impact·타임라인·저장은 이것만 쓴다. 유지(중복)
+        팩트는 이미 DB에 있는 값과 같으므로 다시 저장하지 않는다.
+        """
+        return [fact for fact in _all_facts(state) if fact.verdict != DUPLICATE]
 
     async def supervisor(state: ChangeHistoryState) -> dict[str, Any]:
         """상태를 보고 다음에 어느 워커로 갈지 정한다.
@@ -159,11 +175,14 @@ def build_change_history_graph(connection: AsyncConnection[DictRow]) -> Any:
         if not state.get("diff_done"):
             return {"route": "diff"}
 
-        facts = _writable_facts(state)
-        if not facts:
-            # ② 전부 중복이거나 뽑힌 팩트가 없다. Compose·Impact를 건너뛴다.
-            logger.info("유의미한 변화 없음: topic=%s — 짧은 보고서 경로", state["topic"])
-            return {"route": "assemble", "no_change": True}
+        all_facts = _all_facts(state)
+        if not all_facts:
+            # ② 오늘 자료에서 팩트를 하나도 못 뽑았다 — 요약을 쓸 재료가 없다.
+            # "달라진 게 없다"와는 다른 실패다. 예외를 올려 호출자(agent/graph.py의
+            # change_history 노드)가 기존 generate() 경로로 되돌아가게 한다.
+            raise RuntimeError(
+                f"오늘 자료에서 팩트를 하나도 추출하지 못했습니다: topic={state['topic']}"
+            )
 
         compose_outcome = state.get("compose")
         compose_attempts = int(state.get("compose_attempts") or 0)
@@ -177,16 +196,20 @@ def build_change_history_graph(connection: AsyncConnection[DictRow]) -> Any:
             return {"route": "compose"}
         # 재작업 후에도 실패했다면 조립이 대체 문구로 채우고 넘어간다.
 
-        impact_attempts = int(state.get("impact_attempts") or 0)
-        impact_outcome = state.get("impact")
-        if impact_attempts == 0:
-            return {"route": "impact"}
-        if (
-            isinstance(impact_outcome, ImpactOutcome)
-            and impact_outcome.failed
-            and impact_attempts <= WORKER_MAX_RETRIES
-        ):
-            return {"route": "impact"}
+        # 이번에 달라진 게 없으면(전부 유지) Impact가 해석할 대상도 없다 —
+        # 건너뛴다. Compose는 이미 위에서 정상적으로 돌았으므로 요약은 그대로 나간다.
+        highlight_facts = _highlight_facts(state)
+        if highlight_facts:
+            impact_attempts = int(state.get("impact_attempts") or 0)
+            impact_outcome = state.get("impact")
+            if impact_attempts == 0:
+                return {"route": "impact"}
+            if (
+                isinstance(impact_outcome, ImpactOutcome)
+                and impact_outcome.failed
+                and impact_attempts <= WORKER_MAX_RETRIES
+            ):
+                return {"route": "impact"}
 
         if not state.get("validated"):
             return {"route": "validate"}
@@ -258,12 +281,16 @@ def build_change_history_graph(connection: AsyncConnection[DictRow]) -> Any:
         }
 
     async def compose(state: ChangeHistoryState) -> dict[str, Any]:
-        """Overview와 타임라인을 한 번의 LLM 호출로 만든다."""
+        """오늘 확인된 팩트 전체로 핵심 요약과 타임라인을 한 번의 LLM 호출로 만든다.
+
+        신규·갱신·유지 팩트를 모두 넘긴다 — 여기서 만드는 요약이 "달라진 것만"이
+        아니라 지금 전체 상황을 설명하는 정보요약보고서 역할을 하기 때문이다.
+        """
         attempts = int(state.get("compose_attempts") or 0)
         correction = _correction_for(state, COMPOSE_WORKER) if attempts else ""
         outcome = await chg_003(
             topic=state["topic"],
-            facts=_writable_facts(state),
+            facts=_all_facts(state),
             reference_date=_state_reference_date(state),
             base_summary=str(state.get("base_summary") or ""),
             model=state["model"],
@@ -276,11 +303,16 @@ def build_change_history_graph(connection: AsyncConnection[DictRow]) -> Any:
         }
 
     async def impact(state: ChangeHistoryState) -> dict[str, Any]:
-        """정제된 팩트로 파급효과와 행동 지침을 추론한다."""
+        """이번에 달라진 팩트로 파급효과와 확인 사항을 추론한다.
+
+        유지(중복) 팩트는 뺀다 — 안 바뀐 것을 놓고 "앞으로 뭘 지켜봐야 하는지"를
+        새로 추론할 이유가 없다. Supervisor가 달라진 게 없으면 이 노드 자체를
+        건너뛰므로, 여기 도달했다는 것은 highlight_facts가 비어 있지 않다는 뜻이다.
+        """
         attempts = int(state.get("impact_attempts") or 0)
         outcome = await chg_004(
             topic=state["topic"],
-            facts=_writable_facts(state),
+            facts=_highlight_facts(state),
             # 추론 난이도가 높은 노드라 필요하면 여기만 더 강한 모델로 올린다.
             model=impact_model(state["model"]),
             correction=_correction_for(state, IMPACT_WORKER) if attempts else "",
@@ -292,7 +324,12 @@ def build_change_history_graph(connection: AsyncConnection[DictRow]) -> Any:
         }
 
     async def validate(state: ChangeHistoryState) -> dict[str, Any]:
-        """조립 전에 팩트 정합성·날짜 타당성·인용 마커를 코드로 검사한다."""
+        """조립 전에 팩트 정합성·날짜 타당성·인용 마커를 코드로 검사한다.
+
+        Compose의 overview가 유지 팩트도 인용할 수 있으므로, 인용 마커 검사의
+        "사용 가능한 참조" 범위도 전체 팩트(all_facts) 기준이어야 한다 — highlight만
+        기준으로 삼으면 유지 팩트의 정당한 인용을 오탐으로 걸러낸다.
+        """
         compose_outcome = state.get("compose")
         impact_outcome = state.get("impact")
         timeline = (
@@ -304,7 +341,7 @@ def build_change_history_graph(connection: AsyncConnection[DictRow]) -> Any:
             connection,
             user_id=state["user_id"],
             topic=state["topic"],
-            facts=_writable_facts(state),
+            facts=_all_facts(state),
             timeline=timeline,
             reference_date=_state_reference_date(state),
             overview=(
@@ -321,21 +358,25 @@ def build_change_history_graph(connection: AsyncConnection[DictRow]) -> Any:
         return {"validation": outcome, "validated": True}
 
     async def assemble(state: ChangeHistoryState) -> dict[str, Any]:
-        """검증을 통과한 출력에 섹션 헤더를 붙여 하나의 markdown으로 잇는다.
+        """검증을 통과한 출력으로 정보요약보고서를 조립한다.
+
+        Compose의 overview("핵심 요약·맥락")는 이미 전체 그림(신규·갱신·유지)을
+        담고 있으므로 그대로 쓴다. "이번에 달라진 점" 섹션만
+        validation.facts에서 신규·갱신을 추려 따로 만든다.
 
         조립 뒤 기존 무료 품질 검사(quality.evaluate_report)를 그대로 적용한다.
-        새 판정 규칙을 만들지 않고 재사용하는 것이다.
-
-        단 **"변화 없음" 보고서에는 적용하지 않는다.** 그 경로는 쓸 팩트가 없어
-        인용도 없는 것이 정상인데, quality는 인용 0개를 무조건 `no_citations`
-        (재생성 대상)로 본다. 고칠 수 없는 실패를 매번 실패로 기록하면 로그와
-        지표가 오염돼 진짜 문제를 못 찾는다. 검사를 건너뛰었다는 사실 자체를
-        판정값으로 남겨, "통과"와 구분되게 한다.
+        이제는 달라진 게 없어도(highlight_items가 비어도) Compose가 실제 요약을
+        전체 팩트로 써서 인용이 정상적으로 존재하므로, 검사를 건너뛸 이유가 없다
+        — "변화 없음"이라고 본문 자체가 비거나 짧아지지 않는다.
         """
         validation = state.get("validation")
-        facts = (
+        validated_facts = (
             validation.facts if isinstance(validation, ValidationOutcome) else ()
         )
+        highlight_items = tuple(
+            item for item in validated_facts if item.fact.verdict != DUPLICATE
+        )
+        no_change = not highlight_items
         compose_outcome = state.get("compose")
         impact_outcome = state.get("impact")
         contexts = [
@@ -346,7 +387,7 @@ def build_change_history_graph(connection: AsyncConnection[DictRow]) -> Any:
         generated = await chg_006(
             topic=state["topic"],
             reference_date=_state_reference_date(state),
-            facts=facts,
+            highlight_facts=highlight_items,
             compose=(
                 compose_outcome
                 if isinstance(compose_outcome, ComposeOutcome)
@@ -359,33 +400,38 @@ def build_change_history_graph(connection: AsyncConnection[DictRow]) -> Any:
             ),
             contexts=contexts,
             is_first_run=bool(state.get("is_first_run")),
-            no_change=bool(state.get("no_change")),
         )
-        if state.get("no_change"):
-            quality_outcome = QUALITY_SKIPPED_NO_CHANGE
-        else:
-            quality_outcome = evaluate_report(
-                generated, context_count=len(contexts)
-            ).outcome
+        quality_outcome = evaluate_report(
+            generated, context_count=len(contexts)
+        ).outcome
         logger.info(
-            "델타 보고서 조립 완료: topic=%s 팩트 %d건 품질=%s",
+            "델타 보고서 조립 완료: topic=%s 달라진 점 %d건 품질=%s",
             state["topic"],
-            len(facts),
+            len(highlight_items),
             quality_outcome,
         )
-        return {"generated": generated, "quality_outcome": quality_outcome}
+        return {
+            "generated": generated,
+            "quality_outcome": quality_outcome,
+            "no_change": no_change,
+        }
 
     async def store(state: ChangeHistoryState) -> dict[str, Any]:
-        """이번 실행의 팩트와 실행 메타를 델타 테이블에 저장한다.
+        """이번에 달라진 팩트와 실행 메타를 델타 테이블에 저장한다.
 
-        **첫 실행도 예외 없이 저장한다.** 이 저장은 출력이 아니라 다음 실행의
-        Base 재료다. 저장 실패가 이미 만들어진 보고서를 못 나가게 하면 안 되므로
-        예외는 경고 로그로만 남긴다(다음 실행이 복구 경로다).
+        **유지(중복) 팩트는 저장하지 않는다** — 이미 DB에 있는 값과 같으므로
+        다시 넣으면 같은 사실이 실행마다 새 Row로 쌓인다. **첫 실행도 예외 없이
+        저장한다.** 이 저장은 출력이 아니라 다음 실행의 Base 재료다. 저장 실패가
+        이미 만들어진 보고서를 못 나가게 하면 안 되므로 예외는 경고 로그로만 남긴다
+        (다음 실행이 복구 경로다).
         """
         validation = state.get("validation")
-        facts = (
+        validated_facts = (
             validation.facts if isinstance(validation, ValidationOutcome) else ()
         )
+        highlight_items = [
+            item for item in validated_facts if item.fact.verdict != DUPLICATE
+        ]
         payload = [
             NewChangeHistoryFact(
                 subject=item.fact.subject,
@@ -400,7 +446,7 @@ def build_change_history_graph(connection: AsyncConnection[DictRow]) -> Any:
                 source_reference=item.fact.source_reference or None,
                 source_url=item.fact.source_url or None,
             )
-            for item in facts
+            for item in highlight_items
         ]
         try:
             async with connection.transaction():
@@ -492,7 +538,7 @@ def _accumulate_tokens(state: ChangeHistoryState, outcome: Any) -> dict[str, int
 
 
 def _state_reference_date(state: ChangeHistoryState) -> date:
-    """상태에 담긴 기준일을 date로 꺼낸다. 없으면 오늘(UTC)."""
+    """상태에 담긴 기준일을 date로 꺼낸다. 없으면 서비스 시간대 기준 오늘."""
     value = state.get("reference_date")
     if isinstance(value, date):
         return value
@@ -501,7 +547,7 @@ def _state_reference_date(state: ChangeHistoryState) -> date:
             return date.fromisoformat(value)
         except ValueError:
             pass
-    return datetime.now(UTC).date()
+    return current_reference_date()
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
@@ -528,7 +574,7 @@ async def chg_001(
         topic: 보고서 주제
         contexts: report_builder가 만든 오늘의 근거 문서
         model: 워커가 사용할 기본 모델
-        reference_date: 절대 날짜 정형화 기준일. 생략하면 오늘(UTC)
+        reference_date: 절대 날짜 정형화 기준일. 생략하면 서비스 시간대 기준 오늘
 
     Returns:
         조립된 보고서(generated)와 실행 요약(팩트 수·드롭 플래그 등)
@@ -540,7 +586,7 @@ async def chg_001(
             "job_id": job_id,
             "topic": topic,
             "model": model,
-            "reference_date": reference_date or datetime.now(UTC).date(),
+            "reference_date": reference_date or current_reference_date(),
             "contexts": list(contexts),
         },
         # 워커마다 Supervisor를 한 번씩 더 거치므로 최악의 경로(워커 2회 재작업)가
@@ -552,13 +598,18 @@ async def chg_001(
     if not isinstance(generated, GeneratedReportContent):
         raise RuntimeError("변경점 추적 그래프가 보고서를 반환하지 않았습니다.")
     validation = state.get("validation")
-    facts = validation.facts if isinstance(validation, ValidationOutcome) else ()
+    all_facts = validation.facts if isinstance(validation, ValidationOutcome) else ()
+    # 이번에 달라진 점(신규·갱신)만 추린다. 유지(중복) 팩트는 validation.facts에
+    # 섞여 있지만(인용 검증용) 호출자에게는 "몇 건이 바뀌었나"만 의미 있다.
+    highlight_facts = tuple(
+        item for item in all_facts if item.fact.verdict != DUPLICATE
+    )
     return {
         "generated": generated,
         "run_id": str(state.get("run_id") or ""),
         "is_first_run": bool(state.get("is_first_run")),
         "no_change": bool(state.get("no_change")),
-        "fact_count": len(facts),
+        "fact_count": len(highlight_facts),
         "duplicate_count": int(state.get("duplicate_count") or 0),
         "stored_fact_count": int(state.get("stored_fact_count") or 0),
         "dropped_flags": list(state.get("dropped_flags") or []),
@@ -570,5 +621,5 @@ async def chg_001(
         "impact_attempts": int(state.get("impact_attempts") or 0),
         "input_tokens": int(state.get("input_tokens") or 0),
         "output_tokens": int(state.get("output_tokens") or 0),
-        "facts": list(facts),
+        "facts": list(highlight_facts),
     }
