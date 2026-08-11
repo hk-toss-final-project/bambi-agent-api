@@ -3,6 +3,11 @@
 구현 모듈의 기능 함수를 안정적인 import 경로로 다시 노출한다.
 """
 
+from .features.briefing_selections import (
+    StoredBriefingTopicSelection,
+    load_briefing_topic_selection,
+    save_briefing_topic_selection,
+)
 from .features.users import db_001
 from .features.personal_wiki import (
     UserSourceDocumentForAgent,
@@ -272,4 +277,7 @@ __all__ = [
     "sync_wiki_relation_supports",
     "reset_personal_wiki",
     "get_agent_jobs",
+    "StoredBriefingTopicSelection",
+    "load_briefing_topic_selection",
+    "save_briefing_topic_selection",
 ]

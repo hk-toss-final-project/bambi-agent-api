@@ -17,6 +17,7 @@ from agent.report_builder.api import (
 )
 from app.services import briefing_topics as service_module
 from app.services.briefing_topics import BriefingTopicsService
+from infrastructure.persistence.api import StoredBriefingTopicSelection
 
 
 class _FakeRepository:
@@ -102,6 +103,116 @@ def test_service_passes_assembled_context_to_the_selector(
     contexts = {candidate.node: candidate.context for candidate in seen[0].candidates}
     assert "PostgreSQL 인덱스 튜닝" in contexts["DBeaver Community"]
     assert "마지막 저장" in contexts["삼성전자"]
+
+
+class _CachingRepository(_FakeRepository):
+    """선정 결과 저장까지 지원하는 Repository 대역."""
+
+    def __init__(
+        self,
+        materials: Sequence[CandidateMaterial],
+        *,
+        stored: StoredBriefingTopicSelection | None = None,
+        stored_digest: str | None = None,
+    ) -> None:
+        """미리 저장돼 있다고 볼 결과와 그 지문을 보관한다."""
+        super().__init__(materials)
+        self._stored = stored
+        self._stored_digest = stored_digest
+        self.saved: dict[str, object] | None = None
+
+    async def load_topic_selection(
+        self, user_id: str, *, candidate_digest: str, topic_limit: int
+    ) -> StoredBriefingTopicSelection | None:
+        """지문이 저장 당시와 같을 때만 결과를 돌려준다."""
+        if self._stored is None or candidate_digest != self._stored_digest:
+            return None
+        return self._stored
+
+    async def save_topic_selection(
+        self, user_id: str, *, candidate_digest: str, **fields: object
+    ) -> None:
+        """저장 호출을 기록한다."""
+        self.saved = {"user_id": user_id, "digest": candidate_digest, **fields}
+
+
+def test_service_reuses_the_stored_selection_without_calling_the_selector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """후보가 그대로면 저장된 주제를 그대로 돌려주고 LLM을 부르지 않는다.
+
+    Service는 03:00에 주제를 미리 물어 그 주제로 창고 수집을 걸고 07:00에 같은
+    엔드포인트를 다시 부른다. 두 호출이 다른 답을 주면 새벽에 모아둔 자료가
+    맞지 않는다.
+    """
+    materials = _materials()
+    repository = _CachingRepository(
+        materials,
+        stored=StoredBriefingTopicSelection(
+            topics=("삼성전자", "폭염"), reason="03:00에 골랐다.", candidate_count=2
+        ),
+        stored_digest=service_module._candidate_digest(materials),
+    )
+    seen = _stub_selector(monkeypatch, ("전혀 다른 주제",))
+
+    response = asyncio.run(BriefingTopicsService(repository).get_topics("user-1"))
+
+    assert response.topics == ["삼성전자", "폭염"]
+    assert response.reason == "03:00에 골랐다."
+    assert seen == [], "재사용했다면 선정자를 부르면 안 된다"
+
+
+def test_service_reselects_when_the_wiki_changed_overnight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """밤사이 후보가 달라지면 저장된 결과를 쓰지 않고 새로 고른다."""
+    repository = _CachingRepository(
+        _materials(),
+        stored=StoredBriefingTopicSelection(
+            topics=("옛날 주제",), reason="어제 골랐다.", candidate_count=1
+        ),
+        stored_digest="밤사이-바뀌기-전-지문",
+    )
+    _stub_selector(monkeypatch, ("삼성전자",))
+
+    response = asyncio.run(BriefingTopicsService(repository).get_topics("user-1"))
+
+    assert response.topics == ["삼성전자"]
+
+
+def test_service_stores_the_selection_for_the_next_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """새로 고른 주제를 07:00 호출이 다시 쓸 수 있게 저장한다."""
+    repository = _CachingRepository(_materials())
+    _stub_selector(monkeypatch, ("삼성전자",))
+
+    asyncio.run(BriefingTopicsService(repository).get_topics("user-1"))
+
+    assert repository.saved is not None
+    assert repository.saved["topics"] == ["삼성전자"]
+    assert repository.saved["topic_limit"] == 3
+
+
+def test_service_still_selects_when_the_cache_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """캐시 조회가 실패해도 주제 선정 자체는 돌아야 한다.
+
+    캐시는 편의 장치라 여기서 예외가 새면 07:00 아침 발화가 통째로 막힌다.
+    """
+
+    class _BrokenCache(_FakeRepository):
+        async def load_topic_selection(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("DB 연결 실패")
+
+    _stub_selector(monkeypatch, ("삼성전자",))
+
+    response = asyncio.run(
+        BriefingTopicsService(_BrokenCache(_materials())).get_topics("user-1")
+    )
+
+    assert response.topics == ["삼성전자"]
 
 
 def test_service_returns_empty_topics_for_a_user_without_wiki() -> None:
