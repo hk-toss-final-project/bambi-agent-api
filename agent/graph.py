@@ -864,6 +864,15 @@ _MAX_TOPIC_FACETS = 1
 # 생성 프롬프트에 넣는 근거 문서 상한(REPORT-006 기본값과 같아야 한다).
 _MAX_REPORT_CONTEXTS = 12
 
+# 멀티 토픽 조사의 동시성 제어 상한. 무제한 병렬 처리 시 외부 API 429 차단 및
+# DB 커넥션 고갈 위험이 발생하므로 세마포어로 2개 주제까지 동시 수행한다.
+_MULTI_TOPIC_RESEARCH_CONCURRENCY = 2
+
+# 주제별 조사 및 수집 실행 시간 상한(초). 특정 외부 API 응답 지연이 전체 보고서
+# 생성을 10분 이상 지연시켜 워커 타임아웃/재시도가 발생하는 것을 방지한다.
+_TOPIC_RESEARCH_TIMEOUT_SECONDS = 90.0
+
+
 
 @dataclass(frozen=True, slots=True)
 class _WikiKeywordExpansion:
@@ -1163,89 +1172,134 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         read_pipeline_version = str(
             state.get("read_pipeline_version") or LEGACY_READ_PIPELINE_VERSION
         )
-        for topic in topics:
-            intents[topic] = await to_thread(
-                resolve_topic_intent, topic, state["user_id"]
-            )
-            documents_by_topic[topic] = []
-            if (
-                read_pipeline_version == LEGACY_READ_PIPELINE_VERSION
-                and not research_agent_enabled()
-            ):
-                continue
-            topic_started = monotonic()
-            try:
-                research_kwargs: dict[str, Any] = {
-                    "topic": topic,
-                    "user_id": state["user_id"],
-                    "topic_intent": intents[topic],
-                    "model": state["model"],
-                    "wiki_version_id": state.get("wiki_version_id"),
-                    "job_id": state["job_id"],
-                }
-                navigation_snapshot = (
-                    state.get("wiki_navigation_snapshots") or {}
-                ).get(topic)
-                if navigation_snapshot:
-                    research_kwargs["navigation_snapshot"] = navigation_snapshot
-                topic_bundle = _topic_bundle(state, topic)
-                bundle_keywords = _bundle_search_keywords(topic_bundle)
-                if bundle_keywords:
-                    research_kwargs["planned_queries"] = [
-                        keyword
-                        for keyword in bundle_keywords
-                        if keyword.casefold() != topic.casefold()
-                    ]
-                planned_versions = _bundle_wiki_version_ids(topic_bundle)
-                if planned_versions:
-                    research_kwargs["planned_wiki_version_ids"] = planned_versions
-                if read_pipeline_version == LEGACY_READ_PIPELINE_VERSION:
-                    outcome = await research_context(connection, **research_kwargs)
-                else:
-                    outcome = await research_context_for_version(
-                        connection,
-                        pipeline_version=read_pipeline_version,
-                        **research_kwargs,
-                    )
-            except Exception:
-                # 주제 하나가 실패해도 나머지 주제는 계속 조사한다. 실패한 주제는
-                # load_context가 고정 경로로 다시 시도한다.
-                logger.exception(
-                    "조사원 실행에 실패해 기존 수집 경로로 되돌립니다: topic=%s", topic
+
+        sem = asyncio.Semaphore(_MULTI_TOPIC_RESEARCH_CONCURRENCY)
+
+        async def _research_single_topic(topic: str) -> dict[str, Any]:
+            async with sem:
+                intent = await to_thread(
+                    resolve_topic_intent, topic, state["user_id"]
                 )
-                continue
-            documents_by_topic[topic] = list(outcome.documents)
-            collected_live = collected_live or outcome.collected_live
-            # 조사 노드가 리포트 시간의 대부분을 쓰는데 안이 안 보였다
-            # (2026-08-11 실측: 336초 중 320초). 도구별 호출 수·소요 시간을
-            # 작업 결과까지 실어 서버 로그 없이 확인한다.
-            research_stats.append(
-                {
+                topic_docs: list[Any] = []
+                coll_live = False
+                stat: dict[str, Any] | None = None
+                note: str | None = None
+                topic_calls: list[dict[str, object]] = []
+
+                if not (
+                    read_pipeline_version == LEGACY_READ_PIPELINE_VERSION
+                    and not research_agent_enabled()
+                ):
+                    topic_started = monotonic()
+                    try:
+                        research_kwargs: dict[str, Any] = {
+                            "topic": topic,
+                            "user_id": state["user_id"],
+                            "topic_intent": intent,
+                            "model": state["model"],
+                            "wiki_version_id": state.get("wiki_version_id"),
+                            "job_id": state["job_id"],
+                        }
+                        navigation_snapshot = (
+                            state.get("wiki_navigation_snapshots") or {}
+                        ).get(topic)
+                        if navigation_snapshot:
+                            research_kwargs["navigation_snapshot"] = (
+                                navigation_snapshot
+                            )
+                        topic_bundle = _topic_bundle(state, topic)
+                        bundle_keywords = _bundle_search_keywords(topic_bundle)
+                        if bundle_keywords:
+                            research_kwargs["planned_queries"] = [
+                                keyword
+                                for keyword in bundle_keywords
+                                if keyword.casefold() != topic.casefold()
+                            ]
+                        planned_versions = _bundle_wiki_version_ids(topic_bundle)
+                        if planned_versions:
+                            research_kwargs["planned_wiki_version_ids"] = (
+                                planned_versions
+                            )
+
+                        if read_pipeline_version == LEGACY_READ_PIPELINE_VERSION:
+                            outcome = await asyncio.wait_for(
+                                research_context(connection, **research_kwargs),
+                                timeout=_TOPIC_RESEARCH_TIMEOUT_SECONDS,
+                            )
+                        else:
+                            outcome = await asyncio.wait_for(
+                                research_context_for_version(
+                                    connection,
+                                    pipeline_version=read_pipeline_version,
+                                    **research_kwargs,
+                                ),
+                                timeout=_TOPIC_RESEARCH_TIMEOUT_SECONDS,
+                            )
+                        topic_docs = list(outcome.documents)
+                        coll_live = outcome.collected_live
+                        stat = {
+                            "topic": topic,
+                            "pipeline_version": read_pipeline_version,
+                            "elapsed_ms": int((monotonic() - topic_started) * 1000),
+                            "tools": [
+                                {"tool": name, "calls": count, "elapsed_ms": elapsed}
+                                for name, count, elapsed in getattr(
+                                    outcome, "tool_stats", ()
+                                )
+                            ],
+                            "stop_reason": str(getattr(outcome, "stop_reason", "")),
+                            "documents": len(outcome.documents),
+                        }
+                        if outcome.notes:
+                            note = (
+                                outcome.notes
+                                if len(topics) == 1
+                                else f"[{topic}] {outcome.notes}"
+                            )
+                        topic_calls = [
+                            {
+                                "topic": topic,
+                                "tool": call.name,
+                                "arguments": call.arguments,
+                                "failed": call.failed,
+                            }
+                            for call in outcome.calls
+                        ]
+                    except TimeoutError:
+                        logger.warning(
+                            "주제별 조사 실행 시간 초과(%.1f초), 기존 경로로 폴백: topic=%s",
+                            _TOPIC_RESEARCH_TIMEOUT_SECONDS,
+                            topic,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "조사원 실행에 실패해 기존 수집 경로로 되돌립니다: topic=%s",
+                            topic,
+                        )
+
+                return {
                     "topic": topic,
-                    "pipeline_version": read_pipeline_version,
-                    "elapsed_ms": int((monotonic() - topic_started) * 1000),
-                    "tools": [
-                        {"tool": name, "calls": count, "elapsed_ms": elapsed}
-                        # 도구 통계가 없는 형태(테스트 더미 등)도 그대로 통과시킨다.
-                        for name, count, elapsed in getattr(outcome, "tool_stats", ())
-                    ],
-                    "stop_reason": str(getattr(outcome, "stop_reason", "")),
-                    "documents": len(outcome.documents),
+                    "intent": intent,
+                    "documents": topic_docs,
+                    "collected_live": coll_live,
+                    "stat": stat,
+                    "note": note,
+                    "calls": topic_calls,
                 }
-            )
-            if outcome.notes:
-                notes.append(
-                    outcome.notes if len(topics) == 1 else f"[{topic}] {outcome.notes}"
-                )
-            calls.extend(
-                {
-                    "topic": topic,
-                    "tool": call.name,
-                    "arguments": call.arguments,
-                    "failed": call.failed,
-                }
-                for call in outcome.calls
-            )
+
+        results = await asyncio.gather(
+            *(_research_single_topic(topic) for topic in topics)
+        )
+        for res in results:
+            topic = res["topic"]
+            intents[topic] = res["intent"]
+            documents_by_topic[topic] = res["documents"]
+            collected_live = collected_live or res["collected_live"]
+            if res["stat"]:
+                research_stats.append(res["stat"])
+            if res["note"]:
+                notes.append(res["note"])
+            calls.extend(res["calls"])
         flattened = [
             document
             for topic in topics
@@ -1744,13 +1798,24 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         )
         _record("related_keywords", keywords_started)
         live_started = monotonic()
-        live = await to_thread(
-            collect_live_context,
-            topic,
-            state["user_id"],
-            model=state["model"],
-            related_keywords=related_keywords,
-        )
+        try:
+            live = await asyncio.wait_for(
+                to_thread(
+                    collect_live_context,
+                    topic,
+                    state["user_id"],
+                    model=state["model"],
+                    related_keywords=related_keywords,
+                ),
+                timeout=_TOPIC_RESEARCH_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning(
+                "주제별 실시간 수집 시간 초과(%.1f초): topic=%s",
+                _TOPIC_RESEARCH_TIMEOUT_SECONDS,
+                topic,
+            )
+            live = []
         _record("live_collect", live_started)
         logger.info(
             "주제별 실시간 수집: topic=%s %d건 (이웃 키워드 %d개)",
