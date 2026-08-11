@@ -1242,8 +1242,25 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             "research_stats": research_stats,
         }
 
+    def _topic_context_hint(documents: Sequence[Any], topic: str) -> str:
+        """이미 조회한 문서에서 이 주제가 무엇인지 알려줄 한 줄을 뽑는다.
+
+        주제어만으로는 보조 검색어가 헛돈다(2026-08-11 실측: `코리`에 "최신 뉴스",
+        "활동 소식"이 생성됐다 — 제약 기업인지 모르니 아무 데나 붙는 말이 나왔다).
+        개인 Wiki 문서에 그 설명이 이미 들어 있으므로 DB를 다시 부르지 않는다.
+        """
+        marker = "".join(topic.split()).casefold()
+        for document in documents:
+            title = str(getattr(document, "title", "") or "")
+            if "".join(title.split()).casefold() != marker:
+                continue
+            content = " ".join(str(getattr(document, "content", "") or "").split())
+            if content:
+                return content[:200]
+        return ""
+
     async def load_related_keywords(
-        user_id: str, topic: str, *, intent: str = "news"
+        user_id: str, topic: str, *, intent: str = "news", context: str = ""
     ) -> list[str]:
         """개인 Wiki Graph Gate로 bounded PPR 또는 검증 1-hop 키워드를 읽는다.
 
@@ -1290,6 +1307,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 generate_topic_facets,
                 topic,
                 intent=intent,
+                context=context,
                 limit=limit - len(keywords),
             )
             existing = {"".join(topic.split()).casefold()} | {
@@ -1494,6 +1512,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                     state["user_id"],
                     state["topic"],
                     intent=str(state.get("topic_intent") or "news"),
+                    context=_topic_context_hint(personal_documents, state["topic"]),
                 )
             )
         if already_collected_live and not pool_is_enough:
@@ -1694,7 +1713,12 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         related_keywords = (
             bundle_keywords[1:]
             if topic_bundle
-            else await load_related_keywords(state["user_id"], topic, intent=topic_intent)
+            else await load_related_keywords(
+                state["user_id"],
+                topic,
+                intent=topic_intent,
+                context=_topic_context_hint(stored, topic),
+            )
         )
         _record("related_keywords", keywords_started)
         live_started = monotonic()

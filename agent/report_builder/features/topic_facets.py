@@ -44,6 +44,7 @@ def generate_topic_facets(
     topic: str,
     *,
     intent: str = "news",
+    context: str = "",
     limit: int = DEFAULT_FACET_LIMIT,
     model: str = "gpt-4.1-mini",
 ) -> tuple[str, ...]:
@@ -58,6 +59,7 @@ def generate_topic_facets(
     Args:
         topic: 관심 주제
         intent: 주제 성격("news"|"evergreen"). 무엇을 물을지가 갈린다
+        context: 이 주제가 무엇인지 알려주는 한 줄. 없으면 이름만 보고 만든다
         limit: 만들 보조 검색어 수
         model: 사용할 OpenAI 모델
 
@@ -68,7 +70,12 @@ def generate_topic_facets(
     if not normalized or limit <= 0:
         return ()
 
-    prompt = f"주제: {normalized}\nintent: {intent}\n만들 검색어 수: {limit}개"
+    hint = " ".join(context.split())
+    prompt = (
+        f"주제: {normalized}\n"
+        + (f"주제 설명: {hint}\n" if hint else "")
+        + f"intent: {intent}\n만들 검색어 수: {limit}개"
+    )
     try:
         raw = complete(_SYSTEM_PROMPT, prompt, model=model)
         payload = json.loads(strip_json_fence(raw))

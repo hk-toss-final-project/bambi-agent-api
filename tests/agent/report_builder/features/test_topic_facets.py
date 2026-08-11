@@ -113,3 +113,29 @@ def test_prompt_carries_the_topic_intent(monkeypatch: pytest.MonkeyPatch) -> Non
     assert "주제: 다낭 여행" in prompts[0]
     assert "intent: evergreen" in prompts[0]
     assert "1개" in prompts[0]
+
+
+def test_prompt_carries_the_topic_description(monkeypatch: pytest.MonkeyPatch) -> None:
+    """주제 설명이 있으면 프롬프트에 함께 넣는다.
+
+    이름만으로는 무엇에 관한 주제인지 모른다(2026-08-11 실측: `코리`에 "최신
+    뉴스"·"활동 소식" 같은 아무 데나 붙는 검색어가 생성됐다).
+    """
+    prompts = _answer(monkeypatch, '{"queries": ["코리 제약 파이프라인"]}')
+
+    generate_topic_facets(
+        "코리", context="북경 한미약품과 협력하는 제약 기업", limit=1
+    )
+
+    assert "주제 설명: 북경 한미약품과 협력하는 제약 기업" in prompts[0]
+
+
+def test_prompt_omits_the_description_line_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """설명이 없으면 그 줄을 아예 넣지 않는다."""
+    prompts = _answer(monkeypatch, '{"queries": ["다낭 날씨"]}')
+
+    generate_topic_facets("다낭 여행", limit=1)
+
+    assert "주제 설명" not in prompts[0]
