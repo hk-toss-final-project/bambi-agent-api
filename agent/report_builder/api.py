@@ -56,6 +56,7 @@ from .features.generation import (
     normalize_content_tags,
     parse_report_generation,
 )
+from .features.topic_focus import focus_documents_on_topic
 from .features.quality import QualityVerdict, evaluate_report
 from .features.citations import report_011
 from .features.validation import report_013, report_014, report_015, report_016
@@ -100,4 +101,5 @@ __all__ = [
     "navigation_packet_documents",
     "search_global_documents",
     "embed_wiki_queries",
+    "focus_documents_on_topic",
 ]

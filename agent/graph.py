@@ -45,6 +45,7 @@ from agent.report_builder.api import (
     review_report,
     select_personal_documents,
     select_pool_documents,
+    focus_documents_on_topic,
     select_generation_context,
     search_global_documents,
 )
@@ -1667,6 +1668,12 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             # 수집을 한 번도 안 했는데도 뒤쪽 주제가 예산 부족으로 못 돈다.
             if collected_live:
                 live_budget -= 1
+            # 근거를 생성에 넘기기 전에 주제에 해당하는 문장만 남긴다. 기사 하나가
+            # 여러 사안을 실으면 본문이 주제 밖 사실까지 옮겨 적는다(2026-08-11
+            # 실측: '폭염' 섹션이 같은 기사의 KIA 성적을 그대로 썼다).
+            documents = await to_thread(
+                focus_documents_on_topic, topic, documents, model=state["model"]
+            )
             finalized = await _finalize_contexts(state, documents, max_documents=quota)
             picked = 0
             for context in finalized.get("contexts", []):

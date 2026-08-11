@@ -38,7 +38,11 @@ load_dotenv(PROJECT_ROOT / ".env")
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from agent.report_builder.api import ReportContextDocument, generate_report_content  # noqa: E402
+from agent.report_builder.api import (  # noqa: E402
+    ReportContextDocument,
+    focus_documents_on_topic,
+    generate_report_content,
+)
 
 DATASET = ROOT / "dataset.jsonl"
 LAST_RUN = ROOT / "last_run.json"
@@ -72,6 +76,37 @@ def expand_content(entry: dict[str, object]) -> str:
     content = str(entry["content"])
     repeat = int(entry.get("repeat", 1) or 1)
     return " ".join([content] * repeat)
+
+
+def focus_contexts(
+    case: dict[str, object], contexts: list[ReportContextDocument], *, model: str
+) -> list[ReportContextDocument]:
+    """생성 전에 근거를 소주제별로 좁힌다 — 그래프가 하는 것과 같은 처리다.
+
+    그래프는 `_load_multi_topic_contexts`에서 주제마다 이 함수를 부른다. 벤치마크가
+    이 단계를 건너뛰면 생성 프롬프트만 재게 되어, 근거 주입 단계의 개선이 지표에
+    잡히지 않는다. 데이터셋이 근거마다 소유 주제를 적어 두므로 같은 묶음을 만들 수 있다.
+    """
+    owner_of = {
+        str(entry["reference"]): str(entry["topic"])
+        for entry in case["contexts"]  # type: ignore[index]
+    }
+    focused: list[ReportContextDocument] = []
+    for topic in [str(item) for item in (case.get("topics") or [])]:
+        owned = [
+            context for context in contexts if owner_of.get(context.reference) == topic
+        ]
+        if owned:
+            focused.extend(focus_documents_on_topic(topic, owned, model=model))
+    # 소유 주제가 topics에 없는 근거(단일 주제 케이스 등)는 그대로 둔다.
+    kept = {context.reference for context in focused}
+    focused.extend(
+        context
+        for context in contexts
+        if context.reference not in kept
+        and owner_of.get(context.reference) not in (case.get("topics") or [])
+    )
+    return focused
 
 
 def build_contexts(case: dict[str, object]) -> list[ReportContextDocument]:
@@ -272,7 +307,7 @@ def main() -> int:
 
     results: list[dict[str, object]] = []
     for case in cases:
-        contexts = build_contexts(case)
+        contexts = focus_contexts(case, build_contexts(case), model=args.model)
         included = estimate_included_references(contexts)
         topics = [str(topic) for topic in (case.get("topics") or [])]
         started = time.perf_counter()
