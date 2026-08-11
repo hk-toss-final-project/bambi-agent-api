@@ -196,7 +196,24 @@ async def claim_runnable_agent_jobs(
                         AND lease_expires_at < clock_timestamp()
                     )
               )
-            ORDER BY priority DESC, scheduled_at, created_at, id
+            -- 온디맨드는 사람이 화면을 보며 기다리는 요청이라 아침 브리핑보다
+            -- 먼저 집는다. 둘 다 report_generation Job이고 Service가 priority를
+            -- 넣지 않아 전부 기본값 100이라, 07:00에 아침 브리핑이 한꺼번에
+            -- 쌓이면 그 뒤에 선다(2026-08-11 실측: 리포트 Job 224건이 전부
+            -- priority=100. 워커 3대 × 건당 7분이면 27건 뒤는 63분을 기다린다).
+            --
+            -- priority를 앞에 그대로 두어 명세의 정렬 규칙은 유지한다. Service가
+            -- 나중에 priority를 넣기 시작하면 그 값이 이 규칙보다 우선한다.
+            ORDER BY
+                priority DESC,
+                -- COALESCE가 필요하다. report_type이 없는 Job은
+                -- payload->>'report_type'이 NULL이고, NULL = 'ON_DEMAND'도 NULL이라
+                -- DESC 정렬에서 NULLS FIRST로 맨 앞에 온다 — 온디맨드가 아닌 Job이
+                -- 오히려 새치기한다. 빈 문자열로 낮춰 항상 true/false가 되게 한다.
+                (COALESCE(payload->>'report_type', '') = 'ON_DEMAND') DESC,
+                scheduled_at,
+                created_at,
+                id
             FOR UPDATE SKIP LOCKED
             LIMIT %s
         )

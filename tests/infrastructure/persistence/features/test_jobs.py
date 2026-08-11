@@ -195,6 +195,54 @@ def test_claim_runnable_agent_jobs_parameterizes_job_type() -> None:
     assert claim_params is not None and claim_params[0] == "report_generation"
 
 
+def test_claim_runnable_agent_jobs_prefers_on_demand_over_morning_briefing() -> None:
+    """온디맨드 리포트를 아침 브리핑보다 먼저 점유하도록 정렬하는지 검증한다.
+
+    둘 다 report_generation Job이고 Service가 priority를 넣지 않아 전부 기본값
+    100이라, 정렬에 이 규칙이 없으면 07:00에 쌓인 아침 브리핑 뒤에 온디맨드가
+    선다.
+    """
+    connection = _FakeConnection([[], [], []])
+
+    asyncio.run(
+        claim_runnable_agent_jobs(
+            connection,  # type: ignore[arg-type]
+            job_type="report_generation",
+            worker_id="worker-1",
+            limit=5,
+            lease_seconds=600,
+        )
+    )
+
+    claim_sql = connection.executed[0][0]
+    assert "'ON_DEMAND'" in claim_sql
+    # priority가 먼저다 — Service가 나중에 priority를 넣으면 그 값이 우선한다.
+    assert claim_sql.index("priority DESC") < claim_sql.index("'ON_DEMAND'")
+    assert claim_sql.index("'ON_DEMAND'") < claim_sql.index("scheduled_at,")
+
+
+def test_claim_runnable_agent_jobs_ordering_guards_missing_report_type() -> None:
+    """report_type이 없는 Job이 새치기하지 않도록 NULL을 막는지 검증한다.
+
+    `payload->>'report_type' = 'ON_DEMAND'`만 쓰면 report_type이 없을 때 NULL이
+    되고, DESC 정렬은 NULLS FIRST라 온디맨드가 아닌 Job이 맨 앞으로 온다.
+    """
+    connection = _FakeConnection([[], [], []])
+
+    asyncio.run(
+        claim_runnable_agent_jobs(
+            connection,  # type: ignore[arg-type]
+            job_type="report_generation",
+            worker_id="worker-1",
+            limit=5,
+            lease_seconds=600,
+        )
+    )
+
+    claim_sql = connection.executed[0][0]
+    assert "COALESCE(payload->>'report_type', '')" in claim_sql
+
+
 def test_claim_agent_job_by_id_records_dev_lease_and_attempt() -> None:
     """개발 실행기가 지정 Job 하나를 Lease로 점유하고 Attempt를 남기는지 검증한다."""
     connection = _FakeConnection(
