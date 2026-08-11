@@ -65,7 +65,22 @@ logger = logging.getLogger("agent.report_builder.researcher")
 
 type DictRow = dict[str, Any]
 
-RESEARCH_MAX_ITERATIONS = 5
+# 조사원 Tool Loop 반복 상한. 5에서 3으로 낮췄다(2026-08-11, 이송우 합의).
+#
+# 3주제 리포트가 조사원에만 393~428초를 쓰는데 Worker lease가 600초라 여유가
+# 65~71%뿐이고, 워커 3대가 찬 상태에서 조금만 밀리면 리스를 넘긴다. 넘기면 다른
+# 워커가 같은 작업을 처음부터 다시 집어가 시간이 배로 뛴다(당일 27건 중 6건 재시도,
+# 시도3 평균 1597초).
+#
+# 실측(user 40, 배포 없이 research_context 직접 호출):
+#   5회  폭염 91.0초/10건(final)   LG트윈스 89.7초/4건(final)
+#   4회  폭염 88.5초/10건(상한)    LG트윈스 83.3초/4건(final)   ← 절감 5%뿐
+#   3회  폭염 66.9초/ 9건(상한)    LG트윈스 65.0초/4건(상한)    ← 27% 절감, 근거 -1건
+#
+# 조사원이 보통 wiki_search → wiki_read → search_pool ×2 를 쓰는데, 3회에서야
+# search_pool이 1회로 줄어 시간이 떨어진다. 4회는 그 패턴을 그대로 허용해 의미가 없다.
+# 근거 손실이 커지면 다시 올린다 — research_stats의 documents 수로 확인한다.
+RESEARCH_MAX_ITERATIONS = 3
 _OBSERVATION_SNIPPET_CHARS = 160
 
 
