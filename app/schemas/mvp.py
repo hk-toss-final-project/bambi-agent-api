@@ -150,6 +150,12 @@ class UserContextUpsertRequest(ImmutableSchema):
         default_factory=list,
         description="회원가입 시 선택한 관심 카테고리·토픽 목록 (콜드스타트 관심사 시드)",
     )
+    onboarding_reports_managed_by_service: bool = Field(
+        default=False,
+        description=(
+            "Service API가 온보딩 리포트 생성·멱등성·펜딩 상태를 관리하는지 여부"
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_interest_taxonomy_version(self) -> "UserContextUpsertRequest":

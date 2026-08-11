@@ -177,6 +177,25 @@ def test_onboarding_with_interests_enqueues_seed_job(
     assert report_jobs[0].idempotency_key.startswith("interest-report:")
 
 
+def test_service_managed_onboarding_skips_agent_report_enqueue(
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
+) -> None:
+    """Service가 생성 소유권을 선언하면 시드만 접수하고 리포트는 자동 생성하지 않는다."""
+    response = client.put(
+        "/internal/v1/users/service-managed-user/context",
+        json={
+            "context_version": 1,
+            "plan": "free",
+            "signup_interests": [{"category": "기술", "topics": ["AI"]}],
+            "onboarding_reports_managed_by_service": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(agent_jobs_fake.jobs_with_feature("WSE-014")) == 1
+    assert agent_jobs_fake.jobs_with_feature("SVC-008") == []
+
+
 def test_onboarding_without_interests_skips_seed_job(
     client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
 ) -> None:

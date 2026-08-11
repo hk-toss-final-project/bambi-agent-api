@@ -1,9 +1,9 @@
 # 온보딩 콜드스타트 설계 — 관심사 시드 + 웰컴 리포트
 
-> 상태: **Part B 컨텍스트 시드 고도화 구현 완료** · 작성일 2026-08-04 · 갱신일 2026-08-10
+> 상태: **Part B 컨텍스트 시드·Service 소유 온보딩 리포트 구현 완료** · 작성일 2026-08-04 · 갱신일 2026-08-11
 > 목적: 가입 직후 "관심사 0개 · 리포트 0개"인 콜드스타트를 해소한다.
 > (1) 온보딩에서 고른 Category·Topic을 **관심사 시드 입력원**으로 정식 편입해 프로필을
-> 채우고, (2) 가입 즉시 **웰컴 리포트 1개**를 생성해 첫 화면을 비지 않게 한다.
+> 채우고, (2) 가입 즉시 **온보딩 리포트를 최대 3개** 생성해 첫 화면을 비지 않게 한다.
 > 상위 설계: [wiki-interest-subscription-design.md](wiki-interest-subscription-design.md)
 > (입력원 → Wiki → 관심사 프로필 → 구독의 단방향 파생 원칙).
 > "확인됨"은 코드·스키마로 검증한 사실, "결정 필요"는 팀이 정해야 하는 항목이다.
@@ -130,19 +130,24 @@ graph LR
 
 ### 5.1 트리거
 
-**온보딩 컨텍스트 upsert의 첫 스냅샷**([agent_jobs.py:83 `upsert_user_context`](../app/services/agent_jobs.py))에서 `report_generation` Job 1개를 enqueue한다. "첫" 판정은 해당 user의 기존 스냅샷 유무로 한다(append-only 테이블).
+온보딩 리포트 생성·멱등성·펜딩 상태는 Service API가 소유한다. Service는 컨텍스트
+upsert에 `onboarding_reports_managed_by_service=true`를 보내 Agent의 레거시 자동
+등록을 끄고, 온보딩 완료 시 선정한 관심사로 SVC-008을 최대 3회 호출한다.
 
 ### 5.2 topic 도출 · content_type
 
-- **topic**: `signup_interests`에서 우선순위 1개를 뽑아 사람이 읽는 문자열로. (여러 개면 대표 1개 — 결정 A2: 첫 항목 / 최다 topic / LLM 요약 중.)
-- **content_type**: 웰컴용 기본값 필요 — 결정 A1(예: 짧은 브리핑형). 리포트 워커가 `content_type`을 필수로 요구하므로 값 확정 전엔 구현 불가.
+- **topic**: Service의 온보딩 관심사 선정 규칙으로 고른 실제 검색어. 사용자 입력
+  Topic을 먼저 고르고, 남은 자리는 선택 Topic 수가 많은 Category 순으로 Category당
+  가장 먼저 선택한 Topic 하나만 고른다.
+- **content_type**: `interest_news_card`.
 - **language**: `preferred_language`.
 
 ### 5.3 멱등·실패 격리·비용
 
-- `idempotency_key = f"welcome:{user_id}"`로 재-upsert에도 리포트가 중복 생성되지 않게 한다([submit_generation](../app/services/agent_jobs.py) 경로 재사용).
+- `idempotency_key = f"onboarding:{user_id}:slot:{1..3}"`로 재호출에도 사용자당
+  온보딩 리포트가 최대 3개만 생성되게 한다([submit_generation](../app/services/agent_jobs.py) 경로 재사용).
 - Job enqueue 실패가 온보딩 저장(컨텍스트 upsert)을 롤백시키면 안 된다 — **best-effort, 실패 격리**. (wiki build 완료 훅이 실패해도 Build를 유지하는 기존 패턴과 동일.)
-- 비용: 가입마다 리포트 생성 LLM 호출 1회. 1회성 웰컴이므로 수용 가능하나, 봇 가입·대량 가입 시 비용 급증 가능 → 결정 A3(rate-limit/plan 게이팅 여부).
+- 비용: 가입마다 리포트 생성 LLM 호출 최대 3회. 봇 가입·대량 가입 시 비용 급증 가능 → 결정 A3(rate-limit/plan 게이팅 여부).
 
 ### 5.4 REPORT-021 준수
 
@@ -150,7 +155,9 @@ graph LR
 
 ### 5.5 A와 B의 순서
 
-B(시드)가 A(리포트)보다 먼저 반영되면 웰컴 리포트가 시드 관심사를 근거로 쓸 수 있어 품질이 좋다. 다만 A는 topic만 있으면 독립 실행 가능하므로 **강결합은 불필요** — 둘을 같은 upsert 처리에서 순차 enqueue하되 서로 실패 격리한다.
+Service는 먼저 컨텍스트를 upsert해 시드 Job과 사용자 컨텍스트를 접수한 뒤 SVC-008을
+호출한다. Wiki Build 완료까지 기다리지는 않으며, 리포트는 전달받은 실제 Topic과 사용자
+컨텍스트만으로 독립 실행한다. 시드와 리포트 실패는 서로 격리한다.
 
 ## 6. 결정 결과 (확정 2026-08-04)
 
@@ -160,13 +167,13 @@ B(시드)가 A(리포트)보다 먼저 반영되면 웰컴 리포트가 시드 �
 | S2 | `onboarding_seed` 가중치·최신성 취급 | **0.15**(클리핑 0.2보다 낮게)·중립 최신성 — 결정적 회귀 테스트와 로컬 E2E로 검증 |
 | S3 | 시드 명시 삭제 UI 필요 여부 | **자연 하락만** — 실제 저장이 쌓이면 재계산 시 밀려남(별도 삭제 UI 없음) |
 | A1 | 웰컴 리포트 `content_type` | **`interest_news_card`**(카드형, 이미 기본값) |
-| A2 | 다중 선택 시 topic 선정 | **랜덤 1개** — 트리거 소유자인 Service가 선택 |
+| A2 | 다중 선택 시 topic 선정 | **최대 3개** — 사용자 입력 Topic 우선, 남은 자리는 선택 Topic 수가 많은 Category 순, Category당 최초 선택 Topic 1개 |
 | 트리거 | 웰컴 리포트 발행 주체 | **Service**(`POST /generations`, MVP 2026-07-20 결정 준수). Agent는 시드(Part B)만 담당 |
 | A3 | 웰컴 리포트 게이팅 | 미결 — 봇·대량 가입 비용은 Service 트리거와 함께 별도 논의 |
 
 구현 현황: Part B(시드)는 `agent-api`에 구현 완료(WSE-014, 44개 DB 컨텍스트,
-추가 키워드 캐시·LLM 폴백, 단일 Head Version 교체, Full Rebuild 포함). Part A(웰컴 리포트)는 계약 문서로
-Service에 위임([service-integration-guide.md](service-integration-guide.md) §3.1,
+추가 키워드 캐시·LLM 폴백, 단일 Head Version 교체, Full Rebuild 포함). Part A(온보딩 리포트)는
+Service에 위임해 구현했다([service-integration-guide.md](service-integration-guide.md) §3.1,
 [agent-contract.md](agent-contract.md) §4.2-1).
 
 ## 7. 비목표 (이번 범위 밖)

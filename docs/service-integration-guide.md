@@ -51,6 +51,7 @@ flowchart LR
 | `blocked_interest_ids` | X | 차단 관심사 ID 목록 |
 | `blocked_source_ids` | X | 차단 Source ID 목록 |
 | `signup_interests` | X | 회원가입 시 고른 관심 카테고리·토픽 시드. `[{"category": "기술", "topics": ["AI", "반도체"]}, ...]` — 카테고리만 골랐으면 `topics`는 빈 배열. 생략하면 빈 목록으로 저장 |
+| `onboarding_reports_managed_by_service` | X | 기본 `false`. `true`이면 Agent의 가입 관심사별 자동 리포트 등록을 건너뛰고 Service가 생성·멱등성·펜딩 상태를 관리 |
 
 - 호출 시점: **회원가입 직후 1회(필수)** + 플랜·언어·차단 설정 변경 시마다.
 - `signup_interests`는 사용자가 **선언한** 관심사 시드다. 위키에서 파생·재계산되는
@@ -68,12 +69,13 @@ flowchart LR
   Service의 추가 호출은 필요 없다. 이 접수는 컨텍스트 저장과 분리된 best-effort이며,
   같은 선택은 현재 Version을 재사용하고, 선택이 바뀌면 같은 Head의 다음 Version과
   Full Rebuild로 이전 시드만 근거로 한 노드를 제거한다.
-- **가입 즉시 웰컴 리포트 (Service 트리거)**: "가입하자마자 리포트 1개"는 생성 트리거라
-  MVP 결정(2026-07-20)상 **Service 소유**다. Service가 온보딩 완료 직후
-  `POST /internal/v1/users/{user_id}/generations`를 아래 값으로 1회 호출한다.
-  - `topic`: `signup_interests`에서 고른 대표 관심사(여러 개면 랜덤 1개)
+- **가입 즉시 온보딩 리포트 (Service 트리거)**: 생성 트리거는 **Service 소유**다.
+  Service는 컨텍스트에 `onboarding_reports_managed_by_service=true`를 보내고, 온보딩
+  완료 직후 선정한 관심사마다 `POST /internal/v1/users/{user_id}/generations`를 최대
+  3회 호출한다.
+  - `topic`: Service의 온보딩 관심사 선정 규칙으로 고른 실제 검색어
   - `content_type`: `interest_news_card` (기본값)
-  - `idempotency_key`: `welcome:{user_id}` — 멱등키로 재호출해도 리포트는 1개만 생성됨
+  - `idempotency_key`: `onboarding:{user_id}:slot:{1..3}` — 슬롯별 멱등키로 재호출해도 최대 3개만 생성됨
 - ⚠️ 컨텍스트가 없는 사용자의 생성 요청은 `409 USER_CONTEXT_REQUIRED`로
   거부됩니다. 가입 플로우에 반드시 포함하세요.
 - ⚠️ `blocked_*_ids`의 ID 체계(무엇의 ID인지)는 아직 양팀 미합의 상태입니다.

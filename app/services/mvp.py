@@ -349,7 +349,8 @@ class AgentApiMvpService:
                 ),
             ) from exc
         await self._seed_onboarding_interests(stored, request_id=request_id)
-        await self._enqueue_interest_reports(stored, request_id=request_id)
+        if not payload.onboarding_reports_managed_by_service:
+            await self._enqueue_interest_reports(stored, request_id=request_id)
         return UserContextResponse(
             user_id=stored.user_id,
             context_version=stored.context_version,
