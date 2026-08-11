@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from infrastructure.persistence.api import ClaimedAgentJob
-from infrastructure.sources.connectors.api import JinaReadResult
+from infrastructure.sources.connectors.api import ArticleImageMetadata, JinaReadResult
 from workers.features import url_collection
 
 # 차단 감지기(shared.fetch_guard)가 짧은 본문을 수집 실패로 보므로,
@@ -105,12 +105,17 @@ def test_process_job_fetches_saves_and_completes(
             job=_url_job(),
             worker_id="url-worker-1",
             url_fetcher=fake_fetch,
+            image_fetcher=lambda url: ArticleImageMetadata(
+                url="https://cdn.example/personal-cover.jpg",
+                source="open_graph",
+            ),
         )
     )
 
     assert result["wiki_build_job_id"] == "wiki-job-1"
     assert saved_kwargs["markdown"] == _FETCHED_MARKDOWN
     assert saved_kwargs["resolved_url"] == "https://example.com/final"
+    assert saved_kwargs["image_url"] == "https://cdn.example/personal-cover.jpg"
     assert saved_kwargs["published_at"] == datetime(2026, 8, 4, 9, 30, tzinfo=UTC)
     assert connection.transactions == 2
     assert completed[0].worker_id == "url-worker-1"

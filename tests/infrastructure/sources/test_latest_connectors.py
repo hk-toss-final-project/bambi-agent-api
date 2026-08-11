@@ -64,6 +64,7 @@ def test_newsapi_and_gdelt_providers_normalize_articles() -> None:
                         "url": "https://example.com/newsapi",
                         "description": "New release",
                         "publishedAt": "2026-07-16T00:00:00Z",
+                        "urlToImage": "https://cdn.example/newsapi.jpg",
                         "source": {"name": "Example"},
                     }
                 ]
@@ -80,6 +81,7 @@ def test_newsapi_and_gdelt_providers_normalize_articles() -> None:
                         "seendate": "20260716T010203Z",
                         "domain": "example.com",
                         "language": "English",
+                        "socialimage": "https://cdn.example/gdelt.jpg",
                     }
                 ]
             }
@@ -93,8 +95,10 @@ def test_newsapi_and_gdelt_providers_normalize_articles() -> None:
 
     assert newsapi_items[0].source_name == "Example"
     assert newsapi_items[0].provider == "newsapi"
+    assert newsapi_items[0].image_url == "https://cdn.example/newsapi.jpg"
     assert gdelt_items[0].provider == "gdelt"
     assert gdelt_items[0].published_at is not None
+    assert gdelt_items[0].image_url == "https://cdn.example/gdelt.jpg"
 
 
 def _rss_transport(xml: str) -> httpx.MockTransport:

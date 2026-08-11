@@ -129,6 +129,7 @@ class LatestArticle:
     # 원본 발행처 URL. Google News처럼 url이 리다이렉트 주소인 Provider에서
     # 소스 신뢰도(도메인 가중치) 판정에 쓴다. 알 수 없으면 None.
     source_url: str | None = None
+    image_url: str | None = None
 
 
 class LatestInformationProvider(Protocol):
@@ -314,6 +315,7 @@ class NewsApiProvider:
                 published_at=_iso_datetime(item.get("publishedAt")),
                 source_name=_clean_text((item.get("source") or {}).get("name")),
                 language=language,
+                image_url=str(item.get("urlToImage") or "").strip() or None,
             )
             for item in payload.get("articles", [])
             if str(item.get("url") or "").strip()
@@ -408,6 +410,7 @@ class GdeltNewsProvider:
                     if _clean_text(item.get("domain"))
                     else None
                 ),
+                image_url=str(item.get("socialimage") or "").strip() or None,
             )
             for item in payload.get("articles", [])
             if str(item.get("url") or "").strip()
