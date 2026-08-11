@@ -112,7 +112,7 @@
 - [x] `SCH-001` RSS 수집 스케줄 — Google News RSS(`google_news`, COL-001) 정기 수집. 2026-07-28 범위 추가: 영문 키워드에서 가장 정확한 Provider인데(실측 'Cloudflare' 수집 시 Naver 10건 중 관련 3건, google_news 5건 전부 관련) 스케줄에서 빠져 있었다. **명세의 "RSS Source"는 임의 피드 주소를 뜻하지만 이 구현은 키워드 검색이다** — 임의 피드 수집이 필요해지면 별도 Provider로 추가한다. 원본 URL 디코딩 때문에 키워드당 12초쯤 더 걸린다
 - [x] `SCH-002` Naver API 수집 스케줄 — 독립 Scheduler 프로세스(`scheduler/main.py`)가 tick마다 `agent.global_sources`의 `schedule_cron`·`keywords`를 읽어 실행 차례가 된 Source만 수집 Worker(WORKER-001)로 넘긴다. 판정 순서는 ① Cron 도달 ② 키워드 존재 ③ `quota_policy.daily_max_runs`
 - [x] `SCH-003` GDELT 수집 스케줄 — SCH-002와 동일한 판정·실행 규칙
-- [x] `SCH-004` NewsAPI 수집 스케줄 — 수집 Worker에 `newsapi` Provider(COL-004) 연결 포함. 무료 플랜 호출 한도(일 100회)가 낮아 기본 Provider 목록에서는 제외하고 `quota_policy.daily_max_runs`와 함께 쓴다. (참고: MVP 목록 외 `SCH-009` Wiki Build 조용 시간 트리거는 구현됨)
+- [x] `SCH-004` NewsAPI 수집 스케줄 — 수집 Worker에 `newsapi` Provider(COL-004) 연결 포함. 무료 플랜 호출 한도(일 100회)가 낮아 기본 Provider 목록에서는 제외하고 `quota_policy.daily_max_runs`와 함께 쓴다. (참고: MVP 목록 외 `SCH-009` Wiki Build 조용 시간 트리거는 `enqueue_personal_wiki_build_job` 등록 직후 자동 적용됨 — 웹 클리핑·온보딩 시드·북마크·URL 수집 후속 저장이 모두 이 함수를 거친다. 기본값은 `WIKI_BUILD_QUIET_MINUTES=0`(즉시 반영, 시연·개발 기본값)이라 평소에는 저장 즉시 Wiki Build가 돈다. 저장이 몰리는 운영 환경에서는 이 값을 10 등으로 늘리면, 짧은 시간에 여러 건을 저장해도 대기 Job이 매번 따로 돌지 않고 `WIKI_BUILD_MAX_WAIT_MINUTES` 상한 안에서 한 번에 묶인다)
 - [x] `SCH-010` 사용자 관심사 재계산 — Scheduler tick마다 활성 Wiki가 있고 관심사 Profile이 `INTEREST_RECALCULATION_STALE_HOURS`(기본 24시간)보다 오래된 사용자를 오래된 순서로 최대 `INTEREST_RECALCULATION_LIMIT`(기본 20)명 골라 INT-011을 다시 돌리고, 상위 관심사를 창고 수집 대상으로 갱신한다. 관심사 점수(INT-005)는 계산 시각 기준으로 최신성을 감쇠시키므로 이 단계가 없으면 저장이 멈춘 사용자의 점수가 마지막 Build 시점에 고정된다. 대상 선정이 `calculated_at` 기준이라 별도 처리 이력 없이 같은 주기 중복 실행을 막는다. 재계산은 LLM을 호출하지 않으며, 사용자 한 명의 실패는 나머지와 수집 tick을 막지 않는다
 - [x] `SCH-017` 스케줄 등록 — `POST /internal/v1/collection-schedules` (멱등 Upsert, Cron·키워드 검증)
 - [x] `SCH-018` 스케줄 수정 — `PATCH /internal/v1/collection-schedules/{source_key}` (부분 수정, 다음 tick부터 반영)
@@ -158,7 +158,7 @@
 - [ ] `SW-007` service-db 콘텐츠 Upsert — ➖ service-worker 책임
 - [x] `SW-009` 발행 완료 ACK — 단건 + 부분 성공 Batch ACK
 - [x] `WBA-001` Incremental Wiki Build
-- [x] `WBA-002` Full Wiki Rebuild — ⚠️ 삭제되지 않은 원본 Head의 최신 Version 전체를 메모리에서 재분류·검증한 뒤 최종 Transaction에서 기존 파생 Wiki를 supersede하고 새 Snapshot을 저장한다. 실행 경로는 `personal_wiki_build` Job Payload의 `mode=full_rebuild`이며 상주 Worker(WORKER-002)가 처리한다. 트리거는 ① 북마크 해제 등 원본 제거(`enqueue_personal_wiki_rebuild_job`) ② Scheduler 정기 유지보수(`MAINTENANCE_REBUILD_LIMIT`, 기본 7일 간격) 두 가지다. 정기 트리거는 사용자·날짜 단위 멱등이며 대기·실행 중인 재구성이 있는 사용자는 건너뛴다. 실제 DB E2E 운영 검증은 남아 있다
+- [x] `WBA-002` Full Wiki Rebuild — ⚠️ 삭제되지 않은 원본 Head의 최신 Version 전체를 메모리에서 재분류·검증한 뒤 최종 Transaction에서 기존 파생 Wiki를 supersede하고 새 Snapshot을 저장한다. 실행 경로는 `personal_wiki_build` Job Payload의 `mode=full_rebuild`이며 상주 Worker(WORKER-002)가 처리한다. 트리거는 ① 북마크 해제 등 원본 제거(`enqueue_personal_wiki_rebuild_job`) ② Scheduler 정기 유지보수(`MAINTENANCE_REBUILD_LIMIT`, 기본 7일 간격) 두 가지다. 정기 트리거는 사용자·날짜 단위 멱등이며 대기·실행 중인 재구성이 있는 사용자는 건너뛴다. WBA-014 품질 지표(`.metrics`)를 재구성마다 `wiki_versions.change_summary.quality_metrics`에 함께 기록해, 새 이력 테이블 없이 `version` 순으로 훑는 것만으로 고아·중복·모순 건수 추이를 볼 수 있다. 실제 DB E2E 운영 검증은 남아 있다
 - [x] `WBA-003` Wiki 문서 정규화 — Build 파이프라인에 포함
 - [x] `WBA-011` Wiki 재임베딩 — ⚠️ Incremental Build와 Full Rebuild의 변경 Entity·Concept Chunk를 재임베딩한다. 저장 후 best-effort라 Provider 실패 시 Wiki Build는 유지하며 별도 재시도 Job은 없음
 - [x] `WBA-014` Wiki 품질 검증 — canonical 중복, endpoint·관계 유형, provenance·confidence·review·lifecycle·근거, 고아·모순·과밀 Hub를 결정적으로 검사하고 오류는 저장 전 차단

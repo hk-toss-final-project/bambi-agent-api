@@ -166,6 +166,48 @@ def test_update_full_wiki_rebuild_summary_records_complete_replacement_scope() -
     assert params[1:] == ("wiki-1", "user-1", "user/user-1")
 
 
+def test_update_full_wiki_rebuild_summary_includes_quality_metrics_when_given() -> None:
+    """WBA-014 품질 지표를 넘기면 같은 Snapshot에 함께 기록해 추이를 남긴다."""
+    connection = _FakeConnection(None)
+
+    asyncio.run(
+        update_full_wiki_rebuild_summary(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            wiki_version_id="wiki-1",
+            source_count=4,
+            affected_document_count=9,
+            superseded_document_count=7,
+            quality_metrics={"orphan_count": 2, "duplicate_surface_count": 0},
+        )
+    )
+
+    _query, params = connection.executed[0]
+    assert params[0].obj["quality_metrics"] == {
+        "orphan_count": 2,
+        "duplicate_surface_count": 0,
+    }
+
+
+def test_update_full_wiki_rebuild_summary_omits_quality_metrics_key_when_not_given() -> None:
+    """quality_metrics를 안 넘기면 기존 요약 구조를 그대로 유지한다."""
+    connection = _FakeConnection(None)
+
+    asyncio.run(
+        update_full_wiki_rebuild_summary(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            wiki_version_id="wiki-1",
+            source_count=1,
+            affected_document_count=1,
+            superseded_document_count=0,
+        )
+    )
+
+    _query, params = connection.executed[0]
+    assert "quality_metrics" not in params[0].obj
+
+
 class _FakeCursor:
     """psycopg Cursor의 fetchone만 흉내 내는 결정적 Test Double."""
 

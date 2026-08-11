@@ -657,6 +657,7 @@ async def rebuild_full_wiki(
             source_count=len(sources),
             affected_document_count=affected_document_count,
             superseded_document_count=superseded_count,
+            quality_metrics=quality.metrics,
         )
 
     persisted = _combine_rebuild_results(persisted_results)

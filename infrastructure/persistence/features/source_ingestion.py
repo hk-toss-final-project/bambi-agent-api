@@ -426,6 +426,8 @@ async def save_web_clipping_and_enqueue(
     occurred_at: datetime | None,
     memo: str | None,
     request_id: str,
+    quiet_minutes: int = 0,
+    max_wait_minutes: int = 30,
 ) -> PersistedSourceSubmission:
     """클리핑 Markdown과 Wiki Build Job을 같은 트랜잭션에 멱등 저장한다."""
     namespace_key = f"user/{user_id}"
@@ -509,6 +511,8 @@ async def save_web_clipping_and_enqueue(
         source_event_row_id=source_event_row_id,
         feature_id="SVC-002",
         request_id=request_id,
+        quiet_minutes=quiet_minutes,
+        max_wait_minutes=max_wait_minutes,
     )
     return PersistedSourceSubmission(
         source_document_id=source_document_id,
@@ -642,6 +646,8 @@ async def save_onboarding_seed_and_enqueue(
     metadata: dict[str, object],
     occurred_at: datetime | None,
     request_id: str,
+    quiet_minutes: int = 0,
+    max_wait_minutes: int = 30,
 ) -> PersistedSourceSubmission:
     """온보딩 관심사 시드 문서와 Wiki Build Job을 같은 트랜잭션에 멱등 저장한다.
 
@@ -720,6 +726,8 @@ async def save_onboarding_seed_and_enqueue(
         source_event_row_id=source_event_row_id,
         feature_id="WSE-014",
         request_id=request_id,
+        quiet_minutes=quiet_minutes,
+        max_wait_minutes=max_wait_minutes,
     )
     return PersistedSourceSubmission(
         source_document_id=source_document_id,
@@ -740,6 +748,8 @@ async def save_content_mark_and_enqueue(
     occurred_at: datetime | None,
     memo: str | None,
     request_id: str,
+    quiet_minutes: int = 0,
+    max_wait_minutes: int = 30,
 ) -> PersistedSourceSubmission:
     """북마크한 플랫폼 내부 리포트를 원본 Version으로 물질화하고 Build Job을 멱등 등록한다.
 
@@ -870,6 +880,8 @@ async def save_content_mark_and_enqueue(
         source_event_row_id=source_event_row_id,
         feature_id="SVC-004",
         request_id=request_id,
+        quiet_minutes=quiet_minutes,
+        max_wait_minutes=max_wait_minutes,
     )
     return PersistedSourceSubmission(
         source_document_id=source_document_id,
@@ -1049,6 +1061,8 @@ async def db_002(
     occurred_at: datetime | None,
     memo: str | None,
     request_id: str,
+    quiet_minutes: int = 0,
+    max_wait_minutes: int = 30,
 ) -> PersistedSourceSubmission:
     """[DB-002] Wiki Source Event와 웹 클리핑 원본을 저장한다."""
     return await save_web_clipping_and_enqueue(
@@ -1066,6 +1080,8 @@ async def db_002(
         occurred_at=occurred_at,
         memo=memo,
         request_id=request_id,
+        quiet_minutes=quiet_minutes,
+        max_wait_minutes=max_wait_minutes,
     )
 
 
@@ -1130,6 +1146,8 @@ async def save_fetched_url_and_enqueue(
     markdown: str,
     resolved_url: str,
     published_at: datetime | None,
+    quiet_minutes: int = 0,
+    max_wait_minutes: int = 30,
 ) -> dict[str, object]:
     """Jina 본문을 원본 Version으로 저장하고 후속 Wiki Build Job을 등록한다.
 
@@ -1170,6 +1188,8 @@ async def save_fetched_url_and_enqueue(
         source_event_id=source_event_id,
         source_event_row_id=source_event_row_id,
         feature_id="SVC-003",
+        quiet_minutes=quiet_minutes,
+        max_wait_minutes=max_wait_minutes,
     )
     return {
         "source_document_id": source_document_id,

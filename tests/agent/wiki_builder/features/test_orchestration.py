@@ -368,8 +368,9 @@ def test_rebuild_full_wiki_stages_all_llm_work_before_atomic_replacement(
         return len(kwargs["document_version_ids"])  # type: ignore[arg-type]
 
     async def fake_summary(_connection: object, **kwargs: object) -> None:
-        """최종 Wiki Version 요약이 전체 원본 범위를 기록하는지 검증한다."""
+        """최종 Wiki Version 요약이 전체 원본 범위와 품질 지표를 기록하는지 검증한다."""
         events.append("summary")
+        quality_metrics = kwargs.pop("quality_metrics")  # type: ignore[misc]
         assert kwargs == {
             "user_id": "user-onboarding",
             "wiki_version_id": "wiki-rebuild",
@@ -377,6 +378,9 @@ def test_rebuild_full_wiki_stages_all_llm_work_before_atomic_replacement(
             "affected_document_count": 2,
             "superseded_document_count": 5,
         }
+        # 유지 루프가 재구성마다 추이를 볼 수 있도록 WBA-014 지표를 그대로 넘긴다.
+        assert isinstance(quality_metrics, dict)
+        assert quality_metrics["document_count"] >= 0
 
     monkeypatch.setattr(orchestration, "set_personal_wiki_scope", fake_scope)
     monkeypatch.setattr(

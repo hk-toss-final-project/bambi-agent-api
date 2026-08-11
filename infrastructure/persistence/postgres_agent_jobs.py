@@ -56,8 +56,21 @@ logger = logging.getLogger(__name__)
 class PostgresAgentJobRepository:
     """PostgreSQL에서 사용자 원본과 Agent Job 수명주기를 관리한다."""
 
-    def __init__(self, database_url: str) -> None:
-        """지연 시작 방식의 Agent Job PostgreSQL Pool을 구성한다."""
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        wiki_build_quiet_minutes: int = 0,
+        wiki_build_max_wait_minutes: int = 30,
+    ) -> None:
+        """지연 시작 방식의 Agent Job PostgreSQL Pool을 구성한다.
+
+        Args:
+            database_url: agent-db 연결 문자열
+            wiki_build_quiet_minutes: 원본 저장 직후 대기 Wiki Build를 미루는
+                조용 시간(분). SCH-009가 새 원본 저장마다 적용한다
+            wiki_build_max_wait_minutes: 첫 대기 Job 발생 후 최대 대기시간(분)
+        """
         self._pool: AsyncConnectionPool[DictRow] = AsyncConnectionPool(
             conninfo=database_url,
             min_size=1,
@@ -65,6 +78,8 @@ class PostgresAgentJobRepository:
             open=False,
             kwargs={"row_factory": dict_row},
         )
+        self._wiki_build_quiet_minutes = wiki_build_quiet_minutes
+        self._wiki_build_max_wait_minutes = wiki_build_max_wait_minutes
 
     async def startup(self) -> None:
         """원본·Job 저장용 연결 Pool을 열고 준비될 때까지 기다린다."""
@@ -155,6 +170,8 @@ class PostgresAgentJobRepository:
                     occurred_at=occurred_at,
                     memo=memo,
                     request_id=request_id,
+                    quiet_minutes=self._wiki_build_quiet_minutes,
+                    max_wait_minutes=self._wiki_build_max_wait_minutes,
                 )
                 stored = await get_agent_job(connection, job_id=saved.job_id)
                 if stored is None:
@@ -189,6 +206,8 @@ class PostgresAgentJobRepository:
                     metadata=metadata,
                     occurred_at=occurred_at,
                     request_id=request_id,
+                    quiet_minutes=self._wiki_build_quiet_minutes,
+                    max_wait_minutes=self._wiki_build_max_wait_minutes,
                 )
                 stored = await get_agent_job(connection, job_id=saved.job_id)
                 if stored is None:
@@ -262,6 +281,8 @@ class PostgresAgentJobRepository:
                     occurred_at=occurred_at,
                     memo=memo,
                     request_id=request_id,
+                    quiet_minutes=self._wiki_build_quiet_minutes,
+                    max_wait_minutes=self._wiki_build_max_wait_minutes,
                 )
                 stored = await get_agent_job(connection, job_id=saved.job_id)
                 if stored is None:
@@ -541,6 +562,8 @@ class PostgresAgentJobRepository:
                     markdown=markdown,
                     resolved_url=resolved_url,
                     published_at=published_at,
+                    quiet_minutes=self._wiki_build_quiet_minutes,
+                    max_wait_minutes=self._wiki_build_max_wait_minutes,
                 )
 
     @asynccontextmanager
