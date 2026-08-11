@@ -27,8 +27,9 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 
-from agent.assistant.api import assist_daily_agent
+from agent.assistant.api import assist_daily_agent, fetch_article_image
 from domain.interests.api import expand_topic_queries
 from shared.report_models import ReportContextDocument
 
@@ -88,6 +89,54 @@ _DEFAULT_MAX_DOCUMENTS = 12
 
 # 실시간 자료의 namespace_key. 개인 Wiki 문서와 출처를 구분하는 데 쓴다.
 _LIVE_NAMESPACE = "live-source"
+
+
+def _missing_image_source(item: dict[str, object]) -> dict[str, object] | None:
+    """이미지가 없는 아이템에서 폴백 조회할 첫 뉴스 원문을 고른다."""
+    sources = [
+        source
+        for source in (item.get("sources") or [])
+        if isinstance(source, dict)
+    ]
+    if any(source.get("url") and source.get("image_url") for source in sources):
+        return None
+    return next(
+        (
+            source
+            for source in sources
+            if source.get("source_type") == "news" and source.get("url")
+        ),
+        None,
+    )
+
+
+def _fill_missing_source_images(items: Sequence[dict[str, object]]) -> None:
+    """선택된 아이템의 이미지 없는 뉴스 원문을 제한된 병렬 조회로 보충한다."""
+    targets = [
+        (source, str(source.get("url") or ""))
+        for item in items
+        if (source := _missing_image_source(item)) is not None
+    ]
+    if not targets:
+        return
+
+    with ThreadPoolExecutor(max_workers=min(4, len(targets))) as executor:
+        futures = [
+            (source, url, executor.submit(fetch_article_image, url))
+            for source, url in targets
+        ]
+        for source, url, future in futures:
+            try:
+                image_url = future.result()
+            except Exception as error:
+                logger.warning(
+                    "실시간 기사 대표 이미지 조회 실패, 이미지 없이 계속한다: %s: %s",
+                    url,
+                    error,
+                )
+                continue
+            if image_url:
+                source["image_url"] = image_url
 
 
 def _to_context_document(item: dict[str, object], number: int) -> ReportContextDocument | None:
@@ -206,10 +255,11 @@ def collect_live_context(
         logger.warning("실시간 자료 수집 실패, 개인 Wiki만 사용한다: %s", error)
         return []
 
+    items = [item for item in (result.get("items") or []) if isinstance(item, dict)]
+    _fill_missing_source_images(items)
+
     documents: list[ReportContextDocument] = []
-    for item in result.get("items") or []:
-        if not isinstance(item, dict):
-            continue
+    for item in items:
         # 순번은 수락된 문서 기준으로 매겨 참조 ID(L1, L2, …)에 빈 번호가 없게 한다.
         document = _to_context_document(item, len(documents) + 1)
         if document is not None:

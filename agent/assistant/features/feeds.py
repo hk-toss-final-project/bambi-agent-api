@@ -229,6 +229,12 @@ def _extract_jina_image(text: str) -> str | None:
     return extract_jina_image(text)
 
 
+def fetch_article_image(url: str) -> str | None:
+    """Jina Reader로 기사 원문을 읽어 대표 이미지 URL 한 건을 반환한다."""
+    raw = jina_read(url)
+    return _extract_jina_image(raw) if raw else None
+
+
 def article_body_offset(markdown: str, title: str) -> int:
     """원문에서 기사 본문이 시작하는 위치를 찾는다. 못 찾으면 0.
 

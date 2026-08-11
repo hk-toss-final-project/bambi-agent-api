@@ -175,6 +175,22 @@ def test_extract_jina_image_returns_none_when_no_image() -> None:
     assert feeds._extract_jina_image("Markdown Content:\n본문만 있음") is None
 
 
+def test_fetch_article_image_reads_and_extracts_jina_image(monkeypatch) -> None:
+    """기사 이미지 조회는 Jina 원문에서 대표 이미지 한 건만 반환한다."""
+    monkeypatch.setattr(
+        feeds,
+        "jina_read",
+        lambda url: (
+            "Image 1: https://cdn.example/danang.jpg\n"
+            "Markdown Content:\n다낭 기사 본문"
+        ),
+    )
+
+    assert feeds.fetch_article_image("https://news.example/danang") == (
+        "https://cdn.example/danang.jpg"
+    )
+
+
 def test_jina_read_delegates_to_shared_connector(monkeypatch) -> None:
     """jina_read는 공유 Jina 커넥터에 위임하고 실패 시 None을 반환한다."""
     from infrastructure.sources.connectors import api as connectors_api
