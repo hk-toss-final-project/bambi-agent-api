@@ -1,0 +1,10 @@
+{"id":"ko-personal-global","topic":"AI 에이전트 개발 동향","content_type":"interest_news_card","language":"ko","personal":"사용자는 LangGraph 기반 에이전트를 개발하고 있다.","global":"새로운 에이전트 프레임워크 버전이 공개됐다.","required_refs":["P1","G1"]}
+{"id":"ko-database","topic":"PostgreSQL과 pgvector","content_type":"analysis","language":"ko","personal":"사용자의 Wiki는 PostgreSQL과 pgvector 설계를 다룬다.","global":"pgvector의 새로운 인덱스 개선 소식이 발표됐다.","required_refs":["P1","G1"]}
+{"id":"en-agent","topic":"Agent orchestration updates","content_type":"briefing","language":"en","personal":"The user builds LangGraph workflows.","global":"A new orchestration release was announced.","required_refs":["P1","G1"]}
+{"id":"ko-security","topic":"에이전트 보안","content_type":"interest_news_card","language":"ko","personal":"사용자는 내부 API 인증과 RLS를 중요하게 본다.","global":"최근 에이전트 도구 권한 관련 보안 권고가 공개됐다.","required_refs":["P1","G1"]}
+{"id":"ko-clipping","topic":"웹 클리핑 지식 관리","content_type":"guide","language":"ko","personal":"사용자는 Markdown 웹 클리핑을 영구 보존한다.","global":"최신 웹 클리퍼가 Markdown 추출 품질을 개선했다.","required_refs":["P1","G1"]}
+{"id":"mixed-language","topic":"LLM Wiki 업데이트","content_type":"briefing","language":"ko","personal":"User prefers Obsidian-style entity and concept documents.","global":"새로운 knowledge graph 연구 결과가 발표됐다.","required_refs":["P1","G1"]}
+{"id":"ambiguous","topic":"최근 변화","content_type":"interest_news_card","language":"ko","personal":"사용자는 AI와 데이터베이스에 관심이 있다.","global":"AI 데이터 인프라 시장에 새로운 발표가 있었다.","required_refs":["P1","G1"]}
+{"id":"personal-only-signal","topic":"개인 Wiki 설계","content_type":"analysis","language":"ko","personal":"Entity, Concept, Schema 문서를 하나의 버전 구조로 보존한다.","global":"지식 그래프 문서화 도구의 최신 버전이 나왔다.","required_refs":["P1","G1"]}
+{"id":"long-context","topic":"에이전트 플랫폼 아키텍처","content_type":"analysis","language":"ko","personal":"서비스 API, Agent API, Worker가 Job과 Snapshot으로 연결된다.","global":"비동기 에이전트 플랫폼 운영 사례가 새로 공개됐다.","required_refs":["P1","G1"]}
+{"id":"citation-boundary","topic":"출처 기반 생성","content_type":"guide","language":"ko","personal":"생성 결과는 사용한 Wiki 문서 Version을 Citation으로 연결한다.","global":"근거 기반 생성 평가 방법에 관한 최신 글이 공개됐다.","required_refs":["P1","G1"]}
