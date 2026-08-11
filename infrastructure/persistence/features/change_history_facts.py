@@ -35,6 +35,18 @@ BASE_FACT_SEARCH_LIMIT = 12
 # Base 맥락·전체 조회 상한.
 BASE_FACT_LIST_LIMIT = 60
 
+# topic 비교 조건. **저장은 원문 그대로 두고 조회에서만 정규화한다.**
+#
+# topic이 이 기능의 비교축이라, 문자열이 조금만 달라도 Base를 못 찾아 매번 첫
+# 실행이 된다. 같은 관심사를 다른 경로로 요청하면 표기가 갈릴 수 있는데(관심사
+# 매칭 자체가 이미 lower() 비교다 — INT-013), 여기만 완전 일치를 쓰면 델타
+# 히스토리가 조용히 두 갈래로 쪼개진다.
+#
+# 저장값을 건드리지 않는 이유는 이미 쌓인 행과 카드에 보이는 표기를 그대로
+# 두기 위해서다. 이 조건은 함수 인덱스를 타지 않지만, 조회 범위가 (user_id,
+# topic)으로 이미 좁아 실측 영향이 없다.
+_TOPIC_MATCH = "lower(btrim({column})) = lower(btrim(%s))"
+
 
 def _uuid_or_none(value: str | None) -> str | None:
     """UUID 형식이 아닌 값은 None으로 바꿔 잘못된 FK 저장을 막는다."""
@@ -80,14 +92,15 @@ async def load_latest_report_snapshot(
         최신 Snapshot 본문. 이 주제로 발행한 적이 없으면 None.
     """
     cursor = await connection.execute(
-        """
+        f"""
         SELECT snapshot.payload, snapshot.created_at
         FROM agent.publish_snapshots AS snapshot
         JOIN agent.generated_content_candidates AS candidate
             ON candidate.id = snapshot.candidate_id
         JOIN agent.generation_requests AS request
             ON request.id = candidate.generation_request_id
-        WHERE snapshot.user_id = %s AND request.topic = %s
+        WHERE snapshot.user_id = %s
+          AND {_TOPIC_MATCH.format(column="request.topic")}
         ORDER BY snapshot.created_at DESC
         LIMIT 1
         """,
@@ -119,7 +132,7 @@ async def load_latest_change_history_run(
         직전 실행 기록. 첫 실행이면 None.
     """
     cursor = await connection.execute(
-        """
+        f"""
         SELECT
             id,
             user_id,
@@ -131,7 +144,7 @@ async def load_latest_change_history_run(
             updated_fact_count,
             duplicate_fact_count
         FROM agent.change_history_runs
-        WHERE user_id = %s AND topic = %s
+        WHERE user_id = %s AND {_TOPIC_MATCH.format(column="topic")}
         ORDER BY created_at DESC
         LIMIT 1
         """,
@@ -196,7 +209,7 @@ async def search_change_history_facts(
     if not query.strip():
         return []
     cursor = await connection.execute(
-        """
+        f"""
         SELECT
             id,
             subject,
@@ -210,7 +223,7 @@ async def search_change_history_facts(
             source_url
         FROM agent.change_history_facts
         WHERE user_id = %s
-          AND topic = %s
+          AND {_TOPIC_MATCH.format(column="topic")}
           AND status = 'active'
         ORDER BY
             word_similarity(%s, subject || ' ' || attribute || ' ' || statement) DESC,
@@ -236,7 +249,7 @@ async def list_change_history_facts(
     페이지가 누적 팩트를 보여줄 때 쓴다.
     """
     cursor = await connection.execute(
-        """
+        f"""
         SELECT
             id,
             subject,
@@ -249,7 +262,9 @@ async def list_change_history_facts(
             source_reference,
             source_url
         FROM agent.change_history_facts
-        WHERE user_id = %s AND topic = %s AND status = 'active'
+        WHERE user_id = %s
+          AND {_TOPIC_MATCH.format(column="topic")}
+          AND status = 'active'
         ORDER BY created_at DESC
         LIMIT %s
         """,
@@ -429,10 +444,12 @@ async def persist_change_history_run(
             # 갱신된 과거 팩트는 지우지 않고 내려 둔다. 다음 실행의 검색 대상에서만
             # 빠지고, before 값을 읽는 ID 조회로는 계속 접근할 수 있다.
             await connection.execute(
-                """
+                f"""
                 UPDATE agent.change_history_facts
                 SET status = 'superseded'
-                WHERE id = %s AND user_id = %s AND topic = %s
+                WHERE id = %s
+                  AND user_id = %s
+                  AND {_TOPIC_MATCH.format(column="topic")}
                 """,
                 (supersedes, user_id, topic),
             )

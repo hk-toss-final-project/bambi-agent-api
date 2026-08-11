@@ -96,6 +96,8 @@ class PostgresPublishSnapshotRepository:
                 "source_interest_id": payload.get("source_interest_id", ""),
                 "interest_profile_id": payload.get("interest_profile_id", ""),
                 "bundle_keywords": payload.get("bundle_keywords", []),
+                "taxonomy_topic_ids": payload.get("taxonomy_topic_ids", []),
+                "taxonomy_version": payload.get("taxonomy_version", ""),
                 "created_at": row["created_at"],
             }
         )
@@ -119,6 +121,8 @@ class PostgresPublishSnapshotRepository:
             "source_interest_id": snapshot.source_interest_id,
             "interest_profile_id": snapshot.interest_profile_id,
             "bundle_keywords": list(snapshot.bundle_keywords),
+            "taxonomy_topic_ids": list(snapshot.taxonomy_topic_ids),
+            "taxonomy_version": snapshot.taxonomy_version,
         }
 
     async def save(self, snapshot: PublishSnapshotResponse) -> None:

@@ -307,6 +307,38 @@ Service는 이 필드로 어떤 LLM Wiki 관심사와 연결 노드가 카드 �
 추적할 수 있습니다. `tags`의 기존 의미는 바뀌지 않으며 여전히 루트 주제 문자열
 하나입니다.
 
+**`taxonomy_topic_ids`·`taxonomy_version`(2026-08-11 추가)** — 이 카드가 매핑되는
+관심사 taxonomy Topic Key 목록입니다.
+
+```json
+"taxonomy_topic_ids": ["industry", "ai_ml"],
+"taxonomy_version": "1.0.0-draft"
+```
+
+- **용도.** service가 뷰어의 관심사(`interests.taxonomy_topic_id`)와 교집합을 내어
+  추천 피드를 만듭니다. 그전까지 카드에는 자유 문자열 태그(`tags`·`content_tags`)만
+  있어서 관심사와 맞출 공통 식별자가 없었습니다(2026-08-11 우석·영현·여진 합의).
+- **`tags`와 층위가 다릅니다.** 앞의 둘이 사람이 읽는 문자열이라면 이쪽은
+  service·agent가 공유하는 **식별자**입니다. 셋 다 유지하며 서로 대체하지 않습니다.
+- **LLM을 쓰지 않습니다.** 두 갈래 모두 이미 있는 매핑을 거슬러 올라가는 결정적
+  파생이라 추가 비용·지연이 없습니다.
+  1. 리포트가 **실제로 인용한** Global 수집 문서가 어느 수집 대상(Topic)에서
+     왔는지 거슬러 올라갑니다. 요청 주제가 아니라 근거를 보므로 요청과 실제
+     내용이 갈려도 따라갑니다.
+  2. 1이 비면 요청 주제 **이름**으로 taxonomy를 찾습니다. 아침 브리핑은 요청
+     `topic`이 고정 문구라 Job payload의 `topics[]`를 씁니다.
+- ⚠️ **빈 목록은 오류가 아닙니다.** 개인 Wiki만 인용했거나 taxonomy 밖 주제인
+  카드, 그리고 이 필드가 붙기 전에 저장된 Snapshot이 여기 해당합니다. service는
+  빈 값을 "매칭 없음"으로 다루고 발행은 그대로 진행해야 합니다.
+- ⚠️ **`taxonomy_version`은 `taxonomy_topic_ids`와 항상 짝입니다.** 목록이 비면
+  버전도 `""`입니다. 버전이 섞이는 구간(카탈로그 교체 직후)에는 매칭이 많은 한
+  버전만 남기므로, 한 카드의 topic id는 모두 같은 버전으로 풀 수 있습니다.
+- 한 카드가 다는 Topic은 **최대 5개**입니다. 상한이 없으면 인용을 많이 단 리포트가
+  Topic을 열댓 개 달고 나가 교집합 매칭이 사실상 무의미해집니다.
+- `custom:` 수집 대상(직접 입력·Wiki 자동 등록 주제)은 topic id가 없어 제외됩니다.
+  **taxonomy id가 없는 관심사만 가진 사용자는 이 필드로 닫히지 않습니다** —
+  그쪽은 service가 `interest_topics.keywords` 카탈로그로 따로 덮기로 했습니다.
+
 **`citations`는 `{citation_id, title, url}` 세 필드뿐입니다.**
 
 ```json

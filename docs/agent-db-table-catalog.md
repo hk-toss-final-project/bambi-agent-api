@@ -1,6 +1,6 @@
 # Agent DB 테이블 카탈로그
 
-> 기준: 2026-08-10. 물리 스키마와 데이터 계약의 최종 기준은
+> 기준: 2026-08-11. 물리 스키마와 데이터 계약의 최종 기준은
 > database/migrations/0001_initial.sql,
 > database/migrations/0002_publish_snapshot_batches.sql,
 > database/migrations/0003_web_clipping_markdown.sql,
@@ -9,7 +9,8 @@
 > database/migrations/0006_rename_report_builder_contracts.sql,
 > database/migrations/0008_extract_global_source_cache.sql,
 > database/migrations/0017_wiki_relation_lifecycle.sql,
-> database/migrations/0019_onboarding_topic_contexts.sql입니다.
+> database/migrations/0019_onboarding_topic_contexts.sql,
+> database/migrations/0024_openai_batch_jobs.sql입니다.
 
 이 문서는 Agent DB 테이블을 영역과 데이터 성격으로 분류하고, 각 테이블의
 책임, 핵심 관계·제약, RLS 적용 여부와 현재 애플리케이션 연결 상태를 정리합니다.
@@ -63,7 +64,7 @@ user_context_snapshots와 agent_jobs 대신 인메모리 저장소를 사용합�
 | 영역 | 테이블 |
 |---|---|
 | 설정 | prompt_templates, prompt_versions, model_configs, retrieval_configs, embedding_configs |
-| 사용자·Job | user_context_snapshots, agent_jobs, agent_job_attempts |
+| 사용자·Job | user_context_snapshots, agent_jobs, agent_job_attempts, llm_batches, llm_batch_items |
 | 사용자 원본 | wiki_source_events, user_source_documents, user_source_document_versions |
 | 지식 문서·검색 공용 | wiki_documents, wiki_document_versions, wiki_document_sources, wiki_document_relations, wiki_relation_supports, wiki_chunks, wiki_embeddings |
 | Personal Wiki | wiki_versions, wiki_version_documents |
@@ -74,7 +75,7 @@ user_context_snapshots와 agent_jobs 대신 인메모리 저장소를 사용합�
 | 변경점 추적 | change_history_runs, change_history_facts |
 | 평가·추천 | quality_evaluations, safety_evaluations, recommendation_candidates |
 | 발행 | publish_snapshots, publish_attempts |
-| 이벤트·보안·운영 | event_outbox, event_inbox, api_keys, usage_logs, audit_logs |
+| 이벤트·보안·운영 | event_outbox, event_inbox, api_keys, usage_logs, provider_rate_limits, audit_logs |
 | Migration 관리 | schema_migrations |
 
 0001_initial.sql이 기본 38개 테이블과 Index, RLS Policy, Trigger를 생성합니다.
@@ -111,12 +112,19 @@ Partial Unique Index로 한 개만 유지합니다.
 | 테이블 | 성격 | 책임 | 핵심 관계·제약 | RLS | 현재 연결 |
 |---|---|---|---|---|---|
 | user_context_snapshots | Snapshot/Version | AI에 필요한 최소 사용자 설정을 버전별 보존 | user_id + context_version Unique, plan free/paid, Soft Delete | 적용 | 인메모리 대체 |
-| agent_jobs | Operational | API·Scheduler·Worker가 공유할 비동기 작업 상태 | feature_id + user_id + idempotency_key Unique, Retry/Progress/Result, Lease | 적용 | 인메모리 대체 |
+| agent_jobs | Operational | API·Scheduler·Worker가 공유할 비동기 작업 상태 | feature_id + user_id + idempotency_key Unique, Retry/Progress/Result, Lease, waiting_provider | 적용 | PostgreSQL 연결 |
 | agent_job_attempts | History | Job의 Worker별 실행 시도와 오류 이력 | job_id FK Cascade, job_id + attempt_number Unique | 적용 | Schema only |
+| llm_batches | Operational | OpenAI Batch 제출·Poll 상태와 input/output/error 파일 추적 | provider_batch_id Unique, endpoint·상태·24h Window 제약 | system 전용 | Batch Worker |
+| llm_batch_items | Operational/History | JSONL 요청과 custom_id별 응답·오류·Token·도메인 반영 Lease 보존 | custom_id Unique, 선택적 Job·Batch FK | 적용 | Batch Worker·도메인 반영 |
 
 agent_jobs는 0002 Migration에서 lease_expires_at과 Claim 가능 Job 조회 Index가
 추가됩니다. Claim Batch 크기와 실제 LLM 동시성은 애플리케이션 계층에서 별도로
 제어해야 합니다.
+
+llm_batches와 llm_batch_items는 0024 Migration에서 추가됩니다. 외부 파일 업로드와
+상태 조회 중에는 DB 연결을 점유하지 않으며, 결과 순서 대신 custom_id로 Item을
+결합합니다. output과 error 파일을 모두 반영하고 완료 Item의 도메인 저장은 별도
+Lease로 멱등 처리합니다.
 
 ## 5. 지식 문서와 검색
 
@@ -245,6 +253,7 @@ superseded입니다. claimed 상태에서는 claim_id, claimed_by, lease_expires
 | event_inbox | History/Event | Consumer별 수신 Event 멱등성과 처리 결과 기록 | consumer_name + event_id Unique, payload_hash 검증 | 없음 | Schema only |
 | api_keys | Master/Security | External API Key의 Hash, Prefix, Scope와 상태 관리 | Key 원문 미저장, key_prefix/key_hash Unique | 없음 | Schema only |
 | usage_logs | History | Provider 호출의 Token, 비용, 지연과 Trace 누적 | 선택적 Job/Generation Run FK, 사용자 조회 Index | 적용 | Schema only |
+| provider_rate_limits | Operational | Provider·모델별 RPM/TPM 예약과 응답 헤더 상태 공유 | provider + resource_key PK, blocked_until 부분 Index | 없음 | Worker Rate Governor |
 | audit_logs | History | 관리자 변경과 민감 데이터 접근 이력 | Resource·Target User 조회 Index | 없음 | Schema only |
 
 audit_logs는 설계상 Append-only지만 현재 Migration 자체에는 UPDATE/DELETE를

@@ -21,3 +21,12 @@ uv run python bench/wiki_navigation/run.py \
   --input-cost-per-million <현재 단가> \
   --output-cost-per-million <현재 단가>
 ```
+
+OpenAI Batch로 전환한 Wiki Embedding과 비긴급 Report 초안은 각각 다음처럼
+예상 호출·Token 상한을 먼저 확인합니다. 실제 실행은 현재 단가를 명시하고 별도
+승인을 받은 뒤 진행합니다.
+
+```bash
+uv run python bench/wiki_embedding_batch/run.py --estimate-only
+uv run python bench/report_batch_generation/run.py --estimate-only
+```

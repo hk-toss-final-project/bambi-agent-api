@@ -10,6 +10,7 @@ from datetime import date
 from typing import Any
 
 from infrastructure.persistence.features.change_history_facts import (
+    list_change_history_facts,
     load_change_history_facts_by_ids,
     load_latest_change_history_run,
     load_latest_report_snapshot,
@@ -90,7 +91,7 @@ def test_search_facts_filters_by_user_and_topic() -> None:
 
     query, params = connection.executed[0]
     assert "user_id = %s" in query
-    assert "topic = %s" in query
+    assert "lower(btrim(topic)) = lower(btrim(%s))" in query
     assert "status = 'active'" in query
     assert params is not None and params[0] == "user-1" and params[1] == "반도체"
     assert facts[0].subject == "B사 HBM4"
@@ -130,7 +131,8 @@ def test_search_ranks_instead_of_filtering_by_similarity_threshold() -> None:
     assert "<%%" not in query, "유사도 연산자로 필터링하면 안 된다(정렬만 한다)"
     assert "%% %s" not in query, "similarity 연산자로 필터링하면 안 된다"
     # 격리 조건은 그대로 유지돼야 한다.
-    assert "user_id = %s" in query and "topic = %s" in query
+    assert "user_id = %s" in query
+    assert "lower(btrim(topic)) = lower(btrim(%s))" in query
     assert params is not None and params[:2] == ("user-1", "반도체")
 
 
@@ -288,9 +290,69 @@ def test_latest_report_snapshot_reads_topic_from_generation_request() -> None:
     )
 
     query, params = connection.executed[0]
-    assert "request.topic = %s" in query
+    assert "lower(btrim(request.topic)) = lower(btrim(%s))" in query
     assert params == ("user-1", "반도체")
     assert snapshot is not None and snapshot.body == "본문"
+
+
+def test_every_topic_filter_is_case_and_space_insensitive() -> None:
+    """topic으로 거르는 모든 SQL이 정규화 비교를 쓰는지 한곳에서 고정한다.
+
+    topic은 이 기능의 비교축이다. 한 곳이라도 완전 일치로 남으면 표기가 조금
+    다른 요청에서 Base를 못 찾아 델타 히스토리가 조용히 두 갈래로 쪼개진다.
+    """
+    predicate = "lower(btrim(topic)) = lower(btrim(%s))"
+    base_id = "88888888-8888-4888-8888-888888888888"
+
+    facts_connection = _FakeConnection([[]])
+    asyncio.run(
+        list_change_history_facts(
+            facts_connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            topic="반도체",
+        )
+    )
+    run_connection = _FakeConnection([[]])
+    asyncio.run(
+        load_latest_change_history_run(
+            run_connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            topic="반도체",
+        )
+    )
+    persist_connection = _FakeConnection(
+        [
+            [{"id": "99999999-9999-4999-8999-999999999999"}],  # run
+            [{"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}],  # fact
+            [],  # supersede UPDATE
+        ]
+    )
+    asyncio.run(
+        persist_change_history_run(
+            persist_connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            topic="반도체",
+            reference_date=date(2026, 8, 11),
+            facts=[
+                NewChangeHistoryFact(
+                    subject="B사 HBM4",
+                    attribute="양산 일정",
+                    fact_value="2026-3Q",
+                    statement="B사가 HBM4 양산을 2026-3Q로 연기했다.",
+                    verdict="updated",
+                    supersedes_fact_id=base_id,
+                    before_value="2026-2Q",
+                )
+            ],
+        )
+    )
+
+    assert predicate in facts_connection.executed[0][0]
+    assert predicate in run_connection.executed[0][0]
+    # 저장 자체는 원문 그대로 넣는다 — 정규화는 조회 조건에만 적용한다.
+    assert persist_connection.executed[0][1] is not None
+    assert persist_connection.executed[0][1][1] == "반도체"
+    assert predicate in persist_connection.executed[2][0]
 
 
 def test_latest_change_history_run_returns_none_without_history() -> None:

@@ -125,6 +125,7 @@ async def run_url_collection_batch(
         worker_id=worker_id,
         limit=limit,
         lease_seconds=lease_seconds,
+        concurrency=1,
         error_code_prefix="URL_COLLECTION",
         process=process,
     )

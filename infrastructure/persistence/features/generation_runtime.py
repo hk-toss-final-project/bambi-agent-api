@@ -9,7 +9,7 @@ import json
 import logging
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any, Sequence
 from uuid import UUID
@@ -533,6 +533,7 @@ async def enqueue_report_generation_job(
     scheduled_at: datetime | None = None,
     request_id: str,
     change_history_enabled: bool = False,
+    execution_mode: str = "sync",
 ) -> PersistedGenerationSubmission:
     """최신 사용자 Context에 연결된 Report Builder Job과 생성 요청을 멱등 등록한다.
 
@@ -616,6 +617,23 @@ async def enqueue_report_generation_job(
         )
     if not resolved_topic:
         raise ValueError("Report Builder 생성에는 topic이 필요합니다.")
+    if execution_mode not in {"sync", "batch"}:
+        raise ValueError(f"지원하지 않는 execution_mode입니다: {execution_mode}")
+    if execution_mode == "batch" and change_history_enabled:
+        raise ValueError("Batch Report는 변경점 추적을 지원하지 않습니다.")
+    if execution_mode == "batch" and resolved_topics:
+        raise ValueError("Batch Report는 다중 주제를 지원하지 않습니다.")
+    batch_contexts: list[dict[str, object]] = []
+    if execution_mode == "batch":
+        fixed_contexts = await load_report_context(
+            connection,
+            user_id=user_id,
+            query=resolved_topic,
+            top_k_per_scope=5,
+        )
+        if not fixed_contexts:
+            raise ValueError("Batch Report에 고정할 Personal Wiki·Global Context가 없습니다.")
+        batch_contexts = [asdict(item) for item in fixed_contexts]
     job_payload = {
         "topic": resolved_topic,
         # 여러 주제를 한 장에 묶는 요약 리포트용. 비어 있으면 topic 하나만 다룬다.
@@ -636,6 +654,8 @@ async def enqueue_report_generation_job(
         "report_type": report_type,
         "language": resolved_language,
         "change_history_enabled": change_history_enabled,
+        "execution_mode": execution_mode,
+        "batch_contexts": batch_contexts,
     }
     job_cursor = await connection.execute(
         """
@@ -709,6 +729,7 @@ async def enqueue_report_generation_job(
                     "generation_scope": generation_scope,
                     "interest_id": interest_id,
                     "interest_bundle": interest_bundle,
+                    "execution_mode": execution_mode,
                 }
             ),
         ),
@@ -1258,6 +1279,149 @@ def _global_cache_id_or_none(value: str) -> str | None:
     return candidate
 
 
+# 카드 하나가 주장할 수 있는 taxonomy Topic 수 상한. content_tags(5)와 같은 기준이다 —
+# 상한이 없으면 인용을 많이 단 리포트가 Topic 열댓 개를 달고 나가서, Service의 관심사
+# 교집합 매칭이 사실상 "아무 카드나 걸린다"가 된다.
+_MAX_TAXONOMY_TOPIC_IDS = 5
+
+
+async def _derive_taxonomy_topics(
+    connection: AsyncConnection[DictRow],
+    *,
+    candidate_id: str,
+    fallback_topics: Sequence[str],
+) -> tuple[str, list[str]]:
+    """이 리포트가 매핑되는 taxonomy Topic을 결정론으로 고른다 (2026-08-11 계약).
+
+    Service는 이 값으로 "뷰어 관심사 ∩ 카드 Topic"을 계산해 추천 피드를 만든다.
+    카드에는 자유 문자열 태그밖에 없어서 공통 식별자가 없었고, 그 자리를 메운다.
+
+    **LLM을 쓰지 않는다.** 두 갈래 모두 이미 있는 매핑을 거슬러 올라가는 결정적
+    파생이라 추가 비용·지연이 없다(2026-08-11 우석·영현·여진 합의로 채택한 이유).
+
+    ① 인용 원본 파생 — 이 리포트가 **실제로 인용한** Global 수집 문서가 어느
+       수집 대상(Topic)에서 왔는지 거슬러 올라간다. 요청 주제가 아니라 근거를
+       보므로, 요청과 실제 내용이 갈려도 따라간다(tags/content_tags를 분리한
+       것과 같은 이유).
+    ② ①이 비면 요청 주제 이름으로 taxonomy를 찾는다. 개인 Wiki만 인용한
+       리포트가 여기 해당한다 — 개인 Wiki 청크에는 수집 대상이 없다.
+
+    ``custom:{해시}`` 수집 대상(직접 입력·Wiki 자동 등록 주제)은 애초에 topic_id가
+    없어서 ``target_type = 'taxonomy'`` 조건에 자연히 걸러진다.
+
+    Returns:
+        (taxonomy_version, topic_ids). **못 찾으면 ("", [])** 이고 예외를 던지지
+        않는다 — 검색·추천 보조 정보라, 이것 때문에 발행이 멈추면 안 된다
+        (content_tags와 같은 원칙).
+    """
+    cursor = await connection.execute(
+        """
+        SELECT
+            target.taxonomy_version,
+            target.topic_id,
+            min(citation.ordinal) AS first_ordinal,
+            count(*) AS hits
+        FROM agent.citations AS citation
+        JOIN agent.global_source_document_topics AS mapped
+          ON mapped.global_source_document_id = citation.global_source_document_id
+        JOIN agent.interest_collection_targets AS target
+          ON target.target_key = mapped.target_key
+        WHERE citation.candidate_id = %s
+          AND citation.global_source_document_id IS NOT NULL
+          AND target.target_type = 'taxonomy'
+        GROUP BY target.taxonomy_version, target.topic_id
+        ORDER BY first_ordinal, hits DESC, target.topic_id
+        """,
+        (candidate_id,),
+    )
+    rows = await cursor.fetchall()
+    if not rows:
+        rows = await _taxonomy_topics_by_name(connection, fallback_topics)
+    return _pick_single_taxonomy_version(rows)
+
+
+async def _taxonomy_topics_by_name(
+    connection: AsyncConnection[DictRow],
+    topics: Sequence[str],
+) -> list[DictRow]:
+    """요청 주제 이름을 taxonomy Topic 이름과 맞춰 본다 (파생 ②).
+
+    이름 비교는 수집 경로가 쓰는 것과 같은 ``lower(btrim())`` 정규화를 쓴다.
+    아침 브리핑은 요청 ``topic``이 고정 문구("오늘의 관심사 브리핑")라 그걸로는
+    영영 안 맞는다 — 호출부가 Job payload의 실제 ``topics``를 넘겨야 한다.
+    """
+    # SQL 쪽 lower(btrim(...))과 **정확히 같은** 변환만 한다. 파이썬에서만 공백을 더
+    # 접으면 양쪽 정규화가 어긋나 오히려 못 맞추는 값이 생긴다.
+    normalized = [
+        str(topic).strip().casefold() for topic in topics if str(topic).strip()
+    ]
+    if not normalized:
+        return []
+    cursor = await connection.execute(
+        """
+        SELECT
+            topic.taxonomy_version,
+            topic.topic_id,
+            array_position(%s::text[], lower(btrim(topic.name))) AS first_ordinal,
+            1 AS hits
+        FROM agent.interest_taxonomy_topics AS topic
+        WHERE lower(btrim(topic.name)) = ANY(%s::text[])
+        ORDER BY first_ordinal, topic.topic_id
+        """,
+        (normalized, normalized),
+    )
+    return await cursor.fetchall()
+
+
+def _pick_single_taxonomy_version(rows: Sequence[DictRow]) -> tuple[str, list[str]]:
+    """한 버전의 Topic만 남긴다 — 버전과 id가 따로 노는 값을 안 내보내려고.
+
+    taxonomy 버전이 올라간 직후에는 옛 버전 수집 대상과 새 버전이 잠시 섞인다.
+    그때 두 버전의 topic_id를 한 배열에 담아 보내면, 받는 쪽은 어느 버전 카탈로그로
+    풀어야 할지 알 수 없다. 매칭이 가장 많은 버전만 남긴다.
+
+    동수일 때는 버전 문자열이 큰 쪽으로 가른다 — semver 비교가 아니라 **결과를
+    한쪽으로 고정하기 위한 결정적 규칙**일 뿐이다(같은 입력이 실행할 때마다 다른
+    버전을 고르면 카드마다 기준이 흔들린다). 버전이 섞이는 구간 자체가 카탈로그
+    교체 직후 잠깐이라 이 이상 정교하게 갈 이유가 없다.
+    """
+    if not rows:
+        return "", []
+    hits_by_version: dict[str, int] = {}
+    for row in rows:
+        version = str(row["taxonomy_version"])
+        hits_by_version[version] = hits_by_version.get(version, 0) + int(row["hits"])
+    winner = max(hits_by_version.items(), key=lambda item: (item[1], item[0]))[0]
+    topic_ids: list[str] = []
+    for row in rows:
+        if str(row["taxonomy_version"]) != winner:
+            continue
+        topic_id = str(row["topic_id"])
+        if topic_id in topic_ids:
+            continue
+        topic_ids.append(topic_id)
+        if len(topic_ids) >= _MAX_TAXONOMY_TOPIC_IDS:
+            break
+    return winner, topic_ids
+
+
+def _requested_topic_names(
+    generation_request: DictRow, topic: str
+) -> list[str]:
+    """파생 ②에 넣을 요청 주제 이름 — 아침은 topics[], 나머지는 topic.
+
+    아침 브리핑의 ``generation_requests.topic``은 카드 제목용 고정 문구다. 실제
+    주제는 Job payload의 ``topics``에 있고, 그 행은 멱등키 때문에 이미 JOIN돼 있다.
+    깊게 파기(INTEREST_BUNDLE)는 둘 다 없어서 빈 목록이 된다 — 파생 ①만 쓴다.
+    """
+    payload = generation_request.get("job_payload") or {}
+    raw_topics = payload.get("topics") if isinstance(payload, dict) else None
+    names = [str(name) for name in raw_topics if str(name).strip()] if raw_topics else []
+    if names:
+        return names
+    return [topic] if topic else []
+
+
 async def persist_report_generation(
     connection: AsyncConnection[DictRow],
     *,
@@ -1290,7 +1454,10 @@ async def persist_report_generation(
             generation_request.id,
             generation_request.topic,
             generation_request.parameters,
-            job.idempotency_key AS request_idempotency_key
+            job.idempotency_key AS request_idempotency_key,
+            -- taxonomy Topic 파생 ②가 쓴다. 아침 브리핑은 generation_request.topic이
+            -- 카드 제목용 고정 문구라, 실제 주제는 이 payload의 topics에만 있다.
+            job.payload AS job_payload
         FROM agent.generation_requests AS generation_request
         JOIN agent.agent_jobs AS job
           ON job.id = generation_request.job_id
@@ -1499,6 +1666,15 @@ async def persist_report_generation(
     #
     # 요청 주제와 실제 내용은 갈릴 수 있다(실측: '의존성 구조' 요청이 강한 결합·
     # DDD·Application Layer를 다뤘다). 검색·추천에는 뒤쪽이 쓸모 있다.
+    #
+    # taxonomy_topic_ids는 위 두 태그와 층위가 다르다. tags·content_tags가 사람이
+    # 읽는 자유 문자열이라면 이쪽은 Service·Agent가 공유하는 **식별자**다. Service는
+    # 이것으로 뷰어 관심사와 카드의 교집합을 계산해 추천 피드를 만든다.
+    taxonomy_version, taxonomy_topic_ids = await _derive_taxonomy_topics(
+        connection,
+        candidate_id=str(candidate["id"]),
+        fallback_topics=_requested_topic_names(generation_request, topic),
+    )
     publish_payload = {
         "title": generated.title,
         "summary": generated.summary,
@@ -1513,6 +1689,8 @@ async def persist_report_generation(
         "source_interest_id": source_interest_id,
         "interest_profile_id": interest_profile_id,
         "bundle_keywords": bundle_keywords,
+        "taxonomy_topic_ids": taxonomy_topic_ids,
+        "taxonomy_version": taxonomy_version,
     }
     await connection.execute(
         """

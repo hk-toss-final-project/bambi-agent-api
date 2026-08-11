@@ -15,8 +15,10 @@ from infrastructure.persistence.features.jobs import (
     claim_personal_wiki_jobs,
     claim_runnable_agent_jobs,
     complete_agent_job,
+    complete_waiting_provider_job,
     create_completed_agent_job,
     defer_user_wiki_build_jobs,
+    defer_agent_job_for_provider,
     enqueue_global_collection_run_job,
     enqueue_personal_wiki_build_job,
     fail_agent_job,
@@ -417,7 +419,38 @@ def test_enqueue_personal_wiki_build_job_skips_event_link_without_row_id() -> No
     )
 
     assert enqueued.created is True
-    assert len(connection.executed) == 1
+    # 이벤트 연결은 건너뛰어도 SCH-009 조용 시간 조정은 항상 뒤따른다.
+    # 기본값(0분)은 즉시 반영이라 실행 시각이 바로 지금으로 맞춰진다.
+    assert len(connection.executed) == 2
+    defer_sql, defer_params = connection.executed[1]
+    assert "job_type = 'personal_wiki_build'" in defer_sql
+    assert defer_params == ("user-1", 30, 0)
+
+
+def test_enqueue_personal_wiki_build_job_applies_quiet_window_after_insert() -> None:
+    """새 Job 등록 직후 사용자의 대기 Job 전체가 조용 시간만큼 미뤄지는지 검증한다."""
+    connection = _FakeConnection([[{"id": "job-1"}], [{"id": "job-1"}, {"id": "job-2"}]])
+
+    await_result = asyncio.run(
+        enqueue_personal_wiki_build_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            source_document_id="doc-1",
+            source_document_version_id="version-1",
+            source_version=1,
+            source_event_id="clip-1",
+            source_event_row_id="event-row-1",
+            quiet_minutes=15,
+            max_wait_minutes=45,
+        )
+    )
+
+    assert await_result.job_id == "job-1"
+    # 순서: Job Insert → wiki_source_events 연결 → SCH-009 조용 시간 조정.
+    assert len(connection.executed) == 3
+    defer_sql, defer_params = connection.executed[2]
+    assert "scheduled_at = LEAST" in defer_sql
+    assert defer_params == ("user-1", 45, 15)
 
 
 def test_defer_user_wiki_build_jobs_applies_quiet_window_with_max_wait_cap() -> None:
@@ -486,4 +519,50 @@ def test_fail_agent_job_stops_when_lease_is_lost() -> None:
         )
 
     assert len(connection.executed) == 1
-    claim_agent_job_by_id,
+
+
+def test_defer_agent_job_for_provider_releases_worker_lease() -> None:
+    """Batch 대기 전환이 Job Lease를 해제하고 현재 Attempt를 닫는다."""
+    connection = _FakeConnection([[{"id": "job-1"}], []])
+    job = ClaimedAgentJob(
+        job_id="job-1",
+        user_id="user-1",
+        feature_id="SVC-008",
+        job_type="report_generation",
+        attempt_number=1,
+        max_attempts=3,
+    )
+
+    asyncio.run(
+        defer_agent_job_for_provider(
+            connection,  # type: ignore[arg-type]
+            job=job,
+            worker_id="worker-1",
+            batch_item_id="item-1",
+        )
+    )
+
+    sql = connection.executed[0][0]
+    assert "status = 'waiting_provider'" in sql
+    assert "locked_by = NULL" in sql
+    assert "lease_expires_at = NULL" in sql
+    assert "status = 'completed'" in connection.executed[1][0]
+
+
+def test_complete_waiting_provider_job_finishes_without_worker_lease() -> None:
+    """Batch 결과 반영은 waiting_provider 상태만 사용자 범위에서 완료한다."""
+    connection = _FakeConnection([[{"id": "job-1"}]])
+
+    asyncio.run(
+        complete_waiting_provider_job(
+            connection,  # type: ignore[arg-type]
+            job_id="00000000-0000-0000-0000-000000000001",
+            user_id="user-1",
+            result={"content_id": "report-1"},
+        )
+    )
+
+    sql, params = connection.executed[0]
+    assert "status = 'completed'" in sql
+    assert "status = 'waiting_provider'" in sql
+    assert params[2] == "user-1"

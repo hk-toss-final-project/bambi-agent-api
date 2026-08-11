@@ -482,8 +482,23 @@ async def update_full_wiki_rebuild_summary(
     source_count: int,
     affected_document_count: int,
     superseded_document_count: int,
+    quality_metrics: Mapping[str, int | float] | None = None,
 ) -> None:
-    """Full Rebuild Wiki Version에 전체 교체 범위 요약을 기록한다."""
+    """Full Rebuild Wiki Version에 전체 교체 범위 요약을 기록한다.
+
+    `quality_metrics`(WBA-014 결과의 `.metrics`)를 함께 남기면, 재구성마다
+    새로 생기는 이 Row들을 `version` 순으로 훑는 것만으로 고아 문서·중복·
+    모순 건수가 시간에 따라 나아지는지 추이를 볼 수 있다. 별도 이력 테이블을
+    만들지 않고 이미 재구성 단위로 쌓이는 Snapshot에 얹는 방식이다.
+    """
+    summary: dict[str, object] = {
+        "mode": "full_rebuild",
+        "source_count": source_count,
+        "affected_document_count": affected_document_count,
+        "superseded_document_count": superseded_document_count,
+    }
+    if quality_metrics is not None:
+        summary["quality_metrics"] = dict(quality_metrics)
     await connection.execute(
         """
         UPDATE agent.wiki_versions
@@ -493,14 +508,7 @@ async def update_full_wiki_rebuild_summary(
           AND namespace_key = %s
         """,
         (
-            Jsonb(
-                {
-                    "mode": "full_rebuild",
-                    "source_count": source_count,
-                    "affected_document_count": affected_document_count,
-                    "superseded_document_count": superseded_document_count,
-                }
-            ),
+            Jsonb(summary),
             wiki_version_id,
             user_id,
             f"user/{user_id}",

@@ -24,7 +24,21 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("WIKI_LLM_MODEL", "gpt-4.1-mini")
     monkeypatch.setenv("REPORT_LLM_MODEL", "gpt-4.1-nano")
     monkeypatch.setenv("WIKI_EMBEDDING_MODEL", "text-embedding-3-small")
+    monkeypatch.setenv("WIKI_EMBEDDING_BATCH_THRESHOLD", "80")
     monkeypatch.setenv("PERSONAL_WIKI_WORKER_BATCH_SIZE", "3")
+    monkeypatch.setenv("PERSONAL_WIKI_JOB_CONCURRENCY", "2")
+    monkeypatch.setenv("REPORT_JOB_CONCURRENCY", "4")
+    monkeypatch.setenv("OPENAI_DEFAULT_RPM", "120")
+    monkeypatch.setenv("OPENAI_DEFAULT_TPM", "90000")
+    monkeypatch.setenv("WIKI_OPENAI_REQUESTS_PER_JOB", "6")
+    monkeypatch.setenv("WIKI_OPENAI_TOKENS_PER_JOB", "24000")
+    monkeypatch.setenv("REPORT_OPENAI_REQUESTS_PER_JOB", "10")
+    monkeypatch.setenv("REPORT_OPENAI_TOKENS_PER_JOB", "45000")
+    monkeypatch.setenv("OPENAI_BATCH_MAX_ITEMS", "400")
+    monkeypatch.setenv("OPENAI_BATCH_MAX_SUBMISSIONS", "2")
+    monkeypatch.setenv("OPENAI_BATCH_POLL_LIMIT", "20")
+    monkeypatch.setenv("OPENAI_BATCH_POLL_INTERVAL_SECONDS", "45")
+    monkeypatch.setenv("OPENAI_BATCH_POLL_LEASE_SECONDS", "90")
     monkeypatch.setenv("PERSONAL_WIKI_JOB_LEASE_SECONDS", "900")
     monkeypatch.setenv("WIKI_BUILD_QUIET_MINUTES", "15")
     monkeypatch.setenv("WIKI_BUILD_MAX_WAIT_MINUTES", "45")
@@ -47,7 +61,21 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     assert settings.wiki_llm_model == "gpt-4.1-mini"
     assert settings.report_llm_model == "gpt-4.1-nano"
     assert settings.wiki_embedding_model == "text-embedding-3-small"
+    assert settings.wiki_embedding_batch_threshold == 80
     assert settings.personal_wiki_worker_batch_size == 3
+    assert settings.personal_wiki_job_concurrency == 2
+    assert settings.report_job_concurrency == 4
+    assert settings.openai_default_rpm == 120
+    assert settings.openai_default_tpm == 90_000
+    assert settings.wiki_openai_requests_per_job == 6
+    assert settings.wiki_openai_tokens_per_job == 24_000
+    assert settings.report_openai_requests_per_job == 10
+    assert settings.report_openai_tokens_per_job == 45_000
+    assert settings.openai_batch_max_items == 400
+    assert settings.openai_batch_max_submissions == 2
+    assert settings.openai_batch_poll_limit == 20
+    assert settings.openai_batch_poll_interval_seconds == 45
+    assert settings.openai_batch_poll_lease_seconds == 90
     assert settings.personal_wiki_job_lease_seconds == 900
     assert settings.wiki_build_quiet_minutes == 15
     assert settings.wiki_build_max_wait_minutes == 45

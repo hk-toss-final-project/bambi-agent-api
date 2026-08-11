@@ -116,7 +116,7 @@ erDiagram
 | DB-026 | Agent Job 저장 | `agent_jobs`, `agent_job_attempts` |
 | DB-027 | Event Outbox 저장 | `event_outbox`, `event_inbox` |
 | DB-028 | API Key 저장 | `api_keys` |
-| DB-029 | Usage Log 저장 | `usage_logs` |
+| DB-029 | Usage Log·Provider 호출 제한 저장 | `usage_logs`, `provider_rate_limits` |
 | DB-030 | Audit Log 저장 | `audit_logs` |
 
 `publish_snapshots`와 `publish_attempts`는 PUB-001~010 및 SW-004/009의 Version, Hash, Batch Claim Lease와 ACK 이력을 담당합니다.
@@ -236,6 +236,31 @@ COMMIT;
 - Claim Batch 크기와 실제 Job·LLM 호출 동시성은 독립 설정입니다. 예를 들어 여러 Job을 미리 점유하더라도 Provider Rate Limit과 비용 Budget에 맞춰 더 작은 동시성으로 실행합니다.
 - Worker Heartbeat가 Lease를 갱신하며, 프로세스 종료나 Heartbeat 유실로 Lease가 만료된 Job은 재시도 정책에 따라 다시 `queued`로 전환합니다.
 - 각 Job은 독립적인 `agent_job_attempts` Row와 결과 Transaction을 가지며 한 Job의 실패가 같은 Batch의 다른 Job을 Rollback하지 않습니다.
+
+### Provider Rate Governor
+
+- `provider_rate_limits`는 Provider·모델별 RPM/TPM 상한, 잔여량과 Reset 시각을
+  Worker 인스턴스가 공유하는 운영 상태로 저장합니다.
+- 예약은 Row를 `FOR UPDATE`로 잠근 짧은 Transaction에서 원자적으로 차감합니다.
+- 잔여량이 부족하면 Transaction을 끝낸 뒤 Reset 시각까지 대기하므로 외부 API
+  대기 중 DB Lock이나 Connection을 점유하지 않습니다.
+- OpenAI 성공·429 응답의 `x-ratelimit-*`, `Retry-After`, `x-request-id`를 반영하고,
+  quota·billing 오류는 재시도 가능한 Rate Limit으로 기록하지 않습니다.
+
+### OpenAI Batch 상태와 결과 반영
+
+- `llm_batch_items`는 같은 provider·endpoint·model·workload끼리 최대 500건씩
+  `llm_batches`로 묶으며 `custom_id`를 결과 재결합의 유일한 기준으로 사용합니다.
+- JSONL 업로드, Batch 생성, 상태 조회와 결과 파일 다운로드 중에는 PostgreSQL
+  Transaction이나 Connection을 점유하지 않습니다.
+- 완료 시 output·error 파일을 모두 읽어 부분 성공을 보존합니다. expired·failed·
+  cancelled Batch의 결과 없는 Item은 최대 시도 횟수 안에서 새 Batch 대상으로
+  되돌리고 이미 완료된 Item은 유지합니다.
+- 완료 결과의 Wiki Embedding·Report 저장은 별도 Lease로 점유합니다. 같은 Item을
+  다시 읽더라도 도메인 Upsert와 `domain_applied_at`으로 중복 반영을 막습니다.
+- 명시적 비긴급 Report는 검색 Context를 먼저 고정한 뒤 Job을
+  `waiting_provider`로 전환해 Worker Lease를 해제합니다. 결과 반영 Transaction이
+  기존 Citation·후보·Publish Snapshot·Outbox를 저장하고 Job을 완료합니다.
 
 ### Publish Snapshot Batch Claim과 ACK
 

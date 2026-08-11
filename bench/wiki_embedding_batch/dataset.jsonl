@@ -1,0 +1,10 @@
+{"id":"001","left":"OpenAI API의 429 응답에는 지수 백오프를 적용한다.","right":"OpenAI 요청이 rate limit에 걸리면 exponential backoff로 재시도한다.","expected":{"relation":"similar","threshold":0.55},"note":"한국어 운영 문장 재표현"}
+{"id":"002","left":"PostgreSQL의 SKIP LOCKED로 여러 워커가 큐 작업을 나눠 점유한다.","right":"여러 작업자는 Postgres SKIP LOCKED를 사용해 같은 큐 항목의 중복 처리를 피한다.","expected":{"relation":"similar","threshold":0.55},"note":"DB 큐 의미 보존"}
+{"id":"003","left":"Batch API processes asynchronous workloads within a completion window.","right":"비동기 대량 작업은 완료 시간 범위를 두고 Batch API로 처리할 수 있다.","expected":{"relation":"similar","threshold":0.50},"note":"한영 혼용 의미 보존"}
+{"id":"004","left":"벡터 검색은 질의와 문서 임베딩의 유사도를 이용해 관련 문서를 찾는다.","right":"Query and document embeddings are compared to retrieve semantically related passages.","expected":{"relation":"similar","threshold":0.50},"note":"한영 기술 문장"}
+{"id":"005","left":"Rust의 소유권 모델은 메모리 안전성을 컴파일 시점에 검사한다.","right":"The Rust programming language checks ownership rules at compile time for memory safety.","expected":{"relation":"similar","threshold":0.50},"note":"모호한 단어를 문맥으로 해소"}
+{"id":"006","left":"오늘 서울에는 비가 내려 우산이 필요하다.","right":"PostgreSQL 인덱스는 데이터 조회 계획의 비용을 줄일 수 있다.","expected":{"relation":"dissimilar","threshold":0.45},"note":"날씨와 데이터베이스 비관련 문장"}
+{"id":"007","left":"사용자는 주간 기술 리포트를 이메일로 받는다.","right":"오븐에서 사워도우 빵을 굽기 전에 반죽을 발효한다.","expected":{"relation":"dissimilar","threshold":0.45},"note":"리포트와 제빵 비관련 문장"}
+{"id":"008","left":"분당 토큰 한도는 긴 문서를 동시에 처리할 때 먼저 병목이 될 수 있다.","right":"고양이는 햇볕이 드는 창가에서 낮잠을 잔다.","expected":{"relation":"dissimilar","threshold":0.45},"note":"토큰 제한과 일상 문장"}
+{"id":"009","left":"개인 위키는 저장한 문서를 주제별 지식으로 정리하고 검색 가능한 청크와 임베딩을 유지한다. 새 원문이 들어오면 기존 지식과의 관계를 판정한 뒤 변경된 청크만 갱신한다.","right":"새로 저장된 자료를 기존 개인 지식과 연결하고, 수정된 검색 단위의 벡터 표현만 다시 만드는 개인 지식베이스 파이프라인이다.","expected":{"relation":"similar","threshold":0.50},"note":"긴 복합 문장 재표현"}
+{"id":"010","left":"Mercury 행성의 공전 주기는 태양계에서 가장 짧다.","right":"Mercury 원소는 상온에서 액체인 금속이다.","expected":{"relation":"dissimilar","threshold":0.55},"note":"같은 표면 단어의 다른 의미"}

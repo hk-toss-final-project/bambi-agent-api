@@ -12,6 +12,7 @@ from agent.wiki_builder.features.embeddings import (
     generate_wiki_embeddings,
 )
 from infrastructure.persistence.features.personal_wiki import WikiChunkForEmbedding
+from infrastructure.persistence.api import ClaimedBatchResultItem
 
 
 class _FakeClient:
@@ -139,3 +140,108 @@ def test_wba_011_reads_then_persists_embeddings_without_open_transaction(
     assert count == 1
     assert scopes == ["56", "56"]
     assert len(persisted) == 1
+
+
+def test_wba_011_enqueues_large_embedding_set_without_sync_provider_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """임계값 이상 Chunk는 고정 크기 Batch Item으로 나누고 동기 호출을 건너뛴다."""
+    commands: list[object] = []
+
+    async def fake_scope(_connection: object, *, user_id: str) -> None:
+        """테스트에서 RLS Scope 설정을 생략한다."""
+
+    async def fake_chunks(*args: object, **kwargs: object) -> list[WikiChunkForEmbedding]:
+        """Batch 임계값을 넘는 Chunk 세 개를 반환한다."""
+        return [
+            WikiChunkForEmbedding("chunk-1", "하나"),
+            WikiChunkForEmbedding("chunk-2", "둘"),
+            WikiChunkForEmbedding("chunk-3", "셋"),
+        ]
+
+    async def fake_enqueue(connection: object, command: object) -> object:
+        """등록 명령을 기록하고 저장 결과 대역을 반환한다."""
+        commands.append(command)
+        return object()
+
+    def fail_client(model: str) -> _FakeClient:
+        """동기 Embedding Client가 생성되면 테스트를 실패시킨다."""
+        raise AssertionError("동기 Embedding Provider를 호출하면 안 됩니다.")
+
+    monkeypatch.setattr(wiki_embeddings, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(wiki_embeddings, "get_wiki_chunks_for_embedding", fake_chunks)
+    monkeypatch.setattr(wiki_embeddings, "enqueue_llm_batch_item", fake_enqueue)
+    monkeypatch.setattr(wiki_embeddings, "_BATCH_INPUTS_PER_ITEM", 2)
+
+    count = asyncio.run(
+        wiki_embeddings.wba_011(
+            _Connection(),  # type: ignore[arg-type]
+            namespace_key="user/56",
+            document_version_ids=["version-1"],
+            model="embed-test",
+            job_id="00000000-0000-0000-0000-000000000001",
+            batch_threshold=3,
+            client_factory=fail_client,
+        )
+    )
+
+    assert count == 0
+    assert len(commands) == 2
+    assert commands[0].workload == "wiki_embedding"  # type: ignore[attr-defined]
+    assert commands[0].request_body["input"] == ["하나", "둘"]  # type: ignore[attr-defined]
+    assert commands[1].request_body["input"] == ["셋"]  # type: ignore[attr-defined]
+
+
+def test_apply_wiki_embedding_batch_result_validates_and_persists_vectors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """뒤섞인 Vector Index를 Chunk 순서로 복원해 기존 Wiki Upsert에 저장한다."""
+    persisted: list[object] = []
+
+    async def fake_scope(_connection: object, *, user_id: str) -> None:
+        """Batch Item 사용자 Scope를 검증한다."""
+        assert user_id == "56"
+
+    async def fake_persist(connection: object, **kwargs: object) -> int:
+        """검증된 Vector 값을 기록하고 개수를 반환한다."""
+        persisted.extend(kwargs["values"])  # type: ignore[arg-type]
+        assert kwargs["namespace_key"] == "user/56"
+        assert kwargs["model_name"] == "embed-test"
+        return len(persisted)
+
+    monkeypatch.setattr(wiki_embeddings, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(wiki_embeddings, "persist_wiki_embeddings", fake_persist)
+    item = ClaimedBatchResultItem(
+        item_id="item-1",
+        custom_id="wiki:1",
+        user_id="56",
+        job_id=None,
+        workload="wiki_embedding",
+        model_name="embed-test",
+        resource_type="wiki_chunk_set",
+        resource_id="chunk-1",
+        context={
+            "namespace_key": "user/56",
+            "chunks": [
+                {"chunk_id": "chunk-1", "content": "하나"},
+                {"chunk_id": "chunk-2", "content": "둘"},
+            ],
+        },
+        result_body={
+            "data": [
+                {"index": 1, "embedding": [0.2] * 1536},
+                {"index": 0, "embedding": [0.1] * 1536},
+            ]
+        },
+    )
+
+    count = asyncio.run(
+        wiki_embeddings.apply_wiki_embedding_batch_result(
+            _Connection(),  # type: ignore[arg-type]
+            item,
+        )
+    )
+
+    assert count == 2
+    assert persisted[0].chunk_id == "chunk-1"  # type: ignore[attr-defined]
+    assert persisted[1].embedding == [0.2] * 1536  # type: ignore[attr-defined]

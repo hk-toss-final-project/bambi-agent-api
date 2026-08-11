@@ -3,12 +3,14 @@
 import asyncio
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
-from infrastructure.persistence.api import ClaimedAgentJob
+from infrastructure.persistence.api import ClaimedAgentJob, ProviderRateLimitDecision
 from workers.features import batch_runner
+from workers.runtime.api import ProviderRateLimitPolicy
 
 
 class _FakeCursor:
@@ -67,6 +69,76 @@ def _job(job_id: str) -> ClaimedAgentJob:
     )
 
 
+def _rate_policy() -> ProviderRateLimitPolicy:
+    """Batch 러너 테스트용 OpenAI 예약 정책을 만든다."""
+    return ProviderRateLimitPolicy(
+        provider="openai",
+        resource_key="gpt-4.1-mini",
+        estimated_requests=2,
+        estimated_tokens=10_000,
+        default_rpm=60,
+        default_tpm=60_000,
+        max_wait_slice_seconds=5,
+    )
+
+
+def test_wait_for_provider_capacity_releases_connection_before_sleep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RPM·TPM 대기는 Pool 연결을 반환한 뒤 수행해 연결 고갈을 막는다."""
+    active_connections = 0
+    sleeps: list[float] = []
+    decisions = [
+        ProviderRateLimitDecision(
+            allowed=False,
+            retry_at=datetime.now(UTC) + timedelta(seconds=10),
+            remaining_requests=0,
+            remaining_tokens=0,
+        ),
+        ProviderRateLimitDecision(
+            allowed=True,
+            retry_at=None,
+            remaining_requests=10,
+            remaining_tokens=10_000,
+        ),
+    ]
+
+    class _Pool:
+        """활성 대여 수를 기록하는 Pool 대역."""
+
+        @asynccontextmanager
+        async def connection(self) -> AsyncIterator[_FakeConnection]:
+            """연결 대여 구간의 활성 수를 증감한다."""
+            nonlocal active_connections
+            active_connections += 1
+            try:
+                yield _FakeConnection()
+            finally:
+                active_connections -= 1
+
+    async def fake_reserve(connection: Any, **kwargs: Any) -> Any:
+        """대기 후 허용 결정을 순서대로 반환한다."""
+        return decisions.pop(0)
+
+    async def fake_sleep(delay: float) -> None:
+        """Sleep 시점에 DB 연결이 반환됐는지 검증한다."""
+        assert active_connections == 0
+        sleeps.append(delay)
+
+    monkeypatch.setattr(batch_runner, "wc_014", fake_reserve)
+    monkeypatch.setattr(batch_runner.asyncio, "sleep", fake_sleep)
+
+    asyncio.run(
+        batch_runner.wait_for_provider_capacity(  # type: ignore[arg-type]
+            _Pool(),
+            policy=_rate_policy(),
+        )
+    )
+
+    assert sleeps == [5]
+    assert active_connections == 0
+
+
 def test_record_job_failure_reports_lease_lost_instead_of_raising() -> None:
     """Lease를 잃어 실패 기록이 거부돼도 예외 대신 lease_lost 결과를 반환한다."""
     # set_system_job_scope, fail_agent_job의 첫 UPDATE가 Row를 못 찾는 상황.
@@ -109,19 +181,55 @@ def test_record_job_failure_returns_next_status_when_recorded() -> None:
     }
 
 
+def test_job_serialization_lock_uses_stable_postgres_advisory_key() -> None:
+    """직렬화 Lock과 Unlock은 같은 문자열 Hash를 사용한다."""
+    connection = _FakeConnection([[{"unlocked": True}]])
+
+    async def run() -> None:
+        """같은 키로 Lock을 획득하고 해제한다."""
+        await batch_runner._lock_job_serialization_key(  # noqa: SLF001
+            connection,  # type: ignore[arg-type]
+            key="personal_wiki_build:user-1",
+        )
+        await batch_runner._unlock_job_serialization_key(  # noqa: SLF001
+            connection,  # type: ignore[arg-type]
+            key="personal_wiki_build:user-1",
+        )
+
+    asyncio.run(run())
+
+    assert len(connection.executed) == 2
+    assert "pg_advisory_lock" in connection.executed[0][0]
+    assert "pg_advisory_unlock" in connection.executed[1][0]
+    assert connection.executed[0][1] == connection.executed[1][1]
+
+
 def test_run_job_batch_processes_each_job_and_isolates_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Batch 러너가 Job별로 성공·실패를 격리해 결과를 누적한다."""
     connection = _FakeConnection()
 
-    class _FakeAsyncConnection:
-        """connect가 고정 연결 대역을 반환하는 psycopg 대체."""
+    class _FakeAsyncConnectionPool:
+        """모든 대여 요청에 고정 연결 대역을 반환하는 Pool 대체."""
 
-        @classmethod
-        async def connect(cls, url: str, *, row_factory: Any = None) -> _FakeConnection:
-            """DB 접속 없이 준비된 연결 대역을 반환한다."""
-            return connection
+        def __init__(self, **kwargs: Any) -> None:
+            """Pool 생성 인자를 허용한다."""
+            self.closed = False
+
+        async def open(self, *, wait: bool = False) -> None:
+            """실제 DB 연결 없이 Pool을 연다."""
+            return None
+
+        @asynccontextmanager
+        async def connection(self) -> AsyncIterator[_FakeConnection]:
+            """준비된 연결 대역을 빌려준다."""
+            yield connection
+
+        async def close(self) -> None:
+            """Pool과 연결이 닫혔음을 기록한다."""
+            self.closed = True
+            await connection.close()
 
     claimed = [_job("job-1"), _job("job-2")]
 
@@ -145,7 +253,9 @@ def test_run_job_batch_processes_each_job_and_isolates_failures(
             raise RuntimeError("일시적 실패")
         return {"content_id": "content-1"}
 
-    monkeypatch.setattr(batch_runner, "AsyncConnection", _FakeAsyncConnection)
+    monkeypatch.setattr(
+        batch_runner, "AsyncConnectionPool", _FakeAsyncConnectionPool
+    )
     monkeypatch.setattr(batch_runner, "set_system_job_scope", fake_scope)
     monkeypatch.setattr(batch_runner, "wc_002", fake_claim)
     monkeypatch.setattr(batch_runner, "wc_006", fake_fail)
