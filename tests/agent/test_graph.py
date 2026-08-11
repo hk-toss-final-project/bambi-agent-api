@@ -1377,7 +1377,18 @@ def test_multi_topic_report_gathers_evidence_per_topic(
     assert generated_with["topic"] == "오늘의 관심사 요약"
     # 두 주제의 근거가 모두 들어간다.
     assert generated_with["contexts"] == ["context-반도체", "context-프로야구"]
-    assert result == {"content_candidate_id": "candidate-1"}
+    assert result["content_candidate_id"] == "candidate-1"
+    # 주제별 근거 단계 건수를 결과에 남긴다. 섹션이 빠졌을 때 어디서 근거를
+    # 잃었는지 서버 로그 없이 확인하려면 이 값이 필요하다(2026-08-11: '폭염'
+    # 섹션이 사라진 원인을 못 찾아 리포트를 네 번 다시 돌렸다).
+    assert [entry["topic"] for entry in result["evidence_trace"]] == [
+        "반도체",
+        "프로야구",
+    ]
+    assert all(
+        set(entry) >= {"gathered", "after_focus", "selected", "picked", "quota"}
+        for entry in result["evidence_trace"]
+    )
 
 
 def test_multi_topic_report_drops_topics_without_evidence(

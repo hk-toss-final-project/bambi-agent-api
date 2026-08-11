@@ -92,6 +92,9 @@ class ReportGenerationState(TypedDict):
     # contexts와 같다. 델타 경로가 주제별로 비교하려면 어느 근거가 어느 주제
     # 몫인지 알아야 한다 — 여러 주제를 묶는 경로에서만 채운다.
     contexts_by_topic: NotRequired[dict[str, list[object]]]
+    # 주제별 근거 단계 건수(수집 → 선별 → 확보). 섹션이 빠졌을 때 어디서
+    # 근거를 잃었는지 작업 결과로 확인하려고 남긴다.
+    evidence_trace: NotRequired[list[dict[str, object]]]
     # 변경점(Delta) 추적 토글. 요청이 켜서 보낼 때만 True이며, 기본값은 꺼짐이라
     # 이 키가 없으면 기존 generate 경로로 그대로 간다(회귀 0).
     change_history_enabled: NotRequired[bool]

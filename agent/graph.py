@@ -1659,6 +1659,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         seen: set[str] = set()
         covered: list[str] = []
         by_topic: dict[str, list[Any]] = {}
+        evidence_trace: list[dict[str, Any]] = []
         live_budget = _MAX_LIVE_COLLECT_TOPICS
         for topic in topics:
             documents, collected_live = await _topic_documents(
@@ -1671,10 +1672,13 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             # 근거를 생성에 넘기기 전에 주제에 해당하는 문장만 남긴다. 기사 하나가
             # 여러 사안을 실으면 본문이 주제 밖 사실까지 옮겨 적는다(2026-08-11
             # 실측: '폭염' 섹션이 같은 기사의 KIA 성적을 그대로 썼다).
+            gathered = len(documents)
             documents = await to_thread(
                 focus_documents_on_topic, topic, documents, model=state["model"]
             )
+            focused = len(documents)
             finalized = await _finalize_contexts(state, documents, max_documents=quota)
+            selected = len(finalized.get("contexts", []))
             picked = 0
             for context in finalized.get("contexts", []):
                 key = str(getattr(context, "reference", None) or context)
@@ -1686,8 +1690,27 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 picked += 1
             if picked:
                 covered.append(topic)
+            # 단계별 건수를 작업 결과에 남긴다. 섹션이 빠졌을 때 어디서 근거를
+            # 잃었는지 서버 로그 없이 확인하려면 이 값이 필요하다(2026-08-11:
+            # '폭염' 섹션이 사라진 원인을 못 찾아 리포트를 네 번 다시 돌렸다).
+            evidence_trace.append(
+                {
+                    "topic": topic,
+                    "gathered": gathered,
+                    "after_focus": focused,
+                    "selected": selected,
+                    "picked": picked,
+                    "quota": quota,
+                    "collected_live": collected_live,
+                }
+            )
             logger.info(
-                "주제별 근거 배정: topic=%s 몫=%d건 확보=%d건", topic, quota, picked
+                "주제별 근거 배정: topic=%s 몫=%d건 수집=%d건 선별후=%d건 확보=%d건",
+                topic,
+                quota,
+                gathered,
+                focused,
+                picked,
             )
         if not merged:
             raise RuntimeError("여러 주제 리포트에 쓸 근거를 한 건도 모으지 못했습니다.")
@@ -1704,6 +1727,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             "contexts": merged,
             "covered_topics": covered,
             "contexts_by_topic": by_topic,
+            "evidence_trace": evidence_trace,
         }
 
     async def _finalize_contexts(
@@ -2065,7 +2089,14 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 payload={"implementation": lambda: dict(completed.data)},
             )
         )
-        return {"result": dict(safeguarded.data)}
+        result = dict(safeguarded.data)
+        # 주제별 근거 단계 건수를 결과에 실어 GET /jobs/{id}/result로 읽게 한다.
+        # 서버 로그에 접근하지 않고도 어느 주제가 어느 단계에서 근거를 잃었는지
+        # 확인할 수 있어야 한다.
+        trace = state.get("evidence_trace")
+        if trace:
+            result["evidence_trace"] = list(trace)
+        return {"result": result}
 
     graph = StateGraph(ReportGenerationState)
     graph.add_node("research", research)
