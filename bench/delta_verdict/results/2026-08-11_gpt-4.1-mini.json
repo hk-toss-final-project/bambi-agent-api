@@ -1,0 +1,312 @@
+[
+  {
+    "id": "dup_particle_only",
+    "category": "duplicate",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 0,
+    "duplicate_count": 1,
+    "unstable_attributes": [],
+    "attributes": [],
+    "diff_attempts": 1,
+    "input_tokens": 3986,
+    "output_tokens": 321,
+    "latency_ms": 9214
+  },
+  {
+    "id": "dup_expanded",
+    "category": "duplicate",
+    "passed": false,
+    "failures": [
+      "갱신이 1건 나왔다(허용 0건). 재서술을 변경으로 판정했다."
+    ],
+    "updated_count": 1,
+    "new_count": 0,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "당첨금 자동 입금 제도"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 4809,
+    "output_tokens": 681,
+    "latency_ms": 16618
+  },
+  {
+    "id": "dup_summarized",
+    "category": "duplicate",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 0,
+    "duplicate_count": 1,
+    "unstable_attributes": [],
+    "attributes": [],
+    "diff_attempts": 1,
+    "input_tokens": 3855,
+    "output_tokens": 289,
+    "latency_ms": 7899
+  },
+  {
+    "id": "dup_identical_rebroadcast",
+    "category": "duplicate",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 0,
+    "duplicate_count": 1,
+    "unstable_attributes": [],
+    "attributes": [],
+    "diff_attempts": 1,
+    "input_tokens": 3888,
+    "output_tokens": 191,
+    "latency_ms": 9142
+  },
+  {
+    "id": "dup_reordered",
+    "category": "duplicate",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 4,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "1등 당첨자 수",
+      "1등 당첨금",
+      "2등 당첨자 수",
+      "당첨금 지급 시작 시점"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 8038,
+    "output_tokens": 917,
+    "latency_ms": 29498
+  },
+  {
+    "id": "dup_status_without_numbers",
+    "category": "duplicate",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 0,
+    "duplicate_count": 1,
+    "unstable_attributes": [],
+    "attributes": [],
+    "diff_attempts": 1,
+    "input_tokens": 3798,
+    "output_tokens": 202,
+    "latency_ms": 6861
+  },
+  {
+    "id": "upd_date_changed",
+    "category": "updated",
+    "passed": true,
+    "failures": [],
+    "updated_count": 1,
+    "new_count": 0,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "미수령 당첨금 자동 지급 시행일"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 4558,
+    "output_tokens": 531,
+    "latency_ms": 13468
+  },
+  {
+    "id": "upd_number_changed",
+    "category": "updated",
+    "passed": false,
+    "failures": [
+      "갱신이 0건뿐이다(최소 1건). 진짜 변경을 놓쳤다."
+    ],
+    "updated_count": 0,
+    "new_count": 3,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "등락률",
+      "외국인 순매수 추세",
+      "거래대금"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 4649,
+    "output_tokens": 764,
+    "latency_ms": 16201
+  },
+  {
+    "id": "upd_status_flipped_same_date",
+    "category": "updated",
+    "passed": true,
+    "failures": [],
+    "updated_count": 1,
+    "new_count": 0,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "미수령 당첨금 자동 지급 제도 시행 일정"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 4506,
+    "output_tokens": 509,
+    "latency_ms": 12066
+  },
+  {
+    "id": "upd_amount_changed",
+    "category": "updated",
+    "passed": true,
+    "failures": [],
+    "updated_count": 1,
+    "new_count": 0,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "반도체 지원 예산"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 4470,
+    "output_tokens": 502,
+    "latency_ms": 11208
+  },
+  {
+    "id": "new_first_run",
+    "category": "new",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 5,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "양산 일정",
+      "시제품 검증 상태",
+      "공급 협의 상태",
+      "경쟁사 대비 양산 일정",
+      "초기 물량 배정 용도"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 2882,
+    "output_tokens": 1085,
+    "latency_ms": 20513
+  },
+  {
+    "id": "new_unrelated_to_base",
+    "category": "new",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 1,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "판매점 수수료율"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 4517,
+    "output_tokens": 494,
+    "latency_ms": 11860
+  },
+  {
+    "id": "attr_lottery_round_label",
+    "category": "attribute",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 6,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "1등 당첨자 수",
+      "1등 당첨금액",
+      "2등 당첨자 수",
+      "3등 당첨자 수",
+      "지급 시작 시점",
+      "지급 기한"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 2973,
+    "output_tokens": 1187,
+    "latency_ms": 21688
+  },
+  {
+    "id": "attr_quarterly_earnings_label",
+    "category": "attribute",
+    "passed": false,
+    "failures": [
+      "이름표에 시점·순번이 박혔다: ['3분기 영업이익', '3분기 매출', '4분기 실적 전망']"
+    ],
+    "updated_count": 0,
+    "new_count": 4,
+    "duplicate_count": 0,
+    "unstable_attributes": [
+      "3분기 영업이익",
+      "3분기 매출",
+      "4분기 실적 전망"
+    ],
+    "attributes": [
+      "3분기 영업이익",
+      "3분기 매출",
+      "실적 개선 원인",
+      "4분기 실적 전망"
+    ],
+    "diff_attempts": 2,
+    "input_tokens": 5842,
+    "output_tokens": 1860,
+    "latency_ms": 35112
+  },
+  {
+    "id": "mixed_language_updated",
+    "category": "updated",
+    "passed": true,
+    "failures": [],
+    "updated_count": 1,
+    "new_count": 0,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "양산 일정"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 4546,
+    "output_tokens": 537,
+    "latency_ms": 18326
+  },
+  {
+    "id": "long_multi_fact_no_change",
+    "category": "duplicate",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 3,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "온라인 구매 한도",
+      "판매점 수수료율",
+      "청소년 구매 차단 본인 확인 절차"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 5368,
+    "output_tokens": 1098,
+    "latency_ms": 32130
+  },
+  {
+    "id": "vague_timing_new",
+    "category": "new",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 1,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "전기차 구매 보조금 체계 개편 검토"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 2572,
+    "output_tokens": 623,
+    "latency_ms": 13520
+  }
+]

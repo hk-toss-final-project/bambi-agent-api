@@ -68,9 +68,20 @@ def _new_fact() -> DiffFact:
 
 
 def _patch_base(
-    monkeypatch: pytest.MonkeyPatch, facts: dict[str, ChangeHistoryFact]
+    monkeypatch: pytest.MonkeyPatch,
+    facts: dict[str, ChangeHistoryFact],
+    *,
+    active: list[ChangeHistoryFact] | None = None,
 ) -> None:
-    """DB의 과거 팩트 조회를 고정 사전으로 대체한다."""
+    """DB의 과거 팩트 조회를 고정 사전으로 대체한다.
+
+    Args:
+        monkeypatch: 조회 함수를 대체할 fixture
+        facts: ID로 조회될 과거 팩트
+        active: (subject, attribute) 매칭에 쓰일 활성 과거 팩트. 생략하면
+            `facts`에 담긴 것이 곧 활성 팩트다.
+    """
+    active_facts = list(facts.values()) if active is None else active
 
     async def fake_load(connection: Any, **kwargs: Any) -> dict[str, ChangeHistoryFact]:
         """지정한 팩트만 존재하는 DB를 흉내낸다."""
@@ -80,10 +91,15 @@ def _patch_base(
             if fact_id in set(kwargs["fact_ids"])
         }
 
+    async def fake_list(connection: Any, **kwargs: Any) -> list[ChangeHistoryFact]:
+        """활성 과거 팩트 목록 조회를 흉내낸다."""
+        return list(active_facts)
+
     async def fake_scope(connection: Any, *, user_id: str) -> None:
         """RLS Scope 설정을 생략한다."""
 
     monkeypatch.setattr(validation_module, "load_change_history_facts_by_ids", fake_load)
+    monkeypatch.setattr(validation_module, "list_change_history_facts", fake_list)
     monkeypatch.setattr(validation_module, "set_personal_wiki_scope", fake_scope)
 
 
@@ -362,5 +378,245 @@ def test_updated_fact_with_same_value_is_filtered_out(
     assert [problem.reason for problem in outcome.problems] == [
         "updated_value_unchanged"
     ]
+    # 코드가 이미 duplicate로 결론을 냈으므로 워커 재작업을 유발하지 않는다.
+    assert outcome.failed_workers == frozenset()
+
+
+def test_restated_updated_fact_is_filtered_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """조사만 붙은 재서술은 걸러낸다 (2026-08-11 운영 DB 실측 오탐)."""
+    _patch_base(
+        monkeypatch,
+        {
+            "fact-1": ChangeHistoryFact(
+                fact_id="fact-1",
+                subject="로또",
+                attribute="미수령 당첨금 자동 지급 시스템",
+                fact_value="오는 18일부터 시행된다.",
+                statement="로또 미수령 당첨금 자동 지급 시스템이 18일부터 시행된다.",
+                verdict="new",
+            )
+        },
+    )
+    restated = DiffFact(
+        verdict="updated",
+        subject="로또",
+        attribute="미수령 당첨금 자동 지급 시스템",
+        fact_value="18일부터 시행된다.",
+        today_statement="로또 당첨금 자동 입금 시스템이 오는 18일부터 시행된다.",
+        updates_fact_id="fact-1",
+        source_reference="G1",
+    )
+
+    outcome = _run([restated], [])
+
+    assert outcome.facts == ()
+    assert [problem.reason for problem in outcome.problems] == [
+        "updated_value_unchanged"
+    ]
+    # 재서술 억제가 diff·compose·impact 재작업을 유발하면 안 된다(호출 3회 낭비).
+    assert outcome.failed_workers == frozenset()
+
+
+def test_updated_fact_with_changed_number_still_passes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """수치가 실제로 달라진 갱신은 억제하지 않는다."""
+    _patch_base(
+        monkeypatch,
+        {
+            "fact-1": ChangeHistoryFact(
+                fact_id="fact-1",
+                subject="로또",
+                attribute="미수령 당첨금 자동 지급 시스템",
+                fact_value="오는 18일부터 시행된다.",
+                statement="로또 미수령 당첨금 자동 지급 시스템이 18일부터 시행된다.",
+                verdict="new",
+            )
+        },
+    )
+    changed = DiffFact(
+        verdict="updated",
+        subject="로또",
+        attribute="미수령 당첨금 자동 지급 시스템",
+        fact_value="오는 25일부터 시행된다.",
+        today_statement="로또 당첨금 자동 입금 시스템이 25일로 미뤄졌다.",
+        updates_fact_id="fact-1",
+        source_reference="G1",
+    )
+
+    outcome = _run([changed], [])
+
+    assert len(outcome.facts) == 1
+    assert outcome.facts[0].before_value == "오는 18일부터 시행된다."
+    assert outcome.problems == ()
+
+
+def test_attribute_with_drifting_value_is_reported_but_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """회차가 박힌 이름표는 재작업 대상으로 알리되 팩트는 버리지 않는다."""
+    _patch_base(monkeypatch, {})
+    fact = DiffFact(
+        verdict="new",
+        subject="로또",
+        attribute="제1237회",
+        fact_value="1등 당첨번호가 발표됐다.",
+        today_statement="로또 제1237회 1등 당첨번호가 발표됐다.",
+        source_reference="G1",
+    )
+
+    outcome = _run([fact], [])
+
+    # 내용은 멀쩡하므로 살린다 — 이름표만 다시 붙이면 된다.
+    assert len(outcome.facts) == 1
+    assert [problem.reason for problem in outcome.problems] == [
+        "attribute_contains_drifting_value"
+    ]
     assert outcome.failed_workers == frozenset({DIFF_WORKER})
+
+
+def test_new_fact_matching_a_past_label_is_promoted_to_updated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """과거와 같은 (subject, attribute)인데 new로 찍힌 팩트를 갱신으로 되돌린다.
+
+    2026-08-11 실측: diff worker가 코스닥/등락률 과거 값을 도구로 받아 놓고도
+    오늘 값을 updates_fact_id 없이 new로 찍어, 변화가 사용자에게 안 보였다.
+    """
+    base = ChangeHistoryFact(
+        fact_id="fact-1",
+        subject="코스닥",
+        attribute="등락률",
+        fact_value="3거래일 만에 21% 급등",
+        statement="코스닥 지수가 3거래일 만에 21% 급등했다.",
+        verdict="new",
+    )
+    _patch_base(monkeypatch, {"fact-1": base})
+    mislabeled = DiffFact(
+        verdict="new",
+        subject="코스닥",
+        attribute="등락률",
+        fact_value="5거래일 만에 30% 넘게 상승",
+        today_statement="코스닥 지수가 5거래일 만에 30% 넘게 뛰었다.",
+        source_reference="G1",
+    )
+
+    outcome = _run([mislabeled], [])
+
+    assert len(outcome.facts) == 1
+    assert outcome.facts[0].fact.verdict == "updated"
+    assert outcome.facts[0].fact.updates_fact_id == "fact-1"
+    assert outcome.facts[0].before_value == "3거래일 만에 21% 급등"
+    assert outcome.problems == ()
+
+
+def test_promoted_fact_with_unchanged_value_is_then_filtered_as_duplicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """승격된 팩트의 값이 그대로면 이어지는 재서술 억제가 걸러낸다.
+
+    승격이 없으면 같은 사실이 매번 새 소식으로 쌓인다. 승격만 하고 억제가 안
+    걸리면 이번엔 거짓 변경으로 나간다. 두 검사가 이어져야 옳다.
+    """
+    base = ChangeHistoryFact(
+        fact_id="fact-1",
+        subject="로또",
+        attribute="미수령 당첨금 자동 지급 시스템",
+        fact_value="18일부터 시행된다.",
+        statement="로또 미수령 당첨금 자동 지급 시스템이 18일부터 시행된다.",
+        verdict="new",
+    )
+    _patch_base(monkeypatch, {"fact-1": base})
+    restated_as_new = DiffFact(
+        verdict="new",
+        subject="로또",
+        attribute="미수령 당첨금 자동 지급 시스템",
+        fact_value="오는 18일부터 시행된다.",
+        today_statement="로또 당첨금 자동 지급이 오는 18일부터 시행된다.",
+        source_reference="G1",
+    )
+
+    outcome = _run([restated_as_new], [])
+
+    assert outcome.facts == ()
+    assert [problem.reason for problem in outcome.problems] == [
+        "updated_value_unchanged"
+    ]
+
+
+def test_new_fact_without_a_matching_label_stays_new(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """과거에 같은 이름표가 없으면 그대로 신규다(엉뚱한 갱신을 만들지 않는다)."""
+    base = ChangeHistoryFact(
+        fact_id="fact-1",
+        subject="로또",
+        attribute="미수령 당첨금 자동 지급 시스템",
+        fact_value="18일부터 시행된다.",
+        statement="로또 미수령 당첨금 자동 지급 시스템이 18일부터 시행된다.",
+        verdict="new",
+    )
+    _patch_base(monkeypatch, {"fact-1": base})
+    unrelated = DiffFact(
+        verdict="new",
+        subject="로또",
+        attribute="판매점 수수료율",
+        fact_value="5%에서 5.5%로 인상",
+        today_statement="복권 판매점 수수료율이 5%에서 5.5%로 오른다.",
+        source_reference="G1",
+    )
+
+    outcome = _run([unrelated], [])
+
+    assert len(outcome.facts) == 1
+    assert outcome.facts[0].fact.verdict == "new"
+    assert outcome.facts[0].fact.updates_fact_id is None
+
+
+def test_promotion_matches_labels_case_and_space_insensitively() -> None:
+    """대소문자·앞뒤 공백만 흡수하고, 뜻이 다른 이름표는 잇지 않는다."""
+    base = ChangeHistoryFact(
+        fact_id="fact-1",
+        subject="B사 HBM4",
+        attribute="양산 일정",
+        fact_value="2026년 2분기",
+        statement="B사 HBM4 양산 일정은 2026년 2분기다.",
+        verdict="new",
+    )
+    spaced = DiffFact(
+        verdict="new",
+        subject="  B사 HBM4 ",
+        attribute="양산 일정 ",
+        fact_value="2026년 3분기",
+        today_statement="양산이 2026년 3분기로 밀렸다.",
+    )
+    different = DiffFact(
+        verdict="new",
+        subject="B사 HBM4",
+        attribute="생산 개시 시점",
+        fact_value="2026년 3분기",
+        today_statement="생산 개시가 2026년 3분기다.",
+    )
+
+    promoted, count = validation_module.promote_mislabeled_new_facts(
+        [spaced, different], [base]
+    )
+
+    assert count == 1
+    assert promoted[0].verdict == "updated"
+    assert promoted[0].updates_fact_id == "fact-1"
+    # 뜻은 같아도 표현이 다른 이름표까지 코드가 잇지는 않는다 — LLM의 몫이다.
+    assert promoted[1].verdict == "new"
+
+
+def test_stable_attribute_is_not_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    """정상 이름표는 문제로 잡지 않는다(불필요한 재작업 방지)."""
+    _patch_base(monkeypatch, {})
+
+    outcome = _run([_new_fact()], [])
+
+    assert outcome.problems == ()
+    assert outcome.failed_workers == frozenset()
 

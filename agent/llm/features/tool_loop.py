@@ -76,8 +76,9 @@ class ToolLoopResult:
     Attributes:
         text: LLM의 최종 응답 텍스트
         calls: 실행한 도구 호출 기록(순서 보존)
-        stop_reason: "final"(LLM이 도구를 더 안 부름) 또는
-            "max_iterations"(반복 상한에 걸려 중단)
+        stop_reason: "final"(LLM이 도구를 더 안 부름), "forced_final"(반복 상한에
+            걸려 도구 없이 한 번 더 물어 답을 받아냄), 또는 "max_iterations"
+            (그마저 실패해 답을 얻지 못함)
         input_tokens: 누적 입력 토큰
         output_tokens: 누적 출력 토큰
     """
@@ -165,6 +166,13 @@ async def run_tool_loop(
     LLM이 도구 호출을 요청하면 실행해 결과를 대화에 덧붙이고 다시 묻는다.
     도구를 더 부르지 않으면 그 응답을 최종 답변으로 본다.
 
+    **반복 상한에 걸려도 빈손으로 돌아가지 않는다.** 도구만 부르다 상한을 채우면
+    지금까지의 관찰을 다 모아 놓고도 결과를 하나도 못 건진다 — 실측에서 같은
+    사실 하나를 여러 번 다른 말로 재검색하다 상한을 채워 최종 응답 자체가
+    없어진 사례가 나왔다(2026-08-11, `dup_reordered` 벤치 케이스). 상한에 걸리면
+    도구 없이 한 번 더 묻는다. 도구가 없으면 모델이 텍스트로 답할 수밖에 없어,
+    지금까지의 관찰을 근거로 답을 강제로 받아낼 수 있다.
+
     Args:
         system_prompt: 역할과 도구 사용 지침
         user_prompt: 이번에 해결할 과제. 공백뿐이면 호출 없이 빈 결과 반환
@@ -184,7 +192,10 @@ async def run_tool_loop(
         return ToolLoopResult(text="")
 
     tools_by_name = {tool.name: tool for tool in tools}
-    client = _get_client(model, temperature, timeout_seconds)
+    # 반복 상한에 걸렸을 때 도구 없이 한 번 더 물을 원본 클라이언트를 남겨 둔다.
+    # bind_tools는 새 객체를 돌려주므로, tools 유무와 무관하게 이 참조는 그대로다.
+    raw_client = _get_client(model, temperature, timeout_seconds)
+    client = raw_client
     if tools:
         client = client.bind_tools([_to_openai_schema(tool) for tool in tools])
 
@@ -235,8 +246,24 @@ async def run_tool_loop(
             )
             messages.append(_tool_message(observation, tool_call.get("id")))
     else:
-        # 상한까지 도구만 부르고 끝났다. 마지막 응답 텍스트라도 살려 둔다.
+        # 상한까지 도구만 부르고 끝났다. 도구를 뗀 채로 한 번 더 물어 지금까지의
+        # 관찰만으로 답을 강제로 받아낸다 — 안 그러면 관찰을 다 모아 놓고도
+        # 결과를 통째로 잃는다.
         logger.warning("도구 루프가 %d회 반복 상한에 도달했습니다.", max_iterations)
+        if tools:
+            response = await _invoke_with_retry(raw_client, messages, max_attempts)
+            usage = getattr(response, "usage_metadata", None) or {}
+            input_tokens += int(usage.get("input_tokens") or 0)
+            output_tokens += int(usage.get("output_tokens") or 0)
+            record_llm_call_observation(
+                model=model,
+                input_tokens=int(usage.get("input_tokens") or 0),
+                output_tokens=int(usage.get("output_tokens") or 0),
+                value=response,
+            )
+            text = str(response.content).strip()
+            if text:
+                stop_reason = "forced_final"
 
     return ToolLoopResult(
         text=text,
