@@ -1389,6 +1389,11 @@ def test_multi_topic_report_gathers_evidence_per_topic(
         set(entry) >= {"gathered", "after_focus", "selected", "picked", "quota"}
         for entry in result["evidence_trace"]
     )
+    # 단계별 소요 시간도 함께 남긴다. 3주제 리포트가 1615초 걸렸는데 본문 생성은
+    # 5.2초였다 — 나머지가 어디로 갔는지 이 값으로 가른다.
+    assert all(
+        "total" in entry["elapsed_ms"] for entry in result["evidence_trace"]
+    )
 
 
 def test_multi_topic_report_drops_topics_without_evidence(

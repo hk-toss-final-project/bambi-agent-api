@@ -1502,7 +1502,11 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         return {"contexts": contexts}
 
     async def _topic_documents(
-        state: ReportGenerationState, topic: str, *, allow_live: bool
+        state: ReportGenerationState,
+        topic: str,
+        *,
+        allow_live: bool,
+        timings: dict[str, int] | None = None,
     ) -> tuple[list[Any], bool]:
         """주제 하나가 쓸 근거 문서를 모은다(여러 주제를 묶는 경로 전용).
 
@@ -1532,6 +1536,17 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         )
         if researched:
             return researched, False
+
+        def _record(stage: str, since: float) -> None:
+            """단계별 소요 시간을 밀리초로 기록한다.
+
+            어디서 시간이 가는지 서버 로그 없이 확인하려고 남긴다(2026-08-11
+            실측: 3주제 리포트가 1615초 걸렸는데 본문 생성은 5.2초였다).
+            """
+            if timings is not None:
+                timings[stage] = int((monotonic() - since) * 1000)
+
+        search_started = monotonic()
         topic_bundle = _topic_bundle(state, topic)
         pinned_wiki = (
             (
@@ -1595,6 +1610,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                         for document in hybrid
                     ],
                 )
+        _record("search", search_started)
         intents = state.get("topic_intents") or {}
         topic_intent = str(intents.get(topic) or "news")
         # 단일 주제 경로와 같은 하한을 쓴다. 여기에만 하한이 없으면 0점짜리
@@ -1612,9 +1628,12 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         stored = [*select_personal_documents(hybrid), *pool_documents]
         # 단일 주제 경로와 같은 판정이다 — 창고에 확실히 쓸 만한 자료가 있으면
         # 외부 수집을 건너뛴다. 대부분의 주제가 여기서 끝난다.
-        if is_pool_sufficient(pool_documents) and await to_thread(
+        relevance_started = monotonic()
+        pool_is_usable = is_pool_sufficient(pool_documents) and await to_thread(
             is_pool_relevant, topic, pool_documents
-        ):
+        )
+        _record("relevance", relevance_started)
+        if pool_is_usable:
             return stored, False
         if not allow_live:
             logger.info(
@@ -1625,11 +1644,14 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         # 리포트에 코스닥시장 기사가 안 걸리는데, 그 연결은 Wiki Builder가 이미
         # 저장해 둔 것이다. 수집을 실제로 돌 때만 조회한다 — 건너뛸 거면 DB 왕복이
         # 낭비다. 이미 매칭된 묶음이 있으면 그 이웃 키워드를 그대로 쓴다.
+        keywords_started = monotonic()
         related_keywords = (
             bundle_keywords[1:]
             if topic_bundle
             else await load_related_keywords(state["user_id"], topic)
         )
+        _record("related_keywords", keywords_started)
+        live_started = monotonic()
         live = await to_thread(
             collect_live_context,
             topic,
@@ -1637,6 +1659,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             model=state["model"],
             related_keywords=related_keywords,
         )
+        _record("live_collect", live_started)
         logger.info(
             "주제별 실시간 수집: topic=%s %d건 (이웃 키워드 %d개)",
             topic,
@@ -1662,8 +1685,10 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         evidence_trace: list[dict[str, Any]] = []
         live_budget = _MAX_LIVE_COLLECT_TOPICS
         for topic in topics:
+            elapsed: dict[str, int] = {}
+            topic_started = monotonic()
             documents, collected_live = await _topic_documents(
-                state, topic, allow_live=live_budget > 0
+                state, topic, allow_live=live_budget > 0, timings=elapsed
             )
             # 창고로 해결된 주제는 예산을 쓰지 않는다. 무조건 깎으면 앞 주제들이
             # 수집을 한 번도 안 했는데도 뒤쪽 주제가 예산 부족으로 못 돈다.
@@ -1673,11 +1698,15 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             # 여러 사안을 실으면 본문이 주제 밖 사실까지 옮겨 적는다(2026-08-11
             # 실측: '폭염' 섹션이 같은 기사의 KIA 성적을 그대로 썼다).
             gathered = len(documents)
+            focus_started = monotonic()
             documents = await to_thread(
                 focus_documents_on_topic, topic, documents, model=state["model"]
             )
+            elapsed["focus"] = int((monotonic() - focus_started) * 1000)
             focused = len(documents)
+            finalize_started = monotonic()
             finalized = await _finalize_contexts(state, documents, max_documents=quota)
+            elapsed["finalize"] = int((monotonic() - finalize_started) * 1000)
             selected = len(finalized.get("contexts", []))
             picked = 0
             for context in finalized.get("contexts", []):
@@ -1702,15 +1731,21 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                     "picked": picked,
                     "quota": quota,
                     "collected_live": collected_live,
+                    "elapsed_ms": {
+                        **elapsed,
+                        "total": int((monotonic() - topic_started) * 1000),
+                    },
                 }
             )
             logger.info(
-                "주제별 근거 배정: topic=%s 몫=%d건 수집=%d건 선별후=%d건 확보=%d건",
+                "주제별 근거 배정: topic=%s 몫=%d건 수집=%d건 선별후=%d건 확보=%d건 %dms %s",
                 topic,
                 quota,
                 gathered,
                 focused,
                 picked,
+                int((monotonic() - topic_started) * 1000),
+                elapsed,
             )
         if not merged:
             raise RuntimeError("여러 주제 리포트에 쓸 근거를 한 건도 모으지 못했습니다.")
