@@ -59,7 +59,7 @@ def _changed_line(item: ValidatedFact) -> str:
     marker = f" [{fact.source_reference}]" if fact.source_reference else ""
     before = item.before_value or "(이전 값 없음)"
     return (
-        f"- (기존) ~~{before}~~\n"
+        f"  (기존) ~~{before}~~\n"
         f"  (변경) `{fact.today_statement}`{marker}"
     )
 

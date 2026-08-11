@@ -35,7 +35,7 @@ logger = logging.getLogger("agent.change_history.diff")
 
 type DictRow = dict[str, Any]
 
-DIFF_MAX_ITERATIONS = 6
+DIFF_MAX_ITERATIONS = 4
 _CONTEXT_SNIPPET_CHARS = 1200
 _MAX_CONTEXT_CHARS = 14000
 _VERDICTS = {NEW, UPDATED, DUPLICATE}

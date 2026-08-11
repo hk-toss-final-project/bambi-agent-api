@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -236,30 +237,88 @@ def collect_documents(
     Returns:
         (문서 목록, 실패 목록[{source, error}])
     """
+def _collect_one_query(
+    query: str,
+    now: datetime,
+    window_hours: float,
+    concurrency: int,
+) -> tuple[str, list[dict[str, object]], list[dict[str, str]]]:
+    """검색어 하나에 대해 소스 수집기들을 부르고 실패를 개별 격리한다.
+
+    뉴스 Provider 429 차단 방지를 위해 0.1초의 미세 딜레이(Backoff Delay)를 가진다.
+    """
+    time.sleep(0.1)
+    collectors = (
+        ("뉴스", lambda: _news_documents(query, now)),
+        ("YouTube", lambda: _youtube_documents(query, now, window_hours)),
+        ("Reddit", lambda: _reddit_documents(query, now, window_hours)),
+    )
+    query_docs: list[dict[str, object]] = []
+    query_failures: list[dict[str, str]] = []
+    try:
+        for label, collected, error in _collect_sources(collectors, concurrency):
+            if error:
+                query_failures.append({"source": label, "error": error})
+            else:
+                query_docs.extend(collected)
+    except Exception as error:  # Fault Isolation
+        logger.warning("검색어 수집 중 예외 발생 (격리됨, query=%s): %s", query, error)
+        query_failures.append({"source": "query", "error": str(error)})
+    return query, query_docs, query_failures
+
+
+def collect_documents(
+    queries: Sequence[str],
+    *,
+    now: datetime,
+    window_hours: float,
+) -> tuple[list[dict[str, object]], list[dict[str, str]]]:
+    """세 소스(뉴스·YouTube·Reddit)를 검색어마다 호출해 후보 문서를 모은다.
+
+    검색어가 여러 개인 경우(Top 3 연관 태그 확장), 외부 뉴스 API 차단(HTTP 429)을
+    방지하도록 최대 2개 워커(max_workers=2)로 제한하여 동시 수집한다.
+    검색어 간 0.1초 백오프 딜레이와 실패 격리를 통해 안전하게 수집 속도를 단축한다.
+
+    Returns:
+        (문서 목록, 실패 목록[{source, error}])
+    """
     docs: list[dict[str, object]] = []
     failures: list[dict[str, str]] = []
     seen_keys: set[str] = set()
     failed_sources: set[str] = set()
     concurrency = config.source_collect_concurrency()
-    for query in queries:
-        collectors = (
-            ("뉴스", lambda q=query: _news_documents(q, now)),
-            ("YouTube", lambda q=query: _youtube_documents(q, now, window_hours)),
-            ("Reddit", lambda q=query: _reddit_documents(q, now, window_hours)),
-        )
-        for label, collected, error in _collect_sources(collectors, concurrency):
-            if error:
-                if label not in failed_sources:
-                    failed_sources.add(label)
-                    failures.append({"source": label, "error": error})
-                continue
-            for doc in collected:
-                key = str(doc.get("url_key") or doc.get("url") or "").strip()
-                if key:
-                    if key in seen_keys:
-                        continue
-                    seen_keys.add(key)
-                docs.append(doc)
+
+    if len(queries) <= 1:
+        raw_results = [
+            _collect_one_query(q, now, window_hours, concurrency)
+            for q in queries
+        ]
+    else:
+        with ThreadPoolExecutor(max_workers=min(2, len(queries))) as executor:
+            futures = [
+                executor.submit(_collect_one_query, q, now, window_hours, concurrency)
+                for q in queries
+            ]
+            raw_results = []
+            for future in futures:
+                try:
+                    raw_results.append(future.result())
+                except Exception as error:  # Fault Isolation
+                    logger.warning("검색어 동시 수집 개별 처리 실패 (격리됨): %s", error)
+
+    for _query, query_docs, query_failures in raw_results:
+        for fail in query_failures:
+            label = fail.get("source", "")
+            if label and label not in failed_sources:
+                failed_sources.add(label)
+                failures.append(fail)
+        for doc in query_docs:
+            key = str(doc.get("url_key") or doc.get("url") or "").strip()
+            if key:
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+            docs.append(doc)
     return docs, failures
 
 
