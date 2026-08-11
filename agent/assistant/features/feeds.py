@@ -256,15 +256,10 @@ def article_body_offset(markdown: str, title: str) -> int:
     Returns:
         본문 시작 위치(문자 인덱스). 제목을 찾지 못하면 0.
     """
-    import re
+    from infrastructure.sources.connectors.api import find_article_body_offset
 
-    letters = re.findall(r"[0-9A-Za-z가-힣]", title)[:12]
-    # 글자가 너무 적으면 우연히 메뉴에 걸릴 수 있어 시도하지 않는다.
-    if len(letters) < 6:
-        return 0
-    pattern = r"[^0-9A-Za-z가-힣]{0,4}".join(re.escape(c) for c in letters)
-    match = re.search(pattern, markdown)
-    return match.start() if match else 0
+    offset = find_article_body_offset(markdown, title)
+    return offset if offset is not None else 0
 
 
 def clean_article_body(markdown: str, max_chars: int = 2000, *, title: str = "") -> str:

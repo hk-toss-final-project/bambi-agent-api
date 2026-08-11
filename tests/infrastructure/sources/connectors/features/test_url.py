@@ -3,6 +3,7 @@
 import httpx
 import pytest
 
+from infrastructure.sources.connectors.features import url as url_connector
 from infrastructure.sources.connectors.features.url import (
     JinaReadError,
     fetch_url_via_jina,
@@ -151,15 +152,68 @@ def test_fetch_url_raw_via_jina_returns_full_text_with_headers() -> None:
 def test_parse_jina_reader_response_extracts_content_image() -> None:
     """구조화 파서는 로고를 건너뛰고 기사 본문 대표 이미지를 보존한다."""
     raw = (
-        "Title: 제목\nURL Source: https://news.example/1\n"
+        "Title: 뉴스 기사 본문 제목\nURL Source: https://news.example/1\n"
         "Image 1: https://cdn.example/logo.png\n"
         "Markdown Content:\n"
+        "# 뉴스 기사 본문 제목\n"
         "![대표](https://cdn.example/photos/hero-1280.webp)\n본문입니다."
     )
 
     result = parse_jina_reader_response(raw, requested_url="https://news.example/1")
 
     assert result.image_url == "https://cdn.example/photos/hero-1280.webp"
+
+
+def test_parse_jina_reader_response_prefers_image_after_article_title() -> None:
+    """뉴스 메뉴 이미지가 먼저 있어도 기사 제목 뒤의 본문 사진을 선택한다."""
+    raw = (
+        "Title: 자연·건축·웰니스·미식, 다낭의 또 다른 휴양법\n"
+        "URL Source: https://news.example/danang\n"
+        "Markdown Content:\n"
+        "![광고](https://menu.example/news/banner/advertisement.jpg)\n"
+        "![로고](https://news.example/images/logo2024.png)\n"
+        "![검색](https://news.example/images/ico_search.png)\n"
+        "분야별 뉴스와 메뉴\n"
+        "# 자연·건축·웰니스·미식, 다낭의 또 다른 휴양법\n"
+        "![메인 로비](https://cdn.example/2026/danang-hero.jpg?rnd=1)\n"
+        "다낭 리조트의 본문입니다."
+    )
+
+    result = parse_jina_reader_response(raw, requested_url="https://news.example/danang")
+
+    assert result.image_url == "https://cdn.example/2026/danang-hero.jpg?rnd=1"
+
+
+def test_parse_jina_reader_response_returns_no_image_without_title_anchor() -> None:
+    """기사 제목을 본문에서 찾지 못하면 메뉴 이미지를 대표 사진으로 쓰지 않는다."""
+    raw = (
+        "Title: 찾을 수 없는 기사 제목\n"
+        "Markdown Content:\n"
+        "![광고](https://menu.example/news/banner/advertisement.jpg)\n"
+        "![검색](https://news.example/images/ico_search.png)\n"
+        "메뉴만 수집된 응답"
+    )
+
+    result = parse_jina_reader_response(raw, requested_url="https://news.example/broken")
+
+    assert result.image_url is None
+
+
+def test_probable_content_image_rejects_page_chrome_assets() -> None:
+    """배너·아이콘·검색 버튼 URL은 본문 이미지 후보로 인정하지 않는다."""
+    rejected = [
+        "https://menu.example/news/banner/advertisement.jpg",
+        "https://news.example/images/ico_search.png",
+        "https://news.example/images/btn_more.png",
+        "https://news.example/images/arrow_down.png",
+    ]
+
+    assert all(
+        not url_connector.is_probable_content_image_url(url) for url in rejected
+    )
+    assert url_connector.is_probable_content_image_url(
+        "https://cdn.example/2026/danang-hero.jpg?rnd=1"
+    )
 
 
 def test_parse_jina_reader_response_ignores_unsafe_image_url() -> None:

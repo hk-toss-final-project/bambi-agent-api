@@ -176,13 +176,17 @@ def test_extract_jina_image_returns_none_when_no_image() -> None:
 
 
 def test_fetch_article_image_reads_and_extracts_jina_image(monkeypatch) -> None:
-    """기사 이미지 조회는 Jina 원문에서 대표 이미지 한 건만 반환한다."""
+    """기사 이미지 조회는 메뉴 배너보다 제목 뒤 본문 사진을 반환한다."""
     monkeypatch.setattr(
         feeds,
         "jina_read",
         lambda url: (
-            "Image 1: https://cdn.example/danang.jpg\n"
-            "Markdown Content:\n다낭 기사 본문"
+            "Title: 다낭 여행의 새로운 매력\n"
+            "Markdown Content:\n"
+            "![광고](https://menu.example/news/banner/ad.jpg)\n"
+            "# 다낭 여행의 새로운 매력\n"
+            "![본문](https://cdn.example/danang.jpg)\n"
+            "다낭 기사 본문"
         ),
     )
 

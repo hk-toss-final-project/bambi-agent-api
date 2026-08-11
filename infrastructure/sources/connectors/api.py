@@ -18,8 +18,10 @@ from .features.url import (
     JinaReadResult,
     col_011,
     extract_jina_image,
+    find_article_body_offset,
     fetch_url_raw_via_jina,
     fetch_url_via_jina,
+    is_probable_content_image_url,
     parse_jina_reader_response,
 )
 from .features.latest import (
@@ -48,8 +50,10 @@ __all__ = [
     "RedditSearchProvider",
     "YouTubeSearchProvider",
     "extract_jina_image",
+    "find_article_body_offset",
     "fetch_url_raw_via_jina",
     "fetch_url_via_jina",
+    "is_probable_content_image_url",
     "parse_jina_reader_response",
     "thumbnail_url",
     "col_001",
