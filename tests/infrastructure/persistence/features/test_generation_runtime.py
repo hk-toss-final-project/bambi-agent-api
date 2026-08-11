@@ -718,31 +718,66 @@ def _connection_for_persist(
     topic: str,
     parameters: dict[str, Any] | None = None,
     request_idempotency_key: str | None = None,
+    *,
+    job_payload: dict[str, Any] | None = None,
+    cited_taxonomy_rows: list[dict[str, Any]] | None = None,
+    named_taxonomy_rows: list[dict[str, Any]] | None = None,
 ) -> _FakeConnection:
     """인용 없는 리포트 저장 경로가 실행할 질의 순서대로 응답을 준비한다.
 
     request_idempotency_key를 주지 않으면 Job 조인 컬럼이 없는 행이 되어,
     이 컬럼을 읽기 전에 저장된 데이터를 만나는 상황을 재현한다.
+
+    taxonomy 파생은 인용 원본 조회(①)가 비었을 때만 이름 조회(②)를 실행하므로,
+    ①에 값을 주면 ② 응답은 목록에 넣지 않는다 — 넣으면 뒤 질의와 한 칸씩 어긋난다.
     """
     request_row: dict[str, Any] = {"id": "request-1", "topic": topic}
     if parameters is not None:
         request_row["parameters"] = parameters
     if request_idempotency_key is not None:
         request_row["request_idempotency_key"] = request_idempotency_key
-    return _FakeConnection(
+    if job_payload is not None:
+        request_row["job_payload"] = job_payload
+    cited = cited_taxonomy_rows or []
+    responses: list[list[dict[str, Any]]] = [
+        [request_row],  # generation_requests 조회
+        [],  # status = running
+        [{"id": "run-1"}],  # generation_runs INSERT
+        [{"next_version": 1}],  # 다음 content 버전
+        [],  # 이전 후보 superseded
+        [{"id": "cand-1", "created_at": datetime(2026, 7, 30, tzinfo=UTC)}],
+        [],  # generation_runs completed
+        [],  # generation_requests completed
+        cited,  # taxonomy 파생 ① 인용 원본
+    ]
+    if not cited:
+        responses.append(named_taxonomy_rows or [])  # taxonomy 파생 ② 주제 이름
+    responses.extend(
         [
-            [request_row],  # generation_requests 조회
-            [],  # status = running
-            [{"id": "run-1"}],  # generation_runs INSERT
-            [{"next_version": 1}],  # 다음 content 버전
-            [],  # 이전 후보 superseded
-            [{"id": "cand-1", "created_at": datetime(2026, 7, 30, tzinfo=UTC)}],
-            [],  # generation_runs completed
-            [],  # generation_requests completed
             [],  # publish_snapshots INSERT
             [],  # event_outbox INSERT
         ]
     )
+    return _FakeConnection(responses)
+
+
+def _taxonomy_row(topic_id: str, version: str = "1.0.0-draft", *,
+                  first_ordinal: int = 0, hits: int = 1) -> dict[str, Any]:
+    """taxonomy 파생 질의가 돌려주는 행 하나를 만든다."""
+    return {
+        "taxonomy_version": version,
+        "topic_id": topic_id,
+        "first_ordinal": first_ordinal,
+        "hits": hits,
+    }
+
+
+def _executed_sql_containing(connection: _FakeConnection, needle: str):
+    """기록된 질의 중 needle을 포함한 첫 번째 (sql, params)를 돌려준다."""
+    for sql, params in connection.executed:
+        if needle in sql:
+            return sql, params
+    return None, None
 
 
 def _publish_payload(connection: _FakeConnection) -> dict[str, Any]:
@@ -786,6 +821,149 @@ def test_publish_payload_carries_request_topic_as_interest_tag() -> None:
     _persist(connection)
 
     assert _publish_payload(connection)["tags"] == ["코스피"]
+
+
+def test_publish_payload_derives_taxonomy_topics_from_cited_sources() -> None:
+    """인용한 Global 수집 문서의 수집 대상에서 taxonomy Topic을 파생한다(①).
+
+    Service가 이 식별자로 뷰어 관심사와 카드의 교집합을 계산한다. 카드에는
+    자유 문자열 태그밖에 없어서 그 계산이 불가능했던 자리를 메우는 값이다.
+    """
+    connection = _connection_for_persist(
+        "반도체",
+        cited_taxonomy_rows=[
+            _taxonomy_row("industry", first_ordinal=0, hits=2),
+            _taxonomy_row("ai_ml", first_ordinal=1, hits=1),
+        ],
+    )
+
+    _persist(connection)
+
+    payload = _publish_payload(connection)
+    assert payload["taxonomy_topic_ids"] == ["industry", "ai_ml"]
+    assert payload["taxonomy_version"] == "1.0.0-draft"
+
+
+def test_publish_payload_skips_name_lookup_when_citations_already_matched() -> None:
+    """①이 값을 내면 ②(이름 조회)는 아예 실행하지 않는다.
+
+    근거 기반 파생이 이름 매칭보다 정확하므로 덮어쓰거나 합치지 않는다.
+    """
+    connection = _connection_for_persist(
+        "반도체", cited_taxonomy_rows=[_taxonomy_row("industry")]
+    )
+
+    _persist(connection)
+
+    sql, _ = _executed_sql_containing(connection, "agent.interest_taxonomy_topics")
+    assert sql is None
+
+
+def test_publish_payload_falls_back_to_requested_topic_name() -> None:
+    """인용 원본이 없으면 요청 주제 이름으로 taxonomy를 찾는다(②).
+
+    개인 Wiki만 인용한 리포트가 여기 해당한다 — 개인 Wiki 청크에는 수집 대상이 없다.
+    """
+    connection = _connection_for_persist(
+        "AI·머신러닝", named_taxonomy_rows=[_taxonomy_row("ai_ml", first_ordinal=1)]
+    )
+
+    _persist(connection)
+
+    payload = _publish_payload(connection)
+    assert payload["taxonomy_topic_ids"] == ["ai_ml"]
+    _, params = _executed_sql_containing(connection, "agent.interest_taxonomy_topics")
+    assert params is not None and params[0] == ["ai·머신러닝"]
+
+
+def test_publish_payload_uses_job_topics_for_morning_briefing() -> None:
+    """아침 브리핑은 요청 topic이 아니라 Job payload의 topics로 찾는다.
+
+    generation_requests.topic은 카드 제목용 **고정 문구**라, 그걸로 taxonomy를
+    찾으면 아침 브리핑은 영영 빈 값이 된다. 실제 주제는 topics[]에만 있다.
+    """
+    connection = _connection_for_persist(
+        "오늘의 관심사 브리핑",
+        job_payload={"topics": ["AI·머신러닝", "경제·금융"]},
+        named_taxonomy_rows=[
+            _taxonomy_row("ai_ml", first_ordinal=1),
+            _taxonomy_row("economy", first_ordinal=2),
+        ],
+    )
+
+    _persist(connection)
+
+    _, params = _executed_sql_containing(connection, "agent.interest_taxonomy_topics")
+    assert params is not None
+    assert params[0] == ["ai·머신러닝", "경제·금융"]
+    assert "오늘의 관심사 브리핑" not in params[0]
+    assert _publish_payload(connection)["taxonomy_topic_ids"] == ["ai_ml", "economy"]
+
+
+def test_publish_payload_keeps_taxonomy_empty_when_nothing_matches() -> None:
+    """아무 것도 못 찾으면 빈 목록·빈 버전이고 발행은 그대로 진행된다.
+
+    검색·추천 보조 정보라, 이것 때문에 발행이 멈추면 안 된다(content_tags와 같은 원칙).
+    """
+    connection = _connection_for_persist("taxonomy 밖 주제")
+
+    _persist(connection)
+
+    payload = _publish_payload(connection)
+    assert payload["taxonomy_topic_ids"] == []
+    assert payload["taxonomy_version"] == ""
+
+
+def test_publish_payload_skips_name_lookup_without_any_requested_topic() -> None:
+    """topic도 topics도 없는 요청(깊게 파기)은 이름 조회를 아예 하지 않는다."""
+    connection = _connection_for_persist("")
+
+    _persist(connection)
+
+    sql, _ = _executed_sql_containing(connection, "agent.interest_taxonomy_topics")
+    assert sql is None
+
+
+def test_pick_single_taxonomy_version_drops_minority_version() -> None:
+    """버전이 섞이면 매칭이 많은 버전만 남긴다.
+
+    두 버전의 topic_id를 한 배열에 담아 보내면 받는 쪽이 어느 카탈로그로 풀어야
+    할지 알 수 없다. 버전과 id는 항상 짝이 맞아야 한다.
+    """
+    from infrastructure.persistence.features.generation_runtime import (
+        _pick_single_taxonomy_version,
+    )
+
+    version, topic_ids = _pick_single_taxonomy_version(
+        [
+            _taxonomy_row("industry", "1.0.0-draft", first_ordinal=0, hits=2),
+            _taxonomy_row("ai_ml", "2.0.0", first_ordinal=1, hits=1),
+        ]
+    )
+
+    assert version == "1.0.0-draft"
+    assert topic_ids == ["industry"]
+
+
+def test_pick_single_taxonomy_version_caps_topic_ids() -> None:
+    """한 카드가 주장하는 Topic 수를 상한으로 자른다.
+
+    상한이 없으면 인용을 많이 단 리포트가 Topic 열댓 개를 달고 나가서, 관심사
+    교집합 매칭이 사실상 "아무 카드나 걸린다"가 된다.
+    """
+    from infrastructure.persistence.features.generation_runtime import (
+        _MAX_TAXONOMY_TOPIC_IDS,
+        _pick_single_taxonomy_version,
+    )
+
+    rows = [
+        _taxonomy_row(f"topic_{index}", first_ordinal=index)
+        for index in range(_MAX_TAXONOMY_TOPIC_IDS + 3)
+    ]
+
+    _, topic_ids = _pick_single_taxonomy_version(rows)
+
+    assert len(topic_ids) == _MAX_TAXONOMY_TOPIC_IDS
 
 
 def test_publish_payload_omits_blank_topic_tag() -> None:

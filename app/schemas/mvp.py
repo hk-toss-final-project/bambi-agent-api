@@ -607,6 +607,23 @@ class PublishSnapshotResponse(ImmutableSchema):
         default_factory=list,
         description="루트 관심사부터 시작하는 범주 검색 키워드 스냅샷",
     )
+    taxonomy_topic_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "이 카드가 매핑되는 관심사 taxonomy Topic Key 목록 (2026-08-11 계약). "
+            "Service가 뷰어 관심사와의 교집합으로 추천 피드를 만든다. "
+            "인용한 Global 수집 문서의 수집 대상에서 파생하고, 없으면 요청 주제 "
+            "이름으로 찾는다. **둘 다 못 찾으면 빈 목록이며 그것은 오류가 아니다** "
+            "— 개인 Wiki만 인용했거나 taxonomy 밖 주제인 카드가 여기 해당한다."
+        ),
+    )
+    taxonomy_version: str = Field(
+        default="",
+        description=(
+            "위 topic_id들을 풀 taxonomy 버전. topic_ids가 비면 함께 빈 문자열이다 "
+            "— 버전과 id가 따로 노는 값은 내보내지 않는다."
+        ),
+    )
     created_at: datetime = Field(description="Snapshot 생성 시각")
 
 
