@@ -14,7 +14,7 @@ from .features.briefing_topics import (
     build_interest_context,
     select_briefing_topics,
 )
-from .features.orchestration import report_001, report_002
+from .features.orchestration import report_001, report_002, report_022
 from .features.context import report_003, report_012
 from .features.retrieval import report_004, report_005, report_006
 from .features.live_sources import (
@@ -102,6 +102,7 @@ __all__ = [
     "report_019",
     "report_020",
     "report_021",
+    "report_022",
     "build_report_generation_prompt",
     "ReportGenerationPrompt",
     "apply_report_generation_batch_result",

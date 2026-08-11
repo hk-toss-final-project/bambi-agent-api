@@ -39,6 +39,7 @@ from infrastructure.persistence.api import (
     get_agent_job,
     get_agent_jobs,
     enqueue_report_generation_job,
+    enqueue_briefing_preparation_job,
     list_runnable_agent_jobs,
     register_url_and_enqueue,
     set_personal_wiki_scope,
@@ -508,6 +509,34 @@ class PostgresAgentJobRepository:
                 await set_system_job_scope(connection)
                 stored = await get_agent_job(connection, job_id=job_id)
         return self._to_job_record(stored) if stored is not None else None
+
+    async def submit_briefing_preparation(
+        self,
+        *,
+        user_id: str,
+        briefing_date: date,
+        idempotency_key: str,
+        limit: int,
+        request_id: str,
+    ) -> AgentJobRecord:
+        """브리핑 준비 Job을 저장하고 현재 Job 상태를 반환한다."""
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await set_personal_wiki_scope(connection, user_id=user_id)
+                job_id = await enqueue_briefing_preparation_job(
+                    connection,
+                    user_id=user_id,
+                    briefing_date=briefing_date,
+                    idempotency_key=idempotency_key,
+                    limit=limit,
+                    request_id=request_id,
+                )
+                stored = await get_agent_job(connection, job_id=job_id)
+                if stored is None:
+                    raise RuntimeError(
+                        f"저장한 브리핑 준비 Job을 찾을 수 없습니다: {job_id}"
+                    )
+        return self._to_job_record(stored)
 
     async def get_jobs(self, job_ids: list[str]) -> list[AgentJobRecord]:
         """시스템 Scope로 여러 Agent Job 상태를 단일 조회한다."""

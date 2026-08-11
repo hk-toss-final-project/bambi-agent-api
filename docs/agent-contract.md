@@ -256,11 +256,16 @@
 
     **아침 주제는 사용자가 고르지 않는다.** Service 는 이 순서로 채운다.
 
-    1. **`GET /internal/v1/users/{user_id}/briefing-topics?limit=3`** — 개인 Wiki 맥락을 읽어
-       agent 가 고른다
-    2. 비면 **사용자 등록 관심사**(온보딩에서 고른 것 + 직접 추가한 것) 최근 3개
+    1. Service Scheduler가 생성일 전 준비 시각에
+       **`POST /internal/v1/users/{user_id}/briefing-preparations`**로 날짜별 비동기 Job을
+       멱등 등록한다. Agent는 개인 Wiki 맥락으로 주제를 고르고 Wiki·Global·Live 근거를
+       Snapshot으로 고정한다.
+    2. 생성 시각에는
+       **`GET /internal/v1/users/{user_id}/briefing-topics?briefing_date=YYYY-MM-DD&limit=3`**로
+       준비된 주제만 DB에서 읽는다. 이 GET은 LLM이나 외부 검색을 호출하지 않는다.
+    3. 비면 **사용자 등록 관심사**(온보딩에서 고른 것 + 직접 추가한 것) 최근 3개
        (`InterestRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc`)
-    3. 그것도 없으면 **건너뛴다**
+    4. 그것도 없으면 **건너뛴다**
 
     - ⚠️ **08-11 낮에 "사용자 선택을 1단계로 앞에 둔다"는 안이 잠깐 확정됐다가 같은 날
       철회됐다.** 최종은 위 2단이고 **선택 화면은 없앤다**(service-web #74). 그 사이에 오간

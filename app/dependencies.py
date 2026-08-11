@@ -178,7 +178,10 @@ def create_container(settings: Settings) -> AppContainer:
             mvp_service=mvp_service,
             publish_snapshot_service=publish_snapshot_service,
             wiki_graph_service=WikiGraphService(wiki_graph_repository),
-            briefing_topics_service=BriefingTopicsService(wiki_graph_repository),
+            briefing_topics_service=BriefingTopicsService(
+                wiki_graph_repository,
+                agent_job_repository,
+            ),
             wiki_navigator_service=WikiNavigatorService(wiki_graph_repository),
             wiki_document_service=WikiDocumentService(wiki_graph_repository),
             agent_workflow_service=workflow_service,

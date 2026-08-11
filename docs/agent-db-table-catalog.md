@@ -10,7 +10,8 @@
 > database/migrations/0008_extract_global_source_cache.sql,
 > database/migrations/0017_wiki_relation_lifecycle.sql,
 > database/migrations/0019_onboarding_topic_contexts.sql,
-> database/migrations/0024_openai_batch_jobs.sql입니다.
+> database/migrations/0024_openai_batch_jobs.sql,
+> database/migrations/0028_briefing_topic_snapshots.sql입니다.
 
 이 문서는 Agent DB 테이블을 영역과 데이터 성격으로 분류하고, 각 테이블의
 책임, 핵심 관계·제약, RLS 적용 여부와 현재 애플리케이션 연결 상태를 정리합니다.
@@ -64,7 +65,7 @@ user_context_snapshots와 agent_jobs 대신 인메모리 저장소를 사용합�
 | 영역 | 테이블 |
 |---|---|
 | 설정 | prompt_templates, prompt_versions, model_configs, retrieval_configs, embedding_configs |
-| 사용자·Job | user_context_snapshots, agent_jobs, agent_job_attempts, llm_batches, llm_batch_items |
+| 사용자·Job | user_context_snapshots, agent_jobs, agent_job_attempts, llm_batches, llm_batch_items, briefing_topic_snapshots |
 | 사용자 원본 | wiki_source_events, user_source_documents, user_source_document_versions |
 | 지식 문서·검색 공용 | wiki_documents, wiki_document_versions, wiki_document_sources, wiki_document_relations, wiki_relation_supports, wiki_chunks, wiki_embeddings |
 | Personal Wiki | wiki_versions, wiki_version_documents |
@@ -116,6 +117,7 @@ Partial Unique Index로 한 개만 유지합니다.
 | agent_job_attempts | History | Job의 Worker별 실행 시도와 오류 이력 | job_id FK Cascade, job_id + attempt_number Unique | 적용 | Schema only |
 | llm_batches | Operational | OpenAI Batch 제출·Poll 상태와 input/output/error 파일 추적 | provider_batch_id Unique, endpoint·상태·24h Window 제약 | system 전용 | Batch Worker |
 | llm_batch_items | Operational/History | JSONL 요청과 custom_id별 응답·오류·Token·도메인 반영 Lease 보존 | custom_id Unique, 선택적 Job·Batch FK | 적용 | Batch Worker·도메인 반영 |
+| briefing_topic_snapshots | Snapshot/Operational | KST 날짜별 아침 브리핑 주제와 Wiki·Global·Live 사전 수집 근거 보존 | user_id + briefing_date Unique, 준비 Job FK | 적용 | 준비·생성 Worker |
 
 agent_jobs는 0002 Migration에서 lease_expires_at과 Claim 가능 Job 조회 Index가
 추가됩니다. Claim Batch 크기와 실제 LLM 동시성은 애플리케이션 계층에서 별도로

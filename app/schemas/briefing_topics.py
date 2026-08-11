@@ -6,7 +6,23 @@ Service가 아침 생성 요청의 `topics[]`에 넣을 주제를 조회할 때 
 
 from __future__ import annotations
 
+from datetime import date
+
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class BriefingPreparationRequest(BaseModel):
+    """Service가 사용자·날짜별 아침 브리핑 준비를 요청하는 본문."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    briefing_date: date = Field(description="아침 브리핑을 생성할 KST 기준 날짜")
+    idempotency_key: str = Field(
+        min_length=1,
+        max_length=200,
+        description="같은 사용자·날짜의 중복 준비 Job을 막는 키",
+    )
+    limit: int = Field(default=3, ge=1, le=5, description="미리 고를 주제 수")
 
 
 class BriefingTopicsResponse(BaseModel):

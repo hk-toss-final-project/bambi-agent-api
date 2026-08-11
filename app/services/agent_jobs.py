@@ -223,6 +223,18 @@ class AgentJobRepository(Protocol):
         """Report Builder Generation Job과 생성 요청을 멱등 저장한다."""
         ...
 
+    async def submit_briefing_preparation(
+        self,
+        *,
+        user_id: str,
+        briefing_date: date,
+        idempotency_key: str,
+        limit: int,
+        request_id: str,
+    ) -> AgentJobRecord:
+        """아침 브리핑 주제·근거 준비 Job을 사용자·날짜별로 멱등 등록한다."""
+        ...
+
     async def get_job(self, job_id: str) -> AgentJobRecord | None:
         """Agent Job의 현재 저장 상태를 반환한다."""
         ...

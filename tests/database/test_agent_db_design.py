@@ -93,6 +93,9 @@ WAITING_PROVIDER_MIGRATION_PATH = (
 GLOBAL_SOURCE_IMAGE_MIGRATION_PATH = (
     PROJECT_ROOT / "database" / "migrations" / "0026_global_source_image_url.sql"
 )
+BRIEFING_SNAPSHOT_MIGRATION_PATH = (
+    PROJECT_ROOT / "database" / "migrations" / "0028_briefing_topic_snapshots.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
@@ -111,6 +114,7 @@ MIGRATION_PATHS = (
     OPENAI_BATCH_MIGRATION_PATH,
     WAITING_PROVIDER_MIGRATION_PATH,
     GLOBAL_SOURCE_IMAGE_MIGRATION_PATH,
+    BRIEFING_SNAPSHOT_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
@@ -235,6 +239,7 @@ def test_migration_contains_all_agent_db_feature_tables() -> None:
         "provider_rate_limits",
         "llm_batches",
         "llm_batch_items",
+        "briefing_topic_snapshots",
         "audit_logs",
         "publish_snapshots",
     }
@@ -380,6 +385,19 @@ def test_waiting_provider_migration_releases_long_running_job_lease() -> None:
     assert "DROP CONSTRAINT agent_jobs_status_check" in migration
     assert "ix_agent_jobs_waiting_provider" in migration
     assert "VALUES (25," in migration
+
+
+def test_briefing_snapshot_migration_tracks_topics_evidence_and_rls() -> None:
+    """브리핑 Snapshot이 날짜별 주제·근거와 사용자 격리를 보존한다."""
+    migration = _read(BRIEFING_SNAPSHOT_MIGRATION_PATH)
+
+    assert "CREATE TABLE agent.briefing_topic_snapshots" in migration
+    assert "UNIQUE (user_id, briefing_date)" in migration
+    assert "contexts_by_topic jsonb" in migration
+    assert "prepared_by_job_id uuid" in migration
+    assert "ENABLE ROW LEVEL SECURITY" in migration
+    assert "briefing_topic_snapshot_isolation" in migration
+    assert "VALUES (28," in migration
 
 
 def test_migration_does_not_create_service_owned_tables() -> None:

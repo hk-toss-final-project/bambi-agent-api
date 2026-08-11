@@ -168,6 +168,45 @@ def test_run_batch_once_uses_dedicated_report_batch_size(
     assert recorded["concurrency"] == 2
 
 
+def test_run_batch_once_dispatches_briefing_preparation_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CLI 브리핑 준비 유형이 전용 Worker와 Rate 예약 설정으로 연결된다."""
+    recorded: dict[str, Any] = {}
+
+    async def fake_briefing_worker(**kwargs: Any) -> list[dict[str, object]]:
+        """브리핑 준비 Worker 실행 인자를 기록한다."""
+        recorded.update(kwargs)
+        return []
+
+    monkeypatch.setattr(
+        worker_main,
+        "run_briefing_preparation_batch",
+        fake_briefing_worker,
+    )
+    args = Namespace(
+        worker="briefing-preparation",
+        model=None,
+        limit=None,
+        concurrency=None,
+        lease_seconds=None,
+    )
+    settings = Settings(
+        agent_database_url="postgresql://test",
+        report_worker_batch_size=8,
+        report_job_concurrency=2,
+        briefing_openai_requests_per_job=7,
+        briefing_openai_tokens_per_job=28_000,
+    )
+
+    asyncio.run(worker_main._run_batch_once(args, settings, "briefing-worker-1"))
+
+    assert recorded["limit"] == 8
+    assert recorded["concurrency"] == 2
+    assert recorded["rate_limit_policy"].estimated_requests == 7
+    assert recorded["rate_limit_policy"].estimated_tokens == 28_000
+
+
 def test_run_loop_dispatches_resident_url_collection_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

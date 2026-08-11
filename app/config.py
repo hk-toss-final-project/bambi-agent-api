@@ -169,6 +169,16 @@ class Settings(BaseModel):
         ge=0,
         description="Report Job 하나의 보수적 OpenAI Token 예약량",
     )
+    briefing_openai_requests_per_job: int = Field(
+        default=8,
+        ge=1,
+        description="브리핑 준비 Job 하나의 보수적 OpenAI 요청 예약량",
+    )
+    briefing_openai_tokens_per_job: int = Field(
+        default=30_000,
+        ge=0,
+        description="브리핑 준비 Job 하나의 보수적 OpenAI Token 예약량",
+    )
     openai_batch_max_items: int = Field(
         default=500,
         ge=1,
@@ -385,6 +395,12 @@ def load_settings() -> Settings:
         ),
         report_openai_tokens_per_job=_integer_env(
             "REPORT_OPENAI_TOKENS_PER_JOB", 50_000
+        ),
+        briefing_openai_requests_per_job=_integer_env(
+            "BRIEFING_OPENAI_REQUESTS_PER_JOB", 8
+        ),
+        briefing_openai_tokens_per_job=_integer_env(
+            "BRIEFING_OPENAI_TOKENS_PER_JOB", 30_000
         ),
         openai_batch_max_items=_integer_env("OPENAI_BATCH_MAX_ITEMS", 500),
         openai_batch_max_submissions=_integer_env(

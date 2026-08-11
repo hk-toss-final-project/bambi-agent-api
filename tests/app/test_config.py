@@ -38,6 +38,8 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("WIKI_OPENAI_TOKENS_PER_JOB", "24000")
     monkeypatch.setenv("REPORT_OPENAI_REQUESTS_PER_JOB", "10")
     monkeypatch.setenv("REPORT_OPENAI_TOKENS_PER_JOB", "45000")
+    monkeypatch.setenv("BRIEFING_OPENAI_REQUESTS_PER_JOB", "7")
+    monkeypatch.setenv("BRIEFING_OPENAI_TOKENS_PER_JOB", "28000")
     monkeypatch.setenv("OPENAI_BATCH_MAX_ITEMS", "400")
     monkeypatch.setenv("OPENAI_BATCH_MAX_SUBMISSIONS", "2")
     monkeypatch.setenv("OPENAI_BATCH_POLL_LIMIT", "20")
@@ -78,6 +80,8 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     assert settings.wiki_openai_tokens_per_job == 24_000
     assert settings.report_openai_requests_per_job == 10
     assert settings.report_openai_tokens_per_job == 45_000
+    assert settings.briefing_openai_requests_per_job == 7
+    assert settings.briefing_openai_tokens_per_job == 28_000
     assert settings.openai_batch_max_items == 400
     assert settings.openai_batch_max_submissions == 2
     assert settings.openai_batch_poll_limit == 20

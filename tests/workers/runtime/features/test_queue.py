@@ -7,6 +7,7 @@ import pytest
 
 from workers.runtime.features import queue
 from workers.runtime.features.queue import (
+    consume_briefing_preparation_jobs,
     consume_report_generation_jobs,
     consume_personal_wiki_jobs,
     consume_url_collection_jobs,
@@ -84,6 +85,62 @@ def test_consume_report_generation_jobs_passes_generation_arguments() -> None:
     assert runner.calls[0]["worker_id"] == "report-worker-1"
     assert runner.calls[0]["model"] == "gpt-4.1-mini"
     assert "embedding_model" not in runner.calls[0]
+
+
+def test_consume_briefing_preparation_jobs_passes_bounded_concurrency() -> None:
+    """브리핑 준비 소비 루프가 Batch 크기와 실제 동시성을 따로 전달한다."""
+    runner = _FakeBatchRunner(
+        [[{"job_id": "briefing-job-1", "status": "completed"}]]
+    )
+
+    results = asyncio.run(
+        consume_briefing_preparation_jobs(
+            database_url="postgresql://test",
+            worker_id="briefing-worker-1",
+            limit=8,
+            concurrency=2,
+            lease_seconds=600,
+            model="gpt-4.1-mini",
+            interval_seconds=0,
+            max_batches=1,
+            batch_runner=runner,
+        )
+    )
+
+    assert [result["job_id"] for result in results] == ["briefing-job-1"]
+    assert runner.calls[0]["limit"] == 8
+    assert runner.calls[0]["concurrency"] == 2
+
+
+def test_wc_001_routes_briefing_preparation_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WC-001이 브리핑 준비 유형을 전용 소비 루프로 전달한다."""
+    recorded: dict[str, Any] = {}
+
+    async def fake_consume(**kwargs: Any) -> list[dict[str, object]]:
+        """전용 소비기 인자를 기록한다."""
+        recorded.update(kwargs)
+        return [{"job_id": "briefing-job-1", "status": "completed"}]
+
+    monkeypatch.setattr(queue, "consume_briefing_preparation_jobs", fake_consume)
+
+    results = asyncio.run(
+        wc_001(
+            database_url="postgresql://test",
+            worker_id="briefing-worker-1",
+            limit=8,
+            concurrency=2,
+            lease_seconds=600,
+            model="gpt-4.1-mini",
+            interval_seconds=5,
+            max_batches=1,
+            job_type="briefing_preparation",
+        )
+    )
+
+    assert results[0]["job_id"] == "briefing-job-1"
+    assert recorded["concurrency"] == 2
 
 
 def test_consume_url_collection_jobs_passes_no_llm_model() -> None:

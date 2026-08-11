@@ -5,7 +5,8 @@ Repository와 선정자를 대체해 LLM·DB 없이 조립 경로만 확인한�
 
 import asyncio
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from typing import Any, Mapping
 
 import pytest
 
@@ -16,16 +17,26 @@ from agent.report_builder.api import (
     InterestContext,
 )
 from app.services import briefing_topics as service_module
+from app.schemas.briefing_topics import BriefingPreparationRequest
+from app.services.agent_jobs import AgentJobRecord
 from app.services.briefing_topics import BriefingTopicsService
-from infrastructure.persistence.api import StoredBriefingTopicSelection
+from infrastructure.persistence.api import (
+    StoredBriefingTopicSelection,
+    StoredBriefingTopicSnapshot,
+)
 
 
 class _FakeRepository:
     """고정 후보 원자재를 돌려주고 요청받은 후보 수를 기록한다."""
 
-    def __init__(self, materials: Sequence[CandidateMaterial]) -> None:
+    def __init__(
+        self,
+        materials: Sequence[CandidateMaterial],
+        snapshot: StoredBriefingTopicSnapshot | None = None,
+    ) -> None:
         """반환할 원자재를 보관한다."""
         self._materials = materials
+        self._snapshot = snapshot
         self.requested_limit: int | None = None
 
     async def load_briefing_candidates(
@@ -36,6 +47,63 @@ class _FakeRepository:
         self.requested_limit = limit
         return self._materials
 
+    async def load_briefing_topic_snapshot(
+        self, user_id: str, *, briefing_date: date
+    ) -> StoredBriefingTopicSnapshot | None:
+        """준비된 테스트 Snapshot을 반환한다."""
+        return self._snapshot
+
+    async def save_briefing_topic_snapshot(
+        self,
+        user_id: str,
+        *,
+        briefing_date: date,
+        topics: Sequence[str],
+        reason: str,
+        candidate_count: int,
+        contexts_by_topic: Mapping[str, Sequence[Mapping[str, object]]],
+        prepared_by_job_id: str,
+    ) -> StoredBriefingTopicSnapshot:
+        """테스트에서 전달된 준비 결과를 Snapshot으로 보관한다."""
+        self._snapshot = StoredBriefingTopicSnapshot(
+            user_id=user_id,
+            briefing_date=briefing_date,
+            topics=tuple(topics),
+            reason=reason,
+            candidate_count=candidate_count,
+            contexts_by_topic={
+                topic: [dict(context) for context in contexts]
+                for topic, contexts in contexts_by_topic.items()
+            },
+            prepared_by_job_id=prepared_by_job_id,
+            prepared_at=datetime(2026, 8, 11, tzinfo=UTC),
+        )
+        return self._snapshot
+
+
+class _FakeAgentJobs:
+    """브리핑 준비 Job 접수 인자를 기록하는 저장소 대역."""
+
+    def __init__(self) -> None:
+        """빈 호출 기록을 초기화한다."""
+        self.submitted: dict[str, Any] = {}
+
+    async def submit_briefing_preparation(self, **kwargs: Any) -> AgentJobRecord:
+        """접수 인자를 기록하고 queued Job을 반환한다."""
+        self.submitted.update(kwargs)
+        created_at = datetime(2026, 8, 11, tzinfo=UTC)
+        return AgentJobRecord(
+            job_id="job-1",
+            feature_id="REPORT-022",
+            job_type="briefing_preparation",
+            user_id=str(kwargs["user_id"]),
+            idempotency_key=str(kwargs["idempotency_key"]),
+            status="queued",
+            progress=0,
+            request_id=str(kwargs["request_id"]),
+            created_at=created_at,
+            updated_at=created_at,
+        )
 
 def _materials() -> list[CandidateMaterial]:
     """도구 하나와 진짜 관심사 하나가 섞인 후보를 만든다."""
@@ -79,7 +147,7 @@ def test_service_asks_for_more_candidates_than_it_returns(
     repository = _FakeRepository(_materials())
     _stub_selector(monkeypatch, ("삼성전자",))
 
-    response = asyncio.run(BriefingTopicsService(repository).get_topics("user-1"))
+    response = asyncio.run(BriefingTopicsService(repository).select_topics("user-1"))
 
     assert repository.requested_limit == 30
     assert response.topics == ["삼성전자"]
@@ -97,7 +165,7 @@ def test_service_passes_assembled_context_to_the_selector(
     seen = _stub_selector(monkeypatch, ("삼성전자",))
 
     asyncio.run(
-        BriefingTopicsService(_FakeRepository(_materials())).get_topics("user-1")
+        BriefingTopicsService(_FakeRepository(_materials())).select_topics("user-1")
     )
 
     contexts = {candidate.node: candidate.context for candidate in seen[0].candidates}
@@ -155,7 +223,7 @@ def test_service_reuses_the_stored_selection_without_calling_the_selector(
     )
     seen = _stub_selector(monkeypatch, ("전혀 다른 주제",))
 
-    response = asyncio.run(BriefingTopicsService(repository).get_topics("user-1"))
+    response = asyncio.run(BriefingTopicsService(repository).select_topics("user-1"))
 
     assert response.topics == ["삼성전자", "폭염"]
     assert response.reason == "03:00에 골랐다."
@@ -175,7 +243,7 @@ def test_service_reselects_when_the_wiki_changed_overnight(
     )
     _stub_selector(monkeypatch, ("삼성전자",))
 
-    response = asyncio.run(BriefingTopicsService(repository).get_topics("user-1"))
+    response = asyncio.run(BriefingTopicsService(repository).select_topics("user-1"))
 
     assert response.topics == ["삼성전자"]
 
@@ -187,7 +255,7 @@ def test_service_stores_the_selection_for_the_next_call(
     repository = _CachingRepository(_materials())
     _stub_selector(monkeypatch, ("삼성전자",))
 
-    asyncio.run(BriefingTopicsService(repository).get_topics("user-1"))
+    asyncio.run(BriefingTopicsService(repository).select_topics("user-1"))
 
     assert repository.saved is not None
     assert repository.saved["topics"] == ["삼성전자"]
@@ -209,7 +277,7 @@ def test_service_still_selects_when_the_cache_lookup_fails(
     _stub_selector(monkeypatch, ("삼성전자",))
 
     response = asyncio.run(
-        BriefingTopicsService(_BrokenCache(_materials())).get_topics("user-1")
+        BriefingTopicsService(_BrokenCache(_materials())).select_topics("user-1")
     )
 
     assert response.topics == ["삼성전자"]
@@ -223,8 +291,75 @@ def test_service_returns_empty_topics_for_a_user_without_wiki() -> None:
     LLM을 부르지 않으므로 실제 선정자를 그대로 쓴다.
     """
     response = asyncio.run(
-        BriefingTopicsService(_FakeRepository([])).get_topics("user-1")
+        BriefingTopicsService(_FakeRepository([])).select_topics("user-1")
     )
 
     assert response.topics == []
     assert response.candidate_count == 0
+
+
+def test_get_topics_reads_prepared_snapshot_without_selecting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """07시 조회는 준비 Snapshot만 읽고 선정 LLM을 다시 호출하지 않는다."""
+    snapshot = StoredBriefingTopicSnapshot(
+        user_id="user-1",
+        briefing_date=date(2026, 8, 12),
+        topics=("반도체", "프로야구"),
+        reason="미리 선정함",
+        candidate_count=12,
+        contexts_by_topic={},
+        prepared_by_job_id="job-1",
+        prepared_at=datetime(2026, 8, 11, tzinfo=UTC),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "select_briefing_topics",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Snapshot 조회에서 선정자를 호출하면 안 됩니다.")
+        ),
+    )
+
+    response = asyncio.run(
+        BriefingTopicsService(_FakeRepository([], snapshot)).get_topics(
+            "user-1",
+            briefing_date=date(2026, 8, 12),
+        )
+    )
+
+    assert response.topics == ["반도체", "프로야구"]
+    assert response.reason == "미리 선정함"
+
+
+def test_get_topics_returns_empty_when_preparation_is_missing() -> None:
+    """준비 Snapshot이 없으면 07시 조회가 외부 호출 없이 빈 목록을 반환한다."""
+    response = asyncio.run(
+        BriefingTopicsService(_FakeRepository([])).get_topics(
+            "user-1",
+            briefing_date=date(2026, 8, 12),
+        )
+    )
+
+    assert response.topics == []
+    assert response.candidate_count == 0
+
+
+def test_enqueue_preparation_returns_accepted_job() -> None:
+    """Service 요청 본문이 사용자·날짜별 멱등 Job 접수로 전달된다."""
+    jobs = _FakeAgentJobs()
+    payload = BriefingPreparationRequest(
+        briefing_date=date(2026, 8, 12),
+        idempotency_key="briefing:2026-08-12:user-1",
+        limit=3,
+    )
+
+    response = asyncio.run(
+        BriefingTopicsService(
+            _FakeRepository([]),
+            jobs,  # type: ignore[arg-type]
+        ).enqueue_preparation("user-1", payload, request_id="request-1")
+    )
+
+    assert response.job_id == "job-1"
+    assert response.status.value == "queued"
+    assert jobs.submitted["briefing_date"] == date(2026, 8, 12)

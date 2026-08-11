@@ -205,6 +205,12 @@ from .features.wiki_deletion import (
     delete_wiki_document_and_record_event,
 )
 from .features.wiki_reset import reset_personal_wiki
+from .features.briefing_preparations import (
+    StoredBriefingTopicSnapshot,
+    enqueue_briefing_preparation_job,
+    load_briefing_topic_snapshot,
+    upsert_briefing_topic_snapshot,
+)
 
 __all__ = [
     "db_001",
@@ -282,4 +288,8 @@ __all__ = [
     "StoredBriefingTopicSelection",
     "load_briefing_topic_selection",
     "save_briefing_topic_selection",
+    "StoredBriefingTopicSnapshot",
+    "enqueue_briefing_preparation_job",
+    "load_briefing_topic_snapshot",
+    "upsert_briefing_topic_snapshot",
 ]
