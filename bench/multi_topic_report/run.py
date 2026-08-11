@@ -116,6 +116,11 @@ def estimate_included_references(contexts: list[ReportContextDocument]) -> list[
     return included
 
 
+def _normalize(text: str) -> str:
+    """제목 대조용으로 공백과 대소문자 차이를 지운다."""
+    return "".join(text.split()).casefold()
+
+
 def split_sections(body: str) -> list[tuple[str, str]]:
     """본문을 Markdown 제목 기준으로 (제목, 내용) 섹션 목록으로 나눈다.
 
@@ -174,17 +179,52 @@ def evaluate(case: dict[str, object], body: str, included: list[str]) -> dict[st
 
     expected = [topic for topic in topics if topic not in starved]
     missing = [topic for topic in expected if topic not in cited_topics]
+
+    # 근거가 한 건도 없는 주제인데 섹션을 쓴 경우. 2026-08-11 실측에서 '김건희'
+    # 섹션이 인용 없이 "검사님, 다른 영부인 수사 다 해봤느냐"까지 따옴표로
+    # 인용해 나왔다. 근거가 없으면 섹션이 아예 없어야 한다.
+    headings = [heading for heading, _ in split_sections(body) if heading]
+    fabricated = [
+        topic
+        for topic in starved
+        if any(_normalize(topic) in _normalize(heading) for heading in headings)
+    ]
+    # 제목이 붙은 섹션인데 인용이 하나도 없는 경우. 해석 단락(규칙 6)은 참조를
+    # 붙이지 않는 것이 정상이라 주제 이름을 가진 섹션만 본다.
+    uncited = [
+        heading
+        for heading, content in split_sections(body)
+        if heading
+        and any(_normalize(topic) in _normalize(heading) for topic in topics)
+        and not _CITATION_PATTERN.findall(content)
+    ]
+    # 근거 문서에 실려 있지만 주제와 무관한 사실이 본문에 옮겨졌는가(규칙 5).
+    # 데이터셋이 그 사실만 가리키는 문구를 지정한다.
+    leaked = [
+        phrase
+        for phrase in (case.get("forbidden_phrases") or [])  # type: ignore[union-attr]
+        if str(phrase) in body
+    ]
     # 채점을 두 갈래로 나눈다. 근거가 잘려 사라진 주제를 LLM 탓으로 돌리면
     # 프롬프트 품질과 파이프라인 결함이 한 숫자에 섞여 원인을 못 가린다.
     #   llm_passed    : 받은 근거 안에서 주제를 빠뜨리거나 섞지 않았는가
     #   system_passed : 사용자가 고른 주제가 결국 다 리포트에 실렸는가
-    llm_passed = not missing and not cross_contaminated
+    llm_passed = (
+        not missing
+        and not cross_contaminated
+        and not fabricated
+        and not uncited
+        and not leaked
+    )
     return {
         "topics": len(topics),
         "covered": len(expected) - len(missing),
         "expected": len(expected),
         "missing_topics": missing,
         "cross_contaminated_sections": cross_contaminated,
+        "fabricated_sections": fabricated,
+        "uncited_sections": uncited,
+        "leaked_offtopic_phrases": leaked,
         "starved_topics": starved,
         "dropped_references": [
             ref for ref in owner_of if ref not in included_set
