@@ -9,7 +9,8 @@ URL의 저장을 되돌리지 않는다.
 
 - 뉴스·Reddit: Jina Reader(r.jina.ai)로 페이지 본문을 정제해 가져온다. Reddit은
   게시글 본문이 페이지에 그대로 있어 뉴스와 같은 방식으로 충분하다(2026-07-29
-  실측: 저장된 게시글 텍스트가 Jina 결과에 그대로 포함).
+  실측: 저장된 게시글 텍스트가 Jina 결과에 그대로 포함). 대표 이미지는 Jina
+  Markdown 순서에 의존하지 않고 원본 HTML 메타데이터에서 병렬로 가져온다.
 - YouTube: 영상 페이지라 Jina로는 "Skip navigation", "Sign in" 같은 UI 문구만
   나온다(같은 날 실측: 본문 17,466자 전부 UI). 대신 자막을 본문으로 쓴다.
   자막이 없거나 너무 짧은 영상은 실패로 남겨 빈 본문이 풀에 쌓이지 않게 한다.
@@ -21,6 +22,7 @@ URL의 저장을 되돌리지 않는다.
 """
 
 import asyncio
+import logging
 import os
 from asyncio import to_thread
 from collections.abc import Callable
@@ -39,17 +41,22 @@ from infrastructure.persistence.api import (
     save_fetched_article_content,
     set_system_job_scope,
 )
-from shared.fetch_guard import describe_blocked_fetch
 from infrastructure.sources.connectors.api import (
+    ArticleImageMetadata,
     JinaReadError,
     JinaReadResult,
+    fetch_article_image_metadata,
     fetch_url_via_jina,
     thumbnail_url,
 )
+from shared.fetch_guard import describe_blocked_fetch
+
+logger = logging.getLogger(__name__)
 
 type DictRow = dict[str, Any]
 type UrlFetcher = Callable[[str], JinaReadResult]
 type TranscriptFetcher = Callable[[str], str | None]
+type ImageFetcher = Callable[..., ArticleImageMetadata | None]
 
 
 # 자막이 이 길이 미만이면 근거로 쓸 내용이 없다고 보고 버린다.
@@ -185,6 +192,7 @@ async def _download_one(
     *,
     url_fetcher: UrlFetcher,
     transcript_fetcher: TranscriptFetcher,
+    image_fetcher: ImageFetcher,
 ) -> _DownloadedBody:
     """문서 하나의 본문을 Provider에 맞는 방법으로 내려받는다.
 
@@ -196,24 +204,45 @@ async def _download_one(
         return await _download_youtube_transcript(
             article, transcript_fetcher=transcript_fetcher
         )
-    try:
-        fetched = await to_thread(url_fetcher, article.url)
-    except JinaReadError as error:
+    fetched_result, image_result = await asyncio.gather(
+        to_thread(url_fetcher, article.url),
+        to_thread(
+            image_fetcher,
+            article.url,
+            provider_image_url=article.image_url,
+        ),
+        return_exceptions=True,
+    )
+    if isinstance(fetched_result, JinaReadError):
         return _DownloadedBody(
-            error_code=f"JINA_{error.error_code.upper()}",
-            error_message=str(error),
+            error_code=f"JINA_{fetched_result.error_code.upper()}",
+            error_message=str(fetched_result),
         )
+    if isinstance(fetched_result, BaseException):
+        raise fetched_result
+    fetched = fetched_result
     # 봇 차단 안내 페이지는 본문이 아니다. 저장하면 검색에 걸리고 리포트 근거로도
     # 들어간다(2026-08-06 실측: Cloudflare "Just a moment..." 페이지가 정상 본문으로
     # 저장돼 Wiki 노드까지 만들어졌다). Jina는 200을 주므로 여기서 따로 걸러야 한다.
     blocked = describe_blocked_fetch(fetched.title, fetched.markdown)
     if blocked is not None:
         return _DownloadedBody(error_code="FETCH_BLOCKED", error_message=blocked)
+    if isinstance(image_result, Exception):
+        logger.warning(
+            "기사 이미지 메타데이터 조회 실패, 본문만 저장한다: %s: %s",
+            article.url,
+            image_result,
+        )
+        image = None
+    elif isinstance(image_result, BaseException):
+        raise image_result
+    else:
+        image = image_result
     return _DownloadedBody(
         resolved_url=fetched.resolved_url,
         title=fetched.title,
         markdown=fetched.markdown,
-        image_url=fetched.image_url,
+        image_url=image.url if image is not None else None,
         published_at=_parse_published_at(fetched.published_time),
     )
 
@@ -223,6 +252,7 @@ async def _download_all(
     *,
     url_fetcher: UrlFetcher,
     transcript_fetcher: TranscriptFetcher,
+    image_fetcher: ImageFetcher,
 ) -> list[_DownloadedBody]:
     """점유한 문서들의 본문을 동시에 내려받는다.
 
@@ -238,6 +268,7 @@ async def _download_all(
                 article,
                 url_fetcher=url_fetcher,
                 transcript_fetcher=transcript_fetcher,
+                image_fetcher=image_fetcher,
             )
 
     return list(await asyncio.gather(*(_guarded(a) for a in articles)))
@@ -280,6 +311,7 @@ async def run_global_content_fetch_batch(
     limit: int = 5,
     url_fetcher: UrlFetcher = fetch_url_via_jina,
     transcript_fetcher: TranscriptFetcher = fetch_transcript,
+    image_fetcher: ImageFetcher | None = None,
 ) -> list[dict[str, object]]:
     """본문이 없는 Global 문서 Batch를 점유해 Provider에 맞게 본문을 채운다.
 
@@ -308,6 +340,7 @@ async def run_global_content_fetch_batch(
             articles,
             url_fetcher=url_fetcher,
             transcript_fetcher=transcript_fetcher,
+            image_fetcher=image_fetcher or fetch_article_image_metadata,
         )
         results: list[dict[str, object]] = []
         for article, body in zip(articles, bodies, strict=True):

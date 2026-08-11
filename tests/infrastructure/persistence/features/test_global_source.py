@@ -52,7 +52,9 @@ class _FakeConnection:
         return _FakeCursor(rows)
 
 
-def _article(url: str, *, title: str = "제목") -> LatestArticle:
+def _article(
+    url: str, *, title: str = "제목", image_url: str | None = None
+) -> LatestArticle:
     """테스트용 정규화 기사 하나를 만든다."""
     return LatestArticle(
         provider="gdelt",
@@ -62,6 +64,7 @@ def _article(url: str, *, title: str = "제목") -> LatestArticle:
         published_at=datetime(2026, 7, 20, tzinfo=UTC),
         source_name="example.com",
         language="ko",
+        image_url=image_url,
     )
 
 
@@ -83,7 +86,10 @@ def test_persist_skips_existing_url_and_saves_new_as_pending() -> None:
             provider="gdelt",
             query="AI Agent",
             articles=[
-                _article("https://example.com/new"),
+                _article(
+                    "https://example.com/new",
+                    image_url="https://cdn.example/provider-cover.jpg",
+                ),
                 _article("https://example.com/dup"),
             ],
         )
@@ -102,7 +108,8 @@ def test_persist_skips_existing_url_and_saves_new_as_pending() -> None:
     assert "INSERT INTO agent.global_source_documents" in document_sql
     assert "ON CONFLICT (canonical_url) DO NOTHING" in document_sql
     assert document_params is not None
-    assert document_params[8] == "pending"
+    assert document_params[8] == "https://cdn.example/provider-cover.jpg"
+    assert document_params[9] == "pending"
     assert any(
         "INSERT INTO agent.global_source_document_topics" in query
         for query, _params in connection.executed

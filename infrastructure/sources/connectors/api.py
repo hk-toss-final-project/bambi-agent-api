@@ -25,6 +25,12 @@ from .features.url import (
     parse_jina_reader_response,
     resolve_article_image,
 )
+from .features.article_image import (
+    ArticleImageFetchError,
+    ArticleImageMetadata,
+    extract_article_image_metadata,
+    fetch_article_image_metadata,
+)
 from .features.latest import (
     GdeltNewsProvider,
     GoogleNewsRssProvider,
@@ -41,6 +47,8 @@ from .features.custom import col_012
 __all__ = [
     "GdeltNewsProvider",
     "GoogleNewsRssProvider",
+    "ArticleImageFetchError",
+    "ArticleImageMetadata",
     "JinaReadError",
     "JinaReadResult",
     "LatestArticle",
@@ -51,9 +59,11 @@ __all__ = [
     "RedditSearchProvider",
     "YouTubeSearchProvider",
     "extract_jina_image",
+    "extract_article_image_metadata",
     "find_article_body_offset",
     "fetch_url_raw_via_jina",
     "fetch_url_via_jina",
+    "fetch_article_image_metadata",
     "is_probable_content_image_url",
     "parse_jina_reader_response",
     "resolve_article_image",

@@ -567,7 +567,7 @@ LLM Wiki 문서가 아니라 "한 번 읽은 URL 본문을 모두가 재사용"�
 | title | text | 자동, 빈 문자열 | 기사 제목 (본문 수집 시 Jina 제목으로 갱신) |
 | description | text | 선택 | Provider가 준 기사 설명·Snippet |
 | markdown | text | 선택 | Jina Reader가 채운 본문. pending 동안 NULL |
-| image_url | text | 선택 | Jina 또는 Provider에서 얻은 원문 대표 이미지 URL |
+| image_url | text | 선택 | Provider 또는 원본 HTML 메타데이터에서 얻은 대표 이미지 URL |
 | content_hash | text | 선택 | 본문 SHA-256 (64자) |
 | content_status | text | 자동, pending | pending, fetching, fetched, failed 상태 머신 |
 | resolved_url | text | 선택 | Jina가 리다이렉트까지 반영한 최종 URL |

@@ -46,6 +46,7 @@ class GlobalArticleToFetch:
     document_id: str
     url: str
     provider: str = ""
+    image_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -638,9 +639,10 @@ async def persist_collected_articles(
                 language,
                 title,
                 description,
+                image_url,
                 content_status,
                 published_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (canonical_url) DO NOTHING
             RETURNING id
             """,
@@ -653,6 +655,7 @@ async def persist_collected_articles(
                 article.language or "und",
                 article.title,
                 article.description or None,
+                article.image_url,
                 content_status,
                 article.published_at,
             ),
@@ -677,6 +680,7 @@ async def persist_collected_articles(
                 ),
                 "source_name": article.source_name,
                 "language": article.language,
+                "image_url": article.image_url,
             }
         )
 
@@ -797,7 +801,11 @@ async def claim_global_articles_for_fetch(
         SET content_status = 'fetching'
         FROM claimable
         WHERE document.id = claimable.id
-        RETURNING document.id, document.canonical_url, document.provider
+        RETURNING
+            document.id,
+            document.canonical_url,
+            document.provider,
+            document.image_url
         """,
         (limit,),
     )
@@ -807,6 +815,7 @@ async def claim_global_articles_for_fetch(
             document_id=str(row["id"]),
             url=row["canonical_url"],
             provider=row.get("provider") or "",
+            image_url=str(row["image_url"]) if row.get("image_url") else None,
         )
         for row in rows
     ]
@@ -855,7 +864,7 @@ async def save_fetched_article_content(
             search_body = %s,
             content_hash = %s,
             resolved_url = %s,
-            image_url = %s,
+            image_url = COALESCE(%s, image_url),
             published_at = COALESCE(%s, published_at),
             content_status = 'fetched',
             fetched_at = clock_timestamp()

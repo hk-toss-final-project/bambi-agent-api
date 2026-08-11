@@ -78,6 +78,7 @@ def _article_to_entry(article: "LatestArticle") -> dict[str, object]:
         "published_ts": int(published_at.timestamp()) if published_at else 0,
         "source_url": article.source_url or "",
         "source_name": article.source_name or "",
+        "image_url": article.image_url or "",
     }
 
 
@@ -186,7 +187,7 @@ def jina_read(url: str) -> str | None:
 
     호출은 공유 Jina 커넥터에 위임한다(인증·오류 처리 일원화). 비서는 기사
     하나쯤 실패해도 리포트를 계속 만들어야 하므로 예외 대신 None을 준다.
-    'Image N:' 헤더로 대표 이미지를 뽑아야 해서 원문 전체를 받는다.
+    본문 요약에 헤더 정보가 필요해 원문 전체를 받는다.
     """
     from infrastructure.sources.connectors.api import (
         JinaReadError,
@@ -230,9 +231,17 @@ def _extract_jina_image(text: str) -> str | None:
 
 
 def fetch_article_image(url: str) -> str | None:
-    """Jina Reader로 기사 원문을 읽어 대표 이미지 URL 한 건을 반환한다."""
-    raw = jina_read(url)
-    return _extract_jina_image(raw) if raw else None
+    """원본 HTML 메타데이터에서 기사 대표 이미지 URL 한 건을 반환한다."""
+    from infrastructure.sources.connectors.api import (
+        ArticleImageFetchError,
+        fetch_article_image_metadata,
+    )
+
+    try:
+        result = fetch_article_image_metadata(url)
+    except ArticleImageFetchError:
+        return None
+    return result.url if result is not None else None
 
 
 def article_body_offset(markdown: str, title: str) -> int:
