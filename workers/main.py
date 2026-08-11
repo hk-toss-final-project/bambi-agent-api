@@ -128,6 +128,7 @@ async def _run_batch_once(
             poll_limit=settings.openai_batch_poll_limit,
             poll_interval_seconds=settings.openai_batch_poll_interval_seconds,
             poll_lease_seconds=settings.openai_batch_poll_lease_seconds,
+            worker_id=worker_id,
         )
     if args.worker == "global-collector":
         keywords = [
@@ -209,6 +210,7 @@ async def _run_batch_once(
             estimated_requests=settings.wiki_openai_requests_per_job,
             estimated_tokens=settings.wiki_openai_tokens_per_job,
         ),
+        embedding_batch_threshold=settings.wiki_embedding_batch_threshold,
     )
 
 
@@ -259,6 +261,7 @@ async def _run() -> None:
             poll_limit=settings.openai_batch_poll_limit,
             poll_interval_seconds=settings.openai_batch_poll_interval_seconds,
             poll_lease_seconds=settings.openai_batch_poll_lease_seconds,
+            worker_id=worker_id,
             on_cycle=on_batch,
         )
         return
@@ -314,6 +317,7 @@ async def _run() -> None:
             estimated_requests=settings.wiki_openai_requests_per_job,
             estimated_tokens=settings.wiki_openai_tokens_per_job,
         ),
+        embedding_batch_threshold=settings.wiki_embedding_batch_threshold,
         interval_seconds=args.interval_seconds,
         max_batches=None,
         job_type="personal_wiki_build",

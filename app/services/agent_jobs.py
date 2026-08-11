@@ -218,6 +218,7 @@ class AgentJobRepository(Protocol):
         scheduled_at: datetime | None,
         request_id: str,
         change_history_enabled: bool = False,
+        execution_mode: str = "sync",
     ) -> SubmittedGenerationJob:
         """Report Builder Generation Job과 생성 요청을 멱등 저장한다."""
         ...

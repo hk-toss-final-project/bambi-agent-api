@@ -37,3 +37,6 @@ def test_run_personal_wiki_batch_delegates_to_shared_runner(
     assert captured["error_code_prefix"] == "WIKI_BUILD"
     assert captured["worker_id"] == "worker-1"
     assert callable(captured["process"])
+    assert captured["serialization_key"](
+        type("Job", (), {"user_id": "user-1"})()
+    ) == "personal_wiki_build:user-1"

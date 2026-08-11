@@ -133,6 +133,71 @@ def test_worker_defaults_the_toggle_off_for_jobs_without_the_flag(
     assert captured["change_history_enabled"] is False
 
 
+def test_worker_stages_explicit_batch_report_and_releases_job_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """비긴급 Batch Job은 그래프를 호출하지 않고 waiting_provider로 전환한다."""
+    staged: dict[str, Any] = {}
+    deferred: dict[str, Any] = {}
+
+    async def fake_stage(connection: Any, **kwargs: Any) -> Any:
+        """고정 Context를 받은 Batch 등록 인자를 기록한다."""
+        staged.update(kwargs)
+        return SimpleNamespace(
+            item_id="batch-item-1",
+            custom_id="report-generation:hash",
+        )
+
+    async def fake_defer(connection: Any, **kwargs: Any) -> None:
+        """Job Lease 해제 인자를 기록한다."""
+        deferred.update(kwargs)
+
+    async def fake_scope(connection: Any) -> None:
+        """시스템 Scope 설정을 생략한다."""
+
+    async def fail_graph(*args: Any, **kwargs: Any) -> dict[str, object]:
+        """Batch 경로에서 동기 그래프가 호출되면 실패한다."""
+        raise AssertionError("동기 Report 그래프를 호출하면 안 됩니다.")
+
+    monkeypatch.setattr(report_generation, "stage_report_generation_batch", fake_stage)
+    monkeypatch.setattr(report_generation, "defer_agent_job_for_provider", fake_defer)
+    monkeypatch.setattr(report_generation, "set_system_job_scope", fake_scope)
+    monkeypatch.setattr(report_generation, "run_report_generation", fail_graph)
+    job = _claimed_job(
+        {
+            "topic": "AI 에이전트",
+            "content_type": "interest_news_card",
+            "language": "ko",
+            "execution_mode": "batch",
+            "batch_contexts": [
+                {
+                    "reference": "P1",
+                    "document_version_id": "version-1",
+                    "chunk_id": "chunk-1",
+                    "namespace_key": "user/user-1",
+                    "title": "근거",
+                    "content": "고정 근거",
+                    "url": None,
+                    "score": 0.9,
+                }
+            ],
+        }
+    )
+
+    result = asyncio.run(
+        report_generation._process_job(
+            _FakeConnection(),  # type: ignore[arg-type]
+            job=job,
+            worker_id="worker-1",
+            model="gpt-4.1-mini",
+        )
+    )
+
+    assert result["status"] == "waiting_provider"
+    assert staged["contexts"][0].reference == "P1"
+    assert deferred["batch_item_id"] == "batch-item-1"
+
+
 def test_worker_passes_interest_bundle_snapshot_to_the_graph(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

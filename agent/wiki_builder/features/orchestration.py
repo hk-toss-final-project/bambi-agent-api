@@ -324,6 +324,7 @@ async def wba_001(
     source_document_version_id: str,
     job_id: str,
     model: str = "gpt-4.1-mini",
+    embedding_batch_threshold: int = 0,
 ) -> dict[str, object]:
     """[WBA-001] Incremental Wiki Build.
 
@@ -343,6 +344,7 @@ async def wba_001(
         source_document_version_id=source_document_version_id,
         job_id=job_id,
         model=model,
+        embedding_batch_threshold=embedding_batch_threshold,
     )
 
 
@@ -408,6 +410,7 @@ async def rebuild_full_wiki(
     user_id: str,
     job_id: str,
     model: str = "gpt-4.1-mini",
+    embedding_batch_threshold: int = 0,
     classifier: WikiClassifier = classify_source_for_wiki,
     linker: WikiRelationLinker = link_wiki_relations,
     generated_at: str | None = None,
@@ -674,6 +677,8 @@ async def rebuild_full_wiki(
                 namespace_key=f"user/{user_id}",
                 document_version_ids=version_ids,
                 model="text-embedding-3-small",
+                job_id=job_id,
+                batch_threshold=embedding_batch_threshold,
             )
         except Exception as error:  # noqa: BLE001 - Wiki 교체는 이미 완료
             logger.warning("Full Wiki Rebuild 재임베딩 실패: %s", error)
@@ -693,6 +698,7 @@ async def wba_002(
     user_id: str,
     job_id: str,
     model: str = "gpt-4.1-mini",
+    embedding_batch_threshold: int = 0,
 ) -> FullWikiRebuildResult:
     """[WBA-002] Full Wiki Rebuild.
 
@@ -703,6 +709,7 @@ async def wba_002(
         user_id=user_id,
         job_id=job_id,
         model=model,
+        embedding_batch_threshold=embedding_batch_threshold,
     )
 
 

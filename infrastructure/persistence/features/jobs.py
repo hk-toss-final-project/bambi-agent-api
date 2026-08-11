@@ -544,6 +544,81 @@ async def complete_agent_job(
     )
 
 
+async def defer_agent_job_for_provider(
+    connection: AsyncConnection[DictRow],
+    *,
+    job: ClaimedAgentJob,
+    worker_id: str,
+    batch_item_id: str,
+) -> None:
+    """실행 Job을 waiting_provider로 바꾸고 Worker Lease를 즉시 해제한다."""
+    cursor = await connection.execute(
+        """
+        UPDATE agent.agent_jobs
+        SET status = 'waiting_provider',
+            progress = GREATEST(progress, 80),
+            result = %s,
+            retryable = false,
+            locked_at = NULL,
+            locked_by = NULL,
+            lease_expires_at = NULL,
+            updated_at = clock_timestamp()
+        WHERE id = %s
+          AND status = 'running'
+          AND locked_by = %s
+          AND lease_expires_at > clock_timestamp()
+        RETURNING id
+        """,
+        (Jsonb({"batch_item_id": batch_item_id}), job.job_id, worker_id),
+    )
+    if await cursor.fetchone() is None:
+        raise RuntimeError(f"Job Lease 소유권이 없습니다: {job.job_id}")
+    await connection.execute(
+        """
+        UPDATE agent.agent_job_attempts
+        SET status = 'completed',
+            completed_at = clock_timestamp(),
+            details = %s
+        WHERE job_id = %s AND attempt_number = %s
+        """,
+        (
+            Jsonb({"status": "waiting_provider", "batch_item_id": batch_item_id}),
+            job.job_id,
+            job.attempt_number,
+        ),
+    )
+
+
+async def complete_waiting_provider_job(
+    connection: AsyncConnection[DictRow],
+    *,
+    job_id: str,
+    user_id: str,
+    result: Mapping[str, object],
+) -> None:
+    """도메인 결과 저장이 끝난 waiting_provider Job을 최종 완료 처리한다."""
+    cursor = await connection.execute(
+        """
+        UPDATE agent.agent_jobs
+        SET status = 'completed',
+            progress = 100,
+            result = %s,
+            retryable = false,
+            error_code = NULL,
+            error_message = NULL,
+            completed_at = clock_timestamp(),
+            updated_at = clock_timestamp()
+        WHERE id = %s::uuid
+          AND user_id = %s
+          AND status = 'waiting_provider'
+        RETURNING id
+        """,
+        (Jsonb(dict(result)), job_id, user_id),
+    )
+    if await cursor.fetchone() is None:
+        raise RuntimeError("완료할 waiting_provider Job을 찾지 못했습니다.")
+
+
 async def fail_agent_job(
     connection: AsyncConnection[DictRow],
     *,

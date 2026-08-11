@@ -16,6 +16,8 @@ from .features.documents import wba_003, wba_004, wba_005
 from .features.interests import wba_006, wba_007
 from .features.summaries import wba_008, wba_009, wba_010
 from .features.embeddings import (
+    apply_wiki_embedding_batch_result,
+    enqueue_wiki_embedding_batches,
     generate_relation_query_embeddings,
     generate_wiki_embeddings,
     wba_011,
@@ -104,6 +106,8 @@ __all__ = [
     "rebuild_full_wiki",
     "generate_relation_query_embeddings",
     "generate_wiki_embeddings",
+    "apply_wiki_embedding_batch_result",
+    "enqueue_wiki_embedding_batches",
     "classify_source_for_wiki",
     "classify_wiki_source",
     "merge_wiki_classifications",

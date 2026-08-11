@@ -112,7 +112,7 @@ Partial Unique Index로 한 개만 유지합니다.
 | 테이블 | 성격 | 책임 | 핵심 관계·제약 | RLS | 현재 연결 |
 |---|---|---|---|---|---|
 | user_context_snapshots | Snapshot/Version | AI에 필요한 최소 사용자 설정을 버전별 보존 | user_id + context_version Unique, plan free/paid, Soft Delete | 적용 | 인메모리 대체 |
-| agent_jobs | Operational | API·Scheduler·Worker가 공유할 비동기 작업 상태 | feature_id + user_id + idempotency_key Unique, Retry/Progress/Result, Lease | 적용 | 인메모리 대체 |
+| agent_jobs | Operational | API·Scheduler·Worker가 공유할 비동기 작업 상태 | feature_id + user_id + idempotency_key Unique, Retry/Progress/Result, Lease, waiting_provider | 적용 | PostgreSQL 연결 |
 | agent_job_attempts | History | Job의 Worker별 실행 시도와 오류 이력 | job_id FK Cascade, job_id + attempt_number Unique | 적용 | Schema only |
 | llm_batches | Operational | OpenAI Batch 제출·Poll 상태와 input/output/error 파일 추적 | provider_batch_id Unique, endpoint·상태·24h Window 제약 | system 전용 | Batch Worker |
 | llm_batch_items | Operational/History | JSONL 요청과 custom_id별 응답·오류·Token·도메인 반영 Lease 보존 | custom_id Unique, 선택적 Job·Batch FK | 적용 | Batch Worker·도메인 반영 |

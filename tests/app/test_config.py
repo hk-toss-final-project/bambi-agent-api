@@ -24,6 +24,7 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("WIKI_LLM_MODEL", "gpt-4.1-mini")
     monkeypatch.setenv("REPORT_LLM_MODEL", "gpt-4.1-nano")
     monkeypatch.setenv("WIKI_EMBEDDING_MODEL", "text-embedding-3-small")
+    monkeypatch.setenv("WIKI_EMBEDDING_BATCH_THRESHOLD", "80")
     monkeypatch.setenv("PERSONAL_WIKI_WORKER_BATCH_SIZE", "3")
     monkeypatch.setenv("PERSONAL_WIKI_JOB_CONCURRENCY", "2")
     monkeypatch.setenv("REPORT_JOB_CONCURRENCY", "4")
@@ -60,6 +61,7 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     assert settings.wiki_llm_model == "gpt-4.1-mini"
     assert settings.report_llm_model == "gpt-4.1-nano"
     assert settings.wiki_embedding_model == "text-embedding-3-small"
+    assert settings.wiki_embedding_batch_threshold == 80
     assert settings.personal_wiki_worker_batch_size == 3
     assert settings.personal_wiki_job_concurrency == 2
     assert settings.report_job_concurrency == 4

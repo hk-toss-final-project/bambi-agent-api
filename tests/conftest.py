@@ -344,6 +344,7 @@ class InMemoryAgentJobRepository:
         scheduled_at: datetime | None = None,
         request_id: str,
         change_history_enabled: bool = False,
+        execution_mode: str = "sync",
     ) -> SubmittedGenerationJob:
         """실제 저장소처럼 컨텍스트를 요구하며 생성 Job을 멱등 접수한다."""
         if user_id not in self._contexts:
@@ -352,6 +353,7 @@ class InMemoryAgentJobRepository:
         self.last_report_type = report_type
         self.last_generation_scope = generation_scope
         self.last_interest_id = interest_id
+        self.last_execution_mode = execution_mode
         record, _created = self._submit_job(
             feature_id="SVC-008",
             job_type="report_generation",

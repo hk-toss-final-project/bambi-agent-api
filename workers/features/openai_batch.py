@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from psycopg.rows import dict_row
@@ -12,18 +12,23 @@ from psycopg_pool import AsyncConnectionPool
 from agent.llm.api import BatchProvider, OpenAIBatchProvider
 from infrastructure.persistence.api import (
     DueLlmBatch,
+    ClaimedBatchResultItem,
     ProviderBatchSnapshot,
     apply_llm_batch_result_lines,
     claim_due_llm_batches,
     claim_llm_batch,
+    claim_unapplied_batch_results,
+    mark_batch_result_applied,
     mark_llm_batch_submitted,
     release_failed_llm_batch_submission,
+    release_batch_result_application,
     set_system_job_scope,
     update_llm_batch_snapshot,
 )
 
 type ProviderFactory = Callable[[], BatchProvider]
 type CycleObserver = Callable[[list[dict[str, object]]], None]
+type ResultHandler = Callable[[Any, ClaimedBatchResultItem], Awaitable[object]]
 
 
 async def _claim_submission(
@@ -161,6 +166,80 @@ async def _poll_batch(
     }
 
 
+def _default_result_handlers() -> dict[str, ResultHandler]:
+    """workload별 도메인 결과 반영 함수를 공개 facade에서 구성한다."""
+    from agent.wiki_builder.api import apply_wiki_embedding_batch_result
+    from agent.report_builder.api import apply_report_generation_batch_result
+
+    return {
+        "wiki_embedding": apply_wiki_embedding_batch_result,
+        "report_generation": apply_report_generation_batch_result,
+    }
+
+
+async def _apply_domain_results(
+    pool: AsyncConnectionPool,
+    *,
+    worker_id: str,
+    limit: int,
+    lease_seconds: int,
+    handlers: Mapping[str, ResultHandler],
+) -> list[dict[str, object]]:
+    """완료 Item을 Lease로 점유해 workload Handler로 멱등 반영한다."""
+    async with pool.connection() as claim_connection:
+        async with claim_connection.transaction():
+            await set_system_job_scope(claim_connection)
+            items = await claim_unapplied_batch_results(
+                claim_connection,
+                worker_id=worker_id,
+                limit=limit,
+                lease_seconds=lease_seconds,
+            )
+    results: list[dict[str, object]] = []
+    for item in items:
+        handler = handlers.get(item.workload)
+        try:
+            if handler is None:
+                raise ValueError(f"Batch workload Handler가 없습니다: {item.workload}")
+            async with pool.connection() as connection:
+                async with connection.transaction():
+                    applied = await handler(connection, item)
+                    await set_system_job_scope(connection)
+                    await mark_batch_result_applied(
+                        connection,
+                        item_id=item.item_id,
+                        worker_id=worker_id,
+                    )
+        except Exception as error:  # noqa: BLE001 - Item별 실패를 격리한다
+            async with pool.connection() as connection:
+                async with connection.transaction():
+                    await set_system_job_scope(connection)
+                    await release_batch_result_application(
+                        connection,
+                        item_id=item.item_id,
+                        worker_id=worker_id,
+                        error=str(error),
+                    )
+            results.append(
+                {
+                    "item_id": item.item_id,
+                    "custom_id": item.custom_id,
+                    "status": "domain_apply_failed",
+                    "error": str(error),
+                }
+            )
+            continue
+        results.append(
+            {
+                "item_id": item.item_id,
+                "custom_id": item.custom_id,
+                "status": "domain_applied",
+                "applied": applied,
+            }
+        )
+    return results
+
+
 async def run_openai_batch_cycle(
     *,
     database_url: str,
@@ -170,6 +249,10 @@ async def run_openai_batch_cycle(
     poll_limit: int = 10,
     poll_interval_seconds: int = 60,
     poll_lease_seconds: int = 120,
+    worker_id: str = "openai-batch",
+    result_apply_limit: int = 100,
+    result_apply_lease_seconds: int = 300,
+    result_handlers: Mapping[str, ResultHandler] | None = None,
     provider: BatchProvider | None = None,
 ) -> list[dict[str, object]]:
     """제출과 상태 조회를 한 Cycle 실행하고 외부 호출 중 DB 연결을 반환한다."""
@@ -212,6 +295,19 @@ async def run_openai_batch_cycle(
                     poll_interval_seconds=poll_interval_seconds,
                 )
             )
+        results.extend(
+            await _apply_domain_results(
+                pool,
+                worker_id=worker_id,
+                limit=result_apply_limit,
+                lease_seconds=result_apply_lease_seconds,
+                handlers=(
+                    result_handlers
+                    if result_handlers is not None
+                    else _default_result_handlers()
+                ),
+            )
+        )
         return results
     finally:
         await pool.close()

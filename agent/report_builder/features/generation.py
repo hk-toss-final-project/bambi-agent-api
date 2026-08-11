@@ -8,6 +8,7 @@ import json
 import logging
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from agent.llm.api import complete, strip_json_fence
@@ -33,6 +34,15 @@ _MAX_RELATION_TEXT_CHARS = 300
 # 코드가 강제한다 — 프롬프트로만 부탁하면 모델이 10개를 주거나 문장을 넣는다.
 _MAX_CONTENT_TAGS = 5
 _MAX_CONTENT_TAG_CHARS = 20
+
+
+@dataclass(frozen=True, slots=True)
+class ReportGenerationPrompt:
+    """동기 호출과 OpenAI Batch가 공유하는 고정 Prompt와 허용 Citation."""
+
+    system_prompt: str
+    user_prompt: str
+    allowed_references: tuple[str, ...]
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
@@ -187,7 +197,7 @@ def _interest_relation_block(
     )
 
 
-def generate_report_content(
+def build_report_generation_prompt(
     *,
     topic: str,
     content_type: str,
@@ -197,8 +207,8 @@ def generate_report_content(
     correction: str = "",
     topics: Sequence[str] = (),
     interest_bundle: Mapping[str, object] | None = None,
-) -> GeneratedReportContent:
-    """개인 Wiki와 최신 Global 근거로 Report Builder 콘텐츠 JSON을 생성한다.
+) -> ReportGenerationPrompt:
+    """개인 Wiki와 최신 Global 근거로 Report Builder 생성 Prompt를 만든다.
 
     correction이 주어지면(품질 재생성 시) 이전 생성의 문제를 교정하는 지시를
     프롬프트 앞부분에 넣는다. 같은 근거·프롬프트로 다시 생성하면 결과가 같으므로,
@@ -281,10 +291,39 @@ def generate_report_content(
         + "아래 근거만 사용해 콘텐츠를 생성하세요.\n\n"
         + "\n\n---\n\n".join(context_blocks)
     )
-    raw = complete(_SYSTEM_PROMPT, user_prompt, model=model)
+    return ReportGenerationPrompt(
+        system_prompt=_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        allowed_references=tuple(included_references),
+    )
+
+
+def generate_report_content(
+    *,
+    topic: str,
+    content_type: str,
+    language: str,
+    contexts: Sequence[ReportContextDocument],
+    model: str = "gpt-4.1-mini",
+    correction: str = "",
+    topics: Sequence[str] = (),
+    interest_bundle: Mapping[str, object] | None = None,
+) -> GeneratedReportContent:
+    """공유 Prompt를 동기 OpenAI 경계로 실행하고 응답 JSON을 검증한다."""
+    prompt = build_report_generation_prompt(
+        topic=topic,
+        content_type=content_type,
+        language=language,
+        contexts=contexts,
+        model=model,
+        correction=correction,
+        topics=topics,
+        interest_bundle=interest_bundle,
+    )
+    raw = complete(prompt.system_prompt, prompt.user_prompt, model=model)
     return parse_report_generation(
         raw,
-        allowed_references=included_references,
+        allowed_references=prompt.allowed_references,
     )
 
 

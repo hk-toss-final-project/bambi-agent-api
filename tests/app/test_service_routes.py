@@ -352,6 +352,41 @@ def test_generation_request_allows_omitting_report_type(
     assert agent_jobs_fake.last_report_type == ""
 
 
+def test_generation_request_forwards_explicit_batch_mode(
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
+) -> None:
+    """비긴급 생성 요청의 batch 실행 선택을 저장소까지 전달한다."""
+    _put_context(client, "user-batch")
+
+    accepted = client.post(
+        "/internal/v1/users/user-batch/generations",
+        json={
+            "idempotency_key": "generation-batch-1",
+            "topic": "AI 에이전트",
+            "execution_mode": "batch",
+        },
+    )
+
+    assert accepted.status_code == 202
+    assert agent_jobs_fake.last_execution_mode == "batch"
+
+
+def test_generation_request_rejects_batch_change_history(client: TestClient) -> None:
+    """동기 재조사가 필요한 변경점 추적은 Batch 요청으로 접수하지 않는다."""
+    rejected = client.post(
+        "/internal/v1/users/user-batch/generations",
+        json={
+            "idempotency_key": "generation-batch-delta",
+            "topic": "AI 에이전트",
+            "execution_mode": "batch",
+            "change_history_enabled": True,
+        },
+    )
+
+    assert rejected.status_code == 422
+    assert rejected.json()["code"] == "REQUEST_VALIDATION_ERROR"
+
+
 def test_generation_request_forwards_interest_bundle_scope(
     client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
 ) -> None:

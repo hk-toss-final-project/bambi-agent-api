@@ -98,6 +98,11 @@ class Settings(BaseModel):
         default="text-embedding-3-small",
         description="Personal Wiki Chunk Embedding 모델",
     )
+    wiki_embedding_batch_threshold: int = Field(
+        default=100,
+        ge=0,
+        description="이 Chunk 수 이상인 Wiki Embedding을 OpenAI Batch로 전환",
+    )
     personal_wiki_worker_batch_size: int = Field(
         default=1, ge=1, le=100, description="Personal Wiki Worker Job Claim 개수"
     )
@@ -320,6 +325,9 @@ def load_settings() -> Settings:
         report_llm_model=os.getenv("REPORT_LLM_MODEL", "gpt-4.1-mini"),
         wiki_embedding_model=os.getenv(
             "WIKI_EMBEDDING_MODEL", "text-embedding-3-small"
+        ),
+        wiki_embedding_batch_threshold=_integer_env(
+            "WIKI_EMBEDDING_BATCH_THRESHOLD", 100
         ),
         personal_wiki_worker_batch_size=_integer_env(
             "PERSONAL_WIKI_WORKER_BATCH_SIZE", 1

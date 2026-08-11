@@ -258,6 +258,9 @@ COMMIT;
   되돌리고 이미 완료된 Item은 유지합니다.
 - 완료 결과의 Wiki Embedding·Report 저장은 별도 Lease로 점유합니다. 같은 Item을
   다시 읽더라도 도메인 Upsert와 `domain_applied_at`으로 중복 반영을 막습니다.
+- 명시적 비긴급 Report는 검색 Context를 먼저 고정한 뒤 Job을
+  `waiting_provider`로 전환해 Worker Lease를 해제합니다. 결과 반영 Transaction이
+  기존 Citation·후보·Publish Snapshot·Outbox를 저장하고 Job을 완료합니다.
 
 ### Publish Snapshot Batch Claim과 ACK
 

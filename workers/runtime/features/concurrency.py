@@ -51,6 +51,7 @@ async def wc_013[ItemT, ResultT](
     return list(await asyncio.gather(*(run(item) for item in items)))
 
 
+# MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def wc_014(
     connection: AsyncConnection[DictRow],
     *,

@@ -153,7 +153,7 @@ API, Scheduler와 Worker가 공유할 비동기 작업의 상태와 재시도 �
 | job_type | text | 필수 | Worker가 선택할 작업 유형 |
 | user_id | text | 선택 | 사용자별 작업이면 대상 사용자 식별자 |
 | idempotency_key | text | 필수 | 같은 기능·사용자의 중복 Job 생성을 막는 Key |
-| status | text | 자동, queued | queued, running, completed, failed, cancelled, dead_letter |
+| status | text | 자동, queued | queued, running, waiting_provider, completed, failed, cancelled, dead_letter |
 | priority | smallint | 자동, 100 | Dequeue 정렬 우선순위, 0~1000 |
 | progress | smallint | 자동, 0 | 작업 진행률, 0~100 |
 | payload | jsonb | 자동, 빈 Object | Worker에 전달할 입력 Payload |

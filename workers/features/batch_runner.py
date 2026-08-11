@@ -41,6 +41,7 @@ type DictRow = dict[str, Any]
 type JobProcessor = Callable[
     [AsyncConnection[DictRow], ClaimedAgentJob], Awaitable[dict[str, object]]
 ]
+type JobSerializationKey = Callable[[ClaimedAgentJob], str | None]
 
 logger = logging.getLogger("workers.batch_runner")
 
@@ -108,6 +109,33 @@ async def observe_job_provider_limits(
         logger.warning("Provider Rate Limit 응답 관찰 저장 실패: %s", observation_error)
 
 
+async def _lock_job_serialization_key(
+    connection: AsyncConnection[DictRow],
+    *,
+    key: str,
+) -> None:
+    """외부 처리 동안 유지할 PostgreSQL 세션 Advisory Lock을 획득한다."""
+    await connection.execute(
+        "SELECT pg_advisory_lock(hashtextextended(%s, 0))",
+        (key,),
+    )
+
+
+async def _unlock_job_serialization_key(
+    connection: AsyncConnection[DictRow],
+    *,
+    key: str,
+) -> None:
+    """Pool 반환 전에 PostgreSQL 세션 Advisory Lock을 명시적으로 해제한다."""
+    cursor = await connection.execute(
+        "SELECT pg_advisory_unlock(hashtextextended(%s, 0)) AS unlocked",
+        (key,),
+    )
+    row = await cursor.fetchone()
+    if row is not None and not bool(row.get("unlocked")):
+        logger.warning("Job 직렬화 Advisory Lock이 이미 해제됐습니다: %s", key)
+
+
 async def record_job_failure(
     connection: AsyncConnection[DictRow],
     *,
@@ -170,6 +198,7 @@ async def run_job_batch(
     lease_seconds: int,
     concurrency: int = 1,
     rate_limit_policy: ProviderRateLimitPolicy | None = None,
+    serialization_key: JobSerializationKey | None = None,
     error_code_prefix: str,
     process: JobProcessor,
 ) -> list[dict[str, object]]:
@@ -183,6 +212,7 @@ async def run_job_batch(
         lease_seconds: Job Lease 유지 시간(초)
         concurrency: Claim한 Job을 동시에 실행할 최대 수
         rate_limit_policy: Job별 OpenAI 예상 요청·Token 예약 정책
+        serialization_key: 같은 키의 Job을 Worker 프로세스 간 직렬화하는 함수
         error_code_prefix: 실패 오류 코드 접두사 (예: WIKI_BUILD)
         process: 점유한 Job 하나를 실행하는 함수 (connection, job)
 
@@ -219,7 +249,20 @@ async def run_job_batch(
                     await wait_for_provider_capacity(pool, policy=rate_limit_policy)
                 with capture_llm_calls() as observations:
                     async with pool.connection() as job_connection:
-                        result = await process(job_connection, job)
+                        key = serialization_key(job) if serialization_key else None
+                        if key:
+                            await _lock_job_serialization_key(
+                                job_connection,
+                                key=key,
+                            )
+                        try:
+                            result = await process(job_connection, job)
+                        finally:
+                            if key:
+                                await _unlock_job_serialization_key(
+                                    job_connection,
+                                    key=key,
+                                )
             except Exception as error:
                 if rate_limit_policy is not None:
                     await observe_job_provider_limits(

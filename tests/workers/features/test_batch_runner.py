@@ -181,6 +181,29 @@ def test_record_job_failure_returns_next_status_when_recorded() -> None:
     }
 
 
+def test_job_serialization_lock_uses_stable_postgres_advisory_key() -> None:
+    """직렬화 Lock과 Unlock은 같은 문자열 Hash를 사용한다."""
+    connection = _FakeConnection([[{"unlocked": True}]])
+
+    async def run() -> None:
+        """같은 키로 Lock을 획득하고 해제한다."""
+        await batch_runner._lock_job_serialization_key(  # noqa: SLF001
+            connection,  # type: ignore[arg-type]
+            key="personal_wiki_build:user-1",
+        )
+        await batch_runner._unlock_job_serialization_key(  # noqa: SLF001
+            connection,  # type: ignore[arg-type]
+            key="personal_wiki_build:user-1",
+        )
+
+    asyncio.run(run())
+
+    assert len(connection.executed) == 2
+    assert "pg_advisory_lock" in connection.executed[0][0]
+    assert "pg_advisory_unlock" in connection.executed[1][0]
+    assert connection.executed[0][1] == connection.executed[1][1]
+
+
 def test_run_job_batch_processes_each_job_and_isolates_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

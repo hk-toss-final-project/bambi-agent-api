@@ -76,7 +76,7 @@
 - [x] `PWE-001` 개인 Wiki 문서 Chunking
 - [x] `PWE-002` Chunk 저장 — `wiki_chunks` 멱등 Upsert
 - [ ] `PWE-004` Embedding 생성 — ❌ 독립 PWE Feature facade는 아직 스텁이다. 현재 Wiki Build는 `WBA-011` 내부 경로에서 변경 Entity·Concept Chunk의 1536차원 Vector를 생성한다.
-- [ ] `PWE-005` Embedding 저장 — ❌ 독립 PWE Feature facade는 아직 스텁이다. 현재 Wiki Build의 저장은 `WBA-011`이 `wiki_embeddings`에 멱등 반영하며 별도 재시도 Job은 미연결이다.
+- [ ] `PWE-005` Embedding 저장 — ❌ 독립 PWE Feature facade는 아직 스텁이다. 현재 Wiki Build의 저장은 `WBA-011`이 `wiki_embeddings`에 멱등 반영하며, 대량 Chunk는 OpenAI Batch Item 단위 재시도를 사용한다.
 - [x] `PRAG-001` Keyword Search — 개인 Wiki와 Global 저장 자료의 FTS·Trigram 후보 조회
 - [x] `PRAG-002` Vector Search — 기존 `wiki_embeddings`의 active config·동일 모델을 사용한 개인 Wiki Cosine top-k 조회
 - [x] `PRAG-003` Hybrid Search — 개인 Wiki Keyword·Vector 후보를 결정적 RRF로 결합하고 Global Keyword 결과를 유지한다. Embedding Provider·Vector 조회 실패는 Keyword로 폴백한다.
@@ -152,7 +152,7 @@
 
 - [x] `WORKER-001` Global Source Collector Worker — ⚠️ 수집·저장은 dev API 동기 실행만, 상주 Worker 없음
 - [x] `WORKER-002` Personal Wiki Builder Worker — 단발·상주(Loop) 모드 CLI
-- [x] `WORKER-003` Report Builder Generation Worker — 단발·상주(Loop) 모드 CLI, `SKIP LOCKED` Batch Claim (dev API와 같은 Handler 체인)
+- [x] `WORKER-003` Report Builder Generation Worker — 단발·상주(Loop) 모드 CLI, `SKIP LOCKED` Batch Claim. 명시적 비긴급 Job은 고정 Context로 OpenAI Batch에 등록하고 waiting_provider Lease를 해제한다
 - [ ] `SW-001` Content Ready 이벤트 수신 — ➖ service-worker(Spring) 책임, Agent API 범위 아님
 - [x] `SW-004` Publish Snapshot 조회 — 단건 조회 + Lease Batch Claim
 - [ ] `SW-007` service-db 콘텐츠 Upsert — ➖ service-worker 책임
@@ -160,7 +160,7 @@
 - [x] `WBA-001` Incremental Wiki Build
 - [x] `WBA-002` Full Wiki Rebuild — ⚠️ 삭제되지 않은 원본 Head의 최신 Version 전체를 메모리에서 재분류·검증한 뒤 최종 Transaction에서 기존 파생 Wiki를 supersede하고 새 Snapshot을 저장한다. 실행 경로는 `personal_wiki_build` Job Payload의 `mode=full_rebuild`이며 상주 Worker(WORKER-002)가 처리한다. 트리거는 ① 북마크 해제 등 원본 제거(`enqueue_personal_wiki_rebuild_job`) ② Scheduler 정기 유지보수(`MAINTENANCE_REBUILD_LIMIT`, 기본 7일 간격) 두 가지다. 정기 트리거는 사용자·날짜 단위 멱등이며 대기·실행 중인 재구성이 있는 사용자는 건너뛴다. 실제 DB E2E 운영 검증은 남아 있다
 - [x] `WBA-003` Wiki 문서 정규화 — Build 파이프라인에 포함
-- [x] `WBA-011` Wiki 재임베딩 — ⚠️ Incremental Build와 Full Rebuild의 변경 Entity·Concept Chunk를 재임베딩한다. 저장 후 best-effort라 Provider 실패 시 Wiki Build는 유지하며 별도 재시도 Job은 없음
+- [x] `WBA-011` Wiki 재임베딩 — Incremental Build와 Full Rebuild의 변경 Entity·Concept Chunk를 재임베딩한다. 설정 임계값 이상은 OpenAI Batch로 전환하고 Vector 수·차원 검증 후 멱등 반영한다
 - [x] `WBA-014` Wiki 품질 검증 — canonical 중복, endpoint·관계 유형, provenance·confidence·review·lifecycle·근거, 고아·모순·과밀 Hub를 결정적으로 검사하고 오류는 저장 전 차단
 - [x] `WBA-015` Wiki 삭제 반영 — delete 이벤트 기록 + 문서 soft-delete + Chunk 검색 제외 (동기·멱등, 2026-07-27 구현. 실행 경로는 삭제 API→Repository이며 wba_015는 커넥션 보유 호출자용 facade. D1 잠정: 재등장 시 기본 부활, tombstone 없음)
 - [x] `WBA-018` Claude 작성 Wiki 항목 저장 — MCP `wiki:write` 경로. 원문 분류·관계 Linker LLM 호출 없이 Claude 분류 결과로 `build_wiki_plan`/`persist_wiki_build`를 그대로 태우고, identity 충돌 해소만 필요 시 최소 LLM 호출. 저장 전 병합 Snapshot 기준 WBA-014 게이트를 통과해야 하며, Worker Queue를 거치지 않으므로 FK용 Agent Job을 `completed` 상태로 직접 생성
