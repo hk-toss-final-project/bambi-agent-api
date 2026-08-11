@@ -308,6 +308,7 @@ def test_navigation_snapshot_persists_selected_versions_and_saved_at() -> None:
 
     sql, params = connection.executed[1]
     assert "wiki_navigation_snapshots" in sql
+    assert "jsonb_build_object(%s::text, %s::jsonb)" in sql
     assert params is not None and params[0] == "삼성전자"
     snapshot = params[1].obj
     assert snapshot["selected_document_version_ids"] == ["version-samsung"]
