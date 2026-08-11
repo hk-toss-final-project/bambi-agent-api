@@ -30,6 +30,7 @@ from .client import (
     _retry_delay_for_error,
     _transient_error_types,
     is_retryable_openai_error,
+    record_llm_call_observation,
 )
 
 logger = logging.getLogger("agent.llm.tool_loop")
@@ -202,6 +203,12 @@ async def run_tool_loop(
         usage = getattr(response, "usage_metadata", None) or {}
         input_tokens += int(usage.get("input_tokens") or 0)
         output_tokens += int(usage.get("output_tokens") or 0)
+        record_llm_call_observation(
+            model=model,
+            input_tokens=int(usage.get("input_tokens") or 0),
+            output_tokens=int(usage.get("output_tokens") or 0),
+            value=response,
+        )
         messages.append(response)
 
         tool_calls = list(getattr(response, "tool_calls", None) or [])

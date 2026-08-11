@@ -157,6 +157,12 @@ from .features.onboarding_contexts import (
 from .features.events import db_027
 from .features.api_keys import db_028
 from .features.usage import db_029
+from .features.provider_rate_limits import (
+    ProviderRateLimitDecision,
+    observe_provider_rate_limits,
+    parse_rate_limit_reset,
+    reserve_provider_capacity,
+)
 from .features.audit import db_030
 from .features.interest_profiles import (
     ConnectionInterestProfileRepository,
@@ -204,6 +210,10 @@ __all__ = [
     "db_028",
     "db_029",
     "db_030",
+    "ProviderRateLimitDecision",
+    "observe_provider_rate_limits",
+    "parse_rate_limit_reset",
+    "reserve_provider_capacity",
     "ConnectionInterestBundleRepository",
     "load_personal_wiki_vector_context",
     "RelationSupportSyncResult",

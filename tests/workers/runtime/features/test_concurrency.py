@@ -4,7 +4,8 @@ import asyncio
 
 import pytest
 
-from workers.runtime.features.concurrency import wc_013
+from workers.runtime.features import concurrency
+from workers.runtime.features.concurrency import ProviderRateLimitPolicy, wc_013
 
 
 def test_wc_013_limits_concurrency_and_preserves_result_order() -> None:
@@ -35,3 +36,32 @@ def test_wc_013_rejects_invalid_concurrency() -> None:
 
     with pytest.raises(ValueError, match="max_concurrency"):
         asyncio.run(wc_013([1], process, max_concurrency=0))
+
+
+def test_wc_014_delegates_postgres_capacity_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WC-014가 정책의 예상 요청·Token을 PostgreSQL 원자 예약에 전달한다."""
+    captured: dict[str, object] = {}
+    expected = object()
+
+    async def fake_reserve(connection: object, **kwargs: object) -> object:
+        """예약 호출 인자를 기록하고 고정 결정을 반환한다."""
+        captured.update(kwargs)
+        return expected
+
+    monkeypatch.setattr(concurrency, "reserve_provider_capacity", fake_reserve)
+    policy = ProviderRateLimitPolicy(
+        provider="openai",
+        resource_key="gpt-4.1-mini",
+        estimated_requests=8,
+        estimated_tokens=30_000,
+        default_rpm=60,
+        default_tpm=60_000,
+    )
+
+    result = asyncio.run(concurrency.wc_014(object(), policy=policy))  # type: ignore[arg-type]
+
+    assert result is expected
+    assert captured["request_count"] == 8
+    assert captured["estimated_tokens"] == 30_000

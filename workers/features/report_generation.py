@@ -20,6 +20,7 @@ from infrastructure.persistence.api import (
 )
 from shared.contracts import FeatureRequest
 from workers.features.batch_runner import run_job_batch
+from workers.runtime.api import ProviderRateLimitPolicy
 
 type DictRow = dict[str, Any]
 
@@ -120,6 +121,7 @@ async def run_report_generation_batch(
     worker_id: str,
     limit: int = 1,
     concurrency: int = 1,
+    rate_limit_policy: ProviderRateLimitPolicy | None = None,
     lease_seconds: int = 600,
     model: str = "gpt-4.1-mini",
 ) -> list[dict[str, object]]:
@@ -143,6 +145,7 @@ async def run_report_generation_batch(
         limit=limit,
         lease_seconds=lease_seconds,
         concurrency=concurrency,
+        rate_limit_policy=rate_limit_policy,
         error_code_prefix="REPORT_GENERATION",
         process=process,
     )
@@ -155,6 +158,7 @@ async def worker_003(
     worker_id: str,
     limit: int = 1,
     concurrency: int = 1,
+    rate_limit_policy: ProviderRateLimitPolicy | None = None,
     lease_seconds: int = 600,
     model: str = "gpt-4.1-mini",
 ) -> list[dict[str, object]]:
@@ -170,6 +174,7 @@ async def worker_003(
         worker_id=worker_id,
         limit=limit,
         concurrency=concurrency,
+        rate_limit_policy=rate_limit_policy,
         lease_seconds=lease_seconds,
         model=model,
     )

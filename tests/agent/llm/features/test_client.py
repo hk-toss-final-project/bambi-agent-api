@@ -133,6 +133,34 @@ def test_complete_with_usage_returns_request_and_rate_limit_headers(
     }
 
 
+def test_capture_llm_calls_collects_usage_and_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Worker Capture Context가 호출 사용량과 Provider 헤더를 함께 수집한다."""
+    fake = _FakeClient(
+        failures=0,
+        response=_FakeResponse(
+            "본문",
+            {"input_tokens": 11, "output_tokens": 7},
+            {
+                "X-Request-ID": "req-capture",
+                "X-RateLimit-Remaining-Tokens": "999",
+            },
+        ),
+    )
+    _patch_boundary(monkeypatch, fake)
+
+    with llm_client.capture_llm_calls() as captured:
+        llm_client.complete_with_usage("system", "user", model="test-model")
+
+    assert len(captured) == 1
+    assert captured[0].model == "test-model"
+    assert captured[0].input_tokens == 11
+    assert captured[0].output_tokens == 7
+    assert captured[0].request_id == "req-capture"
+    assert captured[0].headers["x-ratelimit-remaining-tokens"] == "999"
+
+
 class _QuotaError(RuntimeError):
     """재시도하면 안 되는 사용량 한도 오류."""
 

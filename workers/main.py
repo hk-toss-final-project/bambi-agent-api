@@ -18,7 +18,25 @@ from workers.api import (
     worker_002,
     worker_003,
 )
-from workers.runtime.api import wc_001
+from workers.runtime.api import ProviderRateLimitPolicy, wc_001
+
+
+def _openai_rate_policy(
+    settings: Settings,
+    *,
+    model: str,
+    estimated_requests: int,
+    estimated_tokens: int,
+) -> ProviderRateLimitPolicy:
+    """환경 설정을 Worker Job의 OpenAI 모델별 예약 정책으로 변환한다."""
+    return ProviderRateLimitPolicy(
+        provider="openai",
+        resource_key=model,
+        estimated_requests=estimated_requests,
+        estimated_tokens=estimated_tokens,
+        default_rpm=settings.openai_default_rpm,
+        default_tpm=settings.openai_default_tpm,
+    )
 
 
 def _parse_args() -> argparse.Namespace:
@@ -143,6 +161,7 @@ async def _run_batch_once(
             ),
         )
     if args.worker == "report-generation":
+        model = args.model or settings.report_llm_model
         return await worker_003(
             database_url=settings.agent_database_url,
             worker_id=worker_id,
@@ -151,8 +170,15 @@ async def _run_batch_once(
             lease_seconds=(
                 args.lease_seconds or settings.personal_wiki_job_lease_seconds
             ),
-            model=args.model or settings.report_llm_model,
+            model=model,
+            rate_limit_policy=_openai_rate_policy(
+                settings,
+                model=model,
+                estimated_requests=settings.report_openai_requests_per_job,
+                estimated_tokens=settings.report_openai_tokens_per_job,
+            ),
         )
+    model = args.model or settings.wiki_llm_model
     return await worker_002(
         database_url=settings.agent_database_url,
         worker_id=worker_id,
@@ -161,7 +187,13 @@ async def _run_batch_once(
         lease_seconds=(
             args.lease_seconds or settings.personal_wiki_job_lease_seconds
         ),
-        model=args.model or settings.wiki_llm_model,
+        model=model,
+        rate_limit_policy=_openai_rate_policy(
+            settings,
+            model=model,
+            estimated_requests=settings.wiki_openai_requests_per_job,
+            estimated_tokens=settings.wiki_openai_tokens_per_job,
+        ),
     )
 
 
@@ -200,6 +232,7 @@ async def _run() -> None:
         print(json.dumps(results, ensure_ascii=False, default=str), flush=True)
 
     if args.worker == "report-generation":
+        model = args.model or settings.report_llm_model
         await wc_001(
             database_url=settings.agent_database_url,
             worker_id=worker_id,
@@ -208,7 +241,13 @@ async def _run() -> None:
             lease_seconds=(
                 args.lease_seconds or settings.personal_wiki_job_lease_seconds
             ),
-            model=args.model or settings.report_llm_model,
+            model=model,
+            rate_limit_policy=_openai_rate_policy(
+                settings,
+                model=model,
+                estimated_requests=settings.report_openai_requests_per_job,
+                estimated_tokens=settings.report_openai_tokens_per_job,
+            ),
             interval_seconds=args.interval_seconds,
             max_batches=None,
             job_type="report_generation",
@@ -229,13 +268,20 @@ async def _run() -> None:
             on_batch=on_batch,
         )
         return
+    model = args.model or settings.wiki_llm_model
     await wc_001(
         database_url=settings.agent_database_url,
         worker_id=worker_id,
         limit=args.limit or settings.personal_wiki_worker_batch_size,
         concurrency=args.concurrency or settings.personal_wiki_job_concurrency,
         lease_seconds=(args.lease_seconds or settings.personal_wiki_job_lease_seconds),
-        model=args.model or settings.wiki_llm_model,
+        model=model,
+        rate_limit_policy=_openai_rate_policy(
+            settings,
+            model=model,
+            estimated_requests=settings.wiki_openai_requests_per_job,
+            estimated_tokens=settings.wiki_openai_tokens_per_job,
+        ),
         interval_seconds=args.interval_seconds,
         max_batches=None,
         job_type="personal_wiki_build",

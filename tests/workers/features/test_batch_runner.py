@@ -3,12 +3,14 @@
 import asyncio
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
-from infrastructure.persistence.api import ClaimedAgentJob
+from infrastructure.persistence.api import ClaimedAgentJob, ProviderRateLimitDecision
 from workers.features import batch_runner
+from workers.runtime.api import ProviderRateLimitPolicy
 
 
 class _FakeCursor:
@@ -65,6 +67,76 @@ def _job(job_id: str) -> ClaimedAgentJob:
         max_attempts=3,
         payload={},
     )
+
+
+def _rate_policy() -> ProviderRateLimitPolicy:
+    """Batch 러너 테스트용 OpenAI 예약 정책을 만든다."""
+    return ProviderRateLimitPolicy(
+        provider="openai",
+        resource_key="gpt-4.1-mini",
+        estimated_requests=2,
+        estimated_tokens=10_000,
+        default_rpm=60,
+        default_tpm=60_000,
+        max_wait_slice_seconds=5,
+    )
+
+
+def test_wait_for_provider_capacity_releases_connection_before_sleep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RPM·TPM 대기는 Pool 연결을 반환한 뒤 수행해 연결 고갈을 막는다."""
+    active_connections = 0
+    sleeps: list[float] = []
+    decisions = [
+        ProviderRateLimitDecision(
+            allowed=False,
+            retry_at=datetime.now(UTC) + timedelta(seconds=10),
+            remaining_requests=0,
+            remaining_tokens=0,
+        ),
+        ProviderRateLimitDecision(
+            allowed=True,
+            retry_at=None,
+            remaining_requests=10,
+            remaining_tokens=10_000,
+        ),
+    ]
+
+    class _Pool:
+        """활성 대여 수를 기록하는 Pool 대역."""
+
+        @asynccontextmanager
+        async def connection(self) -> AsyncIterator[_FakeConnection]:
+            """연결 대여 구간의 활성 수를 증감한다."""
+            nonlocal active_connections
+            active_connections += 1
+            try:
+                yield _FakeConnection()
+            finally:
+                active_connections -= 1
+
+    async def fake_reserve(connection: Any, **kwargs: Any) -> Any:
+        """대기 후 허용 결정을 순서대로 반환한다."""
+        return decisions.pop(0)
+
+    async def fake_sleep(delay: float) -> None:
+        """Sleep 시점에 DB 연결이 반환됐는지 검증한다."""
+        assert active_connections == 0
+        sleeps.append(delay)
+
+    monkeypatch.setattr(batch_runner, "wc_014", fake_reserve)
+    monkeypatch.setattr(batch_runner.asyncio, "sleep", fake_sleep)
+
+    asyncio.run(
+        batch_runner.wait_for_provider_capacity(  # type: ignore[arg-type]
+            _Pool(),
+            policy=_rate_policy(),
+        )
+    )
+
+    assert sleeps == [5]
+    assert active_connections == 0
 
 
 def test_record_job_failure_reports_lease_lost_instead_of_raising() -> None:

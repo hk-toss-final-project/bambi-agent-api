@@ -5,10 +5,13 @@
 
 from .features.client import (
     LlmCompletion,
+    LlmCallObservation,
+    capture_llm_calls,
     complete,
     complete_with_usage,
     is_retryable_openai_error,
     retry_after_seconds_from_error,
+    response_headers_from_value,
 )
 from .features.completion import llm_001, llm_002, llm_003
 from .features.embedding_client import embed_texts, get_embedding_client
@@ -30,10 +33,13 @@ from .features.safety import llm_017, llm_018
 
 __all__ = [
     "LlmCompletion",
+    "LlmCallObservation",
+    "capture_llm_calls",
     "complete",
     "complete_with_usage",
     "is_retryable_openai_error",
     "retry_after_seconds_from_error",
+    "response_headers_from_value",
     "embed_texts",
     "get_embedding_client",
     "strip_json_fence",

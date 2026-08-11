@@ -81,6 +81,9 @@ ONBOARDING_CONTEXT_MIGRATION_PATH = (
     / "migrations"
     / "0019_onboarding_topic_contexts.sql"
 )
+PROVIDER_RATE_GOVERNOR_MIGRATION_PATH = (
+    PROJECT_ROOT / "database" / "migrations" / "0023_openai_rate_governor.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
@@ -95,6 +98,7 @@ MIGRATION_PATHS = (
     WIKI_RELATION_LIFECYCLE_MIGRATION_PATH,
     PERSONAL_WIKI_RESET_MIGRATION_PATH,
     ONBOARDING_CONTEXT_MIGRATION_PATH,
+    PROVIDER_RATE_GOVERNOR_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
@@ -216,6 +220,7 @@ def test_migration_contains_all_agent_db_feature_tables() -> None:
         "event_outbox",
         "api_keys",
         "usage_logs",
+        "provider_rate_limits",
         "audit_logs",
         "publish_snapshots",
     }
@@ -324,6 +329,18 @@ def test_migration_defines_vector_search_and_rls_boundaries() -> None:
     assert "CREATE POLICY wiki_document_read" in migration
     assert "CREATE POLICY wiki_document_write" in migration
     assert "namespace_key = 'user/' || agent.current_user_id()" in migration
+
+
+def test_provider_rate_governor_migration_tracks_rpm_tpm_and_blocking() -> None:
+    """Provider Rate Governor가 요청·Token·차단 상태를 공유하는지 검증한다."""
+    migration = _read(PROVIDER_RATE_GOVERNOR_MIGRATION_PATH)
+
+    assert "CREATE TABLE agent.provider_rate_limits" in migration
+    assert "PRIMARY KEY (provider, resource_key)" in migration
+    assert "remaining_requests bigint" in migration
+    assert "remaining_tokens bigint" in migration
+    assert "blocked_until timestamptz" in migration
+    assert "VALUES (23," in migration
 
 
 def test_migration_does_not_create_service_owned_tables() -> None:

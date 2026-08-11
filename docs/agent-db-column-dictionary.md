@@ -969,6 +969,26 @@ Provider 호출의 Token, 비용, 지연, 추적 정보를 사용량 단위로 �
 | metadata | jsonb | 자동, 빈 Object | Provider 응답 ID 등 추가 운영 정보 |
 | created_at | timestamptz | 자동 | 사용량 발생 시각 |
 
+### provider_rate_limits
+
+Provider·모델별 동기 API 요청·Token 잔여량과 Reset 시각을 Worker 사이에 공유합니다.
+
+| 컬럼 | 타입 | 필수·기본값 | 설명 |
+|---|---|---|---|
+| provider | text | 필수, PK | Provider 이름. 현재 openai |
+| resource_key | text | 필수, PK | 호출 제한을 공유하는 모델 또는 Provider Resource Key |
+| limit_requests | bigint | 필수 | 관찰 또는 기본 설정에서 얻은 요청 상한 |
+| remaining_requests | bigint | 필수 | 예약 가능한 남은 요청 수 |
+| reset_requests_at | timestamptz | 필수 | 요청 잔여량 초기화 시각 |
+| limit_tokens | bigint | 필수 | 관찰 또는 기본 설정에서 얻은 Token 상한 |
+| remaining_tokens | bigint | 필수 | 예약 가능한 남은 Token 수 |
+| reset_tokens_at | timestamptz | 필수 | Token 잔여량 초기화 시각 |
+| blocked_until | timestamptz | 선택 | 임시 429 Retry-After가 끝나는 시각 |
+| last_request_id | text | 선택 | 마지막 OpenAI x-request-id |
+| metadata | jsonb | 자동, 빈 객체 | 마지막 관찰 헤더 등 확장 정보 |
+| created_at | timestamptz | 자동 | 최초 상태 생성 시각 |
+| updated_at | timestamptz | 자동 | 예약 또는 헤더 반영 시각 |
+
 ### audit_logs
 
 관리자 변경과 민감 데이터 접근을 변경하지 않는 Append-only Audit로 기록합니다.

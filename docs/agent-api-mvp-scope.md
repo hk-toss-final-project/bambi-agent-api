@@ -177,6 +177,8 @@
 - [ ] `WC-009` Idempotency 처리 — ❌ Worker 공통 멱등 처리 기능 미구현. 개별 DB·Job 경계의 Unique·Upsert는 유지하며 기존 항등 위임 함수는 스텁으로 복원
 - [x] `WC-013` Concurrency 제어 — Batch Claim 크기와 실제 Job 실행 동시성을
   별도 설정으로 제한하고 동시 Job마다 Pool의 독립 DB 연결을 사용한다
+- [x] `WC-014` 외부 API Rate Limit — PostgreSQL에서 모델별 예상 RPM·TPM을
+  원자 예약하고 OpenAI 응답 헤더·Retry-After로 공유 잔여량과 Reset을 보정한다
 - [x] `DB-004` 개인 Wiki Chunk 저장
 - [x] `DB-005` 개인 Wiki Embedding 저장
 - [x] `DB-026` Agent Job 저장 — Claim·Lease·Attempt 이력
@@ -432,6 +434,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | WC-006 | Retry 정책 | 재시도 가능한 Chunking·Embedding 실패를 Backoff 후 다시 처리한다. |
 | WC-009 | Idempotency 처리 | 같은 원본을 다시 처리해도 document_kind+document_key, Wiki·출처·관계·Snapshot Row가 중복되지 않게 한다. |
 | WC-013 | Concurrency 제어 | Claim 크기와 Embedding 동시 실행 수를 별도로 제한한다. |
+| WC-014 | 외부 API Rate Limit | 모델별 RPM·TPM을 PostgreSQL에서 공유하고 응답 헤더로 속도를 보정한다. |
 | DB-004 | 개인 Wiki Chunk 저장 | wiki_chunks에 문서 Version별 Chunk를 영속 저장한다. |
 | DB-005 | 개인 Wiki Embedding 저장 | wiki_embeddings에 Chunk별 Vector를 영속 저장한다. |
 | DB-026 | Agent Job 저장 | agent_jobs와 agent_job_attempts에 Claim, Lease, 상태와 시도 이력을 저장한다. |

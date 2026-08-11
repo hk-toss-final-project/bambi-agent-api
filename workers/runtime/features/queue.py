@@ -23,6 +23,8 @@ from infrastructure.persistence.api import (
     db_026,
 )
 
+from .concurrency import ProviderRateLimitPolicy
+
 type BatchResults = list[dict[str, object]]
 type BatchRunner = Callable[..., Awaitable[BatchResults]]
 type BatchObserver = Callable[[BatchResults], None]
@@ -73,6 +75,7 @@ async def consume_personal_wiki_jobs(
     worker_id: str,
     limit: int,
     concurrency: int = 1,
+    rate_limit_policy: ProviderRateLimitPolicy | None = None,
     lease_seconds: int,
     model: str,
     interval_seconds: int = 60,
@@ -87,6 +90,7 @@ async def consume_personal_wiki_jobs(
         worker_id: Job Lease 소유자 식별자
         limit: Batch 하나가 Claim할 최대 Job 수 (WC-001 Batch 크기)
         concurrency: Claim한 Job을 동시에 실행할 최대 수
+        rate_limit_policy: Job별 OpenAI 예상 요청·Token 예약 정책
         lease_seconds: Job Lease 유지 시간(초)
         model: Personal Wiki 분류 LLM 모델
         interval_seconds: 처리할 Job이 없을 때 다음 확인까지 대기 초
@@ -109,6 +113,7 @@ async def consume_personal_wiki_jobs(
             "worker_id": worker_id,
             "limit": limit,
             "concurrency": concurrency,
+            "rate_limit_policy": rate_limit_policy,
             "lease_seconds": lease_seconds,
             "model": model,
         },
@@ -124,6 +129,7 @@ async def consume_report_generation_jobs(
     worker_id: str,
     limit: int,
     concurrency: int = 1,
+    rate_limit_policy: ProviderRateLimitPolicy | None = None,
     lease_seconds: int,
     model: str,
     interval_seconds: int = 60,
@@ -141,6 +147,7 @@ async def consume_report_generation_jobs(
         worker_id: Job Lease 소유자 식별자
         limit: Batch 하나가 Claim할 최대 Job 수 (WC-001 Batch 크기)
         concurrency: Claim한 Job을 동시에 실행할 최대 수
+        rate_limit_policy: Job별 OpenAI 예상 요청·Token 예약 정책
         lease_seconds: Job Lease 유지 시간(초)
         model: Report Builder 콘텐츠 생성 LLM 모델
         interval_seconds: 처리할 Job이 없을 때 다음 확인까지 대기 초
@@ -163,6 +170,7 @@ async def consume_report_generation_jobs(
             "worker_id": worker_id,
             "limit": limit,
             "concurrency": concurrency,
+            "rate_limit_policy": rate_limit_policy,
             "lease_seconds": lease_seconds,
             "model": model,
         },
@@ -209,6 +217,7 @@ async def wc_001(
     worker_id: str,
     limit: int = 1,
     concurrency: int = 1,
+    rate_limit_policy: ProviderRateLimitPolicy | None = None,
     lease_seconds: int = 600,
     model: str = "gpt-4.1-mini",
     interval_seconds: int = 0,
@@ -253,6 +262,7 @@ async def wc_001(
         worker_id=worker_id,
         limit=limit,
         concurrency=concurrency,
+        rate_limit_policy=rate_limit_policy,
         lease_seconds=lease_seconds,
         model=model,
         interval_seconds=interval_seconds,

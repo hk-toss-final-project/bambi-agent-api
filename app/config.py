@@ -113,6 +113,36 @@ class Settings(BaseModel):
         le=50,
         description="Report Builder Worker의 실제 동시 Job 실행 수",
     )
+    openai_default_rpm: int = Field(
+        default=60,
+        ge=1,
+        description="응답 헤더 관찰 전 OpenAI 요청 상한 기본값",
+    )
+    openai_default_tpm: int = Field(
+        default=60_000,
+        ge=1,
+        description="응답 헤더 관찰 전 OpenAI Token 상한 기본값",
+    )
+    wiki_openai_requests_per_job: int = Field(
+        default=8,
+        ge=1,
+        description="Wiki Job 하나의 보수적 OpenAI 요청 예약량",
+    )
+    wiki_openai_tokens_per_job: int = Field(
+        default=30_000,
+        ge=0,
+        description="Wiki Job 하나의 보수적 OpenAI Token 예약량",
+    )
+    report_openai_requests_per_job: int = Field(
+        default=12,
+        ge=1,
+        description="Report Job 하나의 보수적 OpenAI 요청 예약량",
+    )
+    report_openai_tokens_per_job: int = Field(
+        default=50_000,
+        ge=0,
+        description="Report Job 하나의 보수적 OpenAI Token 예약량",
+    )
     personal_wiki_job_lease_seconds: int = Field(
         default=600, ge=30, le=3600, description="Personal Wiki Job Lease 초"
     )
@@ -270,6 +300,20 @@ def load_settings() -> Settings:
             "PERSONAL_WIKI_JOB_CONCURRENCY", 1
         ),
         report_job_concurrency=_integer_env("REPORT_JOB_CONCURRENCY", 1),
+        openai_default_rpm=_integer_env("OPENAI_DEFAULT_RPM", 60),
+        openai_default_tpm=_integer_env("OPENAI_DEFAULT_TPM", 60_000),
+        wiki_openai_requests_per_job=_integer_env(
+            "WIKI_OPENAI_REQUESTS_PER_JOB", 8
+        ),
+        wiki_openai_tokens_per_job=_integer_env(
+            "WIKI_OPENAI_TOKENS_PER_JOB", 30_000
+        ),
+        report_openai_requests_per_job=_integer_env(
+            "REPORT_OPENAI_REQUESTS_PER_JOB", 12
+        ),
+        report_openai_tokens_per_job=_integer_env(
+            "REPORT_OPENAI_TOKENS_PER_JOB", 50_000
+        ),
         personal_wiki_job_lease_seconds=_integer_env(
             "PERSONAL_WIKI_JOB_LEASE_SECONDS", 600
         ),

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from time import monotonic
 from typing import TypeVar
@@ -43,6 +45,57 @@ class LlmCompletion:
     rate_limit_headers: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class LlmCallObservation:
+    """Rate Governor와 사용량 기록에 전달할 LLM 호출 관찰값."""
+
+    model: str
+    input_tokens: int
+    output_tokens: int
+    request_id: str | None
+    headers: dict[str, str] = field(default_factory=dict)
+
+
+_observations: ContextVar[list[LlmCallObservation] | None] = ContextVar(
+    "llm_call_observations",
+    default=None,
+)
+
+
+@contextmanager
+def capture_llm_calls() -> list[LlmCallObservation]:
+    """현재 Job 안의 LLM 호출 관찰값을 모아 반환하는 Context를 연다."""
+    captured: list[LlmCallObservation] = []
+    token = _observations.set(captured)
+    try:
+        yield captured
+    finally:
+        _observations.reset(token)
+
+
+def record_llm_call_observation(
+    *,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    value: object,
+) -> None:
+    """활성 Capture Context가 있으면 호출 사용량과 응답 헤더를 추가한다."""
+    captured = _observations.get()
+    if captured is None:
+        return
+    headers = response_headers_from_value(value)
+    captured.append(
+        LlmCallObservation(
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            request_id=headers.get("x-request-id"),
+            headers=headers,
+        )
+    )
+
+
 def _transient_error_types() -> tuple[type[Exception], ...]:
     """재시도 가능한 일시적 Provider 오류 타입을 반환한다."""
     from openai import (
@@ -73,7 +126,7 @@ def _get_client(model: str, temperature: float, timeout_seconds: float) -> objec
     return _clients[key]
 
 
-def _response_headers(value: object) -> dict[str, str]:
+def response_headers_from_value(value: object) -> dict[str, str]:
     """SDK 응답 또는 예외에서 HTTP 응답 헤더를 소문자 Key로 추출한다."""
     response_metadata = getattr(value, "response_metadata", None)
     raw_headers: object = None
@@ -116,7 +169,9 @@ def is_retryable_openai_error(error: Exception) -> bool:
 
 def retry_after_seconds_from_error(error: Exception) -> float | None:
     """Provider 오류의 Retry-After 헤더를 대기 초로 변환한다."""
-    return parse_retry_after_seconds(_response_headers(error).get("retry-after"))
+    return parse_retry_after_seconds(
+        response_headers_from_value(error).get("retry-after")
+    )
 
 
 def _retry_delay_for_error(error: Exception, attempt: int) -> float:
@@ -189,12 +244,20 @@ def complete_with_usage(
         max_retry_seconds=max_retry_seconds,
     )
     usage = getattr(response, "usage_metadata", None) or {}
-    headers = _response_headers(response)
+    headers = response_headers_from_value(response)
+    input_tokens = int(usage.get("input_tokens") or 0)
+    output_tokens = int(usage.get("output_tokens") or 0)
+    record_llm_call_observation(
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        value=response,
+    )
     return LlmCompletion(
         text=str(response.content).strip(),
         model=model,
-        input_tokens=int(usage.get("input_tokens") or 0),
-        output_tokens=int(usage.get("output_tokens") or 0),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
         request_id=headers.get("x-request-id"),
         rate_limit_headers={
             key: value for key, value in headers.items() if key.startswith("x-ratelimit-")

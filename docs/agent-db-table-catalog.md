@@ -74,7 +74,7 @@ user_context_snapshots와 agent_jobs 대신 인메모리 저장소를 사용합�
 | 변경점 추적 | change_history_runs, change_history_facts |
 | 평가·추천 | quality_evaluations, safety_evaluations, recommendation_candidates |
 | 발행 | publish_snapshots, publish_attempts |
-| 이벤트·보안·운영 | event_outbox, event_inbox, api_keys, usage_logs, audit_logs |
+| 이벤트·보안·운영 | event_outbox, event_inbox, api_keys, usage_logs, provider_rate_limits, audit_logs |
 | Migration 관리 | schema_migrations |
 
 0001_initial.sql이 기본 38개 테이블과 Index, RLS Policy, Trigger를 생성합니다.
@@ -245,6 +245,7 @@ superseded입니다. claimed 상태에서는 claim_id, claimed_by, lease_expires
 | event_inbox | History/Event | Consumer별 수신 Event 멱등성과 처리 결과 기록 | consumer_name + event_id Unique, payload_hash 검증 | 없음 | Schema only |
 | api_keys | Master/Security | External API Key의 Hash, Prefix, Scope와 상태 관리 | Key 원문 미저장, key_prefix/key_hash Unique | 없음 | Schema only |
 | usage_logs | History | Provider 호출의 Token, 비용, 지연과 Trace 누적 | 선택적 Job/Generation Run FK, 사용자 조회 Index | 적용 | Schema only |
+| provider_rate_limits | Operational | Provider·모델별 RPM/TPM 예약과 응답 헤더 상태 공유 | provider + resource_key PK, blocked_until 부분 Index | 없음 | Worker Rate Governor |
 | audit_logs | History | 관리자 변경과 민감 데이터 접근 이력 | Resource·Target User 조회 Index | 없음 | Schema only |
 
 audit_logs는 설계상 Append-only지만 현재 Migration 자체에는 UPDATE/DELETE를
