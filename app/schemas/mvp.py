@@ -576,6 +576,15 @@ class CitationSchema(ImmutableSchema):
     url: str = Field(description="출처 URL")
 
 
+class ReportCoverImageSchema(ImmutableSchema):
+    """리포트 상단 대표 이미지와 원문 출처."""
+
+    url: str = Field(description="원문에서 수집한 대표 이미지 HTTP(S) URL")
+    source_url: str = Field(description="이미지가 연결된 실제 인용 출처 URL")
+    source_title: str = Field(description="화면 출처 표시에 사용할 원문 제목")
+    reference: str = Field(description="대표 이미지가 연결된 Citation 참조(P/G/L)")
+
+
 class PublishSnapshotResponse(ImmutableSchema):
     """Service Worker가 service-db에 저장할 발행 Snapshot."""
 
@@ -588,6 +597,13 @@ class PublishSnapshotResponse(ImmutableSchema):
     body: str = Field(description="발행 콘텐츠 본문")
     citations: list[CitationSchema] = Field(
         default_factory=list, description="본문과 연결된 출처 목록"
+    )
+    cover_image: ReportCoverImageSchema | None = Field(
+        default=None,
+        description=(
+            "실제 인용 출처 중 IMG-013이 결정론적으로 고른 리포트 상단 이미지. "
+            "적합한 이미지가 없거나 구 Snapshot이면 null"
+        ),
     )
     generation_topic: str = Field(
         default="",

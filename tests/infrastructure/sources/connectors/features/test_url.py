@@ -146,3 +146,26 @@ def test_fetch_url_raw_via_jina_returns_full_text_with_headers() -> None:
     )
 
     assert result == raw
+
+
+def test_parse_jina_reader_response_extracts_content_image() -> None:
+    """구조화 파서는 로고를 건너뛰고 기사 본문 대표 이미지를 보존한다."""
+    raw = (
+        "Title: 제목\nURL Source: https://news.example/1\n"
+        "Image 1: https://cdn.example/logo.png\n"
+        "Markdown Content:\n"
+        "![대표](https://cdn.example/photos/hero-1280.webp)\n본문입니다."
+    )
+
+    result = parse_jina_reader_response(raw, requested_url="https://news.example/1")
+
+    assert result.image_url == "https://cdn.example/photos/hero-1280.webp"
+
+
+def test_parse_jina_reader_response_ignores_unsafe_image_url() -> None:
+    """HTTP(S)가 아닌 이미지 후보는 대표 이미지로 사용하지 않는다."""
+    raw = "Title: 제목\nMarkdown Content:\n![대표](data:image/png;base64,AAAA)\n본문"
+
+    result = parse_jina_reader_response(raw, requested_url="https://news.example/1")
+
+    assert result.image_url is None

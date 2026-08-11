@@ -104,6 +104,7 @@ class WikiNavigationSource:
     stored_at: datetime
     published_at: datetime | None
     clipped_on: date | None
+    image_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

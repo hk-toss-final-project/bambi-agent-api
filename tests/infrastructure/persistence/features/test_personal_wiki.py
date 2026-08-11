@@ -667,6 +667,7 @@ def test_save_user_url_document_version_creates_first_version() -> None:
             title="KOSPI",
             raw_content=raw_content,
             resolved_url="https://finance.naver.com/resolved",
+            image_url="https://cdn.example/kospi.jpg",
         )
     )
 
@@ -680,6 +681,11 @@ def test_save_user_url_document_version_creates_first_version() -> None:
     assert insert_params[0] == "doc-1"
     assert insert_params[3] == 1
     assert insert_params[4] == "KOSPI"
+    assert insert_params[9].obj == {
+        "fetcher": "jina-reader",
+        "resolved_url": "https://finance.naver.com/resolved",
+        "image_url": "https://cdn.example/kospi.jpg",
+    }
     update_query, update_params = connection.executed[2]
     assert "UPDATE agent.user_source_documents" in update_query
     assert update_params == (1, _sha256(raw_content), "doc-1")

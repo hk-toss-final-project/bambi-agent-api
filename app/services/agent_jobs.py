@@ -251,6 +251,7 @@ class AgentJobRepository(Protocol):
         markdown: str,
         resolved_url: str,
         published_at: datetime | None,
+        image_url: str | None = None,
     ) -> dict[str, object]:
         """URL 수집 결과를 원본 Version으로 저장하고 Wiki Job을 등록한다."""
         ...

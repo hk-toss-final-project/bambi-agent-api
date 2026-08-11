@@ -647,6 +647,7 @@ async def save_user_url_document_version(
     title: str,
     raw_content: str,
     resolved_url: str | None = None,
+    image_url: str | None = None,
     published_at: datetime | None = None,
     description: str | None = None,
 ) -> SavedUserSourceVersion | None:
@@ -654,7 +655,8 @@ async def save_user_url_document_version(
 
     content_hash가 최신 Version과 같으면 새 Version을 만들지 않고 None을
     반환한다. 리다이렉트가 반영된 최종 URL은 수집 당시 근거를 남기기 위해
-    source_metadata.resolved_url로 함께 보존한다.
+    source_metadata.resolved_url로 함께 보존한다. 원문 대표 이미지를 찾았으면
+    source_metadata.image_url도 같이 보존해 Wiki를 근거로 쓰는 리포트가 재사용한다.
 
     Args:
         user_id: 원본 문서 소유 사용자 ID
@@ -663,6 +665,7 @@ async def save_user_url_document_version(
         title: 수집된 문서 제목
         raw_content: 정제된 Markdown 본문
         resolved_url: 리다이렉트된 최종 URL
+        image_url: 원문 대표 이미지 URL
         published_at: 원문 게시 시각
         description: 원문 요약 설명
 
@@ -690,6 +693,8 @@ async def save_user_url_document_version(
     source_metadata: dict[str, Any] = {"fetcher": "jina-reader"}
     if resolved_url is not None:
         source_metadata["resolved_url"] = resolved_url
+    if image_url is not None:
+        source_metadata["image_url"] = image_url
     version_cursor = await connection.execute(
         """
         INSERT INTO agent.user_source_document_versions (

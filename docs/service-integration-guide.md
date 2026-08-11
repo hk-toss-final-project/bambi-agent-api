@@ -265,7 +265,7 @@ loop (10~30초):
 
 `batch_id`, `lease_expires_at`과 함께 각 item에 **전체 Payload**(content_id,
 user_id, version, snapshot_hash, title, summary, body, citations, tags,
-`report_type`·`request_idempotency_key`와 생성 범주 메타데이터)가 포함되므로
+`cover_image`, `report_type`·`request_idempotency_key`와 생성 범주 메타데이터)가 포함되므로
 추가 조회 없이 바로 Upsert할 수 있습니다. 처리할 것이 없으면 `items=[]`.
 
 **`request_idempotency_key`(2026-08-10 추가)** — 이 카드를 만들게 한 생성 요청의
@@ -340,6 +340,28 @@ Service는 이 필드로 어떤 LLM Wiki 관심사와 연결 노드가 카드 �
 - `custom:` 수집 대상(직접 입력·Wiki 자동 등록 주제)은 topic id가 없어 제외됩니다.
   **taxonomy id가 없는 관심사만 가진 사용자는 이 필드로 닫히지 않습니다** —
   그쪽은 service가 `interest_topics.keywords` 카탈로그로 따로 덮기로 했습니다.
+
+**`cover_image`(2026-08-11 추가)** — 리포트 상단에 노출할 대표 이미지와 원문
+출처입니다. 적합한 이미지가 없거나 이 필드 도입 전 Snapshot이면 `null`입니다.
+
+```json
+"cover_image": {
+  "url": "https://cdn.example.com/article.jpg",
+  "source_url": "https://news.example.com/article",
+  "source_title": "기사 제목",
+  "reference": "G1"
+}
+```
+
+- Agent는 LLM이 만든 URL을 쓰지 않고, 리포트가 **실제로 인용한** Context에서만
+  고릅니다. 본문 Citation 첫 등장 순서를 따르되 Global·Live 외부 출처를 개인
+  Wiki보다 우선합니다.
+- `url`과 `source_url`은 절대 HTTP(S) URL일 때만 발행합니다. 이미지 수집·선택
+  실패는 리포트 생성 실패가 아니며 `null`로 폴백합니다.
+- Service는 이미지 URL뿐 아니라 `source_url`·`source_title`도 함께 저장해 화면에서
+  이미지 출처를 표시합니다. `reference`는 선택 근거 추적용입니다.
+- 기존 Snapshot 하위 호환을 위해 Service는 필드 누락과 명시적 `null`을 모두
+  대표 이미지 없음으로 처리해야 합니다.
 
 **`citations`는 `{citation_id, title, url}` 세 필드뿐입니다.**
 

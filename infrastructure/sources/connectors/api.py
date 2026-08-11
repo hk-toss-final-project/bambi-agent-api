@@ -17,6 +17,7 @@ from .features.url import (
     JinaReadError,
     JinaReadResult,
     col_011,
+    extract_jina_image,
     fetch_url_raw_via_jina,
     fetch_url_via_jina,
     parse_jina_reader_response,
@@ -30,7 +31,7 @@ from .features.latest import (
     NaverNewsProvider,
     NewsApiProvider,
 )
-from .features.youtube import YouTubeSearchProvider
+from .features.youtube import YouTubeSearchProvider, thumbnail_url
 from .features.reddit import RedditSearchProvider
 from .features.custom import col_012
 
@@ -46,9 +47,11 @@ __all__ = [
     "NewsApiProvider",
     "RedditSearchProvider",
     "YouTubeSearchProvider",
+    "extract_jina_image",
     "fetch_url_raw_via_jina",
     "fetch_url_via_jina",
     "parse_jina_reader_response",
+    "thumbnail_url",
     "col_001",
     "col_002",
     "col_003",

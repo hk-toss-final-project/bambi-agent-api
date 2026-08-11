@@ -58,6 +58,7 @@ def report_context_from_mapping(value: Mapping[str, object]) -> ReportContextDoc
             if value.get("source_updated_at")
             else None
         ),
+        image_url=str(value["image_url"]) if value.get("image_url") else None,
     )
 
 
