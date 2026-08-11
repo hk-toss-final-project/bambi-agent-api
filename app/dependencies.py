@@ -19,6 +19,7 @@ from app.services.generated_content import GeneratedContentService
 from app.services.development_scenarios import DevelopmentScenarioService
 from app.services.latest_information import LatestInformationService
 from app.services.mcp_api_keys import McpApiKeyService
+from app.services.briefing_topics import BriefingTopicsService
 from app.services.wiki_graph import WikiGraphService
 from app.services.wiki_navigator import WikiNavigatorService
 from app.services.wiki_documents import WikiDocumentService
@@ -52,6 +53,7 @@ class AppContainer:
     mvp_service: AgentApiMvpService | None = None
     publish_snapshot_service: PublishSnapshotService | None = None
     wiki_graph_service: WikiGraphService | None = None
+    briefing_topics_service: BriefingTopicsService | None = None
     wiki_navigator_service: WikiNavigatorService | None = None
     wiki_document_service: WikiDocumentService | None = None
     agent_workflow_service: AgentWorkflowService | None = None
@@ -116,6 +118,7 @@ class AppContainer:
         self.mvp_service = None
         self.publish_snapshot_service = None
         self.wiki_graph_service = None
+        self.briefing_topics_service = None
         self.wiki_navigator_service = None
         self.wiki_document_service = None
         self.agent_workflow_service = None
@@ -171,6 +174,7 @@ def create_container(settings: Settings) -> AppContainer:
             mvp_service=mvp_service,
             publish_snapshot_service=publish_snapshot_service,
             wiki_graph_service=WikiGraphService(wiki_graph_repository),
+            briefing_topics_service=BriefingTopicsService(wiki_graph_repository),
             wiki_navigator_service=WikiNavigatorService(wiki_graph_repository),
             wiki_document_service=WikiDocumentService(wiki_graph_repository),
             agent_workflow_service=workflow_service,
@@ -391,3 +395,19 @@ def get_mcp_api_key_service(
             ),
         )
     return container.mcp_api_key_service
+
+
+def get_briefing_topics_service(
+    container: AppContainer = Depends(get_container),
+) -> BriefingTopicsService:
+    """아침 브리핑 주제 선정 서비스를 반환한다."""
+    if container.briefing_topics_service is None:
+        raise AgentApiError(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            ErrorDetail(
+                code="SERVICE_NOT_READY",
+                message="개인 Wiki Graph 저장소가 준비되지 않았습니다.",
+                retryable=True,
+            ),
+        )
+    return container.briefing_topics_service
