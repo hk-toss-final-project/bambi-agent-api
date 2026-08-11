@@ -1340,37 +1340,109 @@ async def _derive_taxonomy_topics(
     return _pick_single_taxonomy_version(rows)
 
 
+# 정식 이름을 조각으로 쪼갤 때 쓰는 구분자. 카탈로그 이름이 "AI·머신러닝"처럼
+# 가운뎃점으로 두 갈래를 묶는 형태라, 사용자는 그중 한쪽만 적는 일이 잦다.
+_TAXONOMY_NAME_SEPARATORS = "·/,"
+
+# 맞춰 보는 순서. 앞쪽이 더 정확해서, 한 주제가 여러 갈래로 걸리면 앞쪽을 쓴다.
+_MATCH_NAME = 0
+_MATCH_KEYWORD = 1
+_MATCH_NAME_TOKEN = 2
+
+
+def _normalize_topic_name(value: object) -> str:
+    """이름 비교용 정규화 — 앞뒤 공백 제거 + 대소문자 무시("ai" = "AI")."""
+    return str(value).strip().casefold()
+
+
 async def _taxonomy_topics_by_name(
     connection: AsyncConnection[DictRow],
     topics: Sequence[str],
 ) -> list[DictRow]:
-    """요청 주제 이름을 taxonomy Topic 이름과 맞춰 본다 (파생 ②).
+    """요청 주제 이름을 taxonomy 카탈로그와 맞춰 본다 (파생 ②).
 
-    이름 비교는 수집 경로가 쓰는 것과 같은 ``lower(btrim())`` 정규화를 쓴다.
-    아침 브리핑은 요청 ``topic``이 고정 문구("오늘의 관심사 브리핑")라 그걸로는
-    영영 안 맞는다 — 호출부가 Job payload의 실제 ``topics``를 넘겨야 한다.
+    **세 갈래를 순서대로 본다. 전부 완전 일치이며 부분 문자열·유사도는 쓰지 않는다.**
+
+    1. 정식 이름 — ``AI·머신러닝``
+    2. ``keywords`` 항목 — ``반도체`` → ``industry``
+    3. 정식 이름을 구분자로 쪼갠 조각 — ``AI·머신러닝`` → ``AI``, ``머신러닝``
+
+    2·3이 필요한 이유(2026-08-11 리허설): 요청 주제는 사용자가 적은 관심사 이름이라
+    카탈로그 정식 이름과 잘 안 맞는다. 실측 ``[AI, 경제, 반도체]`` 가 1단계로는 0건이었다 —
+    ``AI`` 는 ``AI·머신러닝`` 의 앞 조각이고, ``반도체`` 는 이름이 아니라 ``industry`` 의
+    keywords 항목이다. 온보딩에서 taxonomy 를 고른 사용자는 정식 이름이 그대로 와서
+    1단계로 맞지만, 자유 입력 관심사는 그렇지 않다.
+
+    **한 조각이 여러 Topic 에 걸리면 그 조각은 버린다** (2026-08-11 우석 안전핀).
+    모호할 때 안 붙이는 쪽이 엉뚱하게 붙는 것보다 낫고, 그래야 규칙이 결정적으로 남는다.
+    모호 판정은 **같은 taxonomy 버전 안에서** 한다 — 버전이 다른 같은 이름은 충돌이 아니다.
+
+    카탈로그는 44행짜리라 통째로 읽어 파이썬에서 맞춘다. SQL 로 세 갈래를 표현하면
+    정규화가 양쪽으로 갈라져(``lower(btrim())`` vs 파이썬) 오히려 안 맞는 값이 생긴다.
     """
-    # SQL 쪽 lower(btrim(...))과 **정확히 같은** 변환만 한다. 파이썬에서만 공백을 더
-    # 접으면 양쪽 정규화가 어긋나 오히려 못 맞추는 값이 생긴다.
-    normalized = [
-        str(topic).strip().casefold() for topic in topics if str(topic).strip()
-    ]
-    if not normalized:
+    needles = [_normalize_topic_name(topic) for topic in topics if str(topic).strip()]
+    if not needles:
         return []
     cursor = await connection.execute(
         """
-        SELECT
-            topic.taxonomy_version,
-            topic.topic_id,
-            array_position(%s::text[], lower(btrim(topic.name))) AS first_ordinal,
-            1 AS hits
-        FROM agent.interest_taxonomy_topics AS topic
-        WHERE lower(btrim(topic.name)) = ANY(%s::text[])
-        ORDER BY first_ordinal, topic.topic_id
-        """,
-        (normalized, normalized),
+        SELECT taxonomy_version, topic_id, name, keywords
+        FROM agent.interest_taxonomy_topics
+        """
     )
-    return await cursor.fetchall()
+    catalog = await cursor.fetchall()
+    if not catalog:
+        return []
+
+    # (버전, 갈래, 찾을 말) -> 걸린 topic_id 집합. 집합이 2개 이상이면 모호해서 버린다.
+    index: dict[tuple[str, int, str], set[str]] = {}
+
+    def remember(version: str, kind: int, needle: str, topic_id: str) -> None:
+        if needle:
+            index.setdefault((version, kind, needle), set()).add(topic_id)
+
+    for row in catalog:
+        version = str(row["taxonomy_version"])
+        topic_id = str(row["topic_id"])
+        name = str(row["name"])
+        remember(version, _MATCH_NAME, _normalize_topic_name(name), topic_id)
+        for keyword in row["keywords"] or []:
+            remember(version, _MATCH_KEYWORD, _normalize_topic_name(keyword), topic_id)
+        for token in _split_taxonomy_name(name):
+            remember(version, _MATCH_NAME_TOKEN, token, topic_id)
+
+    versions = {str(row["taxonomy_version"]) for row in catalog}
+    matched: list[DictRow] = []
+    for ordinal, needle in enumerate(needles):
+        for version in sorted(versions):
+            for kind in (_MATCH_NAME, _MATCH_KEYWORD, _MATCH_NAME_TOKEN):
+                topic_ids = index.get((version, kind, needle))
+                if not topic_ids:
+                    continue
+                if len(topic_ids) > 1:
+                    # 모호한 말 — 이 갈래는 버리고 더 느슨한 갈래도 보지 않는다.
+                    break
+                matched.append(
+                    {
+                        "taxonomy_version": version,
+                        "topic_id": next(iter(topic_ids)),
+                        "first_ordinal": ordinal,
+                        "hits": 1,
+                    }
+                )
+                break
+    return matched
+
+
+def _split_taxonomy_name(name: str) -> list[str]:
+    """정식 이름을 구분자로 쪼갠 조각들 — 이름 자체와 같은 한 조각은 뺀다."""
+    separated = name
+    for separator in _TAXONOMY_NAME_SEPARATORS:
+        separated = separated.replace(separator, "\n")
+    tokens = [_normalize_topic_name(part) for part in separated.split("\n")]
+    tokens = [token for token in tokens if token]
+    if len(tokens) < 2:
+        return []   # 쪼갤 게 없으면 1단계(정식 이름)와 같은 말이라 중복이다
+    return tokens
 
 
 def _pick_single_taxonomy_version(rows: Sequence[DictRow]) -> tuple[str, list[str]]:

@@ -766,7 +766,7 @@ def _connection_for_persist(
     *,
     job_payload: dict[str, Any] | None = None,
     cited_taxonomy_rows: list[dict[str, Any]] | None = None,
-    named_taxonomy_rows: list[dict[str, Any]] | None = None,
+    catalog: list[dict[str, Any]] | None = None,
 ) -> _FakeConnection:
     """인용 없는 리포트 저장 경로가 실행할 질의 순서대로 응답을 준비한다.
 
@@ -796,7 +796,10 @@ def _connection_for_persist(
         cited,  # taxonomy 파생 ① 인용 원본
     ]
     if not cited:
-        responses.append(named_taxonomy_rows or [])  # taxonomy 파생 ② 주제 이름
+        # taxonomy 파생 ② — 카탈로그를 통째로 읽어 파이썬에서 맞춘다.
+        responses.append(
+            _DEFAULT_TAXONOMY_CATALOG if catalog is None else catalog
+        )
     responses.extend(
         [
             [],  # publish_snapshots INSERT
@@ -808,13 +811,36 @@ def _connection_for_persist(
 
 def _taxonomy_row(topic_id: str, version: str = "1.0.0-draft", *,
                   first_ordinal: int = 0, hits: int = 1) -> dict[str, Any]:
-    """taxonomy 파생 질의가 돌려주는 행 하나를 만든다."""
+    """taxonomy 파생 ①(인용 원본) 질의가 돌려주는 행 하나를 만든다."""
     return {
         "taxonomy_version": version,
         "topic_id": topic_id,
         "first_ordinal": first_ordinal,
         "hits": hits,
     }
+
+
+def _catalog_row(topic_id: str, name: str, keywords: list[str] | None = None,
+                 version: str = "1.0.0-draft") -> dict[str, Any]:
+    """taxonomy 카탈로그 한 행 — 파생 ②가 이걸 통째로 읽어 맞춘다."""
+    return {
+        "taxonomy_version": version,
+        "topic_id": topic_id,
+        "name": name,
+        "keywords": keywords or [],
+    }
+
+
+# 실제 V11 카탈로그에서 이 테스트가 쓰는 만큼만 옮긴 것 — 이름·keywords 모양을 그대로 지킨다.
+_DEFAULT_TAXONOMY_CATALOG = [
+    _catalog_row("ai_ml", "AI·머신러닝",
+                 ["생성형 AI", "LLM", "머신러닝", "AI 에이전트", "OpenAI", "Anthropic"]),
+    _catalog_row("economy", "경제·금융",
+                 ["금리", "환율", "물가", "경기 전망", "중앙은행", "인플레이션"]),
+    _catalog_row("industry", "산업·기업",
+                 ["실적 발표", "빅테크", "반도체", "인수합병", "산업 동향", "공급망"]),
+    _catalog_row("realestate", "부동산", ["부동산", "집값", "청약"]),
+]
 
 
 def _executed_sql_containing(connection: _FakeConnection, needle: str):
@@ -909,16 +935,75 @@ def test_publish_payload_falls_back_to_requested_topic_name() -> None:
 
     개인 Wiki만 인용한 리포트가 여기 해당한다 — 개인 Wiki 청크에는 수집 대상이 없다.
     """
+    connection = _connection_for_persist("AI·머신러닝")
+
+    _persist(connection)
+
+    assert _publish_payload(connection)["taxonomy_topic_ids"] == ["ai_ml"]
+
+
+def test_publish_payload_matches_requested_topic_by_keyword() -> None:
+    """정식 이름이 아닌 keywords 항목으로도 찾는다.
+
+    2026-08-11 리허설: 요청 `반도체`가 0건이었다. 이름이 아니라 `industry`의
+    keywords 항목이기 때문이다. 큐레이팅된 목록과의 완전 일치라 fuzzy가 아니다.
+    """
+    connection = _connection_for_persist("반도체")
+
+    _persist(connection)
+
+    assert _publish_payload(connection)["taxonomy_topic_ids"] == ["industry"]
+
+
+def test_publish_payload_matches_requested_topic_by_name_token() -> None:
+    """정식 이름을 구분자로 쪼갠 조각으로도 찾는다 — 대소문자는 무시한다.
+
+    2026-08-11 리허설: `AI`·`경제`가 0건이었다. 각각 `AI·머신러닝`·`경제·금융`의
+    앞 조각이라 이름 완전 일치로는 안 걸린다.
+    """
     connection = _connection_for_persist(
-        "AI·머신러닝", named_taxonomy_rows=[_taxonomy_row("ai_ml", first_ordinal=1)]
+        "오늘의 관심사 브리핑", job_payload={"topics": ["ai", "경제"]}
     )
 
     _persist(connection)
 
-    payload = _publish_payload(connection)
-    assert payload["taxonomy_topic_ids"] == ["ai_ml"]
-    _, params = _executed_sql_containing(connection, "agent.interest_taxonomy_topics")
-    assert params is not None and params[0] == ["ai·머신러닝"]
+    assert _publish_payload(connection)["taxonomy_topic_ids"] == ["ai_ml", "economy"]
+
+
+def test_publish_payload_skips_ambiguous_name_token() -> None:
+    """한 조각이 여러 Topic에 걸리면 그 조각은 버린다(2026-08-11 우석 안전핀).
+
+    모호할 때 안 붙이는 쪽이 엉뚱하게 붙는 것보다 낫다 — 규칙을 결정적으로 유지한다.
+    """
+    connection = _connection_for_persist(
+        "금융",
+        catalog=[
+            _catalog_row("economy", "경제·금융"),
+            _catalog_row("invest", "투자·금융"),   # `금융`이 두 Topic에 걸린다
+        ],
+    )
+
+    _persist(connection)
+
+    assert _publish_payload(connection)["taxonomy_topic_ids"] == []
+
+
+def test_publish_payload_prefers_full_name_over_token() -> None:
+    """정식 이름이 맞으면 조각 매칭으로 내려가지 않는다.
+
+    `부동산`은 그 자체가 정식 이름이므로, 다른 이름의 조각과 겹쳐도 이름이 이긴다.
+    """
+    connection = _connection_for_persist(
+        "부동산",
+        catalog=[
+            _catalog_row("realestate", "부동산"),
+            _catalog_row("policy", "부동산·정책"),   # 조각으로는 여기에도 걸린다
+        ],
+    )
+
+    _persist(connection)
+
+    assert _publish_payload(connection)["taxonomy_topic_ids"] == ["realestate"]
 
 
 def test_publish_payload_uses_job_topics_for_morning_briefing() -> None:
@@ -930,18 +1015,10 @@ def test_publish_payload_uses_job_topics_for_morning_briefing() -> None:
     connection = _connection_for_persist(
         "오늘의 관심사 브리핑",
         job_payload={"topics": ["AI·머신러닝", "경제·금융"]},
-        named_taxonomy_rows=[
-            _taxonomy_row("ai_ml", first_ordinal=1),
-            _taxonomy_row("economy", first_ordinal=2),
-        ],
     )
 
     _persist(connection)
 
-    _, params = _executed_sql_containing(connection, "agent.interest_taxonomy_topics")
-    assert params is not None
-    assert params[0] == ["ai·머신러닝", "경제·금융"]
-    assert "오늘의 관심사 브리핑" not in params[0]
     assert _publish_payload(connection)["taxonomy_topic_ids"] == ["ai_ml", "economy"]
 
 
