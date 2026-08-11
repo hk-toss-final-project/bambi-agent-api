@@ -10,7 +10,11 @@ from typing import Any
 from psycopg import AsyncConnection
 
 from agent.graph import run_personal_wiki_build, run_personal_wiki_rebuild
-from agent.wiki_builder.api import wba_001
+from agent.wiki_builder.api import (
+    LEGACY_MAINTENANCE_PIPELINE_VERSION,
+    run_wiki_maintenance_for_version,
+    wba_001,
+)
 from domain.jobs.api import job_007
 from infrastructure.persistence.api import (
     ClaimedAgentJob,
@@ -39,10 +43,17 @@ async def _process_job(
 ) -> dict[str, object]:
     """점유한 Personal Wiki Job 하나를 그래프로 Build하고 완료 상태로 바꾼다."""
     if job.payload.get("mode") == "full_rebuild":
-        result = await run_personal_wiki_rebuild(
+        pipeline_version = str(
+            job.payload.get("maintenance_pipeline_version")
+            or LEGACY_MAINTENANCE_PIPELINE_VERSION
+        )
+        result = await run_wiki_maintenance_for_version(
             connection,
+            pipeline_version=pipeline_version,
             user_id=job.user_id,
             job_id=job.job_id,
+            trigger=str(job.payload.get("trigger") or "legacy_full_rebuild"),
+            rebuild_runner=run_personal_wiki_rebuild,
             model=model,
             embedding_batch_threshold=embedding_batch_threshold,
         )

@@ -26,6 +26,7 @@ def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
 
     assert set(diagrams) == {
         "personal-wiki",
+        "wiki-maintenance-v2",
         "wiki-read-v2",
         "report-generation",
         "assistant",
@@ -58,6 +59,14 @@ def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
         "finalize",
     ):
         assert node in diagrams["wiki-read-v2"].mermaid
+    for node in (
+        "audit",
+        "plan",
+        "repair_derivatives",
+        "full_rebuild",
+        "finalize",
+    ):
+        assert node in diagrams["wiki-maintenance-v2"].mermaid
     # 토글이 켜졌을 때 generate를 대체하는 분기가 그래프에 실제로 있어야 한다.
     assert "change_history" in diagrams["report-generation"].mermaid
     assert "reformulate" in diagrams["assistant"].mermaid
@@ -137,13 +146,14 @@ def test_graphs_page_renders_all_diagrams() -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     body = response.text
-    assert body.count('<pre class="mermaid">') == 5
-    assert body.count('class="node-panel"') == 5
+    assert body.count('<pre class="mermaid">') == 6
+    assert body.count('class="node-panel"') == 6
     assert body.count('class="node-detail"') == sum(
         len(diagram.nodes) for diagram in list_graph_diagrams()
     )
     assert "Personal Wiki Build" in body
     assert "Wiki Read Loop V2" in body
+    assert "Wiki Maintenance Loop V2" in body
     assert "키워드 비서 리서치 에이전트" in body
     assert "변경점(Delta) 추적" in body
     assert 'data-node-id="load_source"' in body

@@ -19,7 +19,11 @@ from agent.graph import (
     run_personal_wiki_rebuild,
 )
 from agent.report_builder.api import LEGACY_READ_PIPELINE_VERSION, report_001
-from agent.wiki_builder.api import wba_001
+from agent.wiki_builder.api import (
+    LEGACY_MAINTENANCE_PIPELINE_VERSION,
+    run_wiki_maintenance_for_version,
+    wba_001,
+)
 from app.config import Settings
 from app.exceptions import AgentApiError, ErrorDetail
 from app.schemas.development import (
@@ -93,10 +97,18 @@ class AgentWorkflowService:
         if job.job_type == "personal_wiki_build":
             if job.payload.get("mode") == "full_rebuild":
                 async with self._repository.acquire_connection() as connection:
-                    result = await self._wiki_rebuild_runner(
+                    result = await run_wiki_maintenance_for_version(
                         connection,
+                        pipeline_version=str(
+                            job.payload.get("maintenance_pipeline_version")
+                            or LEGACY_MAINTENANCE_PIPELINE_VERSION
+                        ),
                         user_id=job.user_id,
                         job_id=job.job_id,
+                        trigger=str(
+                            job.payload.get("trigger") or "legacy_full_rebuild"
+                        ),
+                        rebuild_runner=self._wiki_rebuild_runner,
                         model=self._settings.wiki_llm_model,
                     )
                 return "wiki_rebuild", result

@@ -15,6 +15,7 @@ from agent.assistant.api import build_assistant_graph
 from agent.change_history.api import build_change_history_graph
 from agent.graph import build_personal_wiki_graph, build_report_generation_graph
 from agent.report_builder.api import build_wiki_read_graph_v2
+from agent.wiki_builder.api import build_wiki_maintenance_graph_v2
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +211,60 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                     description=(
                         "저장 결과와 Build 통계를 Job 결과 계약에 맞춰 조립하고, 변경된 "
                         "문서와 Identity 판정 사용량을 함께 반환합니다."
+                    ),
+                ),
+            ),
+        ),
+        _diagram(
+            slug="wiki-maintenance-v2",
+            title="Wiki Maintenance Loop V2",
+            description=(
+                "현재 원본·활성 Snapshot·품질·Embedding 감사(audit) → 최소 실행 범위 "
+                "결정(plan) → 건강하면 즉시 종료(noop), 파생 검색만 빠졌으면 "
+                "Embedding 복구(repair_derivatives), 구조 이슈·원본 제거면 검증된 V1 "
+                "원자 교체 실행기(full_rebuild) → 실행 버전·근거·감사 요약 확정"
+                "(finalize). Scheduler는 이 그래프를 반복하지 않고 Job 등록만 담당한다."
+            ),
+            compiled=build_wiki_maintenance_graph_v2(),
+            nodes=(
+                GraphNodeDescription(
+                    node_id="audit",
+                    title="현재 Wiki 상태 감사",
+                    description=(
+                        "활성 원본 수와 최신 시각, 활성 Wiki의 WBA-014 품질 Metric, "
+                        "현재 Embedding 모델에서 빠진 Page Version을 조회합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="plan",
+                    title="최소 유지 범위 계획",
+                    description=(
+                        "원본 제거·구조 품질·Snapshot 신선도·Embedding 누락을 코드로 "
+                        "판정해 noop, repair_derivatives, full_rebuild 중 하나를 고릅니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="repair_derivatives",
+                    title="파생 검색 자료 복구",
+                    description=(
+                        "Wiki 문서와 관계를 다시 분류하지 않고 누락된 Chunk Embedding만 "
+                        "즉시 생성하거나 OpenAI Batch Item으로 등록합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="full_rebuild",
+                    title="원자적 전체 재구성",
+                    description=(
+                        "기존 V1 실행기를 어댑터로 호출해 순차 분류·Lint·최종 단일 "
+                        "Transaction 교체 계약을 그대로 보존합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="finalize",
+                    title="유지 결과 확정",
+                    description=(
+                        "실행 결과에 V2 버전, 선택 action과 이유, 원문 없는 감사 요약을 "
+                        "더해 Job 결과로 저장할 Payload를 만듭니다."
                     ),
                 ),
             ),
