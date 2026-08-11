@@ -4,14 +4,101 @@
 선정 실패로 브리핑을 막는 일이 없어야 한다. LLM은 실제로 부르지 않고 대체한다.
 """
 
+from datetime import UTC, datetime
+
 import pytest
 
 from agent.report_builder.features import briefing_topics
 from agent.report_builder.features.briefing_topics import (
+    CandidateMaterial,
+    CandidateSource,
     InterestCandidate,
     InterestContext,
+    build_interest_context,
     select_briefing_topics,
 )
+
+_NOW = datetime(2026, 8, 11, tzinfo=UTC)
+
+
+def _material(node: str, *, summary: str = "", sources: tuple = ()) -> CandidateMaterial:
+    """맥락 조립에 넣을 후보 원자재를 만든다."""
+    return CandidateMaterial(node=node, summary=summary, sources=sources)
+
+
+def test_context_lists_source_titles_so_tools_can_be_told_apart() -> None:
+    """출처 제목을 나열한다 — 도구인지 관심사인지 가르는 근거가 이것이다.
+
+    같은 `DBeaver Community`라도 튜닝 글에서만 나오면 도구고, 자기 릴리스 노트에서
+    나오면 관심사다. 이름은 같고 출처 목록이 다르다.
+    """
+    context = build_interest_context(
+        [
+            _material(
+                "DBeaver Community",
+                summary="오픈소스 DB 클라이언트.",
+                sources=(
+                    CandidateSource(title="PostgreSQL 인덱스 튜닝", saved_at=_NOW),
+                    CandidateSource(title="실행 계획 읽기", saved_at=_NOW),
+                ),
+            )
+        ],
+        now=_NOW,
+    )
+
+    assert context.candidates[0].node == "DBeaver Community"
+    detail = context.candidates[0].context
+    assert "오픈소스 DB 클라이언트." in detail
+    assert "저장한 글 2건: PostgreSQL 인덱스 튜닝, 실행 계획 읽기" in detail
+
+
+def test_context_reports_how_long_ago_the_last_save_was() -> None:
+    """저장 시각을 경과 일수로 바꾼다.
+
+    날짜를 그대로 주면 선정자가 오늘이 며칠인지 알아야 판단할 수 있다.
+    """
+    context = build_interest_context(
+        [
+            _material(
+                "가상화폐",
+                sources=(
+                    CandidateSource(title="옛 글", saved_at=datetime(2026, 7, 1, tzinfo=UTC)),
+                    CandidateSource(title="덜 옛 글", saved_at=datetime(2026, 8, 4, tzinfo=UTC)),
+                ),
+            )
+        ],
+        now=_NOW,
+    )
+
+    # 여러 건이면 가장 최근 저장이 기준이다 — 관심이 식었는지를 보는 값이다.
+    assert "마지막 저장 7일 전" in context.candidates[0].context
+
+
+def test_context_truncates_long_source_lists() -> None:
+    """출처가 많으면 앞쪽만 적고 나머지는 건수로 줄인다.
+
+    후보가 30개라 전부 적으면 토큰이 커진다.
+    """
+    sources = tuple(
+        CandidateSource(title=f"글 {index}", saved_at=_NOW) for index in range(7)
+    )
+    context = build_interest_context([_material("반도체", sources=sources)], now=_NOW)
+
+    detail = context.candidates[0].context
+    assert "저장한 글 7건: 글 0, 글 1, 글 2, 글 3 외 3건" in detail
+
+
+def test_context_survives_candidates_without_material() -> None:
+    """요약도 출처도 없는 후보를 버리지 않는다.
+
+    맥락이 부실하다고 후보에서 빼면 선정자가 볼 기회조차 없어진다.
+    """
+    context = build_interest_context(
+        [_material("환율"), _material("   ")], now=_NOW
+    )
+
+    assert [candidate.node for candidate in context.candidates] == ["환율"]
+    assert context.candidates[0].context == ""
 
 
 def _context(*nodes: str, summary: str = "") -> InterestContext:

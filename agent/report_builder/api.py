@@ -4,10 +4,14 @@
 """
 
 from .features.briefing_topics import (
+    DEFAULT_BRIEFING_CANDIDATE_LIMIT,
     DEFAULT_BRIEFING_TOPIC_COUNT,
     BriefingTopicSelection,
+    CandidateMaterial,
+    CandidateSource,
     InterestCandidate,
     InterestContext,
+    build_interest_context,
     select_briefing_topics,
 )
 from .features.orchestration import report_001, report_002

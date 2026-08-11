@@ -14,8 +14,9 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 from shared.wiki_models import InterestCandidate, WikiClassification
+from agent.report_builder.api import CandidateMaterial, CandidateSource
 from agent.wiki_builder.api import wba_018
-from domain.personal_wiki.navigation.api import wnav_001, wnav_006
+from domain.personal_wiki.navigation.api import wnav_001, wnav_002, wnav_004, wnav_006
 from domain.personal_wiki.source_events.api import wse_010
 from infrastructure.persistence.api import (
     delete_wiki_document_and_record_event,
@@ -170,6 +171,101 @@ class PostgresWikiGraphRepository:
                 max_pages=max_pages,
                 max_chunks=max_chunks,
             )
+
+    async def load_briefing_candidates(
+        self, user_id: str, *, limit: int
+    ) -> list[CandidateMaterial]:
+        """아침 브리핑 후보와 그 원자재를 하나의 Connection에서 읽는다.
+
+        **검색어 없이 시작한다.** 아침은 "이 주제 자료를 찾아줘"가 아니라 "이
+        사람이 무엇에 관심 있나"를 묻는 경로라 Locate(WNAV-001)를 쓸 수 없다.
+        대신 Wiki Node 목록을 연결 수 순으로 받아 Navigator로 내용을 읽는다.
+
+        연결 수로 정렬하지만 **자르는 기준으로 쓰지 않는다.** 상위 3개만 받으면
+        연결 수 순위가 그대로 결과가 되어(실측: `DBeaver Community` 1.00 >
+        삼성전자) 고치려던 문제가 그대로 남는다. 넉넉히 받아 판단은 선정자가 한다.
+
+        Args:
+            user_id: 조회 대상 사용자 ID
+            limit: 받아올 후보 수
+
+        Returns:
+            연결 수 내림차순 후보와 각 후보의 요약·출처·저장 시각
+        """
+        namespace_key = f"user/{user_id}"
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await self._set_user_scope(connection, user_id=user_id)
+                node_cursor = await connection.execute(
+                    """
+                    SELECT
+                        document.id,
+                        (
+                            SELECT COUNT(*)
+                            FROM agent.wiki_document_relations AS relation
+                            WHERE relation.namespace_key = document.namespace_key
+                              AND relation.status = 'active'
+                              AND relation.review_status <> 'rejected'
+                              AND (
+                                relation.source_document_id = document.id
+                                OR relation.target_document_id = document.id
+                              )
+                        ) AS degree,
+                        version.title
+                    FROM agent.wiki_documents AS document
+                    JOIN agent.wiki_document_versions AS version
+                      ON version.document_id = document.id
+                     AND version.namespace_key = document.namespace_key
+                     AND version.version = document.current_version
+                    WHERE document.namespace_key = %s
+                      AND document.document_kind IN ('entity', 'concept')
+                      AND document.status = 'active'
+                      AND document.deleted_at IS NULL
+                    ORDER BY degree DESC, version.title
+                    LIMIT %s
+                    """,
+                    (namespace_key, limit),
+                )
+                node_rows = await node_cursor.fetchall()
+            document_ids = [str(row["id"]) for row in node_rows]
+            if not document_ids:
+                return []
+            pages = await wnav_002(
+                connection,
+                user_id=user_id,
+                document_ids=document_ids,
+                max_chunks_per_page=1,
+            )
+            sources = await wnav_004(
+                connection,
+                user_id=user_id,
+                wiki_document_version_ids=[
+                    page.document_version_id for page in pages
+                ],
+            )
+
+        sources_by_version: dict[str, list[CandidateSource]] = {}
+        for source in sources:
+            sources_by_version.setdefault(source.wiki_document_version_id, []).append(
+                CandidateSource(title=source.title, saved_at=source.saved_at)
+            )
+        pages_by_document = {page.document_id: page for page in pages}
+        materials: list[CandidateMaterial] = []
+        # Page 조회 순서가 아니라 연결 수 순서를 유지한다 — 선정자가 볼 순서다.
+        for document_id in document_ids:
+            page = pages_by_document.get(document_id)
+            if page is None:
+                continue
+            materials.append(
+                CandidateMaterial(
+                    node=page.title,
+                    summary=page.summary,
+                    sources=tuple(
+                        sources_by_version.get(page.document_version_id, ())
+                    ),
+                )
+            )
+        return materials
 
     async def get_graph(self, user_id: str) -> Mapping[str, object]:
         """현재 사용자 Namespace의 Wiki Node·Edge와 집계를 반환한다."""

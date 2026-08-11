@@ -1,8 +1,9 @@
 """아침 브리핑 주제 선정 기능.
 
 개인 Wiki에서 뽑은 관심사 후보와 그 **맥락 문장**을 받아, 사용자가 내일 아침에
-받아볼 주제를 고른다. 맥락 생성은 Wiki 쪽(이송우) 소유이고 이 모듈은 고르기만
-한다 — 함수 호출로 후보를 넘겨받는다(2026-08-10 협의).
+받아볼 주제를 고른다. 맥락 문장은 Navigator(WNAV-002·004)가 돌려준 재료를
+`build_interest_context`가 사실 그대로 조립한다 — Navigator는 판단을 하지 않고
+원자재만 주기 때문이다(2026-08-10 협의).
 
 **연결 수로 고르던 방식을 대체한다.** 기존 관심사 점수는 구조(연결 수 × 근거
 강도 × 최신성)만 보므로, 여러 글에 자주 등장한 것이 곧 관심사가 된다. 실측에서
@@ -23,6 +24,7 @@ import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from agent.llm.api import complete, strip_json_fence
@@ -36,6 +38,13 @@ _SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 # 아침 브리핑 기본 주제 수. 계약상 topics는 최대 5개까지 보낼 수 있다.
 DEFAULT_BRIEFING_TOPIC_COUNT = 3
+
+# 선정자에게 넘길 후보 수. 상위 3개만 받으면 연결 수 순위가 그대로 결과가 되므로
+# (실측: DBeaver 1.00 > 삼성전자) 넉넉히 받아 고르는 쪽에서 판단한다.
+DEFAULT_BRIEFING_CANDIDATE_LIMIT = 30
+
+# 맥락 문장에 나열할 최대 출처 수. 전부 적으면 후보 30개에서 토큰이 커진다.
+_MAX_CONTEXT_SOURCES = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +88,100 @@ class InterestContext:
 
     candidates: Sequence[InterestCandidate] = field(default_factory=tuple)
     user_summary: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateSource:
+    """후보 Page가 참고한 사용자 원본 하나.
+
+    Attributes:
+        title: 원본 글 제목. 이 후보가 **어떤 맥락에서 등장했는지**를 말해준다 —
+            "PostgreSQL 튜닝" 글에서만 나온 DBeaver는 도구다
+        saved_at: 사용자가 그 글을 저장한 시각(WNAV-004의 `saved_at`).
+            Wiki Build 시각도 기사 발행 시각도 아니다
+    """
+
+    title: str
+    saved_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateMaterial:
+    """Navigator가 돌려준 후보 하나의 원자재.
+
+    Attributes:
+        node: Wiki Page 제목. 그대로 검색어가 된다
+        summary: Page 요약. 그 대상이 무엇인지만 말하고, 이 사용자에게 어떤
+            의미인지는 말하지 않는다
+        sources: 이 Page를 만든 사용자 원본들
+    """
+
+    node: str
+    summary: str = ""
+    sources: Sequence[CandidateSource] = field(default_factory=tuple)
+
+
+def _saved_ago(saved_at: datetime, *, now: datetime) -> str:
+    """저장 시각을 "며칠 전"으로 바꾼다.
+
+    선정자에게 날짜를 그대로 주면 오늘이 며칠인지 알아야 판단할 수 있다.
+    경과 일수로 주면 그 계산이 필요 없다.
+    """
+    days = (now - saved_at).days
+    if days <= 0:
+        return "오늘"
+    if days == 1:
+        return "어제"
+    return f"{days}일 전"
+
+
+def build_interest_context(
+    materials: Sequence[CandidateMaterial],
+    *,
+    user_summary: str = "",
+    now: datetime | None = None,
+) -> InterestContext:
+    """Navigator 원자재를 선정자가 읽을 맥락으로 조립한다.
+
+    **문장을 LLM으로 만들지 않는다.** 후보가 30개라 후보마다 문장을 생성하면
+    아침마다 사용자 수 × 30번 호출이 된다. 출처 제목과 저장 시점을 사실 그대로
+    나열해도 도구·출처인지는 드러난다 — "PostgreSQL 튜닝" 글에서만 나온
+    `DBeaver Community`와, 자기 릴리스 노트에서 나온 `DBeaver Community`는
+    출처 목록이 다르다.
+
+    Args:
+        materials: Navigator(WNAV-002·004)가 돌려준 후보별 재료
+        user_summary: 사용자 전체 관심을 요약한 문장. 없으면 생략한다
+        now: 경과 일수 계산 기준 시각. 생략하면 현재 UTC
+
+    Returns:
+        선정자에게 그대로 넘길 수 있는 후보 묶음
+    """
+    moment = now or datetime.now(UTC)
+    candidates: list[InterestCandidate] = []
+    for material in materials:
+        node = material.node.strip()
+        if not node:
+            continue
+        parts: list[str] = []
+        summary = " ".join(material.summary.split())
+        if summary:
+            parts.append(summary)
+        titles = [
+            " ".join(source.title.split())
+            for source in material.sources
+            if source.title.strip()
+        ]
+        if titles:
+            shown = titles[:_MAX_CONTEXT_SOURCES]
+            more = len(titles) - len(shown)
+            listed = ", ".join(shown) + (f" 외 {more}건" if more > 0 else "")
+            parts.append(f"저장한 글 {len(titles)}건: {listed}")
+        saved = [source.saved_at for source in material.sources if source.saved_at]
+        if saved:
+            parts.append(f"마지막 저장 {_saved_ago(max(saved), now=moment)}")
+        candidates.append(InterestCandidate(node=node, context=" / ".join(parts)))
+    return InterestContext(candidates=candidates, user_summary=user_summary)
 
 
 def _build_user_prompt(context: InterestContext, *, limit: int) -> str:

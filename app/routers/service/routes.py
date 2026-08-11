@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Path, Query, Request, status
 
 from app.exceptions import AgentApiError, ErrorDetail
 from app.dependencies import (
+    get_briefing_topics_service,
     get_collection_schedule_service,
     get_mvp_service,
     get_interest_service,
@@ -80,6 +81,9 @@ from app.routers.service.api import (
 )
 from app.services.collection_schedules import CollectionScheduleService
 from app.services.mvp import AgentApiMvpService
+from agent.report_builder.api import DEFAULT_BRIEFING_TOPIC_COUNT
+from app.schemas.briefing_topics import BriefingTopicsResponse
+from app.services.briefing_topics import BriefingTopicsService
 from app.services.wiki_graph import WikiGraphService
 from app.services.wiki_navigator import WikiNavigatorService
 from app.services.wiki_documents import WikiDocumentService
@@ -384,6 +388,28 @@ async def list_top_connected_wiki_nodes(
 ) -> WikiTopNodesResponse:
     """[PWIKI-003] 연결 Edge가 많은 순서대로 Entity·Concept Node를 조회한다."""
     return await service.get_top_nodes(user_id, _request_id(request), limit=limit)
+
+
+@router.get(
+    "/users/{user_id}/briefing-topics",
+    response_model=BriefingTopicsResponse,
+    operation_id="report_briefing_topics",
+    summary="아침 브리핑 주제 선정",
+)
+async def select_morning_briefing_topics(
+    user_id: UserId,
+    limit: Annotated[
+        int, Query(ge=1, le=5, description="고를 주제 수")
+    ] = DEFAULT_BRIEFING_TOPIC_COUNT,
+    service: BriefingTopicsService = Depends(get_briefing_topics_service),
+) -> BriefingTopicsResponse:
+    """개인 Wiki 맥락을 읽어 아침 브리핑에 쓸 주제를 고른다.
+
+    Service는 이 결과를 아침 생성 요청의 `topics[]`에 넣는다. 연결 수 상위 3개를
+    그대로 쓰면 도구·출처가 주제가 되므로(실측: `DBeaver Community` 1.00),
+    후보를 넓게 받아 맥락을 읽고 고른다.
+    """
+    return await service.get_topics(user_id, limit=limit)
 
 
 @router.get(
