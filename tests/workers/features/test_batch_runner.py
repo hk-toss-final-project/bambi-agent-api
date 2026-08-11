@@ -10,7 +10,7 @@ import pytest
 
 from infrastructure.persistence.api import ClaimedAgentJob, ProviderRateLimitDecision
 from workers.features import batch_runner
-from workers.runtime.api import ProviderRateLimitPolicy
+from workers.runtime.api import JobInputError, ProviderRateLimitPolicy
 
 
 class _FakeCursor:
@@ -56,15 +56,20 @@ class _FakeConnection:
         self.closed = True
 
 
-def _job(job_id: str) -> ClaimedAgentJob:
+def _job(
+    job_id: str,
+    *,
+    attempt_number: int = 3,
+    max_attempts: int = 3,
+) -> ClaimedAgentJob:
     """러너가 처리할 Job 예시."""
     return ClaimedAgentJob(
         job_id=job_id,
         user_id="user-1",
         feature_id="SVC-008",
         job_type="report_generation",
-        attempt_number=3,
-        max_attempts=3,
+        attempt_number=attempt_number,
+        max_attempts=max_attempts,
         payload={},
     )
 
@@ -167,9 +172,9 @@ def test_record_job_failure_returns_next_status_when_recorded() -> None:
     result = asyncio.run(
         batch_runner.record_job_failure(
             connection,  # type: ignore[arg-type]
-            job=_job("job-1"),
+            job=_job("job-1", attempt_number=1),
             worker_id="worker-1",
-            error=ValueError("Payload 누락"),
+            error=JobInputError("Payload 누락"),
             error_code_prefix="WIKI_BUILD",
         )
     )
@@ -179,6 +184,103 @@ def test_record_job_failure_returns_next_status_when_recorded() -> None:
         "status": "failed",
         "error_code": "WIKI_BUILD_INPUT_INVALID",
     }
+
+
+def test_record_job_failure_retries_runtime_value_error() -> None:
+    """모델 출력 파싱 같은 일반 ValueError는 입력 오류로 오분류하지 않는다."""
+    connection = _FakeConnection([[], [{"id": "job-1"}], [], []])
+
+    result = asyncio.run(
+        batch_runner.record_job_failure(
+            connection,  # type: ignore[arg-type]
+            job=_job("job-1", attempt_number=1),
+            worker_id="worker-1",
+            error=ValueError("LLM 응답 JSON을 파싱하지 못했습니다."),
+            error_code_prefix="REPORT_GENERATION",
+        )
+    )
+
+    assert result["status"] == "queued"
+    assert result["error_code"] == "REPORT_GENERATION_RETRYABLE"
+
+
+def test_maintain_job_lease_renews_until_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """공통 heartbeat가 별도 연결에서 Lease를 연장하고 종료 신호에 멈춘다."""
+    connection = _FakeConnection()
+    stop_event = asyncio.Event()
+    calls: list[dict[str, Any]] = []
+
+    class _Pool:
+        """heartbeat용 고정 연결을 빌려주는 Pool 대역."""
+
+        @asynccontextmanager
+        async def connection(self) -> AsyncIterator[_FakeConnection]:
+            """준비된 연결을 heartbeat에 제공한다."""
+            yield connection
+
+    async def fake_scope(conn: Any) -> None:
+        """테스트에서는 시스템 Scope SQL을 생략한다."""
+
+    async def fake_heartbeat(conn: Any, **kwargs: Any) -> datetime:
+        """첫 Lease 갱신을 기록하고 루프 종료를 요청한다."""
+        calls.append(kwargs)
+        stop_event.set()
+        return datetime.now(UTC)
+
+    monkeypatch.setattr(batch_runner, "set_system_job_scope", fake_scope)
+    monkeypatch.setattr(batch_runner, "wc_003", fake_heartbeat)
+
+    asyncio.run(
+        batch_runner.maintain_job_lease(
+            _Pool(),  # type: ignore[arg-type]
+            job=_job("job-1"),
+            worker_id="worker-1",
+            lease_seconds=600,
+            stop_event=stop_event,
+            interval_seconds=0.001,
+        )
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["worker_id"] == "worker-1"
+    assert calls[0]["lease_seconds"] == 600
+
+
+def test_heartbeat_ownership_failure_cancels_running_operation() -> None:
+    """Lease 소유권을 잃으면 오래 도는 Job 실행을 취소해 중복 처리를 막는다."""
+    async def scenario() -> None:
+        """실행 시작 뒤 heartbeat를 실패시키고 취소 정리를 확인한다."""
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+        stop_event = asyncio.Event()
+
+        async def fail_heartbeat() -> None:
+            """Job 실행이 시작되면 Lease 소유권 상실을 보고한다."""
+            await started.wait()
+            raise RuntimeError("Job Lease 소유권이 없습니다: job-1")
+
+        async def operation() -> dict[str, object]:
+            """heartbeat 실패 전까지 계속 실행 중인 Job을 흉내 낸다."""
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+            return {}
+
+        heartbeat_task = asyncio.create_task(fail_heartbeat())
+        with pytest.raises(RuntimeError, match="Lease 소유권"):
+            await batch_runner._run_with_job_heartbeat(  # noqa: SLF001
+                operation=operation,
+                heartbeat_task=heartbeat_task,
+                stop_event=stop_event,
+            )
+        assert cancelled.is_set()
+        assert stop_event.is_set()
+
+    asyncio.run(scenario())
 
 
 def test_job_serialization_lock_uses_stable_postgres_advisory_key() -> None:

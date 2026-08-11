@@ -27,10 +27,13 @@ from dotenv import load_dotenv
 load_dotenv(PROJECT_ROOT / ".env")
 
 from agent.llm.api import ToolSpec, run_tool_loop
-from agent.report_builder.features.researcher import SYSTEM_PROMPT
+from agent.report_builder.features.researcher import (
+    RESEARCH_MAX_ITERATIONS,
+    SYSTEM_PROMPT,
+)
 
 ROOT = Path(__file__).resolve().parent
-MAX_ITERATIONS = 5
+MAX_ITERATIONS = RESEARCH_MAX_ITERATIONS
 
 
 @dataclass(slots=True)

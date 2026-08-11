@@ -43,6 +43,8 @@ def _candidate_from_rows(
     keyword_rank: int | None,
     vector_rank: int | None,
     rrf_score: float,
+    keyword_score: float | None,
+    vector_score: float | None,
 ) -> WikiNavigationCandidate:
     """Keyword·Vector Row를 공개 Navigator 후보 모델로 변환한다."""
     return WikiNavigationCandidate(
@@ -60,6 +62,8 @@ def _candidate_from_rows(
         keyword_rank=keyword_rank,
         vector_rank=vector_rank,
         rrf_score=rrf_score,
+        keyword_score=keyword_score,
+        vector_score=vector_score,
     )
 
 
@@ -74,6 +78,8 @@ def _merge_candidate_rankings(
     keyword_ranks: dict[str, int] = {}
     vector_ranks: dict[str, int] = {}
     fused_scores: dict[str, float] = {}
+    keyword_scores: dict[str, float] = {}
+    vector_scores: dict[str, float] = {}
     for rank, row in enumerate(keyword_rows, start=1):
         key = _candidate_key(row)
         rows.setdefault(key, row)
@@ -81,6 +87,8 @@ def _merge_candidate_rankings(
         fused_scores[key] = fused_scores.get(key, 0.0) + 1.0 / (
             NAVIGATION_RRF_K + rank
         )
+        if row.get("text_score") is not None:
+            keyword_scores[key] = float(row["text_score"])
     for rank, row in enumerate(vector_rows, start=1):
         key = _candidate_key(row)
         rows.setdefault(key, row)
@@ -88,6 +96,8 @@ def _merge_candidate_rankings(
         fused_scores[key] = fused_scores.get(key, 0.0) + 1.0 / (
             NAVIGATION_RRF_K + rank
         )
+        if row.get("vector_score") is not None:
+            vector_scores[key] = float(row["vector_score"])
     ordered = sorted(
         rows,
         key=lambda key: (
@@ -106,6 +116,8 @@ def _merge_candidate_rankings(
             keyword_rank=keyword_ranks.get(key),
             vector_rank=vector_ranks.get(key),
             rrf_score=fused_scores[key],
+            keyword_score=keyword_scores.get(key),
+            vector_score=vector_scores.get(key),
         )
         for key in ordered[:limit]
     ]

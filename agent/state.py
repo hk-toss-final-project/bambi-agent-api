@@ -68,6 +68,8 @@ class ReportGenerationState(TypedDict):
     # 첫 Reader 실행이 Topic별로 고정한 Page Version·관계·Source. 같은 Job의
     # 재시도는 새 Seed를 고르지 않고 이 Snapshot을 재사용한다.
     wiki_navigation_snapshots: NotRequired[dict[str, dict[str, object]]]
+    # Job 접수 시 고정한 읽기 실행 버전. 키가 없는 과거 Job은 legacy_v1이다.
+    read_pipeline_version: NotRequired[str]
     content_type: str
     language: str
     model: str

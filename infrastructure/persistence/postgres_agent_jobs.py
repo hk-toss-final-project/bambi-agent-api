@@ -62,6 +62,8 @@ class PostgresAgentJobRepository:
         *,
         wiki_build_quiet_minutes: int = 0,
         wiki_build_max_wait_minutes: int = 30,
+        wiki_read_pipeline_version: str = "legacy_v1",
+        wiki_maintenance_pipeline_version: str = "legacy_v1",
     ) -> None:
         """지연 시작 방식의 Agent Job PostgreSQL Pool을 구성한다.
 
@@ -70,6 +72,8 @@ class PostgresAgentJobRepository:
             wiki_build_quiet_minutes: 원본 저장 직후 대기 Wiki Build를 미루는
                 조용 시간(분). SCH-009가 새 원본 저장마다 적용한다
             wiki_build_max_wait_minutes: 첫 대기 Job 발생 후 최대 대기시간(분)
+            wiki_read_pipeline_version: 새 Report Job에 고정할 읽기 루프 버전
+            wiki_maintenance_pipeline_version: 새 Full Rebuild Job에 고정할 유지 루프 버전
         """
         self._pool: AsyncConnectionPool[DictRow] = AsyncConnectionPool(
             conninfo=database_url,
@@ -80,6 +84,8 @@ class PostgresAgentJobRepository:
         )
         self._wiki_build_quiet_minutes = wiki_build_quiet_minutes
         self._wiki_build_max_wait_minutes = wiki_build_max_wait_minutes
+        self._wiki_read_pipeline_version = wiki_read_pipeline_version
+        self._wiki_maintenance_pipeline_version = wiki_maintenance_pipeline_version
 
     async def startup(self) -> None:
         """원본·Job 저장용 연결 Pool을 열고 준비될 때까지 기다린다."""
@@ -317,6 +323,9 @@ class PostgresAgentJobRepository:
                     occurred_at=occurred_at,
                     memo=memo,
                     request_id=request_id,
+                    maintenance_pipeline_version=(
+                        self._wiki_maintenance_pipeline_version
+                    ),
                 )
                 stored = await get_agent_job(connection, job_id=saved.job_id)
                 if stored is None:
@@ -480,6 +489,7 @@ class PostgresAgentJobRepository:
                     change_history_enabled=change_history_enabled,
                     execution_mode=execution_mode,
                     request_id=request_id,
+                    read_pipeline_version=self._wiki_read_pipeline_version,
                 )
                 stored = await get_agent_job(connection, job_id=submitted.job_id)
                 if stored is None:

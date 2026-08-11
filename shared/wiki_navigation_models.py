@@ -28,6 +28,8 @@ class WikiNavigationCandidate:
     keyword_rank: int | None = None
     vector_rank: int | None = None
     rrf_score: float = 0.0
+    keyword_score: float | None = None
+    vector_score: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

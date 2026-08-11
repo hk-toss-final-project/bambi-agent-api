@@ -119,6 +119,42 @@ def test_locate_falls_back_to_keyword_when_vector_query_fails(monkeypatch) -> No
     assert connection.transactions == 2
 
 
+def test_locate_preserves_keyword_and_vector_score_components(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """RRF 후보가 후속 Consumer 판정에 원래 Keyword·Vector 점수를 함께 전달한다."""
+    connection = _Connection()
+    keyword = _candidate_row(1)
+    keyword["text_score"] = 0.7
+    vector = _candidate_row(1)
+    vector["vector_score"] = 0.82
+
+    async def fake_scope(*args, **kwargs):  # type: ignore[no-untyped-def]
+        """RLS Scope 설정을 대체한다."""
+
+    async def fake_keyword(*args, **kwargs):  # type: ignore[no-untyped-def]
+        """Keyword 구성 점수가 있는 후보를 반환한다."""
+        return [keyword]
+
+    async def fake_vector(*args, **kwargs):  # type: ignore[no-untyped-def]
+        """같은 후보의 Vector 유사도 점수를 반환한다."""
+        return [vector]
+
+    monkeypatch.setattr(locate, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(locate, "load_wiki_navigation_keyword_candidates", fake_keyword)
+    monkeypatch.setattr(locate, "load_wiki_navigation_vector_candidates", fake_vector)
+
+    result = asyncio.run(
+        locate.wnav_001(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            query="후보",
+            query_embedding=[0.1] * 1536,
+        )
+    )
+
+    assert result[0].keyword_score == 0.7
+    assert result[0].vector_score == 0.82
+
+
 def test_read_preserves_page_version_and_source_interest_times(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Page Version과 Source 저장·관심 시각을 응답에 보존한다."""
     connection = _Connection()

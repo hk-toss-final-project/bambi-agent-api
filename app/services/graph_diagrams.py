@@ -14,6 +14,8 @@ from typing import Any
 from agent.assistant.api import build_assistant_graph
 from agent.change_history.api import build_change_history_graph
 from agent.graph import build_personal_wiki_graph, build_report_generation_graph
+from agent.report_builder.api import build_wiki_read_graph_v2
+from agent.wiki_builder.api import build_wiki_maintenance_graph_v2
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +85,7 @@ def _diagram(
 
 @lru_cache(maxsize=1)
 def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
-    """네 에이전트 그래프의 Mermaid 정의를 추출해 반환한다.
+    """등록된 에이전트 그래프의 Mermaid 정의를 추출해 반환한다.
 
     Wiki·Report·변경점 추적 그래프 빌더는 DB 연결을 인자로 받지만 빌드 시점에는
     연결을 사용하지 않고 노드 클로저만 구성하므로, 구조 추출에는 None을 넘긴다.
@@ -209,6 +211,131 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                     description=(
                         "저장 결과와 Build 통계를 Job 결과 계약에 맞춰 조립하고, 변경된 "
                         "문서와 Identity 판정 사용량을 함께 반환합니다."
+                    ),
+                ),
+            ),
+        ),
+        _diagram(
+            slug="wiki-maintenance-v2",
+            title="Wiki Maintenance Loop V2",
+            description=(
+                "현재 원본·활성 Snapshot·품질·Embedding 감사(audit) → 최소 실행 범위 "
+                "결정(plan) → 건강하면 즉시 종료(noop), 파생 검색만 빠졌으면 "
+                "Embedding 복구(repair_derivatives), 구조 이슈·원본 제거면 검증된 V1 "
+                "원자 교체 실행기(full_rebuild) → 실행 버전·근거·감사 요약 확정"
+                "(finalize). Scheduler는 이 그래프를 반복하지 않고 Job 등록만 담당한다."
+            ),
+            compiled=build_wiki_maintenance_graph_v2(),
+            nodes=(
+                GraphNodeDescription(
+                    node_id="audit",
+                    title="현재 Wiki 상태 감사",
+                    description=(
+                        "활성 원본 수와 최신 시각, 활성 Wiki의 WBA-014 품질 Metric, "
+                        "현재 Embedding 모델에서 빠진 Page Version을 조회합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="plan",
+                    title="최소 유지 범위 계획",
+                    description=(
+                        "원본 제거·구조 품질·Snapshot 신선도·Embedding 누락을 코드로 "
+                        "판정해 noop, repair_derivatives, full_rebuild 중 하나를 고릅니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="repair_derivatives",
+                    title="파생 검색 자료 복구",
+                    description=(
+                        "Wiki 문서와 관계를 다시 분류하지 않고 누락된 Chunk Embedding만 "
+                        "즉시 생성하거나 OpenAI Batch Item으로 등록합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="full_rebuild",
+                    title="원자적 전체 재구성",
+                    description=(
+                        "기존 V1 실행기를 어댑터로 호출해 순차 분류·Lint·최종 단일 "
+                        "Transaction 교체 계약을 그대로 보존합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="finalize",
+                    title="유지 결과 확정",
+                    description=(
+                        "실행 결과에 V2 버전, 선택 action과 이유, 원문 없는 감사 요약을 "
+                        "더해 Job 결과로 저장할 Payload를 만듭니다."
+                    ),
+                ),
+            ),
+        ),
+        _diagram(
+            slug="wiki-read-v2",
+            title="Wiki Read Loop V2",
+            description=(
+                "고정 Snapshot 복원 또는 Wiki 후보 탐색(restore_or_locate) → "
+                "결정적 Seed 선택(select_seed) → Page·관계·Source 읽기(navigate) → "
+                "Global 저장 근거 조회(search_global) → 개수·관련성 판정(assess) → "
+                "부족할 때만 실시간 수집 1회(collect_live) → Context·Trace와 "
+                "Navigation Snapshot 확정(finalize). V1 Researcher Tool Loop와 같은 "
+                "ResearchOutcome 계약을 반환하되 반복 LLM 도구 왕복을 제거한다."
+            ),
+            compiled=build_wiki_read_graph_v2(),
+            nodes=(
+                GraphNodeDescription(
+                    node_id="restore_or_locate",
+                    title="Snapshot 복원 또는 Wiki Locate",
+                    description=(
+                        "재시도 Snapshot이나 관심사 묶음의 고정 Seed를 우선 복원하고, "
+                        "없을 때만 고정 Wiki Version에서 후보를 최대 30개 찾습니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="select_seed",
+                    title="결정적 Wiki Seed 선택",
+                    description=(
+                        "질문과 제목·별칭·요약의 관련성, exact·alias와 RRF 순위를 "
+                        "결합해 최대 3개 Page Version을 코드로 선택합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="navigate",
+                    title="Wiki Page와 근거 읽기",
+                    description=(
+                        "선택한 정확한 Page Version에서 검증 관계와 원본 Source, "
+                        "저장 시각이 보존된 Context Packet을 구성합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="search_global",
+                    title="Global 저장 근거 조회",
+                    description=(
+                        "대표 주제와 Job 접수 시 고정된 연관 키워드로 미리 수집한 "
+                        "Global 자료를 조회하고 중복을 제거합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="assess",
+                    title="근거 충분성 판정",
+                    description=(
+                        "Global 근거의 개수와 주제 관련성을 결정적으로 검사해 Live "
+                        "수집이 필요한지 분기합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="collect_live",
+                    title="실시간 근거 보강",
+                    description=(
+                        "저장 근거가 부족한 경우에만 기존 실시간 수집기를 최대 한 번 "
+                        "호출하고, 실패해도 이미 확보한 근거를 보존합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="finalize",
+                    title="Context와 Trace 확정",
+                    description=(
+                        "Wiki·Global·Live 근거를 합치고 첫 Navigation Packet을 Job의 "
+                        "Topic Snapshot으로 저장해 재시도 입력을 고정합니다."
                     ),
                 ),
             ),

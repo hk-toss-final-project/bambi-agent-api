@@ -196,6 +196,7 @@ async def schedule_personal_wiki_maintenance_rebuilds(
     stale_after_hours: float = 168.0,
     limit: int = 5,
     now: datetime | None = None,
+    maintenance_pipeline_version: str = "legacy_v1",
 ) -> list[MaintenanceRebuildResult]:
     """정기 Wiki 재구성이 밀린 사용자에게 Full Rebuild Job을 등록한다.
 
@@ -226,7 +227,10 @@ async def schedule_personal_wiki_maintenance_rebuilds(
     for user_id in users:
         try:
             enqueued = await enqueue_personal_wiki_maintenance_rebuild_job(
-                connection, user_id=user_id, maintenance_key=key
+                connection,
+                user_id=user_id,
+                maintenance_key=key,
+                maintenance_pipeline_version=maintenance_pipeline_version,
             )
         except Exception as error:  # noqa: BLE001 - 다음 사용자 등록을 계속한다
             logger.warning(

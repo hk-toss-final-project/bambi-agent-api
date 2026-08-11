@@ -30,6 +30,7 @@ from infrastructure.sources.connectors.api import (
 )
 from shared.fetch_guard import ensure_fetch_is_readable
 from workers.features.batch_runner import run_job_batch
+from workers.runtime.api import JobInputError
 
 type DictRow = dict[str, Any]
 type UrlFetcher = Callable[[str], JinaReadResult]
@@ -63,9 +64,9 @@ async def _process_job(
     source_event_id = str(job.payload.get("source_event_id") or "").strip()
     source_event_row_id = str(job.payload.get("source_event_row_id") or "").strip()
     if not url:
-        raise ValueError("URL 수집 Job Payload에 url이 없습니다.")
+        raise JobInputError("URL 수집 Job Payload에 url이 없습니다.")
     if not source_document_id or not source_event_id or not source_event_row_id:
-        raise ValueError("URL 수집 Job Payload에 원본 식별자가 없습니다.")
+        raise JobInputError("URL 수집 Job Payload에 원본 식별자가 없습니다.")
 
     fetched = await asyncio.to_thread(url_fetcher, url)
     # 차단 안내 페이지를 본문으로 저장하지 않는다. 저장하면 LLM이 그 안내문을

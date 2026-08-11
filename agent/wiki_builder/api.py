@@ -80,6 +80,18 @@ from .features.onboarding_contexts import (
     ONBOARDING_CONTEXT_MODEL,
     resolve_onboarding_contexts,
 )
+from .features.maintenance import (
+    LANGGRAPH_MAINTENANCE_PIPELINE_VERSION,
+    LEGACY_MAINTENANCE_PIPELINE_VERSION,
+    MAINTENANCE_PIPELINE_VERSIONS,
+    WikiMaintenanceAction,
+    WikiMaintenanceAudit,
+    WikiMaintenancePlan,
+    build_wiki_maintenance_graph_v2,
+    plan_wiki_maintenance,
+    run_wiki_maintenance_for_version,
+    run_wiki_maintenance_graph_v2,
+)
 
 __all__ = [
     "wba_001",
@@ -147,4 +159,14 @@ __all__ = [
     "CUSTOM_TOPIC_PROMPT_VERSION",
     "ONBOARDING_CONTEXT_MODEL",
     "resolve_onboarding_contexts",
+    "LANGGRAPH_MAINTENANCE_PIPELINE_VERSION",
+    "LEGACY_MAINTENANCE_PIPELINE_VERSION",
+    "MAINTENANCE_PIPELINE_VERSIONS",
+    "WikiMaintenanceAction",
+    "WikiMaintenanceAudit",
+    "WikiMaintenancePlan",
+    "build_wiki_maintenance_graph_v2",
+    "plan_wiki_maintenance",
+    "run_wiki_maintenance_for_version",
+    "run_wiki_maintenance_graph_v2",
 ]

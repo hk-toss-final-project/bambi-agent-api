@@ -903,6 +903,7 @@ async def deactivate_content_mark_and_enqueue_rebuild(
     occurred_at: datetime | None,
     memo: str | None,
     request_id: str,
+    maintenance_pipeline_version: str = "legacy_v1",
 ) -> PersistedSourceSubmission:
     """북마크 이벤트의 활성 원본 연결만 해제하고 전체 재빌드 Job을 등록한다.
 
@@ -1033,6 +1034,7 @@ async def deactivate_content_mark_and_enqueue_rebuild(
         source_event_row_id=source_event_row_id,
         removed_source_document_id=source_document_id,
         request_id=request_id,
+        maintenance_pipeline_version=maintenance_pipeline_version,
     )
     return PersistedSourceSubmission(
         source_document_id=source_document_id,
