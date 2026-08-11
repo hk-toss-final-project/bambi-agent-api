@@ -1441,6 +1441,88 @@ def test_multi_topic_report_drops_topics_without_evidence(
     assert generated_with["contexts"] == ["context-반도체", "context-프로야구"]
 
 
+def test_multi_topic_report_drops_pool_documents_that_miss_the_topic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """주제와 무관하다고 판정된 창고 자료는 근거로 넘기지 않는다.
+
+    검색은 주제와 먼 기사도 물어온다. 그게 근거로 남으면 모델이 그걸 인용해
+    섹션을 채운다(2026-08-11 실측: '김건희' 섹션이 서학개미 증시 기사를 인용해
+    "최근 발언으로 주목받고 있다"는 근거 없는 문장이 됐다. 유사도는 0.18로
+    시스템이 이미 무관하다고 판정한 자료였다).
+
+    근거를 0건으로 두면 기존 규칙이 그 주제를 생성에서 빼고 섹션이 아예
+    만들어지지 않는다 — 틀린 내용보다 빠진 섹션이 낫다.
+    """
+    generated_with: dict[str, Any] = {}
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """DB 사용자 Scope 설정을 생략한다."""
+        return None
+
+    def _pool_document(query: str) -> ReportContextDocument:
+        """창고(Global) 문서 한 건을 만든다 — 실제 사례의 G 인용과 같은 자리다."""
+        return ReportContextDocument(
+            reference=f"G-{query}",
+            document_version_id=f"version-{query}",
+            chunk_id=f"chunk-{query}",
+            namespace_key="global",
+            title=f"{query} 관련 기사",
+            content=f"{query} 본문",
+            url=f"https://example.test/{query}",
+            score=0.9,
+        )
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[Any]:
+        """모든 주제에 창고 자료가 걸리는 상황을 만든다."""
+        return [_pool_document(kwargs["query"])]
+
+    async def fake_prag_006(contexts: list[Any]) -> list[Any]:
+        """검색 Context를 변경 없이 반환한다."""
+        return contexts
+
+    def fake_relevant(topic: str, documents: Any) -> bool:
+        """'김건희'만 창고 자료가 주제와 무관하다고 판정한다."""
+        return topic != "김건희"
+
+    def fake_generate(**kwargs: Any) -> str:
+        """생성 입력을 붙잡아 두고 고정 콘텐츠를 반환한다."""
+        generated_with.update(kwargs)
+        return "generated"
+
+    async def fake_prag_007(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """저장 호출을 고정 결과로 대체한다."""
+        return {"content_candidate_id": "candidate-1"}
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
+    monkeypatch.setattr(agent_graph, "is_pool_relevant", fake_relevant)
+    monkeypatch.setattr(agent_graph, "generate_report_content_with_quality", fake_generate)
+    monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
+    # 실시간 수집도 소득이 없는 상황이다. 대체하지 않으면 외부 API를 실제로 부른다.
+    monkeypatch.setattr(agent_graph, "collect_live_context", lambda *a, **k: [])
+    _disable_research(monkeypatch)
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 관심사 브리핑",
+            topics=["코스닥", "폭염", "김건희"],
+            content_type="interest_news_card",
+            language="ko",
+            model="test-model",
+        )
+    )
+
+    assert generated_with["topics"] == ["코스닥", "폭염"]
+    titles = [document.title for document in generated_with["contexts"]]
+    assert "김건희 관련 기사" not in titles
+
+
 def test_multi_topic_report_collects_live_when_the_pool_is_thin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
