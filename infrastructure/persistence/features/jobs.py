@@ -733,14 +733,22 @@ async def enqueue_personal_wiki_rebuild_job(
     source_event_row_id: str,
     removed_source_document_id: str,
     request_id: str | None = None,
+    maintenance_pipeline_version: str = "legacy_v1",
 ) -> EnqueuedWikiBuildJob:
     """활성 원본 전체를 다시 읽는 Personal Wiki Full Rebuild Job을 멱등 등록한다.
 
     기존 Worker와 상태 조회 계약을 재사용하기 위해 Job 유형은
     ``personal_wiki_build``를 유지하고 Payload의 ``mode``로 전체 재빌드를 구분한다.
     """
+    if maintenance_pipeline_version not in {"legacy_v1", "langgraph_v2"}:
+        raise ValueError(
+            "지원하지 않는 Wiki 유지 파이프라인 버전입니다: "
+            f"{maintenance_pipeline_version}"
+        )
     payload = {
         "mode": "full_rebuild",
+        "trigger": "source_deleted",
+        "maintenance_pipeline_version": maintenance_pipeline_version,
         "source_event_id": source_event_id,
         "source_event_row_id": source_event_row_id,
         "removed_source_document_id": removed_source_document_id,
@@ -884,6 +892,7 @@ async def enqueue_personal_wiki_maintenance_rebuild_job(
     user_id: str,
     maintenance_key: str,
     request_id: str | None = None,
+    maintenance_pipeline_version: str = "legacy_v1",
 ) -> EnqueuedWikiBuildJob:
     """정기 유지보수용 Personal Wiki Full Rebuild Job을 멱등 등록한다.
 
@@ -906,10 +915,16 @@ async def enqueue_personal_wiki_maintenance_rebuild_job(
     """
     if not maintenance_key:
         raise ValueError("정기 재구성에 maintenance_key가 필요합니다.")
+    if maintenance_pipeline_version not in {"legacy_v1", "langgraph_v2"}:
+        raise ValueError(
+            "지원하지 않는 Wiki 유지 파이프라인 버전입니다: "
+            f"{maintenance_pipeline_version}"
+        )
     payload = {
         "mode": "full_rebuild",
         "trigger": "maintenance",
         "maintenance_key": maintenance_key,
+        "maintenance_pipeline_version": maintenance_pipeline_version,
     }
     creation = await job_001(
         feature_id=MAINTENANCE_REBUILD_FEATURE_ID,

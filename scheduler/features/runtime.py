@@ -155,6 +155,8 @@ class CollectionScheduler:
     maintenance_rebuild_limit: int = 0
     # 사용자별 정기 Wiki 재구성 간격(시간).
     maintenance_rebuild_stale_hours: float = 168.0
+    # 새 유지보수 Job에 접수 시점 고정할 실행 버전.
+    maintenance_pipeline_version: str = "legacy_v1"
 
     async def run_once(
         self, *, now: datetime | None = None, force: bool = False
@@ -242,6 +244,7 @@ class CollectionScheduler:
                 stale_after_hours=self.maintenance_rebuild_stale_hours,
                 limit=self.maintenance_rebuild_limit,
                 now=now,
+                maintenance_pipeline_version=self.maintenance_pipeline_version,
             )
         except Exception as error:  # noqa: BLE001 - 다음 tick에서 다시 시도한다
             return [
@@ -545,6 +548,7 @@ def build_scheduler(settings: Settings | None = None) -> CollectionScheduler:
         ),
         maintenance_rebuild_limit=resolved.maintenance_rebuild_limit,
         maintenance_rebuild_stale_hours=resolved.maintenance_rebuild_stale_hours,
+        maintenance_pipeline_version=resolved.wiki_maintenance_pipeline_version,
     )
 
 

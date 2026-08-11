@@ -1,6 +1,7 @@
 """Agent API 환경 설정 스키마와 환경변수 로딩 기능."""
 
 import os
+from typing import Literal
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
@@ -97,6 +98,16 @@ class Settings(BaseModel):
     )
     report_llm_model: str = Field(
         default="gpt-4.1-mini", description="Report Builder 콘텐츠 생성 모델"
+    )
+    wiki_read_pipeline_version: Literal["legacy_v1", "langgraph_v2"] = Field(
+        default="legacy_v1",
+        description="새 Report Job에 고정할 Wiki 읽기 루프 버전",
+    )
+    wiki_maintenance_pipeline_version: Literal[
+        "legacy_v1", "langgraph_v2"
+    ] = Field(
+        default="legacy_v1",
+        description="새 Wiki 유지보수 Job에 고정할 실행 루프 버전",
     )
     wiki_embedding_model: str = Field(
         default="text-embedding-3-small",
@@ -332,6 +343,12 @@ def load_settings() -> Settings:
         gdelt_base_url=_optional_env("GDELT_BASE_URL"),
         wiki_llm_model=os.getenv("WIKI_LLM_MODEL", "gpt-4.1-mini"),
         report_llm_model=os.getenv("REPORT_LLM_MODEL", "gpt-4.1-mini"),
+        wiki_read_pipeline_version=os.getenv(
+            "WIKI_READ_PIPELINE_VERSION", "legacy_v1"
+        ),
+        wiki_maintenance_pipeline_version=os.getenv(
+            "WIKI_MAINTENANCE_PIPELINE_VERSION", "legacy_v1"
+        ),
         wiki_embedding_model=os.getenv(
             "WIKI_EMBEDDING_MODEL", "text-embedding-3-small"
         ),

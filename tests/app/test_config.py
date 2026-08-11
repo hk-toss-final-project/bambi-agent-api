@@ -24,6 +24,8 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-secret")
     monkeypatch.setenv("WIKI_LLM_MODEL", "gpt-4.1-mini")
     monkeypatch.setenv("REPORT_LLM_MODEL", "gpt-4.1-nano")
+    monkeypatch.setenv("WIKI_READ_PIPELINE_VERSION", "langgraph_v2")
+    monkeypatch.setenv("WIKI_MAINTENANCE_PIPELINE_VERSION", "langgraph_v2")
     monkeypatch.setenv("WIKI_EMBEDDING_MODEL", "text-embedding-3-small")
     monkeypatch.setenv("WIKI_EMBEDDING_BATCH_THRESHOLD", "80")
     monkeypatch.setenv("PERSONAL_WIKI_WORKER_BATCH_SIZE", "3")
@@ -62,6 +64,8 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     assert settings.openai_api_key.get_secret_value() == "test-secret"
     assert settings.wiki_llm_model == "gpt-4.1-mini"
     assert settings.report_llm_model == "gpt-4.1-nano"
+    assert settings.wiki_read_pipeline_version == "langgraph_v2"
+    assert settings.wiki_maintenance_pipeline_version == "langgraph_v2"
     assert settings.wiki_embedding_model == "text-embedding-3-small"
     assert settings.wiki_embedding_batch_threshold == 80
     assert settings.personal_wiki_worker_batch_size == 3
@@ -89,6 +93,14 @@ def test_settings_uses_dedicated_mcp_port_by_default() -> None:
 
     assert settings.mcp_server_port == 8100
     assert settings.mcp_server_url == "http://localhost:8100/mcp"
+
+
+def test_wiki_pipeline_versions_default_to_legacy() -> None:
+    """새 배포가 명시적인 전환 전에는 기존 읽기·유지 루프를 사용한다."""
+    settings = Settings()
+
+    assert settings.wiki_read_pipeline_version == "legacy_v1"
+    assert settings.wiki_maintenance_pipeline_version == "legacy_v1"
 
 
 def test_create_container_uses_postgres_for_publish_snapshots() -> None:
