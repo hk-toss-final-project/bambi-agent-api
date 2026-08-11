@@ -206,6 +206,8 @@ def _patch_per_topic_documents(monkeypatch: pytest.MonkeyPatch) -> None:
         query = str(kwargs["query"])
         document = _context()
         object.__setattr__(document, "reference", f"G-{query}")
+        object.__setattr__(document, "document_version_id", f"ver-{query}")
+        object.__setattr__(document, "chunk_id", f"chunk-{query}")
         return [document]
 
     monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
