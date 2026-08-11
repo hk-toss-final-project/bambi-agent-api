@@ -200,8 +200,15 @@ def test_loop_reports_unknown_tool_without_crashing(
     assert result.text == "대신 이렇게 답합니다."
 
 
-def test_loop_stops_at_iteration_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """도구만 계속 부르면 반복 상한에서 중단하고 사유를 남긴다."""
+def test_loop_forces_a_final_answer_after_hitting_the_iteration_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """도구만 부르다 상한에 걸리면 도구 없이 한 번 더 물어 답을 받아낸다.
+
+    실측(2026-08-11, `dup_reordered` 벤치 케이스)에서 같은 사실을 여러 번
+    재검색하다 상한을 채워 최종 응답 자체가 사라진 사례가 나왔다. 관찰은 이미
+    다 모았으므로 도구를 떼고 한 번 더 물으면 답을 건질 수 있어야 한다.
+    """
     client = _FakeClient(
         [
             _FakeResponse(
@@ -209,8 +216,38 @@ def test_loop_stops_at_iteration_limit(monkeypatch: pytest.MonkeyPatch) -> None:
                     {"name": "search_pool", "args": {"query": f"q{n}"}, "id": f"c{n}"}
                 ]
             )
-            for n in range(5)
+            for n in range(3)
         ]
+        + [_FakeResponse(content="관찰만으로 정리한 답변입니다.")]
+    )
+    _install(monkeypatch, client)
+
+    result = _run(
+        "너는 조사원이다.", "조사", [_echo_tool([])], max_iterations=3
+    )
+
+    assert result.stop_reason == "forced_final"
+    assert result.text == "관찰만으로 정리한 답변입니다."
+    # 강제 호출은 답을 받아내기 위한 것이지 도구 호출이 아니므로 기록에 안 남는다.
+    assert len(result.calls) == 3
+    # 상한(3) + 강제 호출(1) = 4번 호출, 토큰도 4번 치만큼 누적된다.
+    assert result.input_tokens == 40
+
+
+def test_loop_reports_max_iterations_if_the_forced_final_answer_is_also_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """강제로 한 번 더 물어도 빈 답이면 실패 사유를 그대로 남긴다."""
+    client = _FakeClient(
+        [
+            _FakeResponse(
+                tool_calls=[
+                    {"name": "search_pool", "args": {"query": f"q{n}"}, "id": f"c{n}"}
+                ]
+            )
+            for n in range(3)
+        ]
+        + [_FakeResponse(content="")]
     )
     _install(monkeypatch, client)
 
@@ -219,6 +256,7 @@ def test_loop_stops_at_iteration_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     assert result.stop_reason == "max_iterations"
+    assert result.text == ""
     assert len(result.calls) == 3
 
 

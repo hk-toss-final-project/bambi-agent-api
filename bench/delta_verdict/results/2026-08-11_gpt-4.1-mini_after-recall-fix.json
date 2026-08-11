@@ -1,0 +1,302 @@
+[
+  {
+    "id": "dup_particle_only",
+    "category": "duplicate",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 0,
+    "duplicate_count": 1,
+    "unstable_attributes": [],
+    "attributes": [],
+    "diff_attempts": 1,
+    "input_tokens": 4296,
+    "output_tokens": 318,
+    "latency_ms": 10689
+  },
+  {
+    "id": "dup_expanded",
+    "category": "duplicate",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 1,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "당첨금 자동 입금 서비스 시작"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 5076,
+    "output_tokens": 585,
+    "latency_ms": 12098
+  },
+  {
+    "id": "dup_summarized",
+    "category": "duplicate",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 0,
+    "duplicate_count": 1,
+    "unstable_attributes": [],
+    "attributes": [],
+    "diff_attempts": 1,
+    "input_tokens": 4164,
+    "output_tokens": 290,
+    "latency_ms": 11575
+  },
+  {
+    "id": "dup_identical_rebroadcast",
+    "category": "duplicate",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 0,
+    "duplicate_count": 1,
+    "unstable_attributes": [],
+    "attributes": [],
+    "diff_attempts": 1,
+    "input_tokens": 4198,
+    "output_tokens": 233,
+    "latency_ms": 7812
+  },
+  {
+    "id": "dup_reordered",
+    "category": "duplicate",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 4,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "1등 당첨자 수",
+      "1등 당첨금",
+      "2등 당첨자 수",
+      "당첨금 지급 시작 시점"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 8650,
+    "output_tokens": 1036,
+    "latency_ms": 26140
+  },
+  {
+    "id": "dup_status_without_numbers",
+    "category": "duplicate",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 0,
+    "duplicate_count": 1,
+    "unstable_attributes": [],
+    "attributes": [],
+    "diff_attempts": 1,
+    "input_tokens": 4106,
+    "output_tokens": 205,
+    "latency_ms": 9746
+  },
+  {
+    "id": "upd_date_changed",
+    "category": "updated",
+    "passed": true,
+    "failures": [],
+    "updated_count": 1,
+    "new_count": 0,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "미수령 당첨금 자동 지급 시행일"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 4869,
+    "output_tokens": 542,
+    "latency_ms": 14974
+  },
+  {
+    "id": "upd_number_changed",
+    "category": "updated",
+    "passed": false,
+    "failures": [
+      "갱신이 0건뿐이다(최소 1건). 진짜 변경을 놓쳤다."
+    ],
+    "updated_count": 0,
+    "new_count": 3,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "등락률",
+      "외국인 순매수",
+      "거래대금"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 4956,
+    "output_tokens": 747,
+    "latency_ms": 20606
+  },
+  {
+    "id": "upd_status_flipped_same_date",
+    "category": "updated",
+    "passed": true,
+    "failures": [],
+    "updated_count": 1,
+    "new_count": 0,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "미수령 당첨금 자동 지급 제도 시행 일정"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 4809,
+    "output_tokens": 537,
+    "latency_ms": 11162
+  },
+  {
+    "id": "upd_amount_changed",
+    "category": "updated",
+    "passed": true,
+    "failures": [],
+    "updated_count": 1,
+    "new_count": 0,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "반도체 지원 예산"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 4775,
+    "output_tokens": 486,
+    "latency_ms": 9537
+  },
+  {
+    "id": "new_first_run",
+    "category": "new",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 5,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "HBM4 양산 일정",
+      "HBM4 시제품 검증 상태",
+      "HBM4 공급 협의 상태",
+      "HBM4 양산 일정 경쟁사 대비",
+      "HBM4 초기 물량 배정 용도"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 2981,
+    "output_tokens": 955,
+    "latency_ms": 16366
+  },
+  {
+    "id": "new_unrelated_to_base",
+    "category": "new",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 1,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "판매점 수수료율"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 4828,
+    "output_tokens": 490,
+    "latency_ms": 13071
+  },
+  {
+    "id": "attr_lottery_round_label",
+    "category": "attribute",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 6,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "1등 당첨자 수",
+      "1등 당첨금액",
+      "2등 당첨자 수",
+      "3등 당첨자 수",
+      "당첨금 지급 시작 시점",
+      "당첨금 지급 기한"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 3006,
+    "output_tokens": 1148,
+    "latency_ms": 18832
+  },
+  {
+    "id": "attr_quarterly_earnings_label",
+    "category": "attribute",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 2,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "영업이익",
+      "매출"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 2735,
+    "output_tokens": 691,
+    "latency_ms": 13074
+  },
+  {
+    "id": "mixed_language_updated",
+    "category": "updated",
+    "passed": true,
+    "failures": [],
+    "updated_count": 1,
+    "new_count": 0,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "양산 일정"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 4856,
+    "output_tokens": 471,
+    "latency_ms": 10861
+  },
+  {
+    "id": "long_multi_fact_no_change",
+    "category": "duplicate",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 3,
+    "duplicate_count": 1,
+    "unstable_attributes": [],
+    "attributes": [
+      "온라인 구매 한도",
+      "판매점 수수료율",
+      "청소년 구매 차단 본인 확인 절차"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 5710,
+    "output_tokens": 1083,
+    "latency_ms": 21936
+  },
+  {
+    "id": "vague_timing_new",
+    "category": "new",
+    "passed": true,
+    "failures": [],
+    "updated_count": 0,
+    "new_count": 1,
+    "duplicate_count": 0,
+    "unstable_attributes": [],
+    "attributes": [
+      "전기차 구매 보조금 체계 개편 검토"
+    ],
+    "diff_attempts": 1,
+    "input_tokens": 2639,
+    "output_tokens": 662,
+    "latency_ms": 13126
+  }
+]

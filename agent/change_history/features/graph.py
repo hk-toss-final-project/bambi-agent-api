@@ -84,6 +84,14 @@ _CITATION_CORRECTION = (
     "이전 시도의 서술에 유효한 인용 마커가 없었다. 팩트를 서술할 때마다 그 "
     "팩트의 참조 ID를 [G2] 형식으로 붙여라. 문단마다 최소 하나는 있어야 한다."
 )
+_ATTRIBUTE_CORRECTION = (
+    "이전 시도의 attribute에 날짜·회차·분기 같은 흐르는 값이 섞여 있었다. "
+    "attribute는 날이 바뀌어도 그대로인 이름표여야 하고, 회차·날짜·분기·수치는 "
+    "전부 fact_value로 보내라. 예: attribute='제1237회'는 틀렸고, "
+    "attribute='당첨번호' + fact_value='제1237회 …'가 맞다. "
+    "마찬가지로 attribute='3분기 영업이익'은 틀렸고, "
+    "attribute='영업이익' + fact_value='3분기 1조2천억원'이 맞다."
+)
 
 # 검증에서 나온 사유별 교정 지시. "다시 써라"만으로는 같은 글이 나오므로,
 # 무엇이 문제였는지를 워커에게 그대로 전달한다.
@@ -94,6 +102,7 @@ _CORRECTION_BY_REASON = {
     "timeline_date_out_of_range": _COMPOSE_CORRECTION,
     "timeline_fact_index_missing": _COMPOSE_CORRECTION,
     "updates_fact_id_not_found": _DIFF_CORRECTION,
+    "attribute_contains_drifting_value": _ATTRIBUTE_CORRECTION,
 }
 
 
