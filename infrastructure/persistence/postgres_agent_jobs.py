@@ -60,7 +60,7 @@ class PostgresAgentJobRepository:
         self,
         database_url: str,
         *,
-        wiki_build_quiet_minutes: int = 10,
+        wiki_build_quiet_minutes: int = 0,
         wiki_build_max_wait_minutes: int = 30,
     ) -> None:
         """지연 시작 방식의 Agent Job PostgreSQL Pool을 구성한다.

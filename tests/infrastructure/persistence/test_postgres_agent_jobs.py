@@ -25,7 +25,7 @@ class _Pool:
 def _repository(
     connection: object,
     *,
-    wiki_build_quiet_minutes: int = 10,
+    wiki_build_quiet_minutes: int = 0,
     wiki_build_max_wait_minutes: int = 30,
 ) -> PostgresAgentJobRepository:
     """실제 DB Pool 생성 없이 피드백·조용 시간 메서드만 시험할 저장소를 만든다."""
@@ -139,11 +139,15 @@ class _TransactionalConnection:
         yield None
 
 
-def test_repository_defaults_quiet_window_to_settings_defaults() -> None:
-    """생성자 인자를 생략하면 app.config의 기본 조용 시간 값을 그대로 쓴다."""
+def test_repository_defaults_quiet_window_to_immediate() -> None:
+    """생성자 인자를 생략하면 즉시 반영(0분) 기본값을 그대로 쓴다.
+
+    데모·개발 환경 기본값이다. 저장이 몰리는 운영 환경은
+    WIKI_BUILD_QUIET_MINUTES로 늘려 여러 건을 한 Build로 묶는다.
+    """
     repository = PostgresAgentJobRepository("postgresql://fake")
 
-    assert repository._wiki_build_quiet_minutes == 10
+    assert repository._wiki_build_quiet_minutes == 0
     assert repository._wiki_build_max_wait_minutes == 30
 
 

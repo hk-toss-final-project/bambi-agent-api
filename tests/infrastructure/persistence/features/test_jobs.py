@@ -418,10 +418,11 @@ def test_enqueue_personal_wiki_build_job_skips_event_link_without_row_id() -> No
 
     assert enqueued.created is True
     # 이벤트 연결은 건너뛰어도 SCH-009 조용 시간 조정은 항상 뒤따른다.
+    # 기본값(0분)은 즉시 반영이라 실행 시각이 바로 지금으로 맞춰진다.
     assert len(connection.executed) == 2
     defer_sql, defer_params = connection.executed[1]
     assert "job_type = 'personal_wiki_build'" in defer_sql
-    assert defer_params == ("user-1", 30, 10)
+    assert defer_params == ("user-1", 30, 0)
 
 
 def test_enqueue_personal_wiki_build_job_applies_quiet_window_after_insert() -> None:

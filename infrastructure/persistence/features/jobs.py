@@ -880,7 +880,7 @@ async def enqueue_personal_wiki_build_job(
     source_event_row_id: str | None = None,
     feature_id: str = "SVC-003",
     request_id: str | None = None,
-    quiet_minutes: int = 10,
+    quiet_minutes: int = 0,
     max_wait_minutes: int = 30,
 ) -> EnqueuedWikiBuildJob:
     """저장된 사용자 원본 Version을 처리할 personal_wiki_build Job을 멱등 등록한다.
