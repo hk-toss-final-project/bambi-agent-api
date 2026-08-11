@@ -33,6 +33,10 @@ class _FakeCursor:
         """지정된 단일 Row를 반환한다."""
         return self._row
 
+    async def fetchall(self) -> list[dict[str, Any]]:
+        """SCH-009 조용 시간 조정처럼 fetchall을 쓰는 호출을 위한 목록을 반환한다."""
+        return [self._row] if self._row is not None else []
+
 
 class _SequencedConnection:
     """SQL 호출 순서별 Row와 실행 내역을 보존하는 Connection Test Double."""

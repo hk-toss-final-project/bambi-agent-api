@@ -417,7 +417,37 @@ def test_enqueue_personal_wiki_build_job_skips_event_link_without_row_id() -> No
     )
 
     assert enqueued.created is True
-    assert len(connection.executed) == 1
+    # 이벤트 연결은 건너뛰어도 SCH-009 조용 시간 조정은 항상 뒤따른다.
+    assert len(connection.executed) == 2
+    defer_sql, defer_params = connection.executed[1]
+    assert "job_type = 'personal_wiki_build'" in defer_sql
+    assert defer_params == ("user-1", 30, 10)
+
+
+def test_enqueue_personal_wiki_build_job_applies_quiet_window_after_insert() -> None:
+    """새 Job 등록 직후 사용자의 대기 Job 전체가 조용 시간만큼 미뤄지는지 검증한다."""
+    connection = _FakeConnection([[{"id": "job-1"}], [{"id": "job-1"}, {"id": "job-2"}]])
+
+    await_result = asyncio.run(
+        enqueue_personal_wiki_build_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            source_document_id="doc-1",
+            source_document_version_id="version-1",
+            source_version=1,
+            source_event_id="clip-1",
+            source_event_row_id="event-row-1",
+            quiet_minutes=15,
+            max_wait_minutes=45,
+        )
+    )
+
+    assert await_result.job_id == "job-1"
+    # 순서: Job Insert → wiki_source_events 연결 → SCH-009 조용 시간 조정.
+    assert len(connection.executed) == 3
+    defer_sql, defer_params = connection.executed[2]
+    assert "scheduled_at = LEAST" in defer_sql
+    assert defer_params == ("user-1", 45, 15)
 
 
 def test_defer_user_wiki_build_jobs_applies_quiet_window_with_max_wait_cap() -> None:

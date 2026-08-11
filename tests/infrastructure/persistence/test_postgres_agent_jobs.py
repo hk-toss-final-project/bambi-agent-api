@@ -22,10 +22,17 @@ class _Pool:
         yield self._connection
 
 
-def _repository(connection: object) -> PostgresAgentJobRepository:
-    """실제 DB Pool 생성 없이 피드백 메서드만 시험할 저장소를 만든다."""
+def _repository(
+    connection: object,
+    *,
+    wiki_build_quiet_minutes: int = 10,
+    wiki_build_max_wait_minutes: int = 30,
+) -> PostgresAgentJobRepository:
+    """실제 DB Pool 생성 없이 피드백·조용 시간 메서드만 시험할 저장소를 만든다."""
     repository = PostgresAgentJobRepository.__new__(PostgresAgentJobRepository)
     repository._pool = _Pool(connection)  # type: ignore[assignment]
+    repository._wiki_build_quiet_minutes = wiki_build_quiet_minutes
+    repository._wiki_build_max_wait_minutes = wiki_build_max_wait_minutes
     return repository
 
 
@@ -121,3 +128,94 @@ def test_duplicate_feedback_skips_recalculation(monkeypatch: Any) -> None:
 
     assert accepted == 0
     assert not recalculated
+
+
+class _TransactionalConnection:
+    """transaction() async context manager만 지원하는 Connection 대역."""
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[None]:
+        """실제 커넥션처럼 Transaction 컨텍스트를 제공한다."""
+        yield None
+
+
+def test_repository_defaults_quiet_window_to_settings_defaults() -> None:
+    """생성자 인자를 생략하면 app.config의 기본 조용 시간 값을 그대로 쓴다."""
+    repository = PostgresAgentJobRepository("postgresql://fake")
+
+    assert repository._wiki_build_quiet_minutes == 10
+    assert repository._wiki_build_max_wait_minutes == 30
+
+
+def test_repository_stores_configured_quiet_window() -> None:
+    """생성자에 넘긴 조용 시간·최대 대기시간을 그대로 보관한다."""
+    repository = PostgresAgentJobRepository(
+        "postgresql://fake",
+        wiki_build_quiet_minutes=5,
+        wiki_build_max_wait_minutes=20,
+    )
+
+    assert repository._wiki_build_quiet_minutes == 5
+    assert repository._wiki_build_max_wait_minutes == 20
+
+
+def test_submit_web_clipping_forwards_configured_quiet_window(
+    monkeypatch: Any,
+) -> None:
+    """클리핑 저장이 저장소에 설정된 조용 시간을 db_002에 그대로 전달하는지 검증한다."""
+    captured: dict[str, Any] = {}
+
+    async def fake_db_002(_connection: object, **kwargs: Any) -> Any:
+        """전달받은 인자를 기록하고 최소 Submission 결과를 돌려준다."""
+        captured.update(kwargs)
+
+        class _Saved:
+            job_id = "job-1"
+            source_document_id = "doc-1"
+            source_document_version_id = "version-1"
+
+        return _Saved()
+
+    async def fake_get_agent_job(_connection: object, *, job_id: str) -> Any:
+        """저장 결과 조회를 최소 레코드로 대체한다."""
+        return object()
+
+    async def fake_scope(_connection: object, *, user_id: str) -> None:
+        """RLS Scope 설정을 건너뛴다."""
+        return None
+
+    monkeypatch.setattr(postgres_agent_jobs, "db_002", fake_db_002)
+    monkeypatch.setattr(postgres_agent_jobs, "get_agent_job", fake_get_agent_job)
+    monkeypatch.setattr(postgres_agent_jobs, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(
+        PostgresAgentJobRepository,
+        "_to_job_record",
+        lambda self, stored: stored,
+    )
+
+    repository = _repository(
+        _TransactionalConnection(),
+        wiki_build_quiet_minutes=7,
+        wiki_build_max_wait_minutes=21,
+    )
+
+    asyncio.run(
+        repository.submit_web_clipping(
+            user_id="user-1",
+            source_event_id="clip-1",
+            source_url="https://example.com",
+            title="제목",
+            content="# 본문",
+            author=None,
+            published_at=None,
+            clipped_on=None,
+            description=None,
+            tags=[],
+            occurred_at=None,
+            memo=None,
+            request_id="request-1",
+        )
+    )
+
+    assert captured["quiet_minutes"] == 7
+    assert captured["max_wait_minutes"] == 21
