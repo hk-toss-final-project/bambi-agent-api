@@ -80,6 +80,7 @@ class PostgresPublishSnapshotRepository:
                 "summary": payload["summary"],
                 "body": payload["body"],
                 "citations": payload.get("citations", []),
+                "cover_image": payload.get("cover_image"),
                 # 아래 필드들은 나중에 추가돼, 그 전에 저장된 Snapshot에는 없다.
                 # 쓰는 쪽(generation_runtime.persist_report_generation)에 필드를
                 # 추가할 때 이 매핑도 함께 고쳐야 한다 — 여기서 키를 명시적으로
@@ -113,6 +114,11 @@ class PostgresPublishSnapshotRepository:
             "citations": [
                 citation.model_dump(mode="json") for citation in snapshot.citations
             ],
+            "cover_image": (
+                snapshot.cover_image.model_dump(mode="json")
+                if snapshot.cover_image
+                else None
+            ),
             "generation_topic": snapshot.generation_topic,
             "tags": list(snapshot.tags),
             "content_tags": list(snapshot.content_tags),

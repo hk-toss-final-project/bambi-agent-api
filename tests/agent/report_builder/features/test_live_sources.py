@@ -4,8 +4,16 @@
 결정적으로 검증한다.
 """
 
+import pytest
+
 from agent.report_builder.features import live_sources
 from shared.report_models import ReportContextDocument
+
+
+@pytest.fixture(autouse=True)
+def _disable_network_image_fetch(monkeypatch) -> None:
+    """단위 테스트에서 Jina 네트워크 호출을 빈 이미지 결과로 대체한다."""
+    monkeypatch.setattr(live_sources, "fetch_article_image", lambda url: None)
 
 
 def _doc(reference: str, score: float = 0.5) -> ReportContextDocument:
@@ -56,6 +64,89 @@ def test_collect_live_context_converts_items(monkeypatch) -> None:
     assert "지수가 4% 내렸다." in document.content
     assert "https://b.test/2" in document.content  # 나머지 출처도 본문에 남는다
     assert document.namespace_key == "live-source"
+
+
+def test_collect_live_context_keeps_image_and_source_url_paired(monkeypatch) -> None:
+    """대표 이미지는 그 이미지를 제공한 원문 URL과 함께 Context에 연결한다."""
+    monkeypatch.setattr(
+        live_sources,
+        "assist_daily_agent",
+        lambda topic, user_id, model="gpt-4.1-mini", **kwargs: {
+            "mode": "daily",
+            "items": [
+                {
+                    "title": "다낭 여행의 새로운 매력",
+                    "summary": "새로운 웰빙 관광지가 주목받고 있다.",
+                    "sources": [
+                        {
+                            "source_type": "news",
+                            "title": "이미지 없는 기사",
+                            "url": "https://news.example/without-image",
+                            "image_url": None,
+                        },
+                        {
+                            "source_type": "news",
+                            "title": "이미지 있는 기사",
+                            "url": "https://news.example/with-image",
+                            "image_url": "https://cdn.example/danang.jpg",
+                        },
+                    ],
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        live_sources,
+        "fetch_article_image",
+        lambda url: pytest.fail("이미지가 있으면 Jina 폴백을 호출하면 안 된다"),
+    )
+
+    documents = live_sources.collect_live_context("다낭 여행", "minji")
+
+    assert len(documents) == 1
+    assert documents[0].url == "https://news.example/with-image"
+    assert documents[0].image_url == "https://cdn.example/danang.jpg"
+    assert "https://news.example/without-image" in documents[0].content
+
+
+def test_collect_live_context_fetches_missing_selected_article_image(monkeypatch) -> None:
+    """캐시 이미지가 없으면 선택된 뉴스 원문 한 건에서 대표 이미지를 보충한다."""
+    requested_urls: list[str] = []
+
+    monkeypatch.setattr(
+        live_sources,
+        "assist_daily_agent",
+        lambda topic, user_id, model="gpt-4.1-mini", **kwargs: {
+            "mode": "daily",
+            "items": [
+                {
+                    "title": "다낭 여행의 새로운 매력",
+                    "summary": "인터컨티넨탈 다낭이 주목받고 있다.",
+                    "sources": [
+                        {
+                            "source_type": "news",
+                            "title": "다낭 기사",
+                            "url": "https://news.example/danang",
+                            "image_url": None,
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+    def fake_fetch(url: str) -> str:
+        """요청 URL을 기록하고 고정 대표 이미지를 반환한다."""
+        requested_urls.append(url)
+        return "https://cdn.example/danang.jpg"
+
+    monkeypatch.setattr(live_sources, "fetch_article_image", fake_fetch)
+
+    documents = live_sources.collect_live_context("다낭 여행", "minji")
+
+    assert requested_urls == ["https://news.example/danang"]
+    assert documents[0].url == "https://news.example/danang"
+    assert documents[0].image_url == "https://cdn.example/danang.jpg"
 
 
 def test_collect_live_context_does_not_pollute_history_or_write_report(monkeypatch) -> None:

@@ -17,6 +17,7 @@ from uuid import UUID
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
+from agent.images.api import select_report_cover_image
 from domain.interests.api import ActiveInterestRequiredError, int_012, int_013
 from infrastructure.persistence.features.interest_bundles import (
     ConnectionInterestBundleRepository,
@@ -943,6 +944,7 @@ async def load_report_context(
                 version.title,
                 chunk.content,
                 COALESCE(document.canonical_url, version.source_metadata->>'url') AS url,
+                NULL::text AS image_url,
                 version.created_at AS source_updated_at,
                 GREATEST(
                     similarity(chunk.content, %s),
@@ -972,6 +974,7 @@ async def load_report_context(
                 cache.title,
                 cache.markdown AS content,
                 COALESCE(cache.resolved_url, cache.canonical_url) AS url,
+                cache.image_url,
                 cache.updated_at AS source_updated_at,
                 CASE WHEN topic_match.exact THEN 1.0 ELSE 0.0 END +
                 GREATEST(
@@ -1042,6 +1045,7 @@ async def load_report_context(
                     version.title,
                     chunk.content,
                     COALESCE(document.canonical_url, version.source_metadata->>'url') AS url,
+                    NULL::text AS image_url,
                     0::float AS score,
                     document.updated_at AS recency,
                     chunk.chunk_index AS tiebreak
@@ -1065,6 +1069,7 @@ async def load_report_context(
                     cache.title,
                     cache.markdown AS content,
                     COALESCE(cache.resolved_url, cache.canonical_url) AS url,
+                    cache.image_url,
                     0::float AS score,
                     cache.updated_at AS recency,
                     0 AS tiebreak
@@ -1089,6 +1094,7 @@ async def load_report_context(
                 title,
                 content,
                 url,
+                image_url,
                 score,
                 recency AS source_updated_at
             FROM recent
@@ -1117,6 +1123,9 @@ async def load_report_context(
                 title=row["title"],
                 content=row["content"],
                 url=row["url"],
+                image_url=(
+                    str(row["image_url"]) if row.get("image_url") else None
+                ),
                 score=float(row["score"]),
                 context_role=(
                     "global_retrieval"
@@ -1167,6 +1176,7 @@ async def load_global_report_context(
                 cache.title,
                 cache.markdown AS content,
                 COALESCE(cache.resolved_url, cache.canonical_url) AS url,
+                cache.image_url,
                 cache.updated_at AS source_updated_at,
                 CASE WHEN topic_match.exact THEN 1.0 ELSE 0.0 END +
                 GREATEST(
@@ -1213,6 +1223,7 @@ async def load_global_report_context(
                 cache.title,
                 cache.markdown AS content,
                 COALESCE(cache.resolved_url, cache.canonical_url) AS url,
+                cache.image_url,
                 cache.updated_at AS source_updated_at,
                 0::float AS score
             FROM agent.global_source_documents AS cache
@@ -1233,6 +1244,9 @@ async def load_global_report_context(
             title=str(row["title"]),
             content=str(row["content"]),
             url=str(row["url"]) if row.get("url") else None,
+            image_url=(
+                str(row["image_url"]) if row.get("image_url") else None
+            ),
             score=float(row["score"]),
             context_role="global_retrieval",
             source_updated_at=(
@@ -1599,8 +1613,26 @@ async def persist_report_generation(
     )
     version_row = await version_cursor.fetchone()
     content_version = int(version_row["next_version"])
+    selected_cover = select_report_cover_image(
+        assets=[
+            {
+                "reference": context.reference,
+                "namespace_key": context.namespace_key,
+                "image_url": context.image_url,
+                "source_url": context.url,
+                "source_title": context.title,
+            }
+            for context in contexts
+        ],
+        citation_references=generated.citation_references,
+        body=generated.body,
+    )
+    cover_image_payload = selected_cover.to_payload() if selected_cover else None
     snapshot_hash = hashlib.sha256(
-        f"{generated.title}\n{generated.summary}\n{generated.body}".encode("utf-8")
+        (
+            f"{generated.title}\n{generated.summary}\n{generated.body}\n"
+            f"{json.dumps(cover_image_payload, ensure_ascii=False, sort_keys=True)}"
+        ).encode("utf-8")
     ).hexdigest()
     await connection.execute(
         """
@@ -1760,6 +1792,7 @@ async def persist_report_generation(
         "summary": generated.summary,
         "body": generated.body,
         "citations": citation_payloads,
+        "cover_image": cover_image_payload,
         "generation_topic": topic,
         "tags": [topic] if topic else [],
         "content_tags": list(generated.content_tags),
@@ -1831,6 +1864,7 @@ async def persist_report_generation(
         "body": generated.body,
         "snapshot_hash": snapshot_hash,
         "citations": citation_payloads,
+        "cover_image": cover_image_payload,
     }
 
 

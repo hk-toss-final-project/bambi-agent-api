@@ -114,6 +114,7 @@
 | `summary` | report.summary, card.summary | 그대로 (카드는 요약만 노출) |
 | `body` | **report.body** | 카드엔 안 넣음. 리포트에 보존 |
 | `citations[…]` | report(citations) / card_sources | citation 구조는 아래 주의 |
+| `cover_image` | **report 대표 이미지** | 실제 인용 출처 중 IMG-013이 고른 이미지+원문 출처. 없으면 null |
 | interests(관심사) | **card 관심사 태그** | why_for_you 문장 대체. ✅ 2026-07-30 연결됨 — 발행 Snapshot payload의 `tags`(생성 요청 topic, 항상 1개)를 service가 `card_interest_tags`에 그대로 저장 |
 | ~~why_for_you~~ | (폐기) | "왜 당신에게" 문장 안 씀 → 관심사 태그로 대체 |
 

@@ -78,16 +78,29 @@ def _news_documents(keyword: str, now: datetime) -> list[dict[str, object]]:
     """
     entries = feeds.fetch_provider_entries(keyword)
     unique = feeds.deduplicate(entries)[:_NEWS_POOL]
-    bodies = content_store.fetch_global_article_texts(
+    cached_articles = content_store.fetch_global_article_assets(
         [str(entry.get("link") or "") for entry in unique]
     )
-    if bodies:
-        logger.info("Global 저장 본문 재사용 %d건 (keyword=%s)", len(bodies), keyword)
+    if cached_articles:
+        logger.info(
+            "Global 저장 기사 자산 재사용 %d건 (keyword=%s)",
+            len(cached_articles),
+            keyword,
+        )
     docs: list[dict[str, object]] = []
     for entry in unique:
         title = str(entry.get("title") or "")
         url = str(entry.get("link") or "")
-        body = bodies.get(url)
+        cached_article = cached_articles.get(url)
+        body = str(cached_article.get("markdown") or "") if cached_article else ""
+        image_url = (
+            str(
+                (cached_article or {}).get("image_url")
+                or entry.get("image_url")
+                or ""
+            ).strip()
+            or None
+        )
         if body:
             text = f"{title}\n{feeds.clean_article_body(body)}"
         else:
@@ -102,6 +115,7 @@ def _news_documents(keyword: str, now: datetime) -> list[dict[str, object]]:
                 "text": text,
                 "published_ts": entry.get("published_ts", 0),
                 "published_raw": entry.get("published", ""),
+                "image_url": image_url,
                 # url은 Google News 리다이렉트 주소라 도메인이 전부 news.google.com이다.
                 # 소스 신뢰도는 원본 발행처 URL로 판정해야 한다.
                 "source_url": entry.get("source_url", ""),
@@ -165,6 +179,19 @@ def _reddit_documents(keyword: str, now: datetime, window_hours: float) -> list[
             }
         )
     return docs
+
+
+def _source_metadata(document: dict[str, object]) -> dict[str, object]:
+    """선별된 문서에서 출처와 대표 이미지 메타데이터를 보존한다."""
+    image_url = str(
+        document.get("image_url") or document.get("thumbnail_url") or ""
+    ).strip()
+    return {
+        "title": str(document.get("title") or ""),
+        "url": str(document.get("url") or ""),
+        "source_type": str(document.get("source_type") or ""),
+        "image_url": image_url or None,
+    }
 
 
 # 수집을 시도하는 소스 수(뉴스·YouTube·Reddit). "몇 개가 실패했는지"를 판단할 때
@@ -697,14 +724,7 @@ def run_daily(
                 {
                     "title": str(rep.get("title") or ""),
                     "summary": summary,
-                    "sources": [
-                        {
-                            "title": str(m.get("title") or ""),
-                            "url": str(m.get("url") or ""),
-                            "source_type": str(m.get("source_type") or ""),
-                        }
-                        for m in cluster["members"]
-                    ],
+                    "sources": [_source_metadata(m) for m in cluster["members"]],
                     "published": published.isoformat() if isinstance(published, datetime) else "",
                     "published_method": str(rep.get("published_method") or ""),
                     "score": round(cluster["final_score"], 4),

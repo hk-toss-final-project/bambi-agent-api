@@ -462,6 +462,7 @@ async def load_wiki_navigation_sources(
             source_document.source_type,
             source_version.title,
             source_document.canonical_url AS url,
+            source_version.source_metadata ->> 'image_url' AS image_url,
             link.relation_type,
             COALESCE(source_event.occurred_at, source_version.created_at)
                 AS saved_at,

@@ -223,23 +223,16 @@ def _clean_jina_content(text: str) -> str:
 
 
 def _extract_jina_image(text: str) -> str | None:
-    """Jina 응답에서 기사 대표 이미지 URL을 하나 뽑는다. 없으면 None.
+    """공용 Jina 파서로 기사 대표 이미지 URL을 하나 고른다."""
+    from infrastructure.sources.connectors.api import extract_jina_image
 
-    Jina는 헤더에 'Image N: <url>' 형태로, 본문에는 마크다운 이미지 '![alt](url)'
-    형태로 이미지를 남긴다. 아이콘·로고·트래킹 픽셀 등은 대표 이미지가 아니므로
-    최소 폭을 가진 흔한 이미지 확장자를 우선한다.
-    """
-    import re
+    return extract_jina_image(text)
 
-    candidates = re.findall(r"Image \d+:\s*(https?://\S+)", text)
-    candidates += re.findall(r"!\[[^\]]*\]\((https?://[^)]+)\)", text)
-    for url in candidates:
-        low = url.lower()
-        if any(bad in low for bad in ("logo", "icon", "sprite", "1x1", "blank", "avatar")):
-            continue
-        if re.search(r"\.(jpg|jpeg|png|webp)(\?|$)", low):
-            return url
-    return candidates[0] if candidates else None
+
+def fetch_article_image(url: str) -> str | None:
+    """Jina Reader로 기사 원문을 읽어 대표 이미지 URL 한 건을 반환한다."""
+    raw = jina_read(url)
+    return _extract_jina_image(raw) if raw else None
 
 
 def article_body_offset(markdown: str, title: str) -> int:

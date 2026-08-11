@@ -421,6 +421,7 @@ def test_save_fetched_url_persists_version_and_enqueues_wiki_job(
             markdown="# Jina 본문",
             resolved_url="https://example.com/final",
             published_at=datetime(2026, 8, 4, tzinfo=UTC),
+            image_url="https://cdn.example/cover.jpg",
         )
     )
 
@@ -432,6 +433,7 @@ def test_save_fetched_url_persists_version_and_enqueues_wiki_job(
         "unchanged": False,
     }
     assert saved_kwargs["raw_content"] == "# Jina 본문"
+    assert saved_kwargs["image_url"] == "https://cdn.example/cover.jpg"
     assert enqueued_kwargs["source_event_id"] == "event-1"
     assert enqueued_kwargs["feature_id"] == "SVC-003"
 

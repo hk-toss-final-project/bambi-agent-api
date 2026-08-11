@@ -348,6 +348,14 @@ def navigation_packet_documents(
                 url=next(
                     (source.url for source in page_sources if source.url), None
                 ),
+                image_url=next(
+                    (
+                        source.image_url
+                        for source in page_sources
+                        if source.image_url
+                    ),
+                    None,
+                ),
                 score=(
                     max(float(score or 0.0), 1.0)
                     if page.role == "seed"

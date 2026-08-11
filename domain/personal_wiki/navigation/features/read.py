@@ -131,6 +131,9 @@ async def wnav_004(
             source_type=str(row["source_type"]),
             title=str(row["title"]),
             url=str(row["url"]) if row.get("url") else None,
+            image_url=(
+                str(row["image_url"]) if row.get("image_url") else None
+            ),
             relation_type=str(row["relation_type"]),
             saved_at=row["saved_at"],  # type: ignore[arg-type]
             saved_at_source=str(row["saved_at_source"]),

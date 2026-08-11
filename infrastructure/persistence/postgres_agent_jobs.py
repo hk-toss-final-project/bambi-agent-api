@@ -544,6 +544,7 @@ class PostgresAgentJobRepository:
         markdown: str,
         resolved_url: str,
         published_at: datetime | None,
+        image_url: str | None = None,
     ) -> dict[str, object]:
         """Jina 결과를 원본 Version으로 저장하고 후속 Wiki Job을 등록한다."""
         source_document_id = str(job.payload.get("source_document_id") or "")
@@ -563,6 +564,7 @@ class PostgresAgentJobRepository:
                     title=title,
                     markdown=markdown,
                     resolved_url=resolved_url,
+                    image_url=image_url,
                     published_at=published_at,
                     quiet_minutes=self._wiki_build_quiet_minutes,
                     max_wait_minutes=self._wiki_build_max_wait_minutes,

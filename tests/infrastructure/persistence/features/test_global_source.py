@@ -353,6 +353,7 @@ def test_save_fetched_content_fills_cache_document() -> None:
             title="본문 제목",
             markdown="# 전체 본문\n\n내용",
             published_at=datetime(2026, 7, 20, tzinfo=UTC),
+            image_url="https://cdn.example/cover.jpg",
         )
     )
 
@@ -370,6 +371,7 @@ def test_save_fetched_content_fills_cache_document() -> None:
     assert "search_body = %s" in update_sql
     assert update_params[2]
     assert update_params[4] == "https://example.com/final"
+    assert update_params[5] == "https://cdn.example/cover.jpg"
 
 
 def test_save_fetched_content_raises_for_missing_document() -> None:
