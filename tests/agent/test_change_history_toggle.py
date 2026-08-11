@@ -234,15 +234,15 @@ def test_multi_topic_request_runs_a_delta_per_topic(
     async def fake_change_history(connection: Any, **kwargs: Any) -> dict[str, Any]:
         """주제별 호출을 기록하고 그 주제의 델타 보고서를 돌려준다."""
         topic = str(kwargs["topic"])
-        calls.append(
-            (topic, [document.reference for document in kwargs["contexts"]])
-        )
+        references = [document.reference for document in kwargs["contexts"]]
+        calls.append((topic, references))
+        reference = references[0]
         return {
             "generated": GeneratedReportContent(
                 title=f"{topic} 변경점",
                 summary=f"{topic} 요약",
-                body=f"## Overview\n\n{topic} 브리핑 [G-{topic}]",
-                citation_references=(f"G-{topic}",),
+                body=f"## Overview\n\n{topic} 브리핑 [{reference}]",
+                citation_references=(reference,),
             ),
             "fact_count": 1,
             "input_tokens": 10,
@@ -267,8 +267,8 @@ def test_multi_topic_request_runs_a_delta_per_topic(
 
     # 대표 문자열("오늘의 브리핑")이 아니라 실제 주제로 비교축이 잡혀야 한다.
     assert [topic for topic, _ in calls] == ["반도체", "환율"]
-    assert calls[0][1] == ["G-반도체"]
-    assert calls[1][1] == ["G-환율"]
+    assert calls[0][1] == ["G1"]
+    assert calls[1][1] == ["G2"]
     body = captured["generated"].body
     assert "## 반도체" in body and "## 환율" in body
     assert order == ["persist"]  # generate는 돌지 않는다
@@ -291,12 +291,13 @@ def test_multi_topic_delta_keeps_going_when_one_topic_fails(
         topic = str(kwargs["topic"])
         if topic == "반도체":
             raise RuntimeError("delta down")
+        reference = kwargs["contexts"][0].reference
         return {
             "generated": GeneratedReportContent(
                 title=f"{topic} 변경점",
                 summary=f"{topic} 요약",
-                body=f"## Overview\n\n{topic} 브리핑 [G-{topic}]",
-                citation_references=(f"G-{topic}",),
+                body=f"## Overview\n\n{topic} 브리핑 [{reference}]",
+                citation_references=(reference,),
             ),
             "fact_count": 1,
         }

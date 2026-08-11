@@ -272,6 +272,7 @@ class AgentApiMvpService:
                     ),
                     content_type=payload.content_type,
                     report_type=payload.report_type,
+                    briefing_date=payload.briefing_date,
                     language=payload.language,
                     scheduled_at=payload.scheduled_at,
                     change_history_enabled=payload.change_history_enabled,

@@ -414,6 +414,13 @@ class GenerationRequest(ImmutableSchema):
             "Publish Snapshot에 실어 돌려준다."
         ),
     )
+    briefing_date: date | None = Field(
+        default=None,
+        description=(
+            "REPORT-022가 준비한 날짜별 주제·근거 Snapshot을 재사용할 KST 날짜. "
+            "아침 브리핑 외 요청은 생략한다."
+        ),
+    )
     language: str | None = Field(
         default=None, min_length=2, max_length=16, description="요청 콘텐츠 언어"
     )

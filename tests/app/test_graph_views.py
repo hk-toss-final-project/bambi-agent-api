@@ -100,6 +100,7 @@ def test_graph_descriptions_match_current_agent_contracts() -> None:
     report = diagrams["report-generation"]
     report_nodes = {node.node_id: node for node in report.nodes}
     assert "wiki_search·wiki_read·search_pool" in report_nodes["research"].description
+    assert "REPORT-022" in report_nodes["research"].description
     assert "collect_live 도구" not in report.description
     assert "근거 없는 주제는 생성에서 제외" in report_nodes["load_context"].description
     assert "주제마다" in report_nodes["change_history"].description

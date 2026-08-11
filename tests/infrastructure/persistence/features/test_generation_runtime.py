@@ -2,7 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
@@ -435,6 +435,43 @@ def test_enqueue_stores_report_type_for_the_publish_snapshot() -> None:
     _, request_params = connection.executed[3]
     assert request_params is not None
     assert request_params[-1].obj["report_type"] == "MORNING_BRIEFING"
+
+
+def test_enqueue_pins_explicit_briefing_date_without_interpreting_report_type() -> None:
+    """Service가 명시한 브리핑 날짜만 Job에 고정하고 report_type은 해석하지 않는다."""
+    connection = _FakeConnection(
+        [
+            [{"id": "context-1", "plan": "free", "preferred_language": "ko"}],
+            [],  # 대표 topic INT-013
+            [],  # 반도체 INT-013
+            [],  # 프로야구 INT-013
+            [{"id": "job-1"}],
+            [{"id": "request-1"}],
+        ]
+    )
+
+    asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-prewarmed-morning",
+            topic="오늘의 관심사 브리핑",
+            topics=["반도체", "프로야구"],
+            content_type="interest_news_card",
+            report_type="CUSTOM_SERVICE_VALUE",
+            briefing_date=date(2026, 8, 12),
+            language="ko",
+            request_id="request-1",
+        )
+    )
+
+    _, job_params = connection.executed[4]
+    assert job_params is not None
+    assert job_params[2].obj["briefing_date"] == "2026-08-12"
+    assert job_params[2].obj["report_type"] == "CUSTOM_SERVICE_VALUE"
+    _, request_params = connection.executed[5]
+    assert request_params is not None
+    assert request_params[-1].obj["briefing_date"] == "2026-08-12"
 
 
 def test_enqueue_snapshots_active_interest_bundle() -> None:

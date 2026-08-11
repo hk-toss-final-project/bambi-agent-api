@@ -1483,6 +1483,72 @@ def test_langgraph_v2_multi_topic_collects_missing_live_evidence_in_parallel(
     )
 
 
+def test_prepared_briefing_contexts_skip_research_and_get_unique_references(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REPORT-022 근거는 재조사 없이 사용하고 Topic 간 Citation 번호를 재정렬한다."""
+    order: list[str] = []
+    used_contexts = _patch_generation_tail(monkeypatch, order)
+
+    def document(topic: str) -> ReportContextDocument:
+        """Topic별로 안정 ID는 다르지만 같은 G1 참조를 가진 준비 근거를 만든다."""
+        return ReportContextDocument(
+            reference="G1",
+            document_version_id=f"version-{topic}",
+            chunk_id=f"chunk-{topic}",
+            namespace_key="global",
+            title=f"{topic} 기사",
+            content=f"{topic} 근거",
+            url=f"https://example.com/{topic}",
+            score=0.9,
+        )
+
+    async def fail_research(*args: Any, **kwargs: Any) -> Any:
+        """준비 근거가 있는 Topic을 다시 조사하면 실패한다."""
+        raise AssertionError("REPORT-022 근거를 다시 조사하면 안 됩니다.")
+
+    def fail_intent(*args: Any, **kwargs: Any) -> str:
+        """준비 근거 경로에서 주제 성격을 다시 판정하면 실패한다."""
+        raise AssertionError("준비된 Topic의 intent를 다시 판정하면 안 됩니다.")
+
+    monkeypatch.setattr(agent_graph, "research_context_for_version", fail_research)
+    monkeypatch.setattr(agent_graph, "resolve_topic_intent", fail_intent)
+    monkeypatch.setattr(
+        agent_graph,
+        "focus_documents_on_topic",
+        lambda topic, documents, **kwargs: documents,
+    )
+
+    result = asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 관심사 브리핑",
+            topics=["반도체", "프로야구"],
+            content_type="interest_news_card",
+            language="ko",
+            model="test-model",
+            read_pipeline_version="langgraph_v2",
+            prewarmed_contexts_by_topic={
+                "반도체": [document("반도체")],
+                "프로야구": [document("프로야구")],
+            },
+        )
+    )
+
+    assert order == ["generate", "persist"]
+    assert {
+        context.document_version_id for context in used_contexts[0]
+    } == {"version-반도체", "version-프로야구"}
+    assert [context.reference for context in used_contexts[0]] == ["G1", "G2"]
+    assert all(
+        stats["pipeline_version"] == "briefing_snapshot"
+        for stats in result["research_stats"]
+    )
+
+
 def test_multi_topic_report_drops_topics_without_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

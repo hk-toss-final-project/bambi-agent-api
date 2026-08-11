@@ -214,6 +214,7 @@ class AgentJobRepository(Protocol):
         interest_id: str | None = None,
         content_type: str,
         report_type: str,
+        briefing_date: date | None = None,
         language: str | None,
         scheduled_at: datetime | None,
         request_id: str,

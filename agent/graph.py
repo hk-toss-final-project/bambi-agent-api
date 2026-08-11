@@ -105,6 +105,7 @@ from infrastructure.persistence.api import (
 )
 from agent.assistant.api import resolve_topic_intent
 from shared.contracts import FeatureRequest
+from shared.report_models import ReportContextDocument
 from shared.wiki_models import ExistingWikiEntry
 
 logger = logging.getLogger("agent.graph")
@@ -1181,10 +1182,32 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         live_keywords_by_topic: dict[str, list[str]] = {}
         completed_topics: list[str] = []
         collected_live = False
+        prewarmed_by_topic = state.get("prewarmed_contexts_by_topic") or {}
         read_pipeline_version = str(
             state.get("read_pipeline_version") or LEGACY_READ_PIPELINE_VERSION
         )
         for topic in topics:
+            prewarmed = list(prewarmed_by_topic.get(topic) or [])
+            if prewarmed:
+                intents[topic] = "news"
+                documents_by_topic[topic] = prewarmed
+                completed_topics.append(topic)
+                collected_live = collected_live or any(
+                    str(getattr(document, "namespace_key", "")) == "live"
+                    for document in prewarmed
+                )
+                research_stats.append(
+                    {
+                        "topic": topic,
+                        "pipeline_version": "briefing_snapshot",
+                        "elapsed_ms": 0,
+                        "tools": [],
+                        "stop_reason": "prewarmed",
+                        "documents": len(prewarmed),
+                    }
+                )
+                notes.append(f"[{topic}] REPORT-022 준비 근거를 재사용했습니다.")
+                continue
             intents[topic] = await to_thread(
                 resolve_topic_intent, topic, state["user_id"]
             )
@@ -1972,6 +1995,27 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             )
         if not merged:
             raise RuntimeError("여러 주제 리포트에 쓸 근거를 한 건도 모으지 못했습니다.")
+        # Topic별 준비 Snapshot은 각각 P1/G1/L1부터 번호가 시작한다. 그대로
+        # 합치면 서로 다른 문서가 같은 Citation을 공유하므로 최종 합집합에서 한 번
+        # 번호를 다시 매기고, 주제별 델타 Context도 같은 객체를 보게 맞춘다.
+        if all(isinstance(document, ReportContextDocument) for document in merged):
+            renumbered = merge_context_documents(
+                *(by_topic.get(topic, []) for topic in topics)
+            )
+            by_identity = {
+                _report_context_identity(document): document
+                for document in renumbered
+            }
+            by_topic = {
+                topic: [
+                    by_identity[_report_context_identity(document)]
+                    for document in by_topic.get(topic, [])
+                    if _report_context_identity(document) in by_identity
+                ]
+                for topic in topics
+                if by_topic.get(topic)
+            }
+            merged = renumbered
         if len(covered) < len(topics):
             # 근거를 한 건도 못 구한 주제는 생성 프롬프트에서 뺀다. 남겨 두면
             # "소주제를 순서대로 빠짐없이 다루라"는 지시 때문에 근거 없는 일반론으로
@@ -2433,6 +2477,9 @@ async def run_report_generation(
     wiki_version_id: str | None = None,
     wiki_navigation_snapshots: dict[str, dict[str, object]] | None = None,
     read_pipeline_version: str = LEGACY_READ_PIPELINE_VERSION,
+    prewarmed_contexts_by_topic: (
+        dict[str, list[ReportContextDocument]] | None
+    ) = None,
 ) -> dict[str, object]:
     """Report Builder Generation 그래프를 실행하고 저장 결과 Payload를 반환한다.
 
@@ -2446,6 +2493,7 @@ async def run_report_generation(
         wiki_version_id: Job 접수 시 고정한 활성 Wiki Build UUID
         wiki_navigation_snapshots: 첫 Reader 실행이 Topic별로 고정한 Packet Metadata
         read_pipeline_version: Job 접수 시 고정한 읽기 루프 버전. 과거 Job은 V1
+        prewarmed_contexts_by_topic: REPORT-022가 날짜·주제별로 준비한 생성 근거
     """
     graph = build_report_generation_graph(connection)
     state = await graph.ainvoke(
@@ -2461,6 +2509,9 @@ async def run_report_generation(
             "wiki_version_id": wiki_version_id,
             "wiki_navigation_snapshots": dict(wiki_navigation_snapshots or {}),
             "read_pipeline_version": read_pipeline_version,
+            "prewarmed_contexts_by_topic": dict(
+                prewarmed_contexts_by_topic or {}
+            ),
             "content_type": content_type,
             "language": language,
             "model": model,

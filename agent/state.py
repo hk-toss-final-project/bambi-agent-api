@@ -70,6 +70,9 @@ class ReportGenerationState(TypedDict):
     wiki_navigation_snapshots: NotRequired[dict[str, dict[str, object]]]
     # Job 접수 시 고정한 읽기 실행 버전. 키가 없는 과거 Job은 legacy_v1이다.
     read_pipeline_version: NotRequired[str]
+    # REPORT-022가 같은 날짜·주제로 준비한 근거. 존재하는 주제는 research가
+    # Wiki·Global·Live 수집을 반복하지 않고 이 Snapshot을 그대로 사용한다.
+    prewarmed_contexts_by_topic: NotRequired[dict[str, list[object]]]
     content_type: str
     language: str
     model: str

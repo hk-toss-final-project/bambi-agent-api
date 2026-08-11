@@ -263,6 +263,9 @@
     2. 생성 시각에는
        **`GET /internal/v1/users/{user_id}/briefing-topics?briefing_date=YYYY-MM-DD&limit=3`**로
        준비된 주제만 DB에서 읽는다. 이 GET은 LLM이나 외부 검색을 호출하지 않는다.
+       이어지는 `POST /generations`에는 같은 `topics[]`와 `briefing_date`를 넣는다.
+       Agent Worker는 사용자·날짜·주제 순서가 모두 일치할 때만 준비 근거를 재사용하고,
+       Snapshot이 없거나 달라졌으면 일반 `langgraph_v2` 조사로 안전하게 폴백한다.
     3. 비면 **사용자 등록 관심사**(온보딩에서 고른 것 + 직접 추가한 것) 최근 3개
        (`InterestRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc`)
     4. 그것도 없으면 **건너뛴다**
