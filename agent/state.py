@@ -86,6 +86,9 @@ class ReportGenerationState(TypedDict):
     # 주제마다 근거 몫을 배정하려면 어느 문서가 어느 주제 것인지 알아야 한다.
     topic_intents: NotRequired[dict[str, str]]
     research_documents_by_topic: NotRequired[dict[str, list[object]]]
+    # V2 읽기 루프의 DB 단계까지 정상 완료한 주제. 근거가 비어도 load_context가
+    # 같은 DB 조회와 Live 수집을 다시 실행하지 않도록 완료 여부를 별도로 보존한다.
+    research_completed_topics: NotRequired[list[str]]
     # 근거를 실제로 확보한 주제만. 생성 프롬프트에는 이 목록만 넘긴다 —
     # 근거 없는 주제를 남기면 LLM이 그 섹션을 일반론으로 채운다.
     covered_topics: NotRequired[list[str]]

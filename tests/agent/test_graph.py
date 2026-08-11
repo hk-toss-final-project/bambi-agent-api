@@ -1,8 +1,9 @@
 """LangGraph 오케스트레이션 그래프의 노드 순서와 결과 조립을 검증한다."""
 
 import asyncio
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from threading import Barrier
 from types import SimpleNamespace
 from typing import Any
 
@@ -1396,6 +1397,89 @@ def test_multi_topic_report_gathers_evidence_per_topic(
     # 5.2초였다 — 나머지가 어디로 갔는지 이 값으로 가른다.
     assert all(
         "total" in entry["elapsed_ms"] for entry in result["evidence_trace"]
+    )
+
+
+def test_langgraph_v2_multi_topic_collects_missing_live_evidence_in_parallel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """V2는 Topic별 DB 읽기를 마친 뒤 부족한 Live 근거를 동시에 보강한다."""
+    order: list[str] = []
+    used_contexts = _patch_generation_tail(monkeypatch, order)
+    barrier = Barrier(2, timeout=1)
+    requested_topics: list[str] = []
+
+    def document(topic: str, source: str) -> ReportContextDocument:
+        """주제와 수집 단계를 식별할 테스트 근거를 만든다."""
+        marker = f"{topic}-{source}"
+        return ReportContextDocument(
+            reference=marker,
+            document_version_id=f"version-{marker}",
+            chunk_id=f"chunk-{marker}",
+            namespace_key="global",
+            title=marker,
+            content=f"{topic} 근거",
+            url=f"https://example.com/{marker}",
+            score=0.9,
+        )
+
+    async def fake_research_for_version(
+        connection: Any, **kwargs: Any
+    ) -> ResearchOutcome:
+        """저장 근거가 부족해 Live 보강을 미룬 V2 결과를 반환한다."""
+        assert kwargs["pipeline_version"] == "langgraph_v2"
+        assert kwargs["defer_live"] is True
+        topic = kwargs["topic"]
+        return ResearchOutcome(
+            documents=(document(topic, "stored"),),
+            stop_reason="langgraph_v2",
+            requires_live=True,
+        )
+
+    def fake_collect_live(topic: str, user_id: str, **kwargs: Any) -> list[Any]:
+        """두 Topic 수집이 동시에 시작돼야 통과하는 Live Provider 대역이다."""
+        requested_topics.append(topic)
+        barrier.wait()
+        return [document(topic, "live")]
+
+    monkeypatch.setattr(
+        agent_graph, "research_context_for_version", fake_research_for_version
+    )
+    monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect_live)
+    monkeypatch.setattr(
+        agent_graph,
+        "focus_documents_on_topic",
+        lambda topic, documents, **kwargs: documents,
+    )
+
+    result = asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 관심사 브리핑",
+            topics=["반도체", "프로야구"],
+            content_type="interest_news_card",
+            language="ko",
+            model="test-model",
+            read_pipeline_version="langgraph_v2",
+        )
+    )
+
+    assert set(requested_topics) == {"반도체", "프로야구"}
+    version_ids = {
+        context.document_version_id for context in used_contexts[0]
+    }
+    assert version_ids == {
+        "version-반도체-stored",
+        "version-반도체-live",
+        "version-프로야구-stored",
+        "version-프로야구-live",
+    }
+    assert all(
+        any(tool["tool"] == "collect_live_parallel" for tool in stats["tools"])
+        for stats in result["research_stats"]
     )
 
 

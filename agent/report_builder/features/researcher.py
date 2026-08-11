@@ -142,6 +142,8 @@ class ResearchOutcome:
         collected_live: 실시간 수집을 **시도했는지**. 성공 여부가 아니라 시도
             여부다 — 호출자(graph.load_context)가 같은 수집을 한 번 더
             돌리지 않도록 판단하는 데 쓴다.
+        requires_live: 저장 근거가 부족하지만 상위 다중 주제 오케스트레이터가
+            병렬 수집하도록 이번 실행에서는 Live 호출을 미뤘는지 여부
         input_tokens·output_tokens: 조사에 쓴 토큰 (벤치마크 비용 기록용)
     """
 
@@ -150,6 +152,7 @@ class ResearchOutcome:
     notes: str = ""
     stop_reason: str = "final"
     collected_live: bool = False
+    requires_live: bool = False
     input_tokens: int = 0
     output_tokens: int = 0
     wiki_packets: tuple[WikiNavigationPacket, ...] = ()

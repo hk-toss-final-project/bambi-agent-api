@@ -346,7 +346,8 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
             description=(
                 "조사원 에이전트가 wiki_search·wiki_read로 개인 Wiki를 읽고 "
                 "search_pool로 Global 저장 근거를 찾은 뒤, 코드가 부족 여부를 "
-                "판정해 필요할 때 실시간 수집(research) → 주제별 근거 집중·중복 "
+                "판정하고 여러 주제의 부족한 Live 근거를 제한 병렬 수집(research) "
+                "→ 주제별 근거 집중·중복 "
                 "제거·상한 배정(load_context) → 콘텐츠 생성(generate) 또는 변경점 "
                 "추적(change_history) → 검토자 에이전트가 get_source·search_pool로 "
                 "인용을 원문과 대조(review) → Citation·Snapshot 저장(persist). "
@@ -362,8 +363,9 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                     description=(
                         "조사원 에이전트가 주제별로 wiki_search·wiki_read·search_pool "
                         "도구를 사용해 근거를 모읍니다. 도구 루프가 끝나면 코드가 Global "
-                        "근거의 개수와 관련성을 판정해 부족할 때만 실시간 수집하며, 실패하거나 "
-                        "빈손이면 다음 노드가 고정 수집 경로로 복구합니다."
+                        "근거의 개수와 관련성을 판정합니다. 다중 주제 V2는 DB 단계를 먼저 "
+                        "끝내고 부족한 주제의 Live 수집만 최대 3개 병렬 실행하며, 실패하거나 "
+                        "빈손이면 확보한 저장 근거를 보존합니다."
                     ),
                 ),
                 GraphNodeDescription(
@@ -372,7 +374,8 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                     description=(
                         "단일 주제는 조사 결과나 고정 검색 경로에서 Context를 선별합니다. "
                         "여러 주제는 주제별 저장·실시간 근거를 모아 관련 문장만 남기고, "
-                        "중복을 제외한 뒤 근거 상한을 배분하며 근거 없는 주제는 생성에서 "
+                        "원본 Version·Chunk 기준 중복을 제외한 뒤 근거 상한을 배분하며 "
+                        "근거 없는 주제는 생성에서 "
                         "제외합니다."
                     ),
                 ),

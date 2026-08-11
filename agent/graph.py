@@ -864,10 +864,6 @@ _MAX_TOPIC_FACETS = 1
 # 생성 프롬프트에 넣는 근거 문서 상한(REPORT-006 기본값과 같아야 한다).
 _MAX_REPORT_CONTEXTS = 12
 
-# 멀티 토픽 조사의 동시성 제어 상한. 무제한 병렬 처리 시 외부 API 429 차단 및
-# DB 커넥션 고갈 위험이 발생하므로 세마포어로 2개 주제까지 동시 수행한다.
-_MULTI_TOPIC_RESEARCH_CONCURRENCY = 2
-
 # 주제별 조사 및 수집 실행 시간 상한(초). 특정 외부 API 응답 지연이 전체 보고서
 # 생성을 10분 이상 지연시켜 워커 타임아웃/재시도가 발생하는 것을 방지한다.
 _TOPIC_RESEARCH_TIMEOUT_SECONDS = 90.0
@@ -1096,6 +1092,18 @@ def _report_topics(state: ReportGenerationState) -> list[str]:
     return [topic for topic in topics if topic] or [state["topic"]]
 
 
+def _report_context_identity(document: Any) -> str:
+    """주제별로 다시 매겨지는 참조 번호 대신 원본 문서의 안정 식별자를 만든다."""
+    version_id = str(getattr(document, "document_version_id", "") or "")
+    chunk_id = str(getattr(document, "chunk_id", "") or "")
+    if version_id or chunk_id:
+        return f"version:{version_id}:chunk:{chunk_id}"
+    url = str(getattr(document, "url", "") or "")
+    if url:
+        return f"url:{url}"
+    return str(getattr(document, "reference", None) or document)
+
+
 def _topic_bundle(
     state: ReportGenerationState, topic: str
 ) -> dict[str, object] | None:
@@ -1168,138 +1176,178 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         notes: list[str] = []
         calls: list[dict[str, object]] = []
         research_stats: list[dict[str, Any]] = []
+        research_stats_by_topic: dict[str, dict[str, Any]] = {}
+        outcomes_by_topic: dict[str, Any] = {}
+        live_keywords_by_topic: dict[str, list[str]] = {}
+        completed_topics: list[str] = []
         collected_live = False
         read_pipeline_version = str(
             state.get("read_pipeline_version") or LEGACY_READ_PIPELINE_VERSION
         )
-
-        sem = asyncio.Semaphore(_MULTI_TOPIC_RESEARCH_CONCURRENCY)
-
-        async def _research_single_topic(topic: str) -> dict[str, Any]:
-            async with sem:
-                intent = await to_thread(
-                    resolve_topic_intent, topic, state["user_id"]
-                )
-                topic_docs: list[Any] = []
-                coll_live = False
-                stat: dict[str, Any] | None = None
-                note: str | None = None
-                topic_calls: list[dict[str, object]] = []
-
-                if not (
-                    read_pipeline_version == LEGACY_READ_PIPELINE_VERSION
-                    and not research_agent_enabled()
-                ):
-                    topic_started = monotonic()
-                    try:
-                        research_kwargs: dict[str, Any] = {
-                            "topic": topic,
-                            "user_id": state["user_id"],
-                            "topic_intent": intent,
-                            "model": state["model"],
-                            "wiki_version_id": state.get("wiki_version_id"),
-                            "job_id": state["job_id"],
-                        }
-                        navigation_snapshot = (
-                            state.get("wiki_navigation_snapshots") or {}
-                        ).get(topic)
-                        if navigation_snapshot:
-                            research_kwargs["navigation_snapshot"] = (
-                                navigation_snapshot
-                            )
-                        topic_bundle = _topic_bundle(state, topic)
-                        bundle_keywords = _bundle_search_keywords(topic_bundle)
-                        if bundle_keywords:
-                            research_kwargs["planned_queries"] = [
-                                keyword
-                                for keyword in bundle_keywords
-                                if keyword.casefold() != topic.casefold()
-                            ]
-                        planned_versions = _bundle_wiki_version_ids(topic_bundle)
-                        if planned_versions:
-                            research_kwargs["planned_wiki_version_ids"] = (
-                                planned_versions
-                            )
-
-                        if read_pipeline_version == LEGACY_READ_PIPELINE_VERSION:
-                            outcome = await asyncio.wait_for(
-                                research_context(connection, **research_kwargs),
-                                timeout=_TOPIC_RESEARCH_TIMEOUT_SECONDS,
-                            )
-                        else:
-                            outcome = await asyncio.wait_for(
-                                research_context_for_version(
-                                    connection,
-                                    pipeline_version=read_pipeline_version,
-                                    **research_kwargs,
-                                ),
-                                timeout=_TOPIC_RESEARCH_TIMEOUT_SECONDS,
-                            )
-                        topic_docs = list(outcome.documents)
-                        coll_live = outcome.collected_live
-                        stat = {
-                            "topic": topic,
-                            "pipeline_version": read_pipeline_version,
-                            "elapsed_ms": int((monotonic() - topic_started) * 1000),
-                            "tools": [
-                                {"tool": name, "calls": count, "elapsed_ms": elapsed}
-                                for name, count, elapsed in getattr(
-                                    outcome, "tool_stats", ()
-                                )
-                            ],
-                            "stop_reason": str(getattr(outcome, "stop_reason", "")),
-                            "documents": len(outcome.documents),
-                        }
-                        if outcome.notes:
-                            note = (
-                                outcome.notes
-                                if len(topics) == 1
-                                else f"[{topic}] {outcome.notes}"
-                            )
-                        topic_calls = [
-                            {
-                                "topic": topic,
-                                "tool": call.name,
-                                "arguments": call.arguments,
-                                "failed": call.failed,
-                            }
-                            for call in outcome.calls
-                        ]
-                    except TimeoutError:
-                        logger.warning(
-                            "주제별 조사 실행 시간 초과(%.1f초), 기존 경로로 폴백: topic=%s",
-                            _TOPIC_RESEARCH_TIMEOUT_SECONDS,
-                            topic,
-                        )
-                    except Exception:
-                        logger.exception(
-                            "조사원 실행에 실패해 기존 수집 경로로 되돌립니다: topic=%s",
-                            topic,
-                        )
-
-                return {
+        for topic in topics:
+            intents[topic] = await to_thread(
+                resolve_topic_intent, topic, state["user_id"]
+            )
+            documents_by_topic[topic] = []
+            if (
+                read_pipeline_version == LEGACY_READ_PIPELINE_VERSION
+                and not research_agent_enabled()
+            ):
+                continue
+            topic_started = monotonic()
+            try:
+                research_kwargs: dict[str, Any] = {
                     "topic": topic,
-                    "intent": intent,
-                    "documents": topic_docs,
-                    "collected_live": coll_live,
-                    "stat": stat,
-                    "note": note,
-                    "calls": topic_calls,
+                    "user_id": state["user_id"],
+                    "topic_intent": intents[topic],
+                    "model": state["model"],
+                    "wiki_version_id": state.get("wiki_version_id"),
+                    "job_id": state["job_id"],
                 }
+                navigation_snapshot = (
+                    state.get("wiki_navigation_snapshots") or {}
+                ).get(topic)
+                if navigation_snapshot:
+                    research_kwargs["navigation_snapshot"] = navigation_snapshot
+                topic_bundle = _topic_bundle(state, topic)
+                bundle_keywords = _bundle_search_keywords(topic_bundle)
+                if bundle_keywords:
+                    research_kwargs["planned_queries"] = [
+                        keyword
+                        for keyword in bundle_keywords
+                        if keyword.casefold() != topic.casefold()
+                    ]
+                planned_versions = _bundle_wiki_version_ids(topic_bundle)
+                if planned_versions:
+                    research_kwargs["planned_wiki_version_ids"] = planned_versions
+                if read_pipeline_version == LEGACY_READ_PIPELINE_VERSION:
+                    outcome = await asyncio.wait_for(
+                        research_context(connection, **research_kwargs),
+                        timeout=_TOPIC_RESEARCH_TIMEOUT_SECONDS,
+                    )
+                else:
+                    outcome = await asyncio.wait_for(
+                        research_context_for_version(
+                            connection,
+                            pipeline_version=read_pipeline_version,
+                            defer_live=len(topics) > 1,
+                            **research_kwargs,
+                        ),
+                        timeout=_TOPIC_RESEARCH_TIMEOUT_SECONDS,
+                    )
+            except TimeoutError:
+                logger.warning(
+                    "주제별 조사 실행 시간 초과(%.1f초), 기존 경로로 폴백: topic=%s",
+                    _TOPIC_RESEARCH_TIMEOUT_SECONDS,
+                    topic,
+                )
+                continue
+            except Exception:
+                # 주제 하나가 실패해도 나머지 주제는 계속 조사한다. 실패한 주제는
+                # load_context가 고정 경로로 다시 시도한다.
+                logger.exception(
+                    "조사원 실행에 실패해 기존 수집 경로로 되돌립니다: topic=%s", topic
+                )
+                continue
+            completed_topics.append(topic)
+            outcomes_by_topic[topic] = outcome
+            live_keywords_by_topic[topic] = list(
+                research_kwargs.get("planned_queries") or []
+            )
+            documents_by_topic[topic] = list(outcome.documents)
+            collected_live = collected_live or outcome.collected_live
+            # 조사 노드가 리포트 시간의 대부분을 쓰는데 안이 안 보였다
+            # (2026-08-11 실측: 336초 중 320초). 도구별 호출 수·소요 시간을
+            # 작업 결과까지 실어 서버 로그 없이 확인한다.
+            topic_stats = {
+                "topic": topic,
+                "pipeline_version": read_pipeline_version,
+                "elapsed_ms": int((monotonic() - topic_started) * 1000),
+                "tools": [
+                    {"tool": name, "calls": count, "elapsed_ms": elapsed}
+                    # 도구 통계가 없는 형태(테스트 더미 등)도 그대로 통과시킨다.
+                    for name, count, elapsed in getattr(outcome, "tool_stats", ())
+                ],
+                "stop_reason": str(getattr(outcome, "stop_reason", "")),
+                "documents": len(outcome.documents),
+            }
+            research_stats.append(topic_stats)
+            research_stats_by_topic[topic] = topic_stats
+            if outcome.notes:
+                notes.append(
+                    outcome.notes if len(topics) == 1 else f"[{topic}] {outcome.notes}"
+                )
+            calls.extend(
+                {
+                    "topic": topic,
+                    "tool": call.name,
+                    "arguments": call.arguments,
+                    "failed": call.failed,
+                }
+                for call in outcome.calls
+            )
 
-        results = await asyncio.gather(
-            *(_research_single_topic(topic) for topic in topics)
-        )
-        for res in results:
-            topic = res["topic"]
-            intents[topic] = res["intent"]
-            documents_by_topic[topic] = res["documents"]
-            collected_live = collected_live or res["collected_live"]
-            if res["stat"]:
-                research_stats.append(res["stat"])
-            if res["note"]:
-                notes.append(res["note"])
-            calls.extend(res["calls"])
+        deferred_topics = [
+            topic
+            for topic in topics
+            if bool(getattr(outcomes_by_topic.get(topic), "requires_live", False))
+        ][:_MAX_LIVE_COLLECT_TOPICS]
+
+        async def collect_deferred_live(
+            topic: str,
+        ) -> tuple[str, list[Any], int]:
+            """V2 DB 단계를 마친 주제의 Live 근거를 DB 연결 없이 병렬 수집한다."""
+            started = monotonic()
+            documents: list[Any] = []
+            try:
+                kwargs: dict[str, object] = {"model": state["model"]}
+                if live_keywords_by_topic.get(topic):
+                    kwargs["related_keywords"] = live_keywords_by_topic[topic]
+                documents = await to_thread(
+                    collect_live_context,
+                    topic,
+                    state["user_id"],
+                    **kwargs,
+                )
+            except Exception:
+                logger.exception(
+                    "V2 다중 주제 실시간 수집 실패, 저장 근거만 사용합니다: topic=%s",
+                    topic,
+                )
+            return topic, documents, int((monotonic() - started) * 1000)
+
+        if deferred_topics:
+            deferred_results = await asyncio.gather(
+                *(collect_deferred_live(topic) for topic in deferred_topics)
+            )
+            for topic, live_documents, elapsed_ms in deferred_results:
+                outcome = outcomes_by_topic[topic]
+                documents = merge_context_documents(
+                    outcome.documents,
+                    live_documents,
+                )
+                outcomes_by_topic[topic] = replace(
+                    outcome,
+                    documents=tuple(documents),
+                    collected_live=True,
+                    requires_live=False,
+                    tool_stats=(
+                        *outcome.tool_stats,
+                        ("collect_live_parallel", 1, elapsed_ms),
+                    ),
+                )
+                documents_by_topic[topic] = list(documents)
+                collected_live = True
+                topic_stats = research_stats_by_topic[topic]
+                topic_stats["documents"] = len(documents)
+                topic_stats["parallel_live_elapsed_ms"] = elapsed_ms
+                topic_stats["tools"].append(
+                    {
+                        "tool": "collect_live_parallel",
+                        "calls": 1,
+                        "elapsed_ms": elapsed_ms,
+                    }
+                )
         flattened = [
             document
             for topic in topics
@@ -1312,6 +1360,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             "topic_intents": intents,
             "research_documents": flattened,
             "research_documents_by_topic": documents_by_topic,
+            "research_completed_topics": completed_topics,
             "research_notes": "\n".join(notes),
             "research_collected_live": collected_live,
             "research_calls": calls,
@@ -1675,7 +1724,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         researched = list(
             (state.get("research_documents_by_topic") or {}).get(topic) or []
         )
-        if researched:
+        if researched or topic in set(state.get("research_completed_topics") or []):
             return researched, False
 
         def _record(stage: str, since: float) -> None:
@@ -1872,7 +1921,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             documents = [
                 document
                 for document in documents
-                if str(getattr(document, "reference", None) or document) not in seen
+                if _report_context_identity(document) not in seen
             ]
             deduped = len(documents)
             finalize_started = monotonic()
@@ -1881,7 +1930,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             selected = len(finalized.get("contexts", []))
             picked = 0
             for context in finalized.get("contexts", []):
-                key = str(getattr(context, "reference", None) or context)
+                key = _report_context_identity(context)
                 if key in seen:
                     continue
                 seen.add(key)

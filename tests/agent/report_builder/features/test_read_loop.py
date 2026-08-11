@@ -263,6 +263,53 @@ def test_v2_locates_navigates_collects_live_and_persists_snapshot(
     ]
 
 
+def test_v2_can_defer_live_collection_to_multi_topic_orchestrator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """저장 근거가 부족해도 다중 주제 실행은 Live 호출을 상위 병렬 단계로 미룬다."""
+
+    async def fake_global(*args: Any, **kwargs: Any) -> list[ReportContextDocument]:
+        """부족 판정을 유도할 Global 근거를 반환한다."""
+        return [_document("G1")]
+
+    async def fake_locate(*args: Any, **kwargs: Any) -> list[Any]:
+        """개인 Wiki 후보가 없는 사용자를 흉내 낸다."""
+        return []
+
+    monkeypatch.setattr(read_loop, "embed_wiki_queries", lambda queries: {})
+    monkeypatch.setattr(read_loop, "wnav_001", fake_locate)
+    monkeypatch.setattr(read_loop, "search_global_documents", fake_global)
+    monkeypatch.setattr(read_loop, "is_pool_sufficient", lambda documents: False)
+    monkeypatch.setattr(read_loop, "is_pool_relevant", lambda topic, documents: True)
+    monkeypatch.setattr(
+        read_loop,
+        "collect_live_context",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("지연 모드에서는 Live 수집을 직접 실행하면 안 됩니다.")
+        ),
+    )
+
+    outcome = asyncio.run(
+        run_wiki_read_graph_v2(
+            object(),  # type: ignore[arg-type]
+            topic="AI 에이전트",
+            user_id="user-1",
+            defer_live=True,
+        )
+    )
+
+    assert outcome.collected_live is False
+    assert outcome.requires_live is True
+    assert [stat[0] for stat in outcome.tool_stats] == [
+        "restore_or_locate",
+        "select_seed",
+        "navigate",
+        "search_global",
+        "assess",
+        "finalize",
+    ]
+
+
 def test_research_context_for_version_routes_legacy_and_v2(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

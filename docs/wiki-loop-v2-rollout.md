@@ -48,6 +48,11 @@ Context Packet만 반환하고, 최종 리포트 추론과 작성은 Report Buil
 후보 선택은 exact/alias/RRF 순서의 결정적 정책을 사용해 V1의 반복적인 Tool LLM
 왕복을 제거한다.
 
+여러 주제를 묶은 리포트는 하나의 DB 연결에서 Topic별 Wiki·Global 조회와 판정을
+짧게 끝낸 뒤, 저장 근거가 부족한 Topic의 Live 수집만 최대 3개까지 병렬 실행한다.
+Topic별 결과는 원래 입력 순서로 다시 조립하며, 문서 중복은 Topic마다 다시 매겨지는
+참조 번호가 아니라 원본 Version·Chunk 식별자로 제거한다.
+
 ## 3. 유지 루프 계약
 
 환경변수 `WIKI_MAINTENANCE_PIPELINE_VERSION`이 새 Full Rebuild Job의
