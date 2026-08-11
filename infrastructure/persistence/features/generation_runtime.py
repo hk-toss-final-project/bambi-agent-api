@@ -201,7 +201,7 @@ async def persist_report_navigation_snapshot(
                     payload,
                     '{wiki_navigation_snapshots}',
                     COALESCE(payload -> 'wiki_navigation_snapshots', '{}'::jsonb)
-                    || jsonb_build_object(%s, %s::jsonb),
+                    || jsonb_build_object(%s::text, %s::jsonb),
                     true
                 ),
                 updated_at = clock_timestamp()
