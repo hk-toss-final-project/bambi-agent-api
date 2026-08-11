@@ -852,6 +852,11 @@ _MIN_TOPIC_CONTEXT_DOCUMENTS = 3
 # lease(600초)의 절반 이하다. 상한을 없애지는 않는다 — 계약상 topics는 최대 5개까지
 # 올 수 있고, 5개를 전부 수집하면 lease에 근접한다.
 _MAX_LIVE_COLLECT_TOPICS = 3
+# 주제당 더할 보조 검색어 수. 3개로 시작했다가 되돌렸다 — 검색어가 4배가 되자
+# 조사원이 결과를 보고 다시 판단하는 왕복이 그만큼 늘어 리스 600초를 두 번
+# 연속 넘겼다(2026-08-11 실측: 192초 → 1485·1713초). 검색 자체는 16~22초로
+# 그대로였고 늘어난 것은 LLM 판단 시간이었다. 1개부터 다시 잰다.
+_MAX_TOPIC_FACETS = 1
 
 # 생성 프롬프트에 넣는 근거 문서 상한(REPORT-006 기본값과 같아야 한다).
 _MAX_REPORT_CONTEXTS = 12
@@ -1308,7 +1313,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 topic,
                 intent=intent,
                 context=context,
-                limit=limit - len(keywords),
+                limit=min(_MAX_TOPIC_FACETS, limit - len(keywords)),
             )
             existing = {"".join(topic.split()).casefold()} | {
                 "".join(keyword.split()).casefold() for keyword in keywords

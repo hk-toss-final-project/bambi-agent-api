@@ -2238,3 +2238,71 @@ def test_single_topic_falls_back_to_reactive_search_without_a_match(
     assert searched == ["환율"]
     assert expansion_calls == ["환율"]
     assert collected_with == ["환헤지"]
+
+
+def test_topic_facets_are_capped_at_one_per_topic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """보조 검색어는 주제당 한 개만 더한다.
+
+    3개로 시작했다가 리스 600초를 두 번 연속 넘겨 되돌렸다(2026-08-11 실측:
+    192초 → 1485·1713초). 검색어가 늘면 조사원이 결과를 보고 다시 판단하는
+    왕복이 그만큼 늘어난다.
+    """
+    requested: list[int] = []
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """DB 사용자 Scope 설정을 생략한다."""
+        return None
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[str]:
+        """창고가 비어 있어 실시간 수집으로 넘어가게 한다."""
+        return []
+
+    async def fake_expansion(connection: Any, **kwargs: Any) -> Any:
+        """Wiki 이웃이 하나도 없는 주제를 만든다."""
+        return SimpleNamespace(
+            keywords=(), mode="empty", gate_passed=False, maturity_reasons=()
+        )
+
+    async def fake_prag_006(contexts: list[str]) -> list[str]:
+        """검색 Context를 변경 없이 반환한다."""
+        return contexts
+
+    def fake_facets(topic: str, **kwargs: Any) -> tuple[str, ...]:
+        """요청받은 개수를 기록하고 검색어 하나를 돌려준다."""
+        requested.append(int(kwargs["limit"]))
+        return (f"{topic}-보조",)
+
+    async def fake_prag_007(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """저장 호출을 고정 결과로 대체한다."""
+        return {"content_candidate_id": "candidate-1"}
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
+    monkeypatch.setattr(agent_graph, "_load_related_keyword_expansion", fake_expansion)
+    monkeypatch.setattr(agent_graph, "generate_topic_facets", fake_facets)
+    monkeypatch.setattr(agent_graph, "collect_live_context", lambda *a, **k: ["live-1"])
+    monkeypatch.setattr(
+        agent_graph, "generate_report_content_with_quality", lambda **k: "generated"
+    )
+    monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
+    _disable_research(monkeypatch)
+    monkeypatch.setattr(agent_graph, "generate_topic_facets", fake_facets)
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 관심사 브리핑",
+            topics=["다낭 여행", "코스닥"],
+            content_type="interest_news_card",
+            language="ko",
+            model="test-model",
+        )
+    )
+
+    assert requested == [1, 1]
