@@ -23,6 +23,8 @@ from infrastructure.persistence.api import (
     db_026,
 )
 
+from .concurrency import ProviderRateLimitPolicy
+
 type BatchResults = list[dict[str, object]]
 type BatchRunner = Callable[..., Awaitable[BatchResults]]
 type BatchObserver = Callable[[BatchResults], None]
@@ -72,8 +74,11 @@ async def consume_personal_wiki_jobs(
     database_url: str,
     worker_id: str,
     limit: int,
+    concurrency: int = 1,
+    rate_limit_policy: ProviderRateLimitPolicy | None = None,
     lease_seconds: int,
     model: str,
+    embedding_batch_threshold: int = 0,
     interval_seconds: int = 60,
     max_batches: int | None = None,
     batch_runner: BatchRunner | None = None,
@@ -85,8 +90,11 @@ async def consume_personal_wiki_jobs(
         database_url: Agent DB 연결 문자열
         worker_id: Job Lease 소유자 식별자
         limit: Batch 하나가 Claim할 최대 Job 수 (WC-001 Batch 크기)
+        concurrency: Claim한 Job을 동시에 실행할 최대 수
+        rate_limit_policy: Job별 OpenAI 예상 요청·Token 예약 정책
         lease_seconds: Job Lease 유지 시간(초)
         model: Personal Wiki 분류 LLM 모델
+        embedding_batch_threshold: 이 Chunk 수 이상이면 Embedding Batch로 전환
         interval_seconds: 처리할 Job이 없을 때 다음 확인까지 대기 초
         max_batches: 가져올 Batch 횟수 상한. None이면 무제한 상주
         batch_runner: Batch 한 번을 실행하는 함수 (테스트 대체용)
@@ -106,8 +114,11 @@ async def consume_personal_wiki_jobs(
             "database_url": database_url,
             "worker_id": worker_id,
             "limit": limit,
+            "concurrency": concurrency,
+            "rate_limit_policy": rate_limit_policy,
             "lease_seconds": lease_seconds,
             "model": model,
+            "embedding_batch_threshold": embedding_batch_threshold,
         },
         interval_seconds=interval_seconds,
         max_batches=max_batches,
@@ -120,6 +131,8 @@ async def consume_report_generation_jobs(
     database_url: str,
     worker_id: str,
     limit: int,
+    concurrency: int = 1,
+    rate_limit_policy: ProviderRateLimitPolicy | None = None,
     lease_seconds: int,
     model: str,
     interval_seconds: int = 60,
@@ -136,6 +149,8 @@ async def consume_report_generation_jobs(
         database_url: Agent DB 연결 문자열
         worker_id: Job Lease 소유자 식별자
         limit: Batch 하나가 Claim할 최대 Job 수 (WC-001 Batch 크기)
+        concurrency: Claim한 Job을 동시에 실행할 최대 수
+        rate_limit_policy: Job별 OpenAI 예상 요청·Token 예약 정책
         lease_seconds: Job Lease 유지 시간(초)
         model: Report Builder 콘텐츠 생성 LLM 모델
         interval_seconds: 처리할 Job이 없을 때 다음 확인까지 대기 초
@@ -157,6 +172,8 @@ async def consume_report_generation_jobs(
             "database_url": database_url,
             "worker_id": worker_id,
             "limit": limit,
+            "concurrency": concurrency,
+            "rate_limit_policy": rate_limit_policy,
             "lease_seconds": lease_seconds,
             "model": model,
         },
@@ -202,8 +219,11 @@ async def wc_001(
     database_url: str,
     worker_id: str,
     limit: int = 1,
+    concurrency: int = 1,
+    rate_limit_policy: ProviderRateLimitPolicy | None = None,
     lease_seconds: int = 600,
     model: str = "gpt-4.1-mini",
+    embedding_batch_threshold: int = 0,
     interval_seconds: int = 0,
     max_batches: int | None = 1,
     job_type: str = "personal_wiki_build",
@@ -236,20 +256,23 @@ async def wc_001(
             max_batches=max_batches,
             on_batch=on_batch,
         )
-    consumer = (
-        consume_report_generation_jobs
-        if job_type == "report_generation"
-        else consume_personal_wiki_jobs
-    )
-    return await consumer(
-        database_url=database_url,
-        worker_id=worker_id,
-        limit=limit,
-        lease_seconds=lease_seconds,
-        model=model,
-        interval_seconds=interval_seconds,
-        max_batches=max_batches,
-        on_batch=on_batch,
+    common_kwargs = {
+        "database_url": database_url,
+        "worker_id": worker_id,
+        "limit": limit,
+        "concurrency": concurrency,
+        "rate_limit_policy": rate_limit_policy,
+        "lease_seconds": lease_seconds,
+        "model": model,
+        "interval_seconds": interval_seconds,
+        "max_batches": max_batches,
+        "on_batch": on_batch,
+    }
+    if job_type == "report_generation":
+        return await consume_report_generation_jobs(**common_kwargs)
+    return await consume_personal_wiki_jobs(
+        **common_kwargs,
+        embedding_batch_threshold=embedding_batch_threshold,
     )
 
 

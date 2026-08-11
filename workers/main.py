@@ -12,13 +12,33 @@ import sys
 from app.config import Settings, load_settings
 from app.logging_config import configure_logging
 from workers.api import (
+    consume_openai_batches,
     run_global_content_fetch_batch,
     run_url_collection_batch,
+    run_openai_batch_cycle,
     worker_001,
     worker_002,
     worker_003,
 )
-from workers.runtime.api import wc_001
+from workers.runtime.api import ProviderRateLimitPolicy, wc_001
+
+
+def _openai_rate_policy(
+    settings: Settings,
+    *,
+    model: str,
+    estimated_requests: int,
+    estimated_tokens: int,
+) -> ProviderRateLimitPolicy:
+    """환경 설정을 Worker Job의 OpenAI 모델별 예약 정책으로 변환한다."""
+    return ProviderRateLimitPolicy(
+        provider="openai",
+        resource_key=model,
+        estimated_requests=estimated_requests,
+        estimated_tokens=estimated_tokens,
+        default_rpm=settings.openai_default_rpm,
+        default_tpm=settings.openai_default_tpm,
+    )
 
 
 def _parse_args() -> argparse.Namespace:
@@ -32,12 +52,18 @@ def _parse_args() -> argparse.Namespace:
             "report-generation",
             "global-collector",
             "global-content",
+            "openai-batch",
         ],
         default="personal-wiki",
         help="실행할 Worker 유형",
     )
     parser.add_argument("--worker-id", help="Job Lease 소유자 식별자")
     parser.add_argument("--limit", type=int, help="한 번에 Claim할 Job 개수")
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        help="Claim 크기와 별개인 실제 Job 동시 실행 수",
+    )
     parser.add_argument(
         "--keywords",
         help="global-collector 전용: 쉼표로 구분한 수집 키워드",
@@ -91,6 +117,19 @@ async def _run_batch_once(
     args: argparse.Namespace, settings: Settings, worker_id: str
 ) -> list[dict[str, object]]:
     """설정과 명령행 옵션으로 선택한 Worker의 Job Batch 한 번을 실행한다."""
+    if args.worker == "openai-batch":
+        if settings.openai_api_key is None:
+            raise RuntimeError("openai-batch Worker에 OPENAI_API_KEY가 필요합니다.")
+        return await run_openai_batch_cycle(
+            database_url=settings.agent_database_url,
+            api_key=settings.openai_api_key.get_secret_value(),
+            max_items=settings.openai_batch_max_items,
+            max_submissions=settings.openai_batch_max_submissions,
+            poll_limit=settings.openai_batch_poll_limit,
+            poll_interval_seconds=settings.openai_batch_poll_interval_seconds,
+            poll_lease_seconds=settings.openai_batch_poll_lease_seconds,
+            worker_id=worker_id,
+        )
     if args.worker == "global-collector":
         keywords = [
             keyword.strip()
@@ -138,23 +177,40 @@ async def _run_batch_once(
             ),
         )
     if args.worker == "report-generation":
+        model = args.model or settings.report_llm_model
         return await worker_003(
             database_url=settings.agent_database_url,
             worker_id=worker_id,
             limit=args.limit or settings.personal_wiki_worker_batch_size,
+            concurrency=args.concurrency or settings.report_job_concurrency,
             lease_seconds=(
                 args.lease_seconds or settings.personal_wiki_job_lease_seconds
             ),
-            model=args.model or settings.report_llm_model,
+            model=model,
+            rate_limit_policy=_openai_rate_policy(
+                settings,
+                model=model,
+                estimated_requests=settings.report_openai_requests_per_job,
+                estimated_tokens=settings.report_openai_tokens_per_job,
+            ),
         )
+    model = args.model or settings.wiki_llm_model
     return await worker_002(
         database_url=settings.agent_database_url,
         worker_id=worker_id,
         limit=args.limit or settings.personal_wiki_worker_batch_size,
+        concurrency=args.concurrency or settings.personal_wiki_job_concurrency,
         lease_seconds=(
             args.lease_seconds or settings.personal_wiki_job_lease_seconds
         ),
-        model=args.model or settings.wiki_llm_model,
+        model=model,
+        rate_limit_policy=_openai_rate_policy(
+            settings,
+            model=model,
+            estimated_requests=settings.wiki_openai_requests_per_job,
+            estimated_tokens=settings.wiki_openai_tokens_per_job,
+        ),
+        embedding_batch_threshold=settings.wiki_embedding_batch_threshold,
     )
 
 
@@ -192,15 +248,41 @@ async def _run() -> None:
         """결과가 있는 Batch를 JSON Line으로 출력한다."""
         print(json.dumps(results, ensure_ascii=False, default=str), flush=True)
 
+    if args.worker == "openai-batch":
+        if settings.openai_api_key is None:
+            raise RuntimeError("openai-batch Worker에 OPENAI_API_KEY가 필요합니다.")
+        await consume_openai_batches(
+            database_url=settings.agent_database_url,
+            api_key=settings.openai_api_key.get_secret_value(),
+            interval_seconds=args.interval_seconds,
+            max_cycles=None,
+            max_items=settings.openai_batch_max_items,
+            max_submissions=settings.openai_batch_max_submissions,
+            poll_limit=settings.openai_batch_poll_limit,
+            poll_interval_seconds=settings.openai_batch_poll_interval_seconds,
+            poll_lease_seconds=settings.openai_batch_poll_lease_seconds,
+            worker_id=worker_id,
+            on_cycle=on_batch,
+        )
+        return
+
     if args.worker == "report-generation":
+        model = args.model or settings.report_llm_model
         await wc_001(
             database_url=settings.agent_database_url,
             worker_id=worker_id,
             limit=args.limit or settings.personal_wiki_worker_batch_size,
+            concurrency=args.concurrency or settings.report_job_concurrency,
             lease_seconds=(
                 args.lease_seconds or settings.personal_wiki_job_lease_seconds
             ),
-            model=args.model or settings.report_llm_model,
+            model=model,
+            rate_limit_policy=_openai_rate_policy(
+                settings,
+                model=model,
+                estimated_requests=settings.report_openai_requests_per_job,
+                estimated_tokens=settings.report_openai_tokens_per_job,
+            ),
             interval_seconds=args.interval_seconds,
             max_batches=None,
             job_type="report_generation",
@@ -221,12 +303,21 @@ async def _run() -> None:
             on_batch=on_batch,
         )
         return
+    model = args.model or settings.wiki_llm_model
     await wc_001(
         database_url=settings.agent_database_url,
         worker_id=worker_id,
         limit=args.limit or settings.personal_wiki_worker_batch_size,
+        concurrency=args.concurrency or settings.personal_wiki_job_concurrency,
         lease_seconds=(args.lease_seconds or settings.personal_wiki_job_lease_seconds),
-        model=args.model or settings.wiki_llm_model,
+        model=model,
+        rate_limit_policy=_openai_rate_policy(
+            settings,
+            model=model,
+            estimated_requests=settings.wiki_openai_requests_per_job,
+            estimated_tokens=settings.wiki_openai_tokens_per_job,
+        ),
+        embedding_batch_threshold=settings.wiki_embedding_batch_threshold,
         interval_seconds=args.interval_seconds,
         max_batches=None,
         job_type="personal_wiki_build",

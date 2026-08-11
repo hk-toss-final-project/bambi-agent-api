@@ -45,9 +45,17 @@ class JobStatus(StrEnum):
 
     QUEUED = "queued"
     RUNNING = "running"
+    WAITING_PROVIDER = "waiting_provider"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class GenerationExecutionMode(StrEnum):
+    """Report 생성 결과가 필요한 시간에 따른 실행 방식."""
+
+    SYNC = "sync"
+    BATCH = "batch"
 
 
 class PublishStatus(StrEnum):
@@ -419,6 +427,13 @@ class GenerationRequest(ImmutableSchema):
             "응답 스키마와 발행 Payload는 켜든 끄든 같다."
         ),
     )
+    execution_mode: GenerationExecutionMode = Field(
+        default=GenerationExecutionMode.SYNC,
+        description=(
+            "sync는 기존 즉시 Worker 생성, batch는 접수 시 고정한 DB Context로 "
+            "OpenAI 24시간 비동기 Batch를 사용한다."
+        ),
+    )
 
     @field_validator("topics", mode="after")
     @classmethod
@@ -462,6 +477,16 @@ class GenerationRequest(ImmutableSchema):
         """예약 시각이 시간대 없는 값으로 들어와 모호해지는 것을 차단한다."""
         if self.scheduled_at is not None and self.scheduled_at.tzinfo is None:
             raise ValueError("scheduled_at은 시간대를 포함한 시각이어야 합니다.")
+        return self
+
+    @model_validator(mode="after")
+    def validate_execution_mode(self) -> "GenerationRequest":
+        """Batch가 지원하지 않는 변경점 추적·다중 주제 요청을 접수 전에 차단한다."""
+        if self.execution_mode is GenerationExecutionMode.BATCH:
+            if self.change_history_enabled:
+                raise ValueError("batch 실행은 change_history_enabled를 지원하지 않습니다.")
+            if self.topics:
+                raise ValueError("batch 실행은 다중 topics를 지원하지 않습니다.")
         return self
 
 

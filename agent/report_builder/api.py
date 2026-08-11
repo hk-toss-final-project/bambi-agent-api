@@ -51,6 +51,8 @@ from .features.generation import (
     report_010,
     generate_report_content,
     generate_report_content_with_quality,
+    build_report_generation_prompt,
+    ReportGenerationPrompt,
     normalize_content_tags,
     parse_report_generation,
 )
@@ -61,6 +63,11 @@ from .features.versioning import report_017
 from .features.persistence import report_018, report_019
 from .features.events import report_020
 from .features.safeguards import report_021
+from .features.batch import (
+    apply_report_generation_batch_result,
+    report_context_from_mapping,
+    stage_report_generation_batch,
+)
 
 __all__ = [
     "report_001",
@@ -84,6 +91,11 @@ __all__ = [
     "report_019",
     "report_020",
     "report_021",
+    "build_report_generation_prompt",
+    "ReportGenerationPrompt",
+    "apply_report_generation_batch_result",
+    "report_context_from_mapping",
+    "stage_report_generation_batch",
     "merge_context_documents",
     "navigation_packet_documents",
     "search_global_documents",

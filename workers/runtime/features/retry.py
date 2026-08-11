@@ -9,6 +9,7 @@ from infrastructure.persistence.api import (
     FailAgentJobCommand,
     db_026,
 )
+from shared.retry import exponential_backoff_delay
 from shared.contracts import FeatureRequest, FeatureResult
 
 
@@ -21,6 +22,7 @@ async def wc_006(
     error_code: str,
     error_message: str,
     retryable: bool,
+    retry_delay_seconds: float | None = None,
 ) -> str:
     """[WC-006] Retry 정책.
 
@@ -34,6 +36,7 @@ async def wc_006(
             error_code=error_code,
             error_message=error_message,
             retryable=retryable,
+            retry_delay_seconds=retry_delay_seconds,
         ),
     )
     if not isinstance(result, str):
@@ -41,12 +44,25 @@ async def wc_006(
     return result
 
 
-async def wc_007(request: FeatureRequest) -> FeatureResult:
+async def wc_007(
+    attempt: int,
+    *,
+    retry_after_seconds: float | None = None,
+    base_seconds: float = 1.0,
+    max_backoff_seconds: float = 300.0,
+    jitter_ratio: float = 0.25,
+) -> float:
     """[WC-007] Exponential Backoff.
 
-    재시도 간격을 점진적으로 증가시킨다.
+    Retry-After를 최소값으로 존중하면서 재시도 간격을 점진적으로 증가시킨다.
     """
-    raise NotImplementedError("[WC-007] 기능 구현이 필요합니다.")
+    return exponential_backoff_delay(
+        attempt,
+        retry_after_seconds=retry_after_seconds,
+        base_seconds=base_seconds,
+        max_backoff_seconds=max_backoff_seconds,
+        jitter_ratio=jitter_ratio,
+    )
 
 
 async def wc_008(request: FeatureRequest) -> FeatureResult:

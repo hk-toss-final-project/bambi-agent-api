@@ -139,6 +139,7 @@ class FailAgentJobCommand:
     error_code: str
     error_message: str
     retryable: bool
+    retry_delay_seconds: float | None = None
 
 
 type AgentJobStorageCommand = (
@@ -543,6 +544,81 @@ async def complete_agent_job(
     )
 
 
+async def defer_agent_job_for_provider(
+    connection: AsyncConnection[DictRow],
+    *,
+    job: ClaimedAgentJob,
+    worker_id: str,
+    batch_item_id: str,
+) -> None:
+    """실행 Job을 waiting_provider로 바꾸고 Worker Lease를 즉시 해제한다."""
+    cursor = await connection.execute(
+        """
+        UPDATE agent.agent_jobs
+        SET status = 'waiting_provider',
+            progress = GREATEST(progress, 80),
+            result = %s,
+            retryable = false,
+            locked_at = NULL,
+            locked_by = NULL,
+            lease_expires_at = NULL,
+            updated_at = clock_timestamp()
+        WHERE id = %s
+          AND status = 'running'
+          AND locked_by = %s
+          AND lease_expires_at > clock_timestamp()
+        RETURNING id
+        """,
+        (Jsonb({"batch_item_id": batch_item_id}), job.job_id, worker_id),
+    )
+    if await cursor.fetchone() is None:
+        raise RuntimeError(f"Job Lease 소유권이 없습니다: {job.job_id}")
+    await connection.execute(
+        """
+        UPDATE agent.agent_job_attempts
+        SET status = 'completed',
+            completed_at = clock_timestamp(),
+            details = %s
+        WHERE job_id = %s AND attempt_number = %s
+        """,
+        (
+            Jsonb({"status": "waiting_provider", "batch_item_id": batch_item_id}),
+            job.job_id,
+            job.attempt_number,
+        ),
+    )
+
+
+async def complete_waiting_provider_job(
+    connection: AsyncConnection[DictRow],
+    *,
+    job_id: str,
+    user_id: str,
+    result: Mapping[str, object],
+) -> None:
+    """도메인 결과 저장이 끝난 waiting_provider Job을 최종 완료 처리한다."""
+    cursor = await connection.execute(
+        """
+        UPDATE agent.agent_jobs
+        SET status = 'completed',
+            progress = 100,
+            result = %s,
+            retryable = false,
+            error_code = NULL,
+            error_message = NULL,
+            completed_at = clock_timestamp(),
+            updated_at = clock_timestamp()
+        WHERE id = %s::uuid
+          AND user_id = %s
+          AND status = 'waiting_provider'
+        RETURNING id
+        """,
+        (Jsonb(dict(result)), job_id, user_id),
+    )
+    if await cursor.fetchone() is None:
+        raise RuntimeError("완료할 waiting_provider Job을 찾지 못했습니다.")
+
+
 async def fail_agent_job(
     connection: AsyncConnection[DictRow],
     *,
@@ -551,8 +627,11 @@ async def fail_agent_job(
     error_code: str,
     error_message: str,
     retryable: bool,
+    retry_delay_seconds: float | None = None,
 ) -> str:
     """Job 실패를 기록하고 재시도 가능 여부에 따라 다음 상태를 결정한다."""
+    if retry_delay_seconds is not None and retry_delay_seconds < 0:
+        raise ValueError("Job 재시도 대기시간은 0 이상이어야 합니다.")
     can_retry = retryable and job.attempt_number < job.max_attempts
     next_status = "queued" if can_retry else "failed"
     source_event_status = await wse_013("received" if can_retry else "failed")
@@ -565,7 +644,7 @@ async def fail_agent_job(
             error_message = %s,
             retryable = %s,
             scheduled_at = CASE
-                WHEN %s THEN clock_timestamp() + (LEAST(300, POWER(2, attempt_count)) * interval '1 second')
+                WHEN %s THEN clock_timestamp() + (%s * interval '1 second')
                 ELSE scheduled_at
             END,
             completed_at = CASE WHEN %s THEN NULL ELSE clock_timestamp() END,
@@ -585,6 +664,7 @@ async def fail_agent_job(
             error_message[:2000],
             can_retry,
             can_retry,
+            retry_delay_seconds or 0.0,
             can_retry,
             job.job_id,
             worker_id,
@@ -1255,6 +1335,7 @@ async def db_026(
         job=command.job,
         worker_id=command.worker_id,
         error_code=command.error_code,
-        error_message=command.error_message,
-        retryable=command.retryable,
-    )
+            error_message=command.error_message,
+            retryable=command.retryable,
+            retry_delay_seconds=command.retry_delay_seconds,
+        )

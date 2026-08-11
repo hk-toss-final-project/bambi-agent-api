@@ -111,7 +111,11 @@ type DictRow = dict[str, Any]
 REVIEW_MAX_REVISIONS = 1
 
 
-def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
+def build_personal_wiki_graph(
+    connection: AsyncConnection[DictRow],
+    *,
+    embedding_batch_threshold: int = 0,
+) -> Any:
     """Personal Wiki Build 노드와 엣지를 조립해 컴파일된 그래프를 반환한다.
 
     load_source → resolve_onboarding_context → classify → prepare_identity →
@@ -517,6 +521,8 @@ def build_personal_wiki_graph(connection: AsyncConnection[DictRow]) -> Any:
                 namespace_key=state["source"].namespace_key,
                 document_version_ids=version_ids,
                 model="text-embedding-3-small",
+                job_id=state["job_id"],
+                batch_threshold=embedding_batch_threshold,
             )
             return {"embedding_count": count, "embedding_warning": None}
         except Exception as error:  # noqa: BLE001 - Wiki 저장은 이미 완료됨
@@ -673,6 +679,7 @@ async def run_personal_wiki_build(
     source_document_version_id: str,
     job_id: str,
     model: str = "gpt-4.1-mini",
+    embedding_batch_threshold: int = 0,
 ) -> dict[str, object]:
     """Personal Wiki Build 그래프를 실행하고 Job 결과 Payload를 반환한다.
 
@@ -704,6 +711,7 @@ async def run_personal_wiki_build(
             user_id=user_id,
             job_id=job_id,
             model=model,
+            embedding_batch_threshold=embedding_batch_threshold,
         )
         await _recalculate_interest_profile(connection, user_id=user_id)
         persisted = rebuilt.persisted
@@ -740,7 +748,10 @@ async def run_personal_wiki_build(
             ],
         }
 
-    graph = build_personal_wiki_graph(connection)
+    graph = build_personal_wiki_graph(
+        connection,
+        embedding_batch_threshold=embedding_batch_threshold,
+    )
     state = await graph.ainvoke(
         {
             "user_id": user_id,
@@ -795,6 +806,7 @@ async def run_personal_wiki_rebuild(
     user_id: str,
     job_id: str,
     model: str = "gpt-4.1-mini",
+    embedding_batch_threshold: int = 0,
 ) -> dict[str, object]:
     """남은 활성 원본 전체로 Wiki를 재구성하고 빈 원본 상태도 안전하게 반영한다."""
     async with connection.transaction():
@@ -817,7 +829,11 @@ async def run_personal_wiki_rebuild(
             **retired,
         }
     rebuilt = await rebuild_full_wiki(
-        connection, user_id=user_id, job_id=job_id, model=model
+        connection,
+        user_id=user_id,
+        job_id=job_id,
+        model=model,
+        embedding_batch_threshold=embedding_batch_threshold,
     )
     await _recalculate_interest_profile(connection, user_id=user_id)
     return _full_rebuild_payload(rebuilt)

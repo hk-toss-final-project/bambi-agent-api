@@ -76,7 +76,7 @@
 - [x] `PWE-001` 개인 Wiki 문서 Chunking
 - [x] `PWE-002` Chunk 저장 — `wiki_chunks` 멱등 Upsert
 - [ ] `PWE-004` Embedding 생성 — ❌ 독립 PWE Feature facade는 아직 스텁이다. 현재 Wiki Build는 `WBA-011` 내부 경로에서 변경 Entity·Concept Chunk의 1536차원 Vector를 생성한다.
-- [ ] `PWE-005` Embedding 저장 — ❌ 독립 PWE Feature facade는 아직 스텁이다. 현재 Wiki Build의 저장은 `WBA-011`이 `wiki_embeddings`에 멱등 반영하며 별도 재시도 Job은 미연결이다.
+- [ ] `PWE-005` Embedding 저장 — ❌ 독립 PWE Feature facade는 아직 스텁이다. 현재 Wiki Build의 저장은 `WBA-011`이 `wiki_embeddings`에 멱등 반영하며, 대량 Chunk는 OpenAI Batch Item 단위 재시도를 사용한다.
 - [x] `PRAG-001` Keyword Search — 개인 Wiki와 Global 저장 자료의 FTS·Trigram 후보 조회
 - [x] `PRAG-002` Vector Search — 기존 `wiki_embeddings`의 active config·동일 모델을 사용한 개인 Wiki Cosine top-k 조회
 - [x] `PRAG-003` Hybrid Search — 개인 Wiki Keyword·Vector 후보를 결정적 RRF로 결합하고 Global Keyword 결과를 유지한다. Embedding Provider·Vector 조회 실패는 Keyword로 폴백한다.
@@ -152,7 +152,7 @@
 
 - [x] `WORKER-001` Global Source Collector Worker — ⚠️ 수집·저장은 dev API 동기 실행만, 상주 Worker 없음
 - [x] `WORKER-002` Personal Wiki Builder Worker — 단발·상주(Loop) 모드 CLI
-- [x] `WORKER-003` Report Builder Generation Worker — 단발·상주(Loop) 모드 CLI, `SKIP LOCKED` Batch Claim (dev API와 같은 Handler 체인)
+- [x] `WORKER-003` Report Builder Generation Worker — 단발·상주(Loop) 모드 CLI, `SKIP LOCKED` Batch Claim. 명시적 비긴급 Job은 고정 Context로 OpenAI Batch에 등록하고 waiting_provider Lease를 해제한다
 - [ ] `SW-001` Content Ready 이벤트 수신 — ➖ service-worker(Spring) 책임, Agent API 범위 아님
 - [x] `SW-004` Publish Snapshot 조회 — 단건 조회 + Lease Batch Claim
 - [ ] `SW-007` service-db 콘텐츠 Upsert — ➖ service-worker 책임
@@ -160,7 +160,7 @@
 - [x] `WBA-001` Incremental Wiki Build
 - [x] `WBA-002` Full Wiki Rebuild — ⚠️ 삭제되지 않은 원본 Head의 최신 Version 전체를 메모리에서 재분류·검증한 뒤 최종 Transaction에서 기존 파생 Wiki를 supersede하고 새 Snapshot을 저장한다. 실행 경로는 `personal_wiki_build` Job Payload의 `mode=full_rebuild`이며 상주 Worker(WORKER-002)가 처리한다. 트리거는 ① 북마크 해제 등 원본 제거(`enqueue_personal_wiki_rebuild_job`) ② Scheduler 정기 유지보수(`MAINTENANCE_REBUILD_LIMIT`, 기본 7일 간격) 두 가지다. 정기 트리거는 사용자·날짜 단위 멱등이며 대기·실행 중인 재구성이 있는 사용자는 건너뛴다. WBA-014 품질 지표(`.metrics`)를 재구성마다 `wiki_versions.change_summary.quality_metrics`에 함께 기록해, 새 이력 테이블 없이 `version` 순으로 훑는 것만으로 고아·중복·모순 건수 추이를 볼 수 있다. 실제 DB E2E 운영 검증은 남아 있다
 - [x] `WBA-003` Wiki 문서 정규화 — Build 파이프라인에 포함
-- [x] `WBA-011` Wiki 재임베딩 — ⚠️ Incremental Build와 Full Rebuild의 변경 Entity·Concept Chunk를 재임베딩한다. 저장 후 best-effort라 Provider 실패 시 Wiki Build는 유지하며 별도 재시도 Job은 없음
+- [x] `WBA-011` Wiki 재임베딩 — Incremental Build와 Full Rebuild의 변경 Entity·Concept Chunk를 재임베딩한다. 설정 임계값 이상은 OpenAI Batch로 전환하고 Vector 수·차원 검증 후 멱등 반영한다
 - [x] `WBA-014` Wiki 품질 검증 — canonical 중복, endpoint·관계 유형, provenance·confidence·review·lifecycle·근거, 고아·모순·과밀 Hub를 결정적으로 검사하고 오류는 저장 전 차단
 - [x] `WBA-015` Wiki 삭제 반영 — delete 이벤트 기록 + 문서 soft-delete + Chunk 검색 제외 (동기·멱등, 2026-07-27 구현. 실행 경로는 삭제 API→Repository이며 wba_015는 커넥션 보유 호출자용 facade. D1 잠정: 재등장 시 기본 부활, tombstone 없음)
 - [x] `WBA-018` Claude 작성 Wiki 항목 저장 — MCP `wiki:write` 경로. 원문 분류·관계 Linker LLM 호출 없이 Claude 분류 결과로 `build_wiki_plan`/`persist_wiki_build`를 그대로 태우고, identity 충돌 해소만 필요 시 최소 LLM 호출. 저장 전 병합 Snapshot 기준 WBA-014 게이트를 통과해야 하며, Worker Queue를 거치지 않으므로 FK용 Agent Job을 `completed` 상태로 직접 생성
@@ -172,8 +172,13 @@
 - [x] `WC-001` Queue Job Consume — 상주 소비 루프
 - [x] `WC-002` Job Claim — `FOR UPDATE SKIP LOCKED` + Lease
 - [x] `WC-006` Retry 정책 — retryable 실패 시 지연 후 queued 복귀
+- [x] `WC-007` Exponential Backoff — OpenAI `Retry-After`를 최소값으로 존중하고
+  지수 Backoff+jitter를 적용한다. quota·billing 오류는 재시도하지 않는다
 - [ ] `WC-009` Idempotency 처리 — ❌ Worker 공통 멱등 처리 기능 미구현. 개별 DB·Job 경계의 Unique·Upsert는 유지하며 기존 항등 위임 함수는 스텁으로 복원
-- [x] `WC-013` Concurrency 제어 — ⚠️ Batch Claim 크기 설정만 있고 LLM·Embedding 동시 실행 제한은 순차 처리로 대체
+- [x] `WC-013` Concurrency 제어 — Batch Claim 크기와 실제 Job 실행 동시성을
+  별도 설정으로 제한하고 동시 Job마다 Pool의 독립 DB 연결을 사용한다
+- [x] `WC-014` 외부 API Rate Limit — PostgreSQL에서 모델별 예상 RPM·TPM을
+  원자 예약하고 OpenAI 응답 헤더·Retry-After로 공유 잔여량과 Reset을 보정한다
 - [x] `DB-004` 개인 Wiki Chunk 저장
 - [x] `DB-005` 개인 Wiki Embedding 저장
 - [x] `DB-026` Agent Job 저장 — Claim·Lease·Attempt 이력
@@ -429,6 +434,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | WC-006 | Retry 정책 | 재시도 가능한 Chunking·Embedding 실패를 Backoff 후 다시 처리한다. |
 | WC-009 | Idempotency 처리 | 같은 원본을 다시 처리해도 document_kind+document_key, Wiki·출처·관계·Snapshot Row가 중복되지 않게 한다. |
 | WC-013 | Concurrency 제어 | Claim 크기와 Embedding 동시 실행 수를 별도로 제한한다. |
+| WC-014 | 외부 API Rate Limit | 모델별 RPM·TPM을 PostgreSQL에서 공유하고 응답 헤더로 속도를 보정한다. |
 | DB-004 | 개인 Wiki Chunk 저장 | wiki_chunks에 문서 Version별 Chunk를 영속 저장한다. |
 | DB-005 | 개인 Wiki Embedding 저장 | wiki_embeddings에 Chunk별 Vector를 영속 저장한다. |
 | DB-026 | Agent Job 저장 | agent_jobs와 agent_job_attempts에 Claim, Lease, 상태와 시도 이력을 저장한다. |
@@ -455,6 +461,23 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 - ACK되지 않은 항목은 Lease 만료 후 다시 Claim할 수 있고, 재시도 가능 실패는 Backoff 후 `ready`로 돌아가며 최종 실패는 `failed`로 격리한다.
 - `CONTENT_READY` 이벤트는 Batch Poll을 즉시 깨우는 신호로 사용하고, 주기적인 Batch Poll을 이벤트 유실과 Backfill의 복구 경로로 유지한다.
 - 기존 단건 Snapshot 조회·ACK는 관리자 수동 복구, 장애 조사와 개별 재발행을 위해 유지한다.
+
+### PostgreSQL 기반 OpenAI 대량 처리 계약 (승인, 2026-08-11)
+
+- Redis는 도입하지 않고 기존 `agent_jobs`와 PostgreSQL을 Queue·분산 제어의
+  원천으로 사용한다.
+- Claim 크기와 실제 Job 동시성은 별도 설정이며, 동시 Job은 각자 독립된 DB
+  Connection을 사용한다.
+- 동기 OpenAI 호출은 `Retry-After` 우선 지수 Backoff+jitter와 PostgreSQL
+  RPM/TPM Governor를 적용한다. quota·billing 429는 재시도하지 않는다.
+- Wiki 증분 분류·관계 판정과 즉시 Report는 동기 API를 유지한다.
+- Wiki 대량 Embedding과 비긴급 Report backfill·대량 재생성의 Context 고정 초안은
+  OpenAI Batch API로 처리한다.
+- Batch와 Item 상태, `custom_id`, Provider File·Batch ID, 결과·오류를 Agent DB에
+  영속화한다. 결과 순서가 입력과 달라도 `custom_id`로 매핑하며 부분 성공과 만료를
+  Item 단위로 복구한다.
+- 상세 상태 전이와 Wiki·Report 적용 범위는
+  `docs/openai-batch-processing-design.md`를 따른다.
 
 ## MVP 제외 범위
 

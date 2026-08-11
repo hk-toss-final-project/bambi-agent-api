@@ -15,8 +15,10 @@ from infrastructure.persistence.features.jobs import (
     claim_personal_wiki_jobs,
     claim_runnable_agent_jobs,
     complete_agent_job,
+    complete_waiting_provider_job,
     create_completed_agent_job,
     defer_user_wiki_build_jobs,
+    defer_agent_job_for_provider,
     enqueue_global_collection_run_job,
     enqueue_personal_wiki_build_job,
     fail_agent_job,
@@ -517,4 +519,50 @@ def test_fail_agent_job_stops_when_lease_is_lost() -> None:
         )
 
     assert len(connection.executed) == 1
-    claim_agent_job_by_id,
+
+
+def test_defer_agent_job_for_provider_releases_worker_lease() -> None:
+    """Batch 대기 전환이 Job Lease를 해제하고 현재 Attempt를 닫는다."""
+    connection = _FakeConnection([[{"id": "job-1"}], []])
+    job = ClaimedAgentJob(
+        job_id="job-1",
+        user_id="user-1",
+        feature_id="SVC-008",
+        job_type="report_generation",
+        attempt_number=1,
+        max_attempts=3,
+    )
+
+    asyncio.run(
+        defer_agent_job_for_provider(
+            connection,  # type: ignore[arg-type]
+            job=job,
+            worker_id="worker-1",
+            batch_item_id="item-1",
+        )
+    )
+
+    sql = connection.executed[0][0]
+    assert "status = 'waiting_provider'" in sql
+    assert "locked_by = NULL" in sql
+    assert "lease_expires_at = NULL" in sql
+    assert "status = 'completed'" in connection.executed[1][0]
+
+
+def test_complete_waiting_provider_job_finishes_without_worker_lease() -> None:
+    """Batch 결과 반영은 waiting_provider 상태만 사용자 범위에서 완료한다."""
+    connection = _FakeConnection([[{"id": "job-1"}]])
+
+    asyncio.run(
+        complete_waiting_provider_job(
+            connection,  # type: ignore[arg-type]
+            job_id="00000000-0000-0000-0000-000000000001",
+            user_id="user-1",
+            result={"content_id": "report-1"},
+        )
+    )
+
+    sql, params = connection.executed[0]
+    assert "status = 'completed'" in sql
+    assert "status = 'waiting_provider'" in sql
+    assert params[2] == "user-1"

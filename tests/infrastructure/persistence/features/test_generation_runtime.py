@@ -7,6 +7,8 @@ from typing import Any
 
 import pytest
 
+from infrastructure.persistence.features import generation_runtime
+
 from infrastructure.persistence.features.generation_runtime import (
     enqueue_report_generation_job,
     load_personal_wiki_vector_context,
@@ -213,6 +215,49 @@ def test_enqueue_defaults_change_history_toggle_to_off() -> None:
     _, insert_params = connection.executed[2]
     assert insert_params is not None
     assert insert_params[2].obj["change_history_enabled"] is False
+
+
+def test_enqueue_batch_report_freezes_database_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batch 접수는 LLM 호출 전에 Personal Wiki·Global 검색 결과를 Payload에 고정한다."""
+    connection = _connection_with_context()
+    fixed = ReportContextDocument(
+        reference="P1",
+        document_version_id="version-1",
+        chunk_id="chunk-1",
+        namespace_key="user/user-1",
+        title="고정 근거",
+        content="접수 시점의 개인 Wiki 내용",
+        url=None,
+        score=0.9,
+    )
+
+    async def fake_load(*args: object, **kwargs: object) -> list[ReportContextDocument]:
+        """접수 시점의 고정 검색 Context를 반환한다."""
+        return [fixed]
+
+    monkeypatch.setattr(generation_runtime, "load_report_context", fake_load)
+
+    asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-batch",
+            topic="AI 에이전트",
+            content_type="interest_news_card",
+            language="ko",
+            execution_mode="batch",
+            request_id="request-1",
+        )
+    )
+
+    _, job_params = connection.executed[2]
+    assert job_params is not None
+    payload = job_params[2].obj
+    assert payload["execution_mode"] == "batch"
+    assert payload["batch_contexts"][0]["chunk_id"] == "chunk-1"
+    assert payload["batch_contexts"][0]["content"] == "접수 시점의 개인 Wiki 내용"
 
 
 def test_enqueue_captures_active_wiki_build_for_navigation() -> None:

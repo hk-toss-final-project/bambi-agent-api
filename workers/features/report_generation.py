@@ -9,17 +9,23 @@ from typing import Any
 
 from psycopg import AsyncConnection
 
-from agent.report_builder.api import report_001
+from agent.report_builder.api import (
+    report_001,
+    report_context_from_mapping,
+    stage_report_generation_batch,
+)
 from agent.graph import run_report_generation
 from domain.jobs.api import job_007
 from infrastructure.persistence.api import (
     ClaimedAgentJob,
     CompleteAgentJobCommand,
     db_026,
+    defer_agent_job_for_provider,
     set_system_job_scope,
 )
 from shared.contracts import FeatureRequest
 from workers.features.batch_runner import run_job_batch
+from workers.runtime.api import ProviderRateLimitPolicy
 
 type DictRow = dict[str, Any]
 
@@ -53,6 +59,45 @@ async def _process_job(
     )
     if generation_scope == "INTEREST_BUNDLE" and interest_bundle is None:
         raise ValueError("INTEREST_BUNDLE Job Payload에 interest_bundle이 필요합니다.")
+    if str(job.payload.get("execution_mode") or "sync") == "batch":
+        if change_history_enabled:
+            raise ValueError("변경점 추적 Report는 OpenAI Batch 실행을 지원하지 않습니다.")
+        raw_contexts = job.payload.get("batch_contexts")
+        if not isinstance(raw_contexts, list) or not raw_contexts:
+            raise ValueError("Batch Report Job에는 고정 batch_contexts가 필요합니다.")
+        contexts = [
+            report_context_from_mapping(value)
+            for value in raw_contexts
+            if isinstance(value, dict)
+        ]
+        if len(contexts) != len(raw_contexts):
+            raise ValueError("Batch Report Context 중 객체가 아닌 값이 있습니다.")
+        async with connection.transaction():
+            await set_system_job_scope(connection)
+            stored = await stage_report_generation_batch(
+                connection,
+                user_id=job.user_id,
+                job_id=job.job_id,
+                attempt_number=job.attempt_number,
+                topic=topic,
+                topics=topics,
+                content_type=content_type,
+                language=language,
+                contexts=contexts,
+                model=model,
+                interest_bundle=interest_bundle,
+            )
+            await defer_agent_job_for_provider(
+                connection,
+                job=job,
+                worker_id=worker_id,
+                batch_item_id=stored.item_id,
+            )
+        return {
+            "status": "waiting_provider",
+            "batch_item_id": stored.item_id,
+            "custom_id": stored.custom_id,
+        }
     raw_topic_interest_bundles = job.payload.get("topic_interest_bundles")
     topic_interest_bundles = (
         {
@@ -119,10 +164,12 @@ async def run_report_generation_batch(
     database_url: str,
     worker_id: str,
     limit: int = 1,
+    concurrency: int = 1,
+    rate_limit_policy: ProviderRateLimitPolicy | None = None,
     lease_seconds: int = 600,
     model: str = "gpt-4.1-mini",
 ) -> list[dict[str, object]]:
-    """PostgreSQL에서 Report Builder Generation Job Batch를 점유해 순차적으로 처리한다."""
+    """Report Builder Job을 점유해 설정된 동시성으로 처리한다."""
 
     async def process(
         connection: AsyncConnection[DictRow], job: ClaimedAgentJob
@@ -141,6 +188,8 @@ async def run_report_generation_batch(
         worker_id=worker_id,
         limit=limit,
         lease_seconds=lease_seconds,
+        concurrency=concurrency,
+        rate_limit_policy=rate_limit_policy,
         error_code_prefix="REPORT_GENERATION",
         process=process,
     )
@@ -152,6 +201,8 @@ async def worker_003(
     database_url: str,
     worker_id: str,
     limit: int = 1,
+    concurrency: int = 1,
+    rate_limit_policy: ProviderRateLimitPolicy | None = None,
     lease_seconds: int = 600,
     model: str = "gpt-4.1-mini",
 ) -> list[dict[str, object]]:
@@ -166,6 +217,8 @@ async def worker_003(
         database_url=database_url,
         worker_id=worker_id,
         limit=limit,
+        concurrency=concurrency,
+        rate_limit_policy=rate_limit_policy,
         lease_seconds=lease_seconds,
         model=model,
     )

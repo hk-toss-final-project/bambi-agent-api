@@ -9,7 +9,7 @@ import json
 import logging
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any, Sequence
 from uuid import UUID
@@ -533,6 +533,7 @@ async def enqueue_report_generation_job(
     scheduled_at: datetime | None = None,
     request_id: str,
     change_history_enabled: bool = False,
+    execution_mode: str = "sync",
 ) -> PersistedGenerationSubmission:
     """최신 사용자 Context에 연결된 Report Builder Job과 생성 요청을 멱등 등록한다.
 
@@ -616,6 +617,23 @@ async def enqueue_report_generation_job(
         )
     if not resolved_topic:
         raise ValueError("Report Builder 생성에는 topic이 필요합니다.")
+    if execution_mode not in {"sync", "batch"}:
+        raise ValueError(f"지원하지 않는 execution_mode입니다: {execution_mode}")
+    if execution_mode == "batch" and change_history_enabled:
+        raise ValueError("Batch Report는 변경점 추적을 지원하지 않습니다.")
+    if execution_mode == "batch" and resolved_topics:
+        raise ValueError("Batch Report는 다중 주제를 지원하지 않습니다.")
+    batch_contexts: list[dict[str, object]] = []
+    if execution_mode == "batch":
+        fixed_contexts = await load_report_context(
+            connection,
+            user_id=user_id,
+            query=resolved_topic,
+            top_k_per_scope=5,
+        )
+        if not fixed_contexts:
+            raise ValueError("Batch Report에 고정할 Personal Wiki·Global Context가 없습니다.")
+        batch_contexts = [asdict(item) for item in fixed_contexts]
     job_payload = {
         "topic": resolved_topic,
         # 여러 주제를 한 장에 묶는 요약 리포트용. 비어 있으면 topic 하나만 다룬다.
@@ -636,6 +654,8 @@ async def enqueue_report_generation_job(
         "report_type": report_type,
         "language": resolved_language,
         "change_history_enabled": change_history_enabled,
+        "execution_mode": execution_mode,
+        "batch_contexts": batch_contexts,
     }
     job_cursor = await connection.execute(
         """
@@ -709,6 +729,7 @@ async def enqueue_report_generation_job(
                     "generation_scope": generation_scope,
                     "interest_id": interest_id,
                     "interest_bundle": interest_bundle,
+                    "execution_mode": execution_mode,
                 }
             ),
         ),

@@ -100,6 +100,42 @@ def test_run_batch_once_dispatches_url_collection_worker(
     }
 
 
+def test_run_batch_once_dispatches_openai_batch_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CLI의 openai-batch 선택이 Secret과 제출·Poll 설정을 전용 Worker에 전달한다."""
+    recorded: dict[str, Any] = {}
+
+    async def fake_batch_cycle(**kwargs: Any) -> list[dict[str, object]]:
+        """Batch Cycle 인자를 기록하고 고정 결과를 반환한다."""
+        recorded.update(kwargs)
+        return [{"batch_id": "batch-1", "status": "submitted"}]
+
+    monkeypatch.setattr(worker_main, "run_openai_batch_cycle", fake_batch_cycle)
+    settings = Settings(
+        agent_database_url="postgresql://test",
+        openai_api_key="test-openai-secret",
+        openai_batch_max_items=400,
+        openai_batch_max_submissions=2,
+        openai_batch_poll_limit=20,
+        openai_batch_poll_interval_seconds=45,
+        openai_batch_poll_lease_seconds=90,
+    )
+
+    result = asyncio.run(
+        worker_main._run_batch_once(
+            Namespace(worker="openai-batch"),
+            settings,
+            worker_id="batch-worker-1",
+        )
+    )
+
+    assert result[0]["status"] == "submitted"
+    assert recorded["api_key"] == "test-openai-secret"
+    assert recorded["max_items"] == 400
+    assert recorded["poll_interval_seconds"] == 45
+
+
 def test_run_loop_dispatches_resident_url_collection_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

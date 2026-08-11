@@ -74,7 +74,6 @@ class Settings(BaseModel):
     vector_store_url: str | None = Field(
         default=None, description="Vector 저장소 연결 문자열"
     )
-    queue_url: str | None = Field(default=None, description="Job Queue 연결 문자열")
     openai_api_key: SecretStr | None = Field(
         default=None, description="OpenAI Secret 참조 값"
     )
@@ -99,8 +98,83 @@ class Settings(BaseModel):
         default="text-embedding-3-small",
         description="Personal Wiki Chunk Embedding 모델",
     )
+    wiki_embedding_batch_threshold: int = Field(
+        default=100,
+        ge=0,
+        description="이 Chunk 수 이상인 Wiki Embedding을 OpenAI Batch로 전환",
+    )
     personal_wiki_worker_batch_size: int = Field(
         default=1, ge=1, le=100, description="Personal Wiki Worker Job Claim 개수"
+    )
+    personal_wiki_job_concurrency: int = Field(
+        default=1,
+        ge=1,
+        le=50,
+        description="Personal Wiki Worker의 실제 동시 Job 실행 수",
+    )
+    report_job_concurrency: int = Field(
+        default=1,
+        ge=1,
+        le=50,
+        description="Report Builder Worker의 실제 동시 Job 실행 수",
+    )
+    openai_default_rpm: int = Field(
+        default=60,
+        ge=1,
+        description="응답 헤더 관찰 전 OpenAI 요청 상한 기본값",
+    )
+    openai_default_tpm: int = Field(
+        default=60_000,
+        ge=1,
+        description="응답 헤더 관찰 전 OpenAI Token 상한 기본값",
+    )
+    wiki_openai_requests_per_job: int = Field(
+        default=8,
+        ge=1,
+        description="Wiki Job 하나의 보수적 OpenAI 요청 예약량",
+    )
+    wiki_openai_tokens_per_job: int = Field(
+        default=30_000,
+        ge=0,
+        description="Wiki Job 하나의 보수적 OpenAI Token 예약량",
+    )
+    report_openai_requests_per_job: int = Field(
+        default=12,
+        ge=1,
+        description="Report Job 하나의 보수적 OpenAI 요청 예약량",
+    )
+    report_openai_tokens_per_job: int = Field(
+        default=50_000,
+        ge=0,
+        description="Report Job 하나의 보수적 OpenAI Token 예약량",
+    )
+    openai_batch_max_items: int = Field(
+        default=500,
+        ge=1,
+        le=50_000,
+        description="OpenAI Batch 입력 파일 하나의 최대 Item 수",
+    )
+    openai_batch_max_submissions: int = Field(
+        default=1,
+        ge=0,
+        le=100,
+        description="Batch Worker Cycle 하나의 최대 신규 제출 수",
+    )
+    openai_batch_poll_limit: int = Field(
+        default=10,
+        ge=1,
+        le=1000,
+        description="Batch Worker Cycle 하나의 최대 상태 조회 수",
+    )
+    openai_batch_poll_interval_seconds: int = Field(
+        default=60,
+        ge=1,
+        description="OpenAI Batch 상태 재조회 간격(초)",
+    )
+    openai_batch_poll_lease_seconds: int = Field(
+        default=120,
+        ge=1,
+        description="분산 Batch Worker 상태 조회 Lease(초)",
     )
     personal_wiki_job_lease_seconds: int = Field(
         default=600, ge=30, le=3600, description="Personal Wiki Job Lease 초"
@@ -245,7 +319,6 @@ def load_settings() -> Settings:
         dev_agent_timeout_seconds=_integer_env("DEV_AGENT_TIMEOUT_SECONDS", 180),
         agent_database_url=_optional_env("AGENT_DATABASE_URL"),
         vector_store_url=_optional_env("VECTOR_STORE_URL"),
-        queue_url=_optional_env("QUEUE_URL"),
         openai_api_key=_optional_env("OPENAI_API_KEY"),
         tavily_api_key=_optional_env("TAVILY_API_KEY"),
         naver_client_id=_optional_env("NAVER_CLIENT_ID"),
@@ -257,8 +330,40 @@ def load_settings() -> Settings:
         wiki_embedding_model=os.getenv(
             "WIKI_EMBEDDING_MODEL", "text-embedding-3-small"
         ),
+        wiki_embedding_batch_threshold=_integer_env(
+            "WIKI_EMBEDDING_BATCH_THRESHOLD", 100
+        ),
         personal_wiki_worker_batch_size=_integer_env(
             "PERSONAL_WIKI_WORKER_BATCH_SIZE", 1
+        ),
+        personal_wiki_job_concurrency=_integer_env(
+            "PERSONAL_WIKI_JOB_CONCURRENCY", 1
+        ),
+        report_job_concurrency=_integer_env("REPORT_JOB_CONCURRENCY", 1),
+        openai_default_rpm=_integer_env("OPENAI_DEFAULT_RPM", 60),
+        openai_default_tpm=_integer_env("OPENAI_DEFAULT_TPM", 60_000),
+        wiki_openai_requests_per_job=_integer_env(
+            "WIKI_OPENAI_REQUESTS_PER_JOB", 8
+        ),
+        wiki_openai_tokens_per_job=_integer_env(
+            "WIKI_OPENAI_TOKENS_PER_JOB", 30_000
+        ),
+        report_openai_requests_per_job=_integer_env(
+            "REPORT_OPENAI_REQUESTS_PER_JOB", 12
+        ),
+        report_openai_tokens_per_job=_integer_env(
+            "REPORT_OPENAI_TOKENS_PER_JOB", 50_000
+        ),
+        openai_batch_max_items=_integer_env("OPENAI_BATCH_MAX_ITEMS", 500),
+        openai_batch_max_submissions=_integer_env(
+            "OPENAI_BATCH_MAX_SUBMISSIONS", 1
+        ),
+        openai_batch_poll_limit=_integer_env("OPENAI_BATCH_POLL_LIMIT", 10),
+        openai_batch_poll_interval_seconds=_integer_env(
+            "OPENAI_BATCH_POLL_INTERVAL_SECONDS", 60
+        ),
+        openai_batch_poll_lease_seconds=_integer_env(
+            "OPENAI_BATCH_POLL_LEASE_SECONDS", 120
         ),
         personal_wiki_job_lease_seconds=_integer_env(
             "PERSONAL_WIKI_JOB_LEASE_SECONDS", 600
