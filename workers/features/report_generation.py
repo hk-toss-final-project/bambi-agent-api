@@ -10,6 +10,8 @@ from typing import Any
 from psycopg import AsyncConnection
 
 from agent.report_builder.api import (
+    GENERATION_PIPELINE_VERSIONS,
+    LEGACY_GENERATION_PIPELINE_VERSION,
     LEGACY_READ_PIPELINE_VERSION,
     READ_PIPELINE_VERSIONS,
     report_001,
@@ -134,6 +136,18 @@ async def _process_job(
             "지원하지 않는 Wiki 읽기 파이프라인 버전입니다: "
             f"{read_pipeline_version}"
         )
+    # 생성 루프 버전. **키가 없는 과거 Job은 기본값이 아니라 V1로 해석한다** —
+    # 이미 접수돼 대기 중인 Job이 새 경로로 바뀌면 재시도 결과가 달라진다
+    # (docs/report-generation-v2-rollout.md §2). 기본값은 접수 시점에만 쓴다.
+    generation_pipeline_version = str(
+        job.payload.get("generation_pipeline_version")
+        or LEGACY_GENERATION_PIPELINE_VERSION
+    )
+    if generation_pipeline_version not in GENERATION_PIPELINE_VERSIONS:
+        raise JobInputError(
+            "지원하지 않는 리포트 생성 파이프라인 버전입니다: "
+            f"{generation_pipeline_version}"
+        )
     raw_navigation_snapshots = job.payload.get("wiki_navigation_snapshots")
     wiki_navigation_snapshots = (
         {
@@ -167,6 +181,7 @@ async def _process_job(
                     wiki_version_id=wiki_version_id,
                     wiki_navigation_snapshots=wiki_navigation_snapshots,
                     read_pipeline_version=read_pipeline_version,
+                    generation_pipeline_version=generation_pipeline_version,
                 )
             },
         )

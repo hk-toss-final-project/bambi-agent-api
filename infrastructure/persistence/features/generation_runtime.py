@@ -558,6 +558,7 @@ async def enqueue_report_generation_job(
     change_history_enabled: bool = False,
     execution_mode: str = "sync",
     read_pipeline_version: str = "legacy_v1",
+    generation_pipeline_version: str = "legacy_v1",
 ) -> PersistedGenerationSubmission:
     """최신 사용자 Context에 연결된 Report Builder Job과 생성 요청을 멱등 등록한다.
 
@@ -572,6 +573,10 @@ async def enqueue_report_generation_job(
 
     read_pipeline_version도 접수 시점 Payload에 고정한다. Worker 배포 설정이
     바뀌어도 이미 접수된 Job과 그 재시도는 같은 읽기 루프를 사용한다.
+
+    generation_pipeline_version(본문 생성 루프)도 같은 규칙으로 고정한다.
+    읽기 루프 버전과 독립적으로 조합된다
+    (docs/report-generation-v2-rollout.md §2).
     """
     context_cursor = await connection.execute(
         """
@@ -654,6 +659,11 @@ async def enqueue_report_generation_job(
         raise ValueError(
             f"지원하지 않는 Wiki 읽기 파이프라인 버전입니다: {read_pipeline_version}"
         )
+    if generation_pipeline_version not in {"legacy_v1", "langgraph_v2"}:
+        raise ValueError(
+            "지원하지 않는 리포트 생성 파이프라인 버전입니다: "
+            f"{generation_pipeline_version}"
+        )
     batch_contexts: list[dict[str, object]] = []
     if execution_mode == "batch":
         fixed_contexts = await load_report_context(
@@ -682,6 +692,7 @@ async def enqueue_report_generation_job(
             else None
         ),
         "read_pipeline_version": read_pipeline_version,
+        "generation_pipeline_version": generation_pipeline_version,
         "content_type": content_type,
         "report_type": report_type,
         "language": resolved_language,

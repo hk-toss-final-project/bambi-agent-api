@@ -109,6 +109,12 @@ class Settings(BaseModel):
         default="legacy_v1",
         description="새 Wiki 유지보수 Job에 고정할 실행 루프 버전",
     )
+    # 읽기·유지 루프와 달리 기본값이 langgraph_v2다(2026-08-12 우석 결정,
+    # docs/report-generation-v2-rollout.md §2.1). 롤백은 legacy_v1로 되돌린다.
+    generation_pipeline_version: Literal["legacy_v1", "langgraph_v2"] = Field(
+        default="langgraph_v2",
+        description="새 Report Job에 고정할 본문 생성 루프 버전",
+    )
     wiki_embedding_model: str = Field(
         default="text-embedding-3-small",
         description="Personal Wiki Chunk Embedding 모델",
@@ -348,6 +354,9 @@ def load_settings() -> Settings:
         ),
         wiki_maintenance_pipeline_version=os.getenv(
             "WIKI_MAINTENANCE_PIPELINE_VERSION", "legacy_v1"
+        ),
+        generation_pipeline_version=os.getenv(
+            "GENERATION_PIPELINE_VERSION", "langgraph_v2"
         ),
         wiki_embedding_model=os.getenv(
             "WIKI_EMBEDDING_MODEL", "text-embedding-3-small"

@@ -14,7 +14,11 @@ from typing import Any
 from agent.assistant.api import build_assistant_graph
 from agent.change_history.api import build_change_history_graph
 from agent.graph import build_personal_wiki_graph, build_report_generation_graph
-from agent.report_builder.api import build_wiki_read_graph_v2
+from agent.report_builder.api import (
+    build_report_generation_graph_v2,
+    build_report_section_graph_v2,
+    build_wiki_read_graph_v2,
+)
 from agent.wiki_builder.api import build_wiki_maintenance_graph_v2
 
 
@@ -408,6 +412,135 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                     description=(
                         "생성 Run·후보·Citation·Snapshot·Outbox를 저장 트랜잭션에 기록하고 "
                         "최종 발행 결과 계약을 반환합니다."
+                    ),
+                ),
+            ),
+        ),
+        _diagram(
+            slug="report-generation-v2",
+            title="Report Builder Generation V2",
+            description=(
+                "주제 정리(plan_topics) → 주제별 섹션 서브그래프 동시 실행"
+                "(run_sections) → 섹션 조립(assemble, LLM 미사용) → 전체 인용 "
+                "재검토(final_review, 재작성 없음) → Citation·Snapshot 저장"
+                "(persist). V1과 달리 품질 루프가 리포트 전체가 아니라 섹션 "
+                "단위라 나쁜 섹션만 다시 쓴다. 근거를 못 찾은 주제는 삭제하지 "
+                "않고 커버리지 노트로 남긴다. 변경점(Delta) 요청은 이 경로를 "
+                "타지 않고 V1 그래프로 간다."
+            ),
+            compiled=build_report_generation_graph_v2(None),
+            nodes=(
+                GraphNodeDescription(
+                    node_id="plan_topics",
+                    title="주제 정리",
+                    description=(
+                        "요청 주제를 중복 없이 요청 순서대로 정리합니다. topics가 "
+                        "비면 topic 하나를 다루고, topics가 있으면 topic은 카드 "
+                        "제목용이라 주제 목록에 넣지 않습니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="run_sections",
+                    title="주제별 섹션 실행",
+                    description=(
+                        "주제마다 섹션 서브그래프를 GENERATION_TOPIC_CONCURRENCY "
+                        "상한 안에서 동시에 돌립니다. 한 주제가 실패해도 근거 없음 "
+                        "섹션으로 떨어질 뿐 나머지 주제와 리포트 전체를 막지 않습니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="assemble",
+                    title="섹션 조립",
+                    description=(
+                        "섹션 본문·인용·태그를 요청 순서대로 합칩니다. LLM을 "
+                        "부르지 않습니다 — 여기서 다시 생성하면 주제별로 검증을 "
+                        "마친 문장이 또 흔들립니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="final_review",
+                    title="전체 인용 재검토",
+                    description=(
+                        "조립된 리포트의 인용을 원문과 한 번 더 대조합니다. 섹션 "
+                        "단위 재작성이 이미 끝났으므로 여기서는 재작성으로 돌아가지 "
+                        "않고 지적을 저장 결과에 남깁니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="persist",
+                    title="리포트와 발행 정보 저장",
+                    description=(
+                        "V1과 같은 저장 사슬(prag_007 → REPORT-018 → REPORT-020 → "
+                        "REPORT-021)을 호출하고, 주제별 section_trace를 결과에 "
+                        "실어 발행 후 확인할 수 있게 합니다."
+                    ),
+                ),
+            ),
+        ),
+        _diagram(
+            slug="report-section-v2",
+            title="Report Builder 섹션 서브그래프 V2",
+            description=(
+                "주제 하나를 담당하는 서브그래프. 근거 조사(research_topic) → "
+                "주제 집중·상한 배정(assess_topic) → 섹션 초안(draft_section) → "
+                "섹션 검토(critique_section) ⟲ 섹션 재작성(revise_section) → "
+                "등급 판정(grade_section). 근거가 0건이면 초안을 만들지 않고 "
+                "곧장 등급으로 갑니다."
+            ),
+            compiled=build_report_section_graph_v2(),
+            nodes=(
+                GraphNodeDescription(
+                    node_id="research_topic",
+                    title="주제별 근거 조사",
+                    description=(
+                        "Job에 고정된 읽기 루프 버전으로 이 주제의 근거만 모읍니다. "
+                        "조사가 실패해도 예외를 올리지 않고 빈손으로 다음 노드에 "
+                        "넘겨 근거 없음 경로로 보냅니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="assess_topic",
+                    title="근거 집중과 배정",
+                    description=(
+                        "모은 근거를 주제에 해당하는 문장만 남기도록 좁히고 생성 "
+                        "상한을 적용합니다. 좁히기가 실패하면 원본을 그대로 써서 "
+                        "근거를 통째로 잃지 않습니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="draft_section",
+                    title="섹션 초안 생성",
+                    description=(
+                        "이 주제 몫의 섹션 하나를 생성하고 무료 품질 검사를 "
+                        "적용합니다. 리포트 전체가 아니라 섹션이라 근거 대비 본문 "
+                        "비율이 높습니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="critique_section",
+                    title="섹션 인용 검토",
+                    description=(
+                        "검토자 에이전트가 이 섹션의 인용만 원문과 대조합니다. "
+                        "검토가 불가능하면 통과시킵니다 — 검토는 품질 장치지 발행을 "
+                        "막는 관문이 아닙니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="revise_section",
+                    title="섹션 재작성",
+                    description=(
+                        "검토 지적을 교정 지시로 붙여 이 섹션만 다시 씁니다. "
+                        "GENERATION_SECTION_MAX_REVISIONS 상한까지 반복하고, "
+                        "재작성이 실패하면 직전 초안을 그대로 남깁니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="grade_section",
+                    title="섹션 등급 판정",
+                    description=(
+                        "근거 수와 초안 유무로 ok·thin·no_evidence 등급을 붙이고 "
+                        "상위 그래프가 읽을 결과를 만듭니다. 등급은 관측용이며 "
+                        "발행을 막지 않습니다."
                     ),
                 ),
             ),

@@ -157,6 +157,7 @@ def create_container(settings: Settings) -> AppContainer:
             wiki_maintenance_pipeline_version=(
                 settings.wiki_maintenance_pipeline_version
             ),
+            generation_pipeline_version=settings.generation_pipeline_version,
         )
         mcp_api_key_repository = PostgresApiKeyRepository(settings.agent_database_url)
         interest_service = InterestService(wiki_graph_repository)

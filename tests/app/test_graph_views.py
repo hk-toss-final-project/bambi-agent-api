@@ -29,6 +29,8 @@ def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
         "wiki-maintenance-v2",
         "wiki-read-v2",
         "report-generation",
+        "report-generation-v2",
+        "report-section-v2",
         "assistant",
         "change-history",
     }
@@ -146,8 +148,8 @@ def test_graphs_page_renders_all_diagrams() -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     body = response.text
-    assert body.count('<pre class="mermaid">') == 6
-    assert body.count('class="node-panel"') == 6
+    assert body.count('<pre class="mermaid">') == 8
+    assert body.count('class="node-panel"') == 8
     assert body.count('class="node-detail"') == sum(
         len(diagram.nodes) for diagram in list_graph_diagrams()
     )

@@ -18,7 +18,11 @@ from agent.graph import (
     run_personal_wiki_build,
     run_personal_wiki_rebuild,
 )
-from agent.report_builder.api import LEGACY_READ_PIPELINE_VERSION, report_001
+from agent.report_builder.api import (
+    LEGACY_GENERATION_PIPELINE_VERSION,
+    LEGACY_READ_PIPELINE_VERSION,
+    report_001,
+)
 from agent.wiki_builder.api import (
     LEGACY_MAINTENANCE_PIPELINE_VERSION,
     run_wiki_maintenance_for_version,
@@ -171,6 +175,12 @@ class AgentWorkflowService:
                 job.payload.get("read_pipeline_version")
                 or LEGACY_READ_PIPELINE_VERSION
             )
+            # 키가 없는 과거 Job은 기본값이 아니라 V1로 해석한다 — 접수 시점에
+            # 고정된 의미를 재실행이 바꾸지 않는다(rollout 문서 §2).
+            generation_pipeline_version = str(
+                job.payload.get("generation_pipeline_version")
+                or LEGACY_GENERATION_PIPELINE_VERSION
+            )
             raw_navigation_snapshots = job.payload.get("wiki_navigation_snapshots")
             wiki_navigation_snapshots = (
                 {
@@ -205,6 +215,9 @@ class AgentWorkflowService:
                                 wiki_version_id=wiki_version_id,
                                 wiki_navigation_snapshots=wiki_navigation_snapshots,
                                 read_pipeline_version=read_pipeline_version,
+                                generation_pipeline_version=(
+                                    generation_pipeline_version
+                                ),
                             )
                         },
                     )

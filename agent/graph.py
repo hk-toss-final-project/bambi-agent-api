@@ -41,10 +41,13 @@ from agent.report_builder.api import (
     is_pool_sufficient,
     merge_context_documents,
     navigation_packet_documents,
+    LANGGRAPH_GENERATION_PIPELINE_VERSION,
+    LEGACY_GENERATION_PIPELINE_VERSION,
     LEGACY_READ_PIPELINE_VERSION,
     research_agent_enabled,
     research_context,
     research_context_for_version,
+    run_report_generation_v2,
     review_report,
     select_personal_documents,
     select_pool_documents,
@@ -2384,6 +2387,7 @@ async def run_report_generation(
     wiki_version_id: str | None = None,
     wiki_navigation_snapshots: dict[str, dict[str, object]] | None = None,
     read_pipeline_version: str = LEGACY_READ_PIPELINE_VERSION,
+    generation_pipeline_version: str = LEGACY_GENERATION_PIPELINE_VERSION,
 ) -> dict[str, object]:
     """Report Builder Generation 그래프를 실행하고 저장 결과 Payload를 반환한다.
 
@@ -2397,7 +2401,33 @@ async def run_report_generation(
         wiki_version_id: Job 접수 시 고정한 활성 Wiki Build UUID
         wiki_navigation_snapshots: 첫 Reader 실행이 Topic별로 고정한 Packet Metadata
         read_pipeline_version: Job 접수 시 고정한 읽기 루프 버전. 과거 Job은 V1
+        generation_pipeline_version: Job 접수 시 고정한 생성 루프 버전.
+            키가 없는 과거 Job은 V1이다(docs/report-generation-v2-rollout.md §2).
     """
+    # 델타(변경점) 요청은 버전과 무관하게 V1로 보낸다. V2는 주제별 섹션 fan-out
+    # 이라 정형 섹션·before/after 수치를 다루는 델타 서브그래프와 의미가 다르고,
+    # 검증되지 않은 조합을 만들지 않는다(rollout 문서 §3.5).
+    if (
+        generation_pipeline_version == LANGGRAPH_GENERATION_PIPELINE_VERSION
+        and not change_history_enabled
+    ):
+        return await run_report_generation_v2(
+            connection,
+            user_id=user_id,
+            job_id=job_id,
+            attempt_number=attempt_number,
+            topic=topic,
+            topics=list(topics or []),
+            content_type=content_type,
+            language=language,
+            model=model,
+            generation_scope=generation_scope,
+            interest_bundle=interest_bundle,
+            topic_interest_bundles=topic_interest_bundles,
+            wiki_version_id=wiki_version_id,
+            wiki_navigation_snapshots=wiki_navigation_snapshots,
+            read_pipeline_version=read_pipeline_version,
+        )
     graph = build_report_generation_graph(connection)
     state = await graph.ainvoke(
         {
