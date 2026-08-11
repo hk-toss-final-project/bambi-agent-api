@@ -84,6 +84,9 @@ ONBOARDING_CONTEXT_MIGRATION_PATH = (
 PROVIDER_RATE_GOVERNOR_MIGRATION_PATH = (
     PROJECT_ROOT / "database" / "migrations" / "0023_openai_rate_governor.sql"
 )
+OPENAI_BATCH_MIGRATION_PATH = (
+    PROJECT_ROOT / "database" / "migrations" / "0024_openai_batch_jobs.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
@@ -99,6 +102,7 @@ MIGRATION_PATHS = (
     PERSONAL_WIKI_RESET_MIGRATION_PATH,
     ONBOARDING_CONTEXT_MIGRATION_PATH,
     PROVIDER_RATE_GOVERNOR_MIGRATION_PATH,
+    OPENAI_BATCH_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
@@ -221,6 +225,8 @@ def test_migration_contains_all_agent_db_feature_tables() -> None:
         "api_keys",
         "usage_logs",
         "provider_rate_limits",
+        "llm_batches",
+        "llm_batch_items",
         "audit_logs",
         "publish_snapshots",
     }
@@ -341,6 +347,21 @@ def test_provider_rate_governor_migration_tracks_rpm_tpm_and_blocking() -> None:
     assert "remaining_tokens bigint" in migration
     assert "blocked_until timestamptz" in migration
     assert "VALUES (23," in migration
+
+
+def test_openai_batch_migration_tracks_custom_id_files_and_domain_lease() -> None:
+    """OpenAI Batch가 파일·custom_id·부분 결과·도메인 반영 Lease를 보존한다."""
+    migration = _read(OPENAI_BATCH_MIGRATION_PATH)
+
+    assert "CREATE TABLE agent.llm_batches" in migration
+    assert "CREATE TABLE agent.llm_batch_items" in migration
+    assert "custom_id text NOT NULL UNIQUE" in migration
+    assert "provider_batch_id text UNIQUE" in migration
+    assert "output_file_id text" in migration
+    assert "error_file_id text" in migration
+    assert "domain_apply_claimed_at timestamptz" in migration
+    assert "completion_window = '24h'" in migration
+    assert "VALUES (24," in migration
 
 
 def test_migration_does_not_create_service_owned_tables() -> None:

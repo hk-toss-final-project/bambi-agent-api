@@ -12,8 +12,10 @@ import sys
 from app.config import Settings, load_settings
 from app.logging_config import configure_logging
 from workers.api import (
+    consume_openai_batches,
     run_global_content_fetch_batch,
     run_url_collection_batch,
+    run_openai_batch_cycle,
     worker_001,
     worker_002,
     worker_003,
@@ -50,6 +52,7 @@ def _parse_args() -> argparse.Namespace:
             "report-generation",
             "global-collector",
             "global-content",
+            "openai-batch",
         ],
         default="personal-wiki",
         help="실행할 Worker 유형",
@@ -114,6 +117,18 @@ async def _run_batch_once(
     args: argparse.Namespace, settings: Settings, worker_id: str
 ) -> list[dict[str, object]]:
     """설정과 명령행 옵션으로 선택한 Worker의 Job Batch 한 번을 실행한다."""
+    if args.worker == "openai-batch":
+        if settings.openai_api_key is None:
+            raise RuntimeError("openai-batch Worker에 OPENAI_API_KEY가 필요합니다.")
+        return await run_openai_batch_cycle(
+            database_url=settings.agent_database_url,
+            api_key=settings.openai_api_key.get_secret_value(),
+            max_items=settings.openai_batch_max_items,
+            max_submissions=settings.openai_batch_max_submissions,
+            poll_limit=settings.openai_batch_poll_limit,
+            poll_interval_seconds=settings.openai_batch_poll_interval_seconds,
+            poll_lease_seconds=settings.openai_batch_poll_lease_seconds,
+        )
     if args.worker == "global-collector":
         keywords = [
             keyword.strip()
@@ -230,6 +245,23 @@ async def _run() -> None:
     def on_batch(results: list[dict[str, object]]) -> None:
         """결과가 있는 Batch를 JSON Line으로 출력한다."""
         print(json.dumps(results, ensure_ascii=False, default=str), flush=True)
+
+    if args.worker == "openai-batch":
+        if settings.openai_api_key is None:
+            raise RuntimeError("openai-batch Worker에 OPENAI_API_KEY가 필요합니다.")
+        await consume_openai_batches(
+            database_url=settings.agent_database_url,
+            api_key=settings.openai_api_key.get_secret_value(),
+            interval_seconds=args.interval_seconds,
+            max_cycles=None,
+            max_items=settings.openai_batch_max_items,
+            max_submissions=settings.openai_batch_max_submissions,
+            poll_limit=settings.openai_batch_poll_limit,
+            poll_interval_seconds=settings.openai_batch_poll_interval_seconds,
+            poll_lease_seconds=settings.openai_batch_poll_lease_seconds,
+            on_cycle=on_batch,
+        )
+        return
 
     if args.worker == "report-generation":
         model = args.model or settings.report_llm_model

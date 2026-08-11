@@ -143,6 +143,34 @@ class Settings(BaseModel):
         ge=0,
         description="Report Job 하나의 보수적 OpenAI Token 예약량",
     )
+    openai_batch_max_items: int = Field(
+        default=500,
+        ge=1,
+        le=50_000,
+        description="OpenAI Batch 입력 파일 하나의 최대 Item 수",
+    )
+    openai_batch_max_submissions: int = Field(
+        default=1,
+        ge=0,
+        le=100,
+        description="Batch Worker Cycle 하나의 최대 신규 제출 수",
+    )
+    openai_batch_poll_limit: int = Field(
+        default=10,
+        ge=1,
+        le=1000,
+        description="Batch Worker Cycle 하나의 최대 상태 조회 수",
+    )
+    openai_batch_poll_interval_seconds: int = Field(
+        default=60,
+        ge=1,
+        description="OpenAI Batch 상태 재조회 간격(초)",
+    )
+    openai_batch_poll_lease_seconds: int = Field(
+        default=120,
+        ge=1,
+        description="분산 Batch Worker 상태 조회 Lease(초)",
+    )
     personal_wiki_job_lease_seconds: int = Field(
         default=600, ge=30, le=3600, description="Personal Wiki Job Lease 초"
     )
@@ -313,6 +341,17 @@ def load_settings() -> Settings:
         ),
         report_openai_tokens_per_job=_integer_env(
             "REPORT_OPENAI_TOKENS_PER_JOB", 50_000
+        ),
+        openai_batch_max_items=_integer_env("OPENAI_BATCH_MAX_ITEMS", 500),
+        openai_batch_max_submissions=_integer_env(
+            "OPENAI_BATCH_MAX_SUBMISSIONS", 1
+        ),
+        openai_batch_poll_limit=_integer_env("OPENAI_BATCH_POLL_LIMIT", 10),
+        openai_batch_poll_interval_seconds=_integer_env(
+            "OPENAI_BATCH_POLL_INTERVAL_SECONDS", 60
+        ),
+        openai_batch_poll_lease_seconds=_integer_env(
+            "OPENAI_BATCH_POLL_LEASE_SECONDS", 120
         ),
         personal_wiki_job_lease_seconds=_integer_env(
             "PERSONAL_WIKI_JOB_LEASE_SECONDS", 600

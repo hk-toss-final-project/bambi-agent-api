@@ -33,6 +33,11 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("WIKI_OPENAI_TOKENS_PER_JOB", "24000")
     monkeypatch.setenv("REPORT_OPENAI_REQUESTS_PER_JOB", "10")
     monkeypatch.setenv("REPORT_OPENAI_TOKENS_PER_JOB", "45000")
+    monkeypatch.setenv("OPENAI_BATCH_MAX_ITEMS", "400")
+    monkeypatch.setenv("OPENAI_BATCH_MAX_SUBMISSIONS", "2")
+    monkeypatch.setenv("OPENAI_BATCH_POLL_LIMIT", "20")
+    monkeypatch.setenv("OPENAI_BATCH_POLL_INTERVAL_SECONDS", "45")
+    monkeypatch.setenv("OPENAI_BATCH_POLL_LEASE_SECONDS", "90")
     monkeypatch.setenv("PERSONAL_WIKI_JOB_LEASE_SECONDS", "900")
     monkeypatch.setenv("WIKI_BUILD_QUIET_MINUTES", "15")
     monkeypatch.setenv("WIKI_BUILD_MAX_WAIT_MINUTES", "45")
@@ -64,6 +69,11 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     assert settings.wiki_openai_tokens_per_job == 24_000
     assert settings.report_openai_requests_per_job == 10
     assert settings.report_openai_tokens_per_job == 45_000
+    assert settings.openai_batch_max_items == 400
+    assert settings.openai_batch_max_submissions == 2
+    assert settings.openai_batch_poll_limit == 20
+    assert settings.openai_batch_poll_interval_seconds == 45
+    assert settings.openai_batch_poll_lease_seconds == 90
     assert settings.personal_wiki_job_lease_seconds == 900
     assert settings.wiki_build_quiet_minutes == 15
     assert settings.wiki_build_max_wait_minutes == 45

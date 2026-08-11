@@ -247,6 +247,18 @@ COMMIT;
 - OpenAI 성공·429 응답의 `x-ratelimit-*`, `Retry-After`, `x-request-id`를 반영하고,
   quota·billing 오류는 재시도 가능한 Rate Limit으로 기록하지 않습니다.
 
+### OpenAI Batch 상태와 결과 반영
+
+- `llm_batch_items`는 같은 provider·endpoint·model·workload끼리 최대 500건씩
+  `llm_batches`로 묶으며 `custom_id`를 결과 재결합의 유일한 기준으로 사용합니다.
+- JSONL 업로드, Batch 생성, 상태 조회와 결과 파일 다운로드 중에는 PostgreSQL
+  Transaction이나 Connection을 점유하지 않습니다.
+- 완료 시 output·error 파일을 모두 읽어 부분 성공을 보존합니다. expired·failed·
+  cancelled Batch의 결과 없는 Item은 최대 시도 횟수 안에서 새 Batch 대상으로
+  되돌리고 이미 완료된 Item은 유지합니다.
+- 완료 결과의 Wiki Embedding·Report 저장은 별도 Lease로 점유합니다. 같은 Item을
+  다시 읽더라도 도메인 Upsert와 `domain_applied_at`으로 중복 반영을 막습니다.
+
 ### Publish Snapshot Batch Claim과 ACK
 
 MVP의 실시간·대량 발행 경로는 Agent API가 agent-db를 직접 노출하지 않고 Service Worker에 전체 Snapshot Payload를 Batch로 전달하는 Pull 계약을 사용합니다.

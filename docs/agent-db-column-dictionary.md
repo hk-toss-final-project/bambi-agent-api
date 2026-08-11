@@ -989,6 +989,68 @@ Provider·모델별 동기 API 요청·Token 잔여량과 Reset 시각을 Worker
 | created_at | timestamptz | 자동 | 최초 상태 생성 시각 |
 | updated_at | timestamptz | 자동 | 예약 또는 헤더 반영 시각 |
 
+### llm_batches
+
+OpenAI Batch 하나의 제출·Poll·결과 파일 상태를 보존합니다.
+
+| 컬럼 | 타입 | 필수·기본값 | 설명 |
+|---|---|---|---|
+| id | uuid | 자동, PK | 로컬 Batch 식별자 |
+| provider | text | 자동, openai | 외부 Provider 이름 |
+| endpoint | text | 필수 | responses, chat/completions, embeddings 중 요청 endpoint |
+| model_name | text | 필수 | 같은 Batch Item이 공유하는 Model |
+| workload | text | 필수 | wiki_embedding, report_generation 등 결과 반영 유형 |
+| status | text | 자동, preparing | Provider Batch 상태 머신 |
+| provider_batch_id | text | 선택, Unique | OpenAI Batch 식별자 |
+| input_file_id | text | 선택 | 입력 JSONL 파일 식별자 |
+| output_file_id | text | 선택 | 성공 결과 JSONL 파일 식별자 |
+| error_file_id | text | 선택 | 실패 결과 JSONL 파일 식별자 |
+| completion_window | text | 자동, 24h | Batch 완료 Window |
+| item_count | integer | 필수 | Batch 입력 Item 수 |
+| next_poll_at | timestamptz | 선택 | 다음 Provider 상태 조회 가능 시각 |
+| poll_attempt_count | integer | 자동, 0 | Provider 상태 조회 점유 횟수 |
+| provider_errors | jsonb | 자동, 빈 Array | Batch 단위 Provider 오류 |
+| metadata | jsonb | 자동, 빈 Object | Provider·운영 확장 정보 |
+| submitted_at | timestamptz | 선택 | Provider 제출 완료 시각 |
+| completed_at | timestamptz | 선택 | Terminal 상태 확인 시각 |
+| created_at | timestamptz | 자동 | 로컬 Batch 생성 시각 |
+| updated_at | timestamptz | 자동 | 마지막 상태 반영 시각 |
+
+### llm_batch_items
+
+입력 JSONL 한 줄과 custom_id별 응답·도메인 반영 Lease를 보존합니다.
+
+| 컬럼 | 타입 | 필수·기본값 | 설명 |
+|---|---|---|---|
+| id | uuid | 자동, PK | Batch Item 식별자 |
+| batch_id | uuid | 선택, FK | 현재 제출 Batch 식별자 |
+| job_id | uuid | 선택, FK | 원본 Agent Job 식별자 |
+| user_id | text | 필수 | RLS와 도메인 결과 소유 사용자 |
+| custom_id | text | 필수, Unique | 순서와 무관한 입력·출력 결합 Key |
+| provider | text | 자동, openai | 외부 Provider 이름 |
+| endpoint | text | 필수 | 이 Item의 Batch endpoint |
+| model_name | text | 필수 | 요청 Model |
+| workload | text | 필수 | 도메인 결과 반영 Handler 이름 |
+| resource_type | text | 필수 | 결과를 적용할 Resource 유형 |
+| resource_id | text | 필수 | 결과를 적용할 Resource 식별자 |
+| request_body | jsonb | 필수 | OpenAI JSONL body 객체 |
+| context | jsonb | 자동, 빈 Object | Chunk ID, Citation 등 고정된 도메인 Snapshot |
+| status | text | 자동, queued | queued, preparing, submitted, completed, failed |
+| attempt_count | integer | 자동, 0 | Provider 제출 누적 횟수 |
+| max_attempts | integer | 자동, 3 | 제출·만료 재시도 상한 |
+| provider_request_id | text | 선택 | Item별 OpenAI Request ID |
+| response_status_code | integer | 선택 | Item별 HTTP 상태 코드 |
+| result_body | jsonb | 선택 | 성공 응답 Body |
+| error | jsonb | 선택 | Item별 또는 결과 누락 오류 |
+| input_tokens | bigint | 선택 | 실제 입력 Token 수 |
+| output_tokens | bigint | 선택 | 실제 출력 Token 수 |
+| domain_apply_worker_id | text | 선택 | 결과 반영 Lease 소유 Worker |
+| domain_apply_claimed_at | timestamptz | 선택 | 결과 반영 Lease 점유 시각 |
+| domain_apply_error | text | 선택 | 최근 도메인 반영 실패 사유 |
+| domain_applied_at | timestamptz | 선택 | 도메인 저장 완료 시각 |
+| created_at | timestamptz | 자동 | Item 최초 등록 시각 |
+| updated_at | timestamptz | 자동 | 마지막 상태 변경 시각 |
+
 ### audit_logs
 
 관리자 변경과 민감 데이터 접근을 변경하지 않는 Append-only Audit로 기록합니다.

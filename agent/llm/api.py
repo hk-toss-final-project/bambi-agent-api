@@ -15,6 +15,13 @@ from .features.client import (
 )
 from .features.completion import llm_001, llm_002, llm_003
 from .features.embedding_client import embed_texts, get_embedding_client
+from .features.batch_client import (
+    BatchProvider,
+    OpenAIBatchProvider,
+    ProviderBatchSubmission,
+    build_batch_jsonl,
+    parse_batch_jsonl,
+)
 from .features.parsing import strip_json_fence
 from .features.tool_loop import (
     ToolCallRecord,
@@ -42,6 +49,11 @@ __all__ = [
     "response_headers_from_value",
     "embed_texts",
     "get_embedding_client",
+    "BatchProvider",
+    "OpenAIBatchProvider",
+    "ProviderBatchSubmission",
+    "build_batch_jsonl",
+    "parse_batch_jsonl",
     "strip_json_fence",
     "ToolCallRecord",
     "ToolLoopResult",
