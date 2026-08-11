@@ -156,6 +156,19 @@ def _normalize(text: str) -> str:
     return "".join(text.split()).casefold()
 
 
+def _closes_with_interpretation(content: str) -> bool:
+    """섹션이 참조 없는 문단으로 끝나는지 본다.
+
+    해석은 사실이 아니라 판단이라 참조를 붙이지 않는 것이 생성 규칙이다. 그래서
+    "마지막 문단에 인용 표시가 없다"를 해석 단락이 있다는 신호로 쓴다. 문단이
+    하나뿐이면 사실 서술만 있고 해석이 없는 것으로 본다.
+    """
+    paragraphs = [block.strip() for block in content.split("\n\n") if block.strip()]
+    if len(paragraphs) < 2:
+        return False
+    return not _CITATION_PATTERN.findall(paragraphs[-1])
+
+
 def split_sections(body: str) -> list[tuple[str, str]]:
     """본문을 Markdown 제목 기준으로 (제목, 내용) 섹션 목록으로 나눈다.
 
@@ -240,6 +253,16 @@ def evaluate(case: dict[str, object], body: str, included: list[str]) -> dict[st
         for phrase in (case.get("forbidden_phrases") or [])  # type: ignore[union-attr]
         if str(phrase) in body
     ]
+    # 소주제마다 해석 단락이 붙었는가. 해석은 사실이 아니라 판단이라 참조를 달지
+    # 않는 것이 규칙이므로, 섹션의 마지막 문단에 인용 표시가 없으면 해석으로 본다
+    # (2026-08-11 실측: 3주제 리포트에 해석이 한 단락도 없었다).
+    missing_interpretation = [
+        heading
+        for heading, content in split_sections(body)
+        if heading
+        and any(_normalize(topic) in _normalize(heading) for topic in topics)
+        and not _closes_with_interpretation(content)
+    ]
     # 채점을 두 갈래로 나눈다. 근거가 잘려 사라진 주제를 LLM 탓으로 돌리면
     # 프롬프트 품질과 파이프라인 결함이 한 숫자에 섞여 원인을 못 가린다.
     #   llm_passed    : 받은 근거 안에서 주제를 빠뜨리거나 섞지 않았는가
@@ -260,6 +283,7 @@ def evaluate(case: dict[str, object], body: str, included: list[str]) -> dict[st
         "fabricated_sections": fabricated,
         "uncited_sections": uncited,
         "leaked_offtopic_phrases": leaked,
+        "missing_interpretation": missing_interpretation,
         "starved_topics": starved,
         "dropped_references": [
             ref for ref in owner_of if ref not in included_set
