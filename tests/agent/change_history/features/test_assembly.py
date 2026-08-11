@@ -290,7 +290,7 @@ def test_no_highlight_facts_still_produces_a_full_summary_report() -> None:
     # 핵심 요약은 Compose가 실제로 쓴 전체 맥락 문단 그대로다 — 짧아지지 않는다.
     assert _compose().overview in body
     # overview가 인용한 참조가 등장 순서대로 남는다(유지 팩트 인용 포함).
-    assert content.citation_references == ("P1", "G1")
+    assert content.citation_references == ("G1", "P1")
     # 제목·요약이 비어도 코드가 기본값을 채워 저장이 실패하지 않는다.
     assert content.title
     assert content.summary

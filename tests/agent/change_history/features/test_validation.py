@@ -336,3 +336,31 @@ def test_has_valid_citation_matches_only_available_references() -> None:
     assert validation_module.has_valid_citation("본문 [G1]", ["G1", "P2"])
     assert not validation_module.has_valid_citation("본문 [G9]", ["G1"])
     assert not validation_module.has_valid_citation("마커 없는 본문", ["G1"])
+
+
+def test_updated_fact_with_same_value_is_filtered_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """과거 값과 오늘 값이 동일한 updated 팩트는 보고서에서 걸러낸다."""
+    _patch_base(
+        monkeypatch,
+        {
+            "fact-1": ChangeHistoryFact(
+                fact_id="fact-1",
+                subject="B사 HBM4",
+                attribute="양산 일정",
+                fact_value="2026-3Q",
+                statement="B사 HBM4 양산은 2026-3Q다.",
+                verdict="new",
+            )
+        },
+    )
+
+    outcome = _run([_updated_fact("fact-1")], [])
+
+    assert outcome.facts == ()
+    assert [problem.reason for problem in outcome.problems] == [
+        "updated_value_unchanged"
+    ]
+    assert outcome.failed_workers == frozenset({DIFF_WORKER})
+

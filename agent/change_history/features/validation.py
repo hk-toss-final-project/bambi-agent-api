@@ -19,6 +19,12 @@ Critic은 오늘 수집한 contexts만 볼 수 있고 델타 테이블(과거 �
    검증하므로, 마커가 없는 섹션은 **Critic이 통과시켜도 아무것도 확인하지 않은
    것**이다. 프롬프트로 부탁만 해서는 지켜지지 않아(2026-08-05 실측:
    overview 보유율 0.692) 코드로 확인하고 해당 워커만 다시 시킨다.
+4. **갱신 값의 실질 변화** — updated로 찍힌 팩트의 오늘 값이 before 값(DB 기록)과
+   글자까지 동일한가. Diff 규칙(값이 같으면 duplicate)은 LLM 판단이라 가끔
+   지켜지지 않는다(2026-08-11 실측: "18일 만에 열대야 쉬어가" → "18일 만에
+   열대야 쉬어가"처럼 before/after가 완전히 같은 채로 "달라진 사실"에 나갔다).
+   같은 문자열을 화살표로 이어 붙이면 사용자에게 "달라졌다"는 거짓 신호가
+   되므로, 여기서 걸러 duplicate로 되돌린다.
 
 검증은 **조립 이전, 워커별 출력이 아직 분리되어 있는 시점**에 수행한다. 그래야
 실패했을 때 어느 워커가 문제였는지 특정해 그 워커만 다시 시킬 수 있다.
@@ -205,6 +211,22 @@ async def validate_delta_outputs(
                 continue
             before_value = base.fact_value
             before_statement = base.statement
+
+            if before_value.strip() == fact.fact_value.strip():
+                # LLM이 값이 같은데도 updated로 착각했다. 사용자에게 "달라졌다"는 거짓
+                # 신호를 주지 않기 위해 여기서 걸러 duplicate로 되돌린다(조립에서 뺀다).
+                problems.append(
+                    ValidationProblem(
+                        worker=DIFF_WORKER,
+                        reason="updated_value_unchanged",
+                        subject=f"{fact.subject} / {fact.attribute}",
+                        detail=(
+                            "과거 값과 오늘 값이 완전히 동일합니다. "
+                            "실질적인 변화가 없으므로 duplicate로 간주해 보고서에서 제외합니다."
+                        ),
+                    )
+                )
+                continue
 
         entry = timeline_by_index.get(index)
         occurred_on: date | None = None

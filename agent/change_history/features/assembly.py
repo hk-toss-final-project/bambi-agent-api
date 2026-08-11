@@ -100,6 +100,8 @@ def build_delta_markdown(
     compose: ComposeOutcome,
     impact: ImpactOutcome,
     is_first_run: bool = False,
+    title: str = "",
+    summary: str = "",
 ) -> str:
     """섹션 헤더를 붙여 네 섹션을 하나의 markdown 문자열로 잇는다.
 
@@ -115,6 +117,8 @@ def build_delta_markdown(
         impact: 파급효과·확인 사항 추론 결과 (달라진 점이 없으면 실행되지
             않아 비어 있을 수 있다)
         is_first_run: 비교 대상이 없던 최초 실행인지
+        title: 보고서 제목 (마크다운 최상단 노출용)
+        summary: 3줄 결론 요약 (마크다운 최상단 노출용)
 
     Returns:
         이번에 달라진 점·핵심 요약·주목할 점·타임라인을 담은 markdown 본문
@@ -122,7 +126,13 @@ def build_delta_markdown(
     """
     no_change = not highlight_facts
 
-    blocks: list[str] = [UPDATES_HEADING]
+    blocks: list[str] = []
+    if title.strip():
+        blocks.append(f"# {title.strip()}")
+    if summary.strip():
+        blocks.append(f"### 핵심 요약\n{summary.strip()}")
+
+    blocks.append(UPDATES_HEADING)
     if is_first_run:
         blocks.append(FIRST_RUN_NOTICE)
     if no_change:
@@ -205,12 +215,6 @@ def assemble_delta_report(
     Returns:
         review(Critic)와 persist가 그대로 소비할 수 있는 생성 콘텐츠
     """
-    body = build_delta_markdown(
-        highlight_facts=highlight_facts,
-        compose=compose,
-        impact=impact,
-        is_first_run=is_first_run,
-    )
     title = compose.title.strip() or f"{topic} 요약 ({reference_date.isoformat()})"
     summary = compose.summary.strip()
     if not summary:
@@ -218,6 +222,14 @@ def assemble_delta_report(
             f"{reference_date.isoformat()} 기준 {topic}의 달라진 점 "
             f"{len(highlight_facts)}건을 정리했습니다."
         )
+    body = build_delta_markdown(
+        highlight_facts=highlight_facts,
+        compose=compose,
+        impact=impact,
+        is_first_run=is_first_run,
+        title=title,
+        summary=summary,
+    )
     return GeneratedReportContent(
         title=title,
         summary=summary,

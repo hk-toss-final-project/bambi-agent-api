@@ -5,7 +5,12 @@ import uvicorn
 
 def main() -> None:
     """Uvicorn으로 FastAPI 애플리케이션을 실행한다."""
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000)
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=8000,
+        loop="app.main:selector_event_loop",
+    )
 
 
 if __name__ == "__main__":
