@@ -315,7 +315,7 @@ def test_youtube_documents_use_video_id_as_url_key(monkeypatch) -> None:
 
 
 def test_news_documents_reuse_global_body_when_available(monkeypatch) -> None:
-    """Global 저장소에 본문이 있으면 스니펫 대신 본문을 텍스트로 쓴다.
+    """Global 저장소에 본문과 이미지가 있으면 뉴스 문서 자산으로 재사용한다.
 
     본문이 없는 기사는 기존처럼 Provider 설명 스니펫으로 동작한다(폴백).
     """
@@ -340,8 +340,13 @@ def test_news_documents_reuse_global_body_when_available(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         pipeline.content_store,
-        "fetch_global_article_texts",
-        lambda urls: {"https://n.example/full": "# 제목\n\n저장된 **전체 본문**입니다."},
+        "fetch_global_article_assets",
+        lambda urls: {
+            "https://n.example/full": {
+                "markdown": "# 제목\n\n저장된 **전체 본문**입니다.",
+                "image_url": "https://cdn.example/full.jpg",
+            }
+        },
     )
 
     docs = pipeline._news_documents("키워드", datetime.now(UTC))
@@ -350,7 +355,9 @@ def test_news_documents_reuse_global_body_when_available(monkeypatch) -> None:
     # 마크다운 표기(#, **)는 걷어내고 본문 텍스트만 남는다.
     assert "저장된 전체 본문" in str(by_url["https://n.example/full"]["text"])
     assert "**" not in str(by_url["https://n.example/full"]["text"])
+    assert by_url["https://n.example/full"]["image_url"] == "https://cdn.example/full.jpg"
     assert "짧은 설명만 있음" in str(by_url["https://n.example/short"]["text"])
+    assert by_url["https://n.example/short"]["image_url"] is None
 
 
 def test_record_history_false_does_not_write_history(monkeypatch) -> None:

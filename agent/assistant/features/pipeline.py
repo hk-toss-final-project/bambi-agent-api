@@ -78,16 +78,29 @@ def _news_documents(keyword: str, now: datetime) -> list[dict[str, object]]:
     """
     entries = feeds.fetch_provider_entries(keyword)
     unique = feeds.deduplicate(entries)[:_NEWS_POOL]
-    bodies = content_store.fetch_global_article_texts(
+    cached_articles = content_store.fetch_global_article_assets(
         [str(entry.get("link") or "") for entry in unique]
     )
-    if bodies:
-        logger.info("Global 저장 본문 재사용 %d건 (keyword=%s)", len(bodies), keyword)
+    if cached_articles:
+        logger.info(
+            "Global 저장 기사 자산 재사용 %d건 (keyword=%s)",
+            len(cached_articles),
+            keyword,
+        )
     docs: list[dict[str, object]] = []
     for entry in unique:
         title = str(entry.get("title") or "")
         url = str(entry.get("link") or "")
-        body = bodies.get(url)
+        cached_article = cached_articles.get(url)
+        body = str(cached_article.get("markdown") or "") if cached_article else ""
+        image_url = (
+            str(
+                (cached_article or {}).get("image_url")
+                or entry.get("image_url")
+                or ""
+            ).strip()
+            or None
+        )
         if body:
             text = f"{title}\n{feeds.clean_article_body(body)}"
         else:
@@ -102,6 +115,7 @@ def _news_documents(keyword: str, now: datetime) -> list[dict[str, object]]:
                 "text": text,
                 "published_ts": entry.get("published_ts", 0),
                 "published_raw": entry.get("published", ""),
+                "image_url": image_url,
                 # url은 Google News 리다이렉트 주소라 도메인이 전부 news.google.com이다.
                 # 소스 신뢰도는 원본 발행처 URL로 판정해야 한다.
                 "source_url": entry.get("source_url", ""),
