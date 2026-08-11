@@ -70,6 +70,28 @@ def test_every_graph_node_has_display_text() -> None:
             assert node.description.strip()
 
 
+def test_graph_descriptions_match_current_agent_contracts() -> None:
+    """수동 그래프 설명이 최근 실행 계약의 핵심 분기를 유지해야 한다."""
+    diagrams = {diagram.slug: diagram for diagram in list_graph_diagrams()}
+
+    wiki_nodes = {node.node_id: node for node in diagrams["personal-wiki"].nodes}
+    assert "OpenAI Batch Item" in wiki_nodes["embed"].description
+
+    report = diagrams["report-generation"]
+    report_nodes = {node.node_id: node for node in report.nodes}
+    assert "wiki_search·wiki_read·search_pool" in report_nodes["research"].description
+    assert "collect_live 도구" not in report.description
+    assert "근거 없는 주제는 생성에서 제외" in report_nodes["load_context"].description
+    assert "주제마다" in report_nodes["change_history"].description
+    assert "전부 실패했을 때만 generate" in report_nodes["change_history"].description
+
+    change_history = diagrams["change-history"]
+    change_nodes = {node.node_id: node for node in change_history.nodes}
+    assert "신규·갱신·유지 팩트 전체" in change_nodes["compose"].description
+    assert "전부 유지면 impact를 건너" in change_nodes["supervisor"].description
+    assert "신규·갱신 팩트만" in change_nodes["store"].description
+
+
 def test_every_stategraph_definition_is_registered() -> None:
     """agent/의 모든 StateGraph 정의가 /dev/graphs 레지스트리에 등록돼야 한다.
 
