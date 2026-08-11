@@ -256,6 +256,13 @@ def evaluate(case: dict[str, object], body: str, included: list[str]) -> dict[st
     # 소주제마다 해석 단락이 붙었는가. 해석은 사실이 아니라 판단이라 참조를 달지
     # 않는 것이 규칙이므로, 섹션의 마지막 문단에 인용 표시가 없으면 해석으로 본다
     # (2026-08-11 실측: 3주제 리포트에 해석이 한 단락도 없었다).
+    # 소주제마다 해석 단락이 붙었는가. 해석은 사실이 아니라 판단이라 참조를 달지
+    # 않는 것이 규칙이므로, 섹션의 마지막 문단에 인용 표시가 없으면 해석으로 본다
+    # (2026-08-11 실측: 3주제 리포트에 해석이 한 단락도 없었다).
+    #
+    # 해석의 **질**(근거 없는 일반론인가)은 여기서 재지 않는다. 근거 수로 대신
+    # 세어 봤다가 정상 섹션 17건이 실패로 잡혔다 — 근거 1건이어도 "산재 사망자
+    # 598명"처럼 알맹이가 있으면 해석할 재료가 된다. 개수와 알맹이는 다른 축이다.
     missing_interpretation = [
         heading
         for heading, content in split_sections(body)
@@ -273,6 +280,7 @@ def evaluate(case: dict[str, object], body: str, included: list[str]) -> dict[st
         and not fabricated
         and not uncited
         and not leaked
+        and not missing_interpretation
     )
     return {
         "topics": len(topics),
