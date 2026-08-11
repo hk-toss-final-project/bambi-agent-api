@@ -196,7 +196,9 @@ Swagger UI, `/wiki-graph`, `/dev/graphs` 같은 개발 화면은 토큰 없이 �
 필요합니다. `/wiki-graph`는 Swagger에 영속 저장된 `InternalBearer` 토큰 또는
 화면에서 한 번 입력해 저장한 토큰을 Graph API 요청 헤더에 적용합니다. 서버 Secret을
 HTML이나 URL에 삽입하지 않습니다. `/system/*` 상태 확인 API는 인증 대상에서
-제외합니다.
+제외합니다. `/dev/graphs`는 DB·LLM을 호출하지 않는 읽기 전용 화면이라
+`ENABLE_DEV_GRAPH_VIEWS=true`이면 `APP_ENV`와 관계없이 등록하며, 개발용 동기 실행
+API(`/internal/v1/dev/**`)의 local·test 제한과 분리합니다.
 
 ## 1. Service API 연동
 

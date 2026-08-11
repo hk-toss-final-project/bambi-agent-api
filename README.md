@@ -45,6 +45,8 @@ cp .env.example .env
   키워드 비서 UI만 쓸 경우 비워둬도 됩니다.
 - `ENABLE_DEV_AGENT_API=true` — Swagger 개발 실행 API(`/internal/v1/dev/**`)
   활성화. 로컬 개발 시 권장합니다.
+- `ENABLE_DEV_GRAPH_VIEWS=true` — 읽기 전용 에이전트 구조 화면(`/dev/graphs`)
+  활성화. 기본값이 `true`라 배포 환경에서도 열리며, 필요하면 명시적으로 끌 수 있습니다.
 
 ### 1. PostgreSQL 실행 (Agent API 선행 조건)
 
@@ -74,8 +76,9 @@ uv run uvicorn app.main:app --port 8000 --reload --loop app.main:selector_event_
   개발 실행 API가 함께 등록됩니다. 엔드포인트별 계약은
   [FastAPI MVP API 설계](docs/fastapi-mvp-api.md)를 참고하세요.
 - 에이전트 그래프 구조 시각화: <http://127.0.0.1:8000/dev/graphs> —
-  Personal Wiki·Report Generation·키워드 비서 그래프를 Mermaid 차트로
-  보여줍니다(개발 API와 같은 플래그로 활성화).
+  Personal Wiki·Report Generation·키워드 비서·변경점 추적 그래프를 Mermaid
+  차트로 보여줍니다. 실행 API와 분리된 `ENABLE_DEV_GRAPH_VIEWS`로 제어하며
+  모든 `APP_ENV`에서 기본 활성화됩니다.
 - Swagger UI와 개발 시각화 페이지는 토큰 없이 열 수 있지만,
   `/internal/v1/**` 실행에는 `AGENT_INTERNAL_TOKEN` Bearer 인증이 필요합니다.
   Swagger의 `Authorize`에 토큰을 한 번 입력하면 브라우저에 유지되어 이후

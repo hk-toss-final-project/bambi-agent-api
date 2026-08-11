@@ -25,6 +25,10 @@ class Settings(BaseModel):
         default=True,
         description="키워드 비서 웹 UI(/assistant/**)를 같은 프로세스에 등록할지 여부",
     )
+    enable_dev_graph_views: bool = Field(
+        default=True,
+        description="읽기 전용 에이전트 그래프 화면(/dev/graphs) 활성화 여부",
+    )
     enable_dev_agent_api: bool = Field(
         default=False,
         description="개발용 Agent 동기 실행 API 활성화 여부",
@@ -301,6 +305,7 @@ def load_settings() -> Settings:
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         log_directory=os.getenv("LOG_DIR", "logs"),
         enable_assistant_ui=_boolean_env("ENABLE_ASSISTANT_UI", True),
+        enable_dev_graph_views=_boolean_env("ENABLE_DEV_GRAPH_VIEWS", True),
         enable_dev_agent_api=_boolean_env("ENABLE_DEV_AGENT_API", False),
         internal_api_token=_optional_env("AGENT_INTERNAL_TOKEN"),
         mcp_server_port=_integer_env("MCP_SERVER_PORT", 8100),

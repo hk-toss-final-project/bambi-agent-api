@@ -16,6 +16,7 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("API_PREFIX", "/agent/internal/v1")
     monkeypatch.setenv("DOCS_ENABLED", "false")
+    monkeypatch.setenv("ENABLE_DEV_GRAPH_VIEWS", "false")
     monkeypatch.setenv(
         "AGENT_INTERNAL_TOKEN", "test-agent-internal-token-0123456789abcdef"
     )
@@ -50,6 +51,7 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     assert settings.environment == "production"
     assert settings.api_prefix == "/agent/internal/v1"
     assert settings.docs_enabled is False
+    assert settings.enable_dev_graph_views is False
     assert settings.internal_api_token is not None
     assert (
         settings.internal_api_token.get_secret_value()
