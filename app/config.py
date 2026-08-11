@@ -74,7 +74,6 @@ class Settings(BaseModel):
     vector_store_url: str | None = Field(
         default=None, description="Vector 저장소 연결 문자열"
     )
-    queue_url: str | None = Field(default=None, description="Job Queue 연결 문자열")
     openai_api_key: SecretStr | None = Field(
         default=None, description="OpenAI Secret 참조 값"
     )
@@ -101,6 +100,18 @@ class Settings(BaseModel):
     )
     personal_wiki_worker_batch_size: int = Field(
         default=1, ge=1, le=100, description="Personal Wiki Worker Job Claim 개수"
+    )
+    personal_wiki_job_concurrency: int = Field(
+        default=1,
+        ge=1,
+        le=50,
+        description="Personal Wiki Worker의 실제 동시 Job 실행 수",
+    )
+    report_job_concurrency: int = Field(
+        default=1,
+        ge=1,
+        le=50,
+        description="Report Builder Worker의 실제 동시 Job 실행 수",
     )
     personal_wiki_job_lease_seconds: int = Field(
         default=600, ge=30, le=3600, description="Personal Wiki Job Lease 초"
@@ -241,7 +252,6 @@ def load_settings() -> Settings:
         dev_agent_timeout_seconds=_integer_env("DEV_AGENT_TIMEOUT_SECONDS", 180),
         agent_database_url=_optional_env("AGENT_DATABASE_URL"),
         vector_store_url=_optional_env("VECTOR_STORE_URL"),
-        queue_url=_optional_env("QUEUE_URL"),
         openai_api_key=_optional_env("OPENAI_API_KEY"),
         tavily_api_key=_optional_env("TAVILY_API_KEY"),
         naver_client_id=_optional_env("NAVER_CLIENT_ID"),
@@ -256,6 +266,10 @@ def load_settings() -> Settings:
         personal_wiki_worker_batch_size=_integer_env(
             "PERSONAL_WIKI_WORKER_BATCH_SIZE", 1
         ),
+        personal_wiki_job_concurrency=_integer_env(
+            "PERSONAL_WIKI_JOB_CONCURRENCY", 1
+        ),
+        report_job_concurrency=_integer_env("REPORT_JOB_CONCURRENCY", 1),
         personal_wiki_job_lease_seconds=_integer_env(
             "PERSONAL_WIKI_JOB_LEASE_SECONDS", 600
         ),

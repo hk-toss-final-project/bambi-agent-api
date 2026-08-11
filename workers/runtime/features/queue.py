@@ -72,6 +72,7 @@ async def consume_personal_wiki_jobs(
     database_url: str,
     worker_id: str,
     limit: int,
+    concurrency: int = 1,
     lease_seconds: int,
     model: str,
     interval_seconds: int = 60,
@@ -85,6 +86,7 @@ async def consume_personal_wiki_jobs(
         database_url: Agent DB 연결 문자열
         worker_id: Job Lease 소유자 식별자
         limit: Batch 하나가 Claim할 최대 Job 수 (WC-001 Batch 크기)
+        concurrency: Claim한 Job을 동시에 실행할 최대 수
         lease_seconds: Job Lease 유지 시간(초)
         model: Personal Wiki 분류 LLM 모델
         interval_seconds: 처리할 Job이 없을 때 다음 확인까지 대기 초
@@ -106,6 +108,7 @@ async def consume_personal_wiki_jobs(
             "database_url": database_url,
             "worker_id": worker_id,
             "limit": limit,
+            "concurrency": concurrency,
             "lease_seconds": lease_seconds,
             "model": model,
         },
@@ -120,6 +123,7 @@ async def consume_report_generation_jobs(
     database_url: str,
     worker_id: str,
     limit: int,
+    concurrency: int = 1,
     lease_seconds: int,
     model: str,
     interval_seconds: int = 60,
@@ -136,6 +140,7 @@ async def consume_report_generation_jobs(
         database_url: Agent DB 연결 문자열
         worker_id: Job Lease 소유자 식별자
         limit: Batch 하나가 Claim할 최대 Job 수 (WC-001 Batch 크기)
+        concurrency: Claim한 Job을 동시에 실행할 최대 수
         lease_seconds: Job Lease 유지 시간(초)
         model: Report Builder 콘텐츠 생성 LLM 모델
         interval_seconds: 처리할 Job이 없을 때 다음 확인까지 대기 초
@@ -157,6 +162,7 @@ async def consume_report_generation_jobs(
             "database_url": database_url,
             "worker_id": worker_id,
             "limit": limit,
+            "concurrency": concurrency,
             "lease_seconds": lease_seconds,
             "model": model,
         },
@@ -202,6 +208,7 @@ async def wc_001(
     database_url: str,
     worker_id: str,
     limit: int = 1,
+    concurrency: int = 1,
     lease_seconds: int = 600,
     model: str = "gpt-4.1-mini",
     interval_seconds: int = 0,
@@ -245,6 +252,7 @@ async def wc_001(
         database_url=database_url,
         worker_id=worker_id,
         limit=limit,
+        concurrency=concurrency,
         lease_seconds=lease_seconds,
         model=model,
         interval_seconds=interval_seconds,

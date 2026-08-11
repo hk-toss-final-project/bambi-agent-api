@@ -119,10 +119,11 @@ async def run_report_generation_batch(
     database_url: str,
     worker_id: str,
     limit: int = 1,
+    concurrency: int = 1,
     lease_seconds: int = 600,
     model: str = "gpt-4.1-mini",
 ) -> list[dict[str, object]]:
-    """PostgreSQL에서 Report Builder Generation Job Batch를 점유해 순차적으로 처리한다."""
+    """Report Builder Job을 점유해 설정된 동시성으로 처리한다."""
 
     async def process(
         connection: AsyncConnection[DictRow], job: ClaimedAgentJob
@@ -141,6 +142,7 @@ async def run_report_generation_batch(
         worker_id=worker_id,
         limit=limit,
         lease_seconds=lease_seconds,
+        concurrency=concurrency,
         error_code_prefix="REPORT_GENERATION",
         process=process,
     )
@@ -152,6 +154,7 @@ async def worker_003(
     database_url: str,
     worker_id: str,
     limit: int = 1,
+    concurrency: int = 1,
     lease_seconds: int = 600,
     model: str = "gpt-4.1-mini",
 ) -> list[dict[str, object]]:
@@ -166,6 +169,7 @@ async def worker_003(
         database_url=database_url,
         worker_id=worker_id,
         limit=limit,
+        concurrency=concurrency,
         lease_seconds=lease_seconds,
         model=model,
     )

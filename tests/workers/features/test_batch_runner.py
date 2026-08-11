@@ -115,13 +115,26 @@ def test_run_job_batch_processes_each_job_and_isolates_failures(
     """Batch 러너가 Job별로 성공·실패를 격리해 결과를 누적한다."""
     connection = _FakeConnection()
 
-    class _FakeAsyncConnection:
-        """connect가 고정 연결 대역을 반환하는 psycopg 대체."""
+    class _FakeAsyncConnectionPool:
+        """모든 대여 요청에 고정 연결 대역을 반환하는 Pool 대체."""
 
-        @classmethod
-        async def connect(cls, url: str, *, row_factory: Any = None) -> _FakeConnection:
-            """DB 접속 없이 준비된 연결 대역을 반환한다."""
-            return connection
+        def __init__(self, **kwargs: Any) -> None:
+            """Pool 생성 인자를 허용한다."""
+            self.closed = False
+
+        async def open(self, *, wait: bool = False) -> None:
+            """실제 DB 연결 없이 Pool을 연다."""
+            return None
+
+        @asynccontextmanager
+        async def connection(self) -> AsyncIterator[_FakeConnection]:
+            """준비된 연결 대역을 빌려준다."""
+            yield connection
+
+        async def close(self) -> None:
+            """Pool과 연결이 닫혔음을 기록한다."""
+            self.closed = True
+            await connection.close()
 
     claimed = [_job("job-1"), _job("job-2")]
 
@@ -145,7 +158,9 @@ def test_run_job_batch_processes_each_job_and_isolates_failures(
             raise RuntimeError("일시적 실패")
         return {"content_id": "content-1"}
 
-    monkeypatch.setattr(batch_runner, "AsyncConnection", _FakeAsyncConnection)
+    monkeypatch.setattr(
+        batch_runner, "AsyncConnectionPool", _FakeAsyncConnectionPool
+    )
     monkeypatch.setattr(batch_runner, "set_system_job_scope", fake_scope)
     monkeypatch.setattr(batch_runner, "wc_002", fake_claim)
     monkeypatch.setattr(batch_runner, "wc_006", fake_fail)

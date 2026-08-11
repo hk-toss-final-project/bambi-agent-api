@@ -23,11 +23,13 @@ from inspect import isawaitable
 from typing import Any
 
 from .client import (
-    _BACKOFF_BASE_SECONDS,
     _DEFAULT_MODEL,
+    _DEFAULT_MAX_RETRY_SECONDS,
     _DEFAULT_TIMEOUT_SECONDS,
     _get_client,
+    _retry_delay_for_error,
     _transient_error_types,
+    is_retryable_openai_error,
 )
 
 logger = logging.getLogger("agent.llm.tool_loop")
@@ -99,17 +101,25 @@ def _to_openai_schema(tool: ToolSpec) -> dict[str, Any]:
 
 
 async def _invoke_with_retry(
-    client: Any, messages: list[Any], max_attempts: int
+    client: Any,
+    messages: list[Any],
+    max_attempts: int,
+    max_retry_seconds: float = _DEFAULT_MAX_RETRY_SECONDS,
 ) -> Any:
-    """일시적 Provider 오류에 지수 Backoff 재시도를 적용해 호출한다."""
+    """일시적 Provider 오류에 Retry-After 우선 Backoff를 적용해 호출한다."""
     transient = _transient_error_types()
+    waited = 0.0
     for attempt in range(1, max_attempts + 1):
         try:
             return await client.ainvoke(messages)
-        except transient:
-            if attempt >= max_attempts:
+        except transient as error:
+            if attempt >= max_attempts or not is_retryable_openai_error(error):
                 raise
-            await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+            delay = _retry_delay_for_error(error, attempt)
+            if waited + delay > max_retry_seconds:
+                raise
+            await asyncio.sleep(delay)
+            waited += delay
     raise RuntimeError("도달할 수 없는 분기입니다.")
 
 

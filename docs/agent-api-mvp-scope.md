@@ -172,8 +172,11 @@
 - [x] `WC-001` Queue Job Consume — 상주 소비 루프
 - [x] `WC-002` Job Claim — `FOR UPDATE SKIP LOCKED` + Lease
 - [x] `WC-006` Retry 정책 — retryable 실패 시 지연 후 queued 복귀
+- [x] `WC-007` Exponential Backoff — OpenAI `Retry-After`를 최소값으로 존중하고
+  지수 Backoff+jitter를 적용한다. quota·billing 오류는 재시도하지 않는다
 - [ ] `WC-009` Idempotency 처리 — ❌ Worker 공통 멱등 처리 기능 미구현. 개별 DB·Job 경계의 Unique·Upsert는 유지하며 기존 항등 위임 함수는 스텁으로 복원
-- [x] `WC-013` Concurrency 제어 — ⚠️ Batch Claim 크기 설정만 있고 LLM·Embedding 동시 실행 제한은 순차 처리로 대체
+- [x] `WC-013` Concurrency 제어 — Batch Claim 크기와 실제 Job 실행 동시성을
+  별도 설정으로 제한하고 동시 Job마다 Pool의 독립 DB 연결을 사용한다
 - [x] `DB-004` 개인 Wiki Chunk 저장
 - [x] `DB-005` 개인 Wiki Embedding 저장
 - [x] `DB-026` Agent Job 저장 — Claim·Lease·Attempt 이력

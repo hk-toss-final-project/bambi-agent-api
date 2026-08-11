@@ -139,6 +139,7 @@ class FailAgentJobCommand:
     error_code: str
     error_message: str
     retryable: bool
+    retry_delay_seconds: float | None = None
 
 
 type AgentJobStorageCommand = (
@@ -551,8 +552,11 @@ async def fail_agent_job(
     error_code: str,
     error_message: str,
     retryable: bool,
+    retry_delay_seconds: float | None = None,
 ) -> str:
     """Job 실패를 기록하고 재시도 가능 여부에 따라 다음 상태를 결정한다."""
+    if retry_delay_seconds is not None and retry_delay_seconds < 0:
+        raise ValueError("Job 재시도 대기시간은 0 이상이어야 합니다.")
     can_retry = retryable and job.attempt_number < job.max_attempts
     next_status = "queued" if can_retry else "failed"
     source_event_status = await wse_013("received" if can_retry else "failed")
@@ -565,7 +569,7 @@ async def fail_agent_job(
             error_message = %s,
             retryable = %s,
             scheduled_at = CASE
-                WHEN %s THEN clock_timestamp() + (LEAST(300, POWER(2, attempt_count)) * interval '1 second')
+                WHEN %s THEN clock_timestamp() + (%s * interval '1 second')
                 ELSE scheduled_at
             END,
             completed_at = CASE WHEN %s THEN NULL ELSE clock_timestamp() END,
@@ -585,6 +589,7 @@ async def fail_agent_job(
             error_message[:2000],
             can_retry,
             can_retry,
+            retry_delay_seconds or 0.0,
             can_retry,
             job.job_id,
             worker_id,
@@ -1240,6 +1245,7 @@ async def db_026(
         job=command.job,
         worker_id=command.worker_id,
         error_code=command.error_code,
-        error_message=command.error_message,
-        retryable=command.retryable,
-    )
+            error_message=command.error_message,
+            retryable=command.retryable,
+            retry_delay_seconds=command.retry_delay_seconds,
+        )

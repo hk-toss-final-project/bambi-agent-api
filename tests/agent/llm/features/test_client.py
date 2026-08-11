@@ -12,9 +12,15 @@ class _TransientError(RuntimeError):
 class _FakeResponse:
     """content와 usage_metadata를 흉내 내는 응답 Test Double."""
 
-    def __init__(self, content: str, usage: dict[str, int] | None) -> None:
+    def __init__(
+        self,
+        content: str,
+        usage: dict[str, int] | None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.content = content
         self.usage_metadata = usage
+        self.response_metadata = {"headers": headers or {}}
 
 
 class _FakeClient:
@@ -98,4 +104,63 @@ def test_complete_returns_text_only(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_boundary(monkeypatch, fake)
 
     assert llm_client.complete("system", "user", model="test-model") == "본문"
+    assert fake.calls == 1
+
+
+def test_complete_with_usage_returns_request_and_rate_limit_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """성공 응답의 요청 ID와 Rate Limit 헤더를 호출 결과에 보존한다."""
+    fake = _FakeClient(
+        failures=0,
+        response=_FakeResponse(
+            "본문",
+            {"input_tokens": 1, "output_tokens": 2},
+            {
+                "X-Request-ID": "req-test",
+                "X-RateLimit-Remaining-Requests": "9",
+                "Content-Type": "application/json",
+            },
+        ),
+    )
+    _patch_boundary(monkeypatch, fake)
+
+    completion = llm_client.complete_with_usage("system", "user")
+
+    assert completion.request_id == "req-test"
+    assert completion.rate_limit_headers == {
+        "x-ratelimit-remaining-requests": "9"
+    }
+
+
+class _QuotaError(RuntimeError):
+    """재시도하면 안 되는 사용량 한도 오류."""
+
+    code = "insufficient_quota"
+
+
+class _QuotaClient:
+    """호출할 때마다 quota 오류를 발생시키는 Client 대역."""
+
+    def __init__(self) -> None:
+        """호출 횟수를 0으로 초기화한다."""
+        self.calls = 0
+
+    def invoke(self, messages: list[tuple[str, str]]) -> _FakeResponse:
+        """quota 오류를 발생시킨다."""
+        self.calls += 1
+        raise _QuotaError("결제 한도 초과")
+
+
+def test_complete_does_not_retry_quota_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """사용자 조치가 필요한 quota 오류는 첫 실패에서 바로 전파한다."""
+    fake = _QuotaClient()
+    monkeypatch.setattr(llm_client, "_get_client", lambda *args: fake)
+    monkeypatch.setattr(llm_client, "_transient_error_types", lambda: (_QuotaError,))
+
+    with pytest.raises(_QuotaError):
+        llm_client.complete_with_usage("system", "user", max_attempts=3)
+
     assert fake.calls == 1

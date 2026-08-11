@@ -39,6 +39,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--worker-id", help="Job Lease 소유자 식별자")
     parser.add_argument("--limit", type=int, help="한 번에 Claim할 Job 개수")
     parser.add_argument(
+        "--concurrency",
+        type=int,
+        help="Claim 크기와 별개인 실제 Job 동시 실행 수",
+    )
+    parser.add_argument(
         "--keywords",
         help="global-collector 전용: 쉼표로 구분한 수집 키워드",
     )
@@ -142,6 +147,7 @@ async def _run_batch_once(
             database_url=settings.agent_database_url,
             worker_id=worker_id,
             limit=args.limit or settings.personal_wiki_worker_batch_size,
+            concurrency=args.concurrency or settings.report_job_concurrency,
             lease_seconds=(
                 args.lease_seconds or settings.personal_wiki_job_lease_seconds
             ),
@@ -151,6 +157,7 @@ async def _run_batch_once(
         database_url=settings.agent_database_url,
         worker_id=worker_id,
         limit=args.limit or settings.personal_wiki_worker_batch_size,
+        concurrency=args.concurrency or settings.personal_wiki_job_concurrency,
         lease_seconds=(
             args.lease_seconds or settings.personal_wiki_job_lease_seconds
         ),
@@ -197,6 +204,7 @@ async def _run() -> None:
             database_url=settings.agent_database_url,
             worker_id=worker_id,
             limit=args.limit or settings.personal_wiki_worker_batch_size,
+            concurrency=args.concurrency or settings.report_job_concurrency,
             lease_seconds=(
                 args.lease_seconds or settings.personal_wiki_job_lease_seconds
             ),
@@ -225,6 +233,7 @@ async def _run() -> None:
         database_url=settings.agent_database_url,
         worker_id=worker_id,
         limit=args.limit or settings.personal_wiki_worker_batch_size,
+        concurrency=args.concurrency or settings.personal_wiki_job_concurrency,
         lease_seconds=(args.lease_seconds or settings.personal_wiki_job_lease_seconds),
         model=args.model or settings.wiki_llm_model,
         interval_seconds=args.interval_seconds,

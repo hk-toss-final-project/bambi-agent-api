@@ -3,7 +3,13 @@
 구현 모듈의 기능 함수를 안정적인 import 경로로 다시 노출한다.
 """
 
-from .features.client import LlmCompletion, complete, complete_with_usage
+from .features.client import (
+    LlmCompletion,
+    complete,
+    complete_with_usage,
+    is_retryable_openai_error,
+    retry_after_seconds_from_error,
+)
 from .features.completion import llm_001, llm_002, llm_003
 from .features.embedding_client import embed_texts, get_embedding_client
 from .features.parsing import strip_json_fence
@@ -26,6 +32,8 @@ __all__ = [
     "LlmCompletion",
     "complete",
     "complete_with_usage",
+    "is_retryable_openai_error",
+    "retry_after_seconds_from_error",
     "embed_texts",
     "get_embedding_client",
     "strip_json_fence",

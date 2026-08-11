@@ -9,14 +9,19 @@
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from psycopg import AsyncConnection
 from psycopg.rows import dict_row
+from psycopg import AsyncConnection
+from psycopg_pool import AsyncConnectionPool
 
+from agent.llm.api import (
+    is_retryable_openai_error,
+    retry_after_seconds_from_error,
+)
 from infrastructure.persistence.api import (
     ClaimedAgentJob,
     set_system_job_scope,
 )
-from workers.runtime.api import wc_002, wc_006, wc_013
+from workers.runtime.api import wc_002, wc_006, wc_007, wc_013
 
 type DictRow = dict[str, Any]
 type JobProcessor = Callable[
@@ -39,11 +44,21 @@ async def record_job_failure(
     걸리면(RuntimeError) Worker 프로세스를 죽이는 대신 lease_lost 결과로
     보고한다. 해당 Job은 Lease 만료 후 다른 Claim이 다시 처리한다.
     """
-    retryable = not isinstance(error, ValueError)
-    error_code = (
-        f"{error_code_prefix}_RETRYABLE"
+    input_invalid = isinstance(error, ValueError)
+    retryable = not input_invalid and is_retryable_openai_error(error)
+    if input_invalid:
+        error_code = f"{error_code_prefix}_INPUT_INVALID"
+    elif retryable:
+        error_code = f"{error_code_prefix}_RETRYABLE"
+    else:
+        error_code = f"{error_code_prefix}_PROVIDER_ACTION_REQUIRED"
+    retry_delay_seconds = (
+        await wc_007(
+            job.attempt_number,
+            retry_after_seconds=retry_after_seconds_from_error(error),
+        )
         if retryable
-        else f"{error_code_prefix}_INPUT_INVALID"
+        else None
     )
     try:
         async with connection.transaction():
@@ -55,6 +70,7 @@ async def record_job_failure(
                 error_code=error_code,
                 error_message=str(error),
                 retryable=retryable,
+                retry_delay_seconds=retry_delay_seconds,
             )
     except RuntimeError as ownership_error:
         return {
@@ -73,10 +89,11 @@ async def run_job_batch(
     worker_id: str,
     limit: int,
     lease_seconds: int,
+    concurrency: int = 1,
     error_code_prefix: str,
     process: JobProcessor,
 ) -> list[dict[str, object]]:
-    """지정 유형의 Job Batch를 점유해 순차 실행하고 결과 목록을 반환한다.
+    """지정 유형의 Job Batch를 점유해 제한된 동시성으로 실행한다.
 
     Args:
         database_url: Agent DB 연결 문자열
@@ -84,40 +101,55 @@ async def run_job_batch(
         worker_id: Job Lease 소유자 식별자
         limit: 한 번에 Claim할 최대 Job 수
         lease_seconds: Job Lease 유지 시간(초)
+        concurrency: Claim한 Job을 동시에 실행할 최대 수
         error_code_prefix: 실패 오류 코드 접두사 (예: WIKI_BUILD)
         process: 점유한 Job 하나를 실행하는 함수 (connection, job)
 
     Returns:
         Job별 완료·실패·lease_lost 결과 목록
     """
-    connection: AsyncConnection[DictRow] = await AsyncConnection.connect(
-        database_url,
-        row_factory=dict_row,
+    if concurrency < 1:
+        raise ValueError("Job 실행 concurrency는 1 이상이어야 합니다.")
+    pool = AsyncConnectionPool(
+        conninfo=database_url,
+        min_size=1,
+        max_size=max(2, concurrency + 1),
+        kwargs={"row_factory": dict_row},
+        open=False,
     )
+    await pool.open(wait=True)
     try:
-        async with connection.transaction():
-            await set_system_job_scope(connection)
-            jobs = await wc_002(
-                connection,
-                job_type=job_type,
-                worker_id=worker_id,
-                limit=limit,
-                lease_seconds=lease_seconds,
-            )
+        async with pool.connection() as claim_connection:
+            async with claim_connection.transaction():
+                await set_system_job_scope(claim_connection)
+                jobs = await wc_002(
+                    claim_connection,
+                    job_type=job_type,
+                    worker_id=worker_id,
+                    limit=limit,
+                    lease_seconds=lease_seconds,
+                )
+
         async def process_claimed_job(job: ClaimedAgentJob) -> dict[str, object]:
             """점유한 Job 하나를 실행하고 완료·실패 결과로 변환한다."""
             try:
-                result = await process(connection, job)
+                async with pool.connection() as job_connection:
+                    result = await process(job_connection, job)
             except Exception as error:
-                return await record_job_failure(
-                    connection,
-                    job=job,
-                    worker_id=worker_id,
-                    error=error,
-                    error_code_prefix=error_code_prefix,
-                )
+                async with pool.connection() as failure_connection:
+                    return await record_job_failure(
+                        failure_connection,
+                        job=job,
+                        worker_id=worker_id,
+                        error=error,
+                        error_code_prefix=error_code_prefix,
+                    )
             return {"job_id": job.job_id, "status": "completed", **result}
 
-        return await wc_013(jobs, process_claimed_job)
+        return await wc_013(
+            jobs,
+            process_claimed_job,
+            max_concurrency=concurrency,
+        )
     finally:
-        await connection.close()
+        await pool.close()
