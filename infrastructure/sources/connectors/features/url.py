@@ -29,6 +29,8 @@ _PAGE_CHROME_IMAGE_MARKERS = (
     "1x1",
     "blank",
     "avatar",
+    "/profile/",
+    "/author/",
     "pixel",
     "banner",
     "/btn",
@@ -38,6 +40,9 @@ _PAGE_CHROME_IMAGE_MARKERS = (
     "favicon",
     "placeholder",
     "loading",
+    "aichat",
+    "global_ani",
+    "/column/",
 )
 
 
@@ -164,12 +169,9 @@ def resolve_article_image(
     Returns:
         다시 계산한 본문 이미지 또는 안전한 기존 캐시. 둘 다 없으면 ``None``.
     """
-    body_image = extract_jina_image(markdown, title=title)
-    if body_image is not None:
-        return body_image
     if cached_url and is_probable_content_image_url(cached_url):
         return html.unescape(cached_url).strip().strip("<>\"'")
-    return None
+    return extract_jina_image(markdown, title=title)
 
 
 def parse_jina_reader_response(text: str, *, requested_url: str) -> JinaReadResult:

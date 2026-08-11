@@ -241,6 +241,39 @@ def test_resolve_article_image_keeps_safe_cache_without_body_image() -> None:
     ) == "https://cdn.example/2026/previous-cover.jpg"
 
 
+def test_resolve_article_image_prefers_metadata_cache_over_jina_body_image() -> None:
+    """HTML 메타데이터로 저장한 캐시는 Jina 본문 첫 이미지로 덮지 않는다."""
+    markdown = (
+        "# 본문 대표 이미지를 확인하는 긴 기사 제목\n"
+        "![AI 아이콘](https://cdn.example/images/aichat/global_ani.png)\n"
+        "![본문](https://cdn.example/photos/body.jpg)"
+    )
+
+    assert url_connector.resolve_article_image(
+        markdown=markdown,
+        title="본문 대표 이미지를 확인하는 긴 기사 제목",
+        cached_url="https://cdn.example/photos/open-graph.jpg",
+    ) == "https://cdn.example/photos/open-graph.jpg"
+
+
+def test_resolve_article_image_rejects_cached_ai_widget_and_reporter_photo() -> None:
+    """기존 AI 위젯 캐시는 건너뛰고 실제 기사 본문 사진을 다시 선택한다."""
+    markdown = (
+        "# 대한체육회, 아시안게임 응원 열기와 미디어 전략 강화\n"
+        "![AI 배너](https://cdn.example/images/aichat/aichat_banner_md.png)\n"
+        "![애니메이션](https://cdn.example/images/aichat/global_ani.png)\n"
+        "![기자](https://cdn.example/news/column/sports.jpg)\n"
+        "기사 첫 문단입니다.\n"
+        "![현장](https://cdn.example/photos/article-main.jpg)"
+    )
+
+    assert url_connector.resolve_article_image(
+        markdown=markdown,
+        title="대한체육회, 아시안게임 응원 열기와 미디어 전략 강화",
+        cached_url="https://cdn.example/images/aichat/global_ani.png",
+    ) == "https://cdn.example/photos/article-main.jpg"
+
+
 def test_parse_jina_reader_response_ignores_unsafe_image_url() -> None:
     """HTTP(S)가 아닌 이미지 후보는 대표 이미지로 사용하지 않는다."""
     raw = "Title: 제목\nMarkdown Content:\n![대표](data:image/png;base64,AAAA)\n본문"
