@@ -270,6 +270,14 @@ def evaluate(case: dict[str, object], body: str, included: list[str]) -> dict[st
         and any(_normalize(topic) in _normalize(heading) for topic in topics)
         and not _closes_with_interpretation(content)
     ]
+    # 프롬프트 예시를 그대로 베껴 쓴 흔적. 2026-08-11 실측에서 예시에 적어둔
+    # "(해석 — 참조 없음)"이 사용자 화면에 그대로 출력됐고, 해석 단락 전체가
+    # 괄호로 감싸여 나왔다. 예시를 자리표시자로 쓴 것이 원인이었다.
+    placeholder_leaked = [
+        marker
+        for marker in ("(해석", "(사실 서술", "참조 없음")
+        if marker in body
+    ]
     # 채점을 두 갈래로 나눈다. 근거가 잘려 사라진 주제를 LLM 탓으로 돌리면
     # 프롬프트 품질과 파이프라인 결함이 한 숫자에 섞여 원인을 못 가린다.
     #   llm_passed    : 받은 근거 안에서 주제를 빠뜨리거나 섞지 않았는가
@@ -281,6 +289,7 @@ def evaluate(case: dict[str, object], body: str, included: list[str]) -> dict[st
         and not uncited
         and not leaked
         and not missing_interpretation
+        and not placeholder_leaked
     )
     return {
         "topics": len(topics),
@@ -292,6 +301,7 @@ def evaluate(case: dict[str, object], body: str, included: list[str]) -> dict[st
         "uncited_sections": uncited,
         "leaked_offtopic_phrases": leaked,
         "missing_interpretation": missing_interpretation,
+        "placeholder_leaked": placeholder_leaked,
         "starved_topics": starved,
         "dropped_references": [
             ref for ref in owner_of if ref not in included_set
