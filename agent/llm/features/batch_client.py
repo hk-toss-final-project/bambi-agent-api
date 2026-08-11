@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from time import monotonic
+from typing import Any, Protocol, TypeVar
 
 from shared.openai_batch import ProviderBatchSnapshot
+
+from .client import (
+    _DEFAULT_MAX_ATTEMPTS,
+    _DEFAULT_MAX_RETRY_SECONDS,
+    _retry_delay_for_error,
+    _transient_error_types,
+    is_retryable_openai_error,
+)
+
+ResultT = TypeVar("ResultT")
 
 
 class PreparedBatchItemInput(Protocol):
@@ -102,6 +114,28 @@ def _model_value(value: object) -> object:
     return value
 
 
+async def _call_with_retry(
+    operation: Callable[[], Awaitable[ResultT]],
+    *,
+    max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+    max_retry_seconds: float = _DEFAULT_MAX_RETRY_SECONDS,
+) -> ResultT:
+    """Batch API 호출에 Retry-After 우선 비동기 지수 Backoff를 적용한다."""
+    transient = _transient_error_types()
+    started = monotonic()
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await operation()
+        except transient as error:
+            if attempt >= max_attempts or not is_retryable_openai_error(error):
+                raise
+            delay = _retry_delay_for_error(error, attempt)
+            if monotonic() - started + delay > max_retry_seconds:
+                raise
+            await asyncio.sleep(delay)
+    raise RuntimeError("도달할 수 없는 Batch Provider 재시도 분기입니다.")
+
+
 class OpenAIBatchProvider:
     """SDK 재시도를 끄고 OpenAI Batch API만 호출하는 Provider 구현."""
 
@@ -118,15 +152,19 @@ class OpenAIBatchProvider:
     async def submit(self, batch: PreparedBatchInput) -> ProviderBatchSubmission:
         """입력 JSONL 파일을 올리고 24시간 완료 Window로 Batch를 생성한다."""
         content = build_batch_jsonl(batch)
-        input_file = await self._client.files.create(
-            file=(f"{batch.batch_id}.jsonl", content, "application/jsonl"),
-            purpose="batch",
+        input_file = await _call_with_retry(
+            lambda: self._client.files.create(
+                file=(f"{batch.batch_id}.jsonl", content, "application/jsonl"),
+                purpose="batch",
+            )
         )
-        provider_batch = await self._client.batches.create(
-            input_file_id=str(input_file.id),
-            endpoint=batch.endpoint,
-            completion_window="24h",
-            metadata={"local_batch_id": batch.batch_id, "workload": batch.workload},
+        provider_batch = await _call_with_retry(
+            lambda: self._client.batches.create(
+                input_file_id=str(input_file.id),
+                endpoint=batch.endpoint,
+                completion_window="24h",
+                metadata={"local_batch_id": batch.batch_id, "workload": batch.workload},
+            )
         )
         return ProviderBatchSubmission(
             provider_batch_id=str(provider_batch.id),
@@ -136,7 +174,9 @@ class OpenAIBatchProvider:
 
     async def retrieve(self, provider_batch_id: str) -> ProviderBatchSnapshot:
         """Provider Batch 상태와 output·error 파일 식별자를 조회한다."""
-        batch = await self._client.batches.retrieve(provider_batch_id)
+        batch = await _call_with_retry(
+            lambda: self._client.batches.retrieve(provider_batch_id)
+        )
         metadata = getattr(batch, "metadata", None)
         return ProviderBatchSnapshot(
             status=str(batch.status),
@@ -159,5 +199,6 @@ class OpenAIBatchProvider:
 
     async def download_jsonl(self, file_id: str) -> list[dict[str, object]]:
         """OpenAI 파일 내용을 읽어 JSONL 결과 객체로 반환한다."""
-        response = await self._client.files.content(file_id)
-        return parse_batch_jsonl(await response.aread())
+        response = await _call_with_retry(lambda: self._client.files.content(file_id))
+        content = await _call_with_retry(response.aread)
+        return parse_batch_jsonl(content)

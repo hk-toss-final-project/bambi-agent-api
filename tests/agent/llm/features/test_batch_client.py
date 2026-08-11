@@ -9,9 +9,11 @@ import pytest
 
 from agent.llm.features.batch_client import (
     OpenAIBatchProvider,
+    _call_with_retry,
     build_batch_jsonl,
     parse_batch_jsonl,
 )
+from agent.llm.features import batch_client
 from infrastructure.persistence.api import PreparedLlmBatch, PreparedLlmBatchItem
 
 
@@ -136,3 +138,75 @@ def test_openai_batch_provider_submits_24_hour_batch() -> None:
     assert client.batches.created["endpoint"] == "/v1/embeddings"
     assert snapshot.status == "completed"
     assert output == [{"custom_id": "wiki:1"}]
+
+
+class _TransientError(RuntimeError):
+    """Batch 비동기 재시도 테스트용 일시 오류."""
+
+
+class _QuotaError(RuntimeError):
+    """재시도하면 안 되는 Batch 사용량 한도 오류."""
+
+    code = "insufficient_quota"
+
+
+def test_batch_call_retries_with_async_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batch 일시 오류는 비동기 Backoff 후 제한된 횟수 안에서 재시도한다."""
+    calls = 0
+    sleeps: list[float] = []
+
+    async def operation() -> str:
+        """첫 호출은 실패하고 두 번째 호출은 성공한다."""
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise _TransientError("429")
+        return "ok"
+
+    async def fake_sleep(delay: float) -> None:
+        """실제 대기 없이 계산된 Backoff를 기록한다."""
+        sleeps.append(delay)
+
+    monkeypatch.setattr(
+        batch_client,
+        "_transient_error_types",
+        lambda: (_TransientError,),
+    )
+    monkeypatch.setattr(
+        batch_client,
+        "_retry_delay_for_error",
+        lambda error, attempt: 2.5,
+    )
+    monkeypatch.setattr(batch_client.asyncio, "sleep", fake_sleep)
+
+    result = asyncio.run(_call_with_retry(operation))
+
+    assert result == "ok"
+    assert calls == 2
+    assert sleeps == [2.5]
+
+
+def test_batch_call_does_not_retry_quota_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """사용자 조치가 필요한 quota 오류는 Batch에서도 즉시 전파한다."""
+    calls = 0
+
+    async def operation() -> str:
+        """호출 횟수를 기록하고 quota 오류를 발생시킨다."""
+        nonlocal calls
+        calls += 1
+        raise _QuotaError("quota")
+
+    monkeypatch.setattr(
+        batch_client,
+        "_transient_error_types",
+        lambda: (_QuotaError,),
+    )
+
+    with pytest.raises(_QuotaError):
+        asyncio.run(_call_with_retry(operation))
+
+    assert calls == 1
