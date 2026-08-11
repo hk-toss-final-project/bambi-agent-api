@@ -149,7 +149,11 @@ def create_container(settings: Settings) -> AppContainer:
         wiki_graph_repository = PostgresWikiGraphRepository(
             settings.agent_database_url
         )
-        agent_job_repository = PostgresAgentJobRepository(settings.agent_database_url)
+        agent_job_repository = PostgresAgentJobRepository(
+            settings.agent_database_url,
+            wiki_build_quiet_minutes=settings.wiki_build_quiet_minutes,
+            wiki_build_max_wait_minutes=settings.wiki_build_max_wait_minutes,
+        )
         mcp_api_key_repository = PostgresApiKeyRepository(settings.agent_database_url)
         interest_service = InterestService(wiki_graph_repository)
         mvp_service = AgentApiMvpService(agent_job_repository)

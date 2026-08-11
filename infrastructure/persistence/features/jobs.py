@@ -880,6 +880,8 @@ async def enqueue_personal_wiki_build_job(
     source_event_row_id: str | None = None,
     feature_id: str = "SVC-003",
     request_id: str | None = None,
+    quiet_minutes: int = 0,
+    max_wait_minutes: int = 30,
 ) -> EnqueuedWikiBuildJob:
     """저장된 사용자 원본 Version을 처리할 personal_wiki_build Job을 멱등 등록한다.
 
@@ -889,6 +891,11 @@ async def enqueue_personal_wiki_build_job(
     Job을 중복 생성하지 않고(JOB-010), 재수집으로 내용이 바뀌어 새 Version이
     생기면 그 Version만 처리하는 새 Job을 만든다.
 
+    등록 직후 SCH-009 조용 시간(quiet window)을 적용한다(`defer_user_wiki_build_jobs`
+    docstring이 지시하는 "새 원본이 수집될 때마다 호출" 지점). 웹 클리핑·온보딩
+    시드·북마크·URL 수집 후속 저장이 모두 이 함수를 거치므로, 사용자가 짧은
+    시간에 여러 건을 저장해도 대기 Job이 매번 따로 도는 대신 한 번으로 묶인다.
+
     Args:
         user_id: 원본을 소유한 사용자 ID
         source_document_id: user_source_documents Head ID
@@ -897,6 +904,8 @@ async def enqueue_personal_wiki_build_job(
         source_event_id: Service 계층이 부여한 멱등 이벤트 식별자
         source_event_row_id: Job과 연결할 wiki_source_events Row ID
         feature_id: Job을 등록한 기능 ID (기본 SVC-003)
+        quiet_minutes: 이번 저장 기준으로 대기 Job을 미루는 조용 시간(분)
+        max_wait_minutes: 첫 대기 Job 발생 후 최대 대기시간(분)
 
     Returns:
         Job ID와 이번 호출에서 새로 생성됐는지 여부
@@ -970,6 +979,12 @@ async def enqueue_personal_wiki_build_job(
             """,
             (job_id, source_event_row_id),
         )
+    await defer_user_wiki_build_jobs(
+        connection,
+        user_id=user_id,
+        quiet_minutes=quiet_minutes,
+        max_wait_minutes=max_wait_minutes,
+    )
     return EnqueuedWikiBuildJob(job_id=job_id, created=created)
 
 
