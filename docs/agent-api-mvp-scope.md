@@ -456,6 +456,23 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 - `CONTENT_READY` 이벤트는 Batch Poll을 즉시 깨우는 신호로 사용하고, 주기적인 Batch Poll을 이벤트 유실과 Backfill의 복구 경로로 유지한다.
 - 기존 단건 Snapshot 조회·ACK는 관리자 수동 복구, 장애 조사와 개별 재발행을 위해 유지한다.
 
+### PostgreSQL 기반 OpenAI 대량 처리 계약 (승인, 2026-08-11)
+
+- Redis는 도입하지 않고 기존 `agent_jobs`와 PostgreSQL을 Queue·분산 제어의
+  원천으로 사용한다.
+- Claim 크기와 실제 Job 동시성은 별도 설정이며, 동시 Job은 각자 독립된 DB
+  Connection을 사용한다.
+- 동기 OpenAI 호출은 `Retry-After` 우선 지수 Backoff+jitter와 PostgreSQL
+  RPM/TPM Governor를 적용한다. quota·billing 429는 재시도하지 않는다.
+- Wiki 증분 분류·관계 판정과 즉시 Report는 동기 API를 유지한다.
+- Wiki 대량 Embedding과 비긴급 Report backfill·대량 재생성의 Context 고정 초안은
+  OpenAI Batch API로 처리한다.
+- Batch와 Item 상태, `custom_id`, Provider File·Batch ID, 결과·오류를 Agent DB에
+  영속화한다. 결과 순서가 입력과 달라도 `custom_id`로 매핑하며 부분 성공과 만료를
+  Item 단위로 복구한다.
+- 상세 상태 전이와 Wiki·Report 적용 범위는
+  `docs/openai-batch-processing-design.md`를 따른다.
+
 ## MVP 제외 범위
 
 - 내부 호출 주체별 별도 Secret·세부 Scope 권한·요청 서명
