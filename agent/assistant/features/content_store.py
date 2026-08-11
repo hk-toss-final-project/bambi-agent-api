@@ -18,6 +18,8 @@ import os
 from collections.abc import Sequence
 from typing import TypedDict
 
+from infrastructure.sources.connectors.api import resolve_article_image
+
 logger = logging.getLogger("agent.assistant.content_store")
 
 
@@ -49,7 +51,7 @@ def fetch_global_article_assets(
         with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT canonical_url, markdown, image_url
+                SELECT canonical_url, title, markdown, image_url
                 FROM agent.global_source_documents
                 WHERE content_status = 'fetched'
                   AND markdown IS NOT NULL
@@ -60,9 +62,13 @@ def fetch_global_article_assets(
             return {
                 str(canonical_url): {
                     "markdown": str(content),
-                    "image_url": str(image_url) if image_url else None,
+                    "image_url": resolve_article_image(
+                        markdown=str(content),
+                        title=str(title),
+                        cached_url=str(image_url) if image_url else None,
+                    ),
                 }
-                for canonical_url, content, image_url in cursor.fetchall()
+                for canonical_url, title, content, image_url in cursor.fetchall()
                 if content
             }
     except Exception as error:

@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from urllib.parse import urlsplit
 
+from infrastructure.sources.connectors.api import is_probable_content_image_url
 from shared.contracts import FeatureResult
 
 _CITATION_REFERENCE = re.compile(r"\[([PGL]\d+)\]")
@@ -94,7 +95,12 @@ def select_report_cover_image(
         image_url = _http_url(asset.get("image_url"))
         source_url = _http_url(asset.get("source_url"))
         reference = str(asset.get("reference") or "").strip()
-        if image_url is None or source_url is None or not reference:
+        if (
+            image_url is None
+            or not is_probable_content_image_url(image_url)
+            or source_url is None
+            or not reference
+        ):
             continue
         return ReportCoverImage(
             url=image_url,

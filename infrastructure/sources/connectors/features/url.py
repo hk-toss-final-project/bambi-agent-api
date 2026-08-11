@@ -18,6 +18,28 @@ from shared.contracts import FeatureRequest, FeatureResult
 _JINA_READER_BASE_URL = "https://r.jina.ai"
 _JINA_TIMEOUT_SECONDS = 30.0
 
+# 기사 본문보다 앞뒤에 반복되는 사이트 UI 이미지 URL 표식이다. 본문 범위 제한에
+# 실패하더라도 이런 자산이 대표 이미지로 발행되지 않게 하는 마지막 가드다.
+_PAGE_CHROME_IMAGE_MARKERS = (
+    "logo",
+    "icon",
+    "/ico",
+    "_ico",
+    "sprite",
+    "1x1",
+    "blank",
+    "avatar",
+    "pixel",
+    "banner",
+    "/btn",
+    "btn_",
+    "/arrow",
+    "arrow_",
+    "favicon",
+    "placeholder",
+    "loading",
+)
+
 
 class JinaReadError(RuntimeError):
     """Jina Reader 수집 실패의 원인 코드와 메시지를 보존하는 예외."""
@@ -40,22 +62,73 @@ class JinaReadResult:
     image_url: str | None = None
 
 
-def extract_jina_image(text: str) -> str | None:
-    """Jina 응답에서 대표 이미지로 쓸 수 있는 HTTP(S) URL을 하나 고른다.
+def find_article_body_offset(markdown: str, title: str) -> int | None:
+    """Jina Markdown에서 기사 제목이 시작되는 위치를 찾는다.
 
-    Jina의 ``Image N:`` 헤더와 본문 Markdown 이미지를 순서대로 확인한다.
-    로고·아이콘·트래킹 픽셀처럼 대표 이미지가 아닌 흔한 후보는 제외하고,
-    확장자가 명확한 이미지 URL을 우선한다. 이미지가 없거나 안전한 외부 URL로
-    해석할 수 없으면 ``None``을 반환한다.
+    제목의 앞 12개 영숫자·한글 사이에 문장부호가 끼는 것을 허용해, 원문과
+    Jina 헤더의 따옴표·말줄임표 표기가 달라도 본문 시작점을 찾는다.
 
     Args:
-        text: Jina Reader의 헤더 포함 원문 응답
+        markdown: Jina Reader가 반환한 Markdown 본문
+        title: Jina 헤더에서 읽은 기사 제목
+
+    Returns:
+        기사 제목 시작 위치. 신뢰할 수 있는 제목 위치가 없으면 None.
+    """
+    letters = re.findall(r"[0-9A-Za-z가-힣]", title)[:12]
+    if len(letters) < 6:
+        return None
+    pattern = r"[^0-9A-Za-z가-힣]{0,4}".join(re.escape(char) for char in letters)
+    match = re.search(pattern, markdown)
+    return match.start() if match else None
+
+
+def is_probable_content_image_url(value: str) -> bool:
+    """URL이 사이트 UI 자산이 아닌 HTTP(S) 본문 이미지 후보인지 판정한다."""
+    url = html.unescape(value).strip().strip("<>\"'")
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    lowered = url.lower()
+    return not any(marker in lowered for marker in _PAGE_CHROME_IMAGE_MARKERS)
+
+
+def extract_jina_image(text: str, *, title: str = "") -> str | None:
+    """Jina 응답에서 대표 이미지로 쓸 수 있는 HTTP(S) URL을 하나 고른다.
+
+    Jina 헤더의 기사 제목을 본문에서 찾은 뒤 그 이후 Markdown 이미지만 확인한다.
+    제목을 찾지 못하면 메뉴·배너를 본문으로 오인하지 않도록 ``None``을 반환한다.
+    헤더가 없는 일반 Markdown은 전체를 대상으로 하되 UI 자산 URL은 제외한다.
+
+    Args:
+        text: Jina Reader의 헤더 포함 원문 응답 또는 일반 Markdown
+        title: 이미 파싱한 기사 제목. 비면 Jina 헤더에서 읽는다.
 
     Returns:
         대표 이미지 HTTP(S) URL. 적합한 후보가 없으면 ``None``
     """
-    candidates = re.findall(r"^Image \d+:\s*(https?://\S+)", text, flags=re.MULTILINE)
-    candidates += re.findall(r"!\[[^\]]*\]\((https?://[^)]+)\)", text)
+    marker = "Markdown Content:"
+    if marker in text:
+        header_block, markdown = text.split(marker, 1)
+        if not title:
+            for line in header_block.splitlines():
+                key, _, value = line.partition(":")
+                if key == "Title":
+                    title = value.strip()
+                    break
+    else:
+        markdown = text
+
+    if title:
+        offset = find_article_body_offset(markdown, title)
+        if offset is None:
+            return None
+        markdown = markdown[offset:]
+
+    candidates = re.findall(
+        r"^Image \d+:\s*(https?://\S+)", markdown, flags=re.MULTILINE
+    )
+    candidates += re.findall(r"!\[[^\]]*\]\((https?://[^)]+)\)", markdown)
     preferred: list[str] = []
     fallback: list[str] = []
     seen: set[str] = set()
@@ -64,20 +137,39 @@ def extract_jina_image(text: str) -> str | None:
         if url in seen:
             continue
         seen.add(url)
-        parsed = urlsplit(url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        if not is_probable_content_image_url(url):
             continue
         lowered = url.lower()
-        if any(
-            marker in lowered
-            for marker in ("logo", "icon", "sprite", "1x1", "blank", "avatar", "pixel")
-        ):
-            continue
         if re.search(r"\.(?:avif|gif|jpe?g|png|webp)(?:[?#]|$)", lowered):
             preferred.append(url)
         else:
             fallback.append(url)
     return next(iter(preferred or fallback), None)
+
+
+def resolve_article_image(
+    *, markdown: str, title: str, cached_url: str | None = None
+) -> str | None:
+    """저장된 기사 본문과 기존 캐시에서 안전한 대표 이미지를 결정한다.
+
+    저장 시점의 선택 규칙이 메뉴·배너를 집어 넣었을 수 있으므로 Markdown에서
+    기사 제목 이후 이미지를 다시 계산한다. 본문에 이미지가 없을 때만 사이트 UI
+    자산이 아닌 기존 캐시를 유지한다.
+
+    Args:
+        markdown: 저장된 Jina Markdown 본문
+        title: 저장된 기사 제목
+        cached_url: 과거에 선택해 저장한 대표 이미지 URL
+
+    Returns:
+        다시 계산한 본문 이미지 또는 안전한 기존 캐시. 둘 다 없으면 ``None``.
+    """
+    body_image = extract_jina_image(markdown, title=title)
+    if body_image is not None:
+        return body_image
+    if cached_url and is_probable_content_image_url(cached_url):
+        return html.unescape(cached_url).strip().strip("<>\"'")
+    return None
 
 
 def parse_jina_reader_response(text: str, *, requested_url: str) -> JinaReadResult:
@@ -127,7 +219,7 @@ def parse_jina_reader_response(text: str, *, requested_url: str) -> JinaReadResu
         title=title or requested_url,
         published_time=published_time,
         markdown=markdown,
-        image_url=extract_jina_image(text),
+        image_url=extract_jina_image(text, title=title),
     )
 
 
