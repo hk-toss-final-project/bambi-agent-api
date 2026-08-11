@@ -1587,18 +1587,12 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             topic_intent=topic_intent,
             score_ratio=0.0,
         )
-        personal = select_personal_documents(hybrid)
-        pool_is_relevant = await to_thread(is_pool_relevant, topic, pool_documents)
-        # 관련 없다고 판정된 창고 자료는 근거로 넘기지 않는다. 검색은 주제와 먼
-        # 기사도 물어오는데, 그게 근거로 남으면 모델이 그걸 인용해 섹션을 채운다
-        # (2026-08-11 실측: '김건희' 섹션이 서학개미 증시 기사[유사도 0.18]를
-        # 인용해 "최근 발언으로 주목받고 있다"는 근거 없는 문장으로 채워졌다).
-        # 근거를 0건으로 두면 아래 _load_multi_topic_contexts가 그 주제를 생성에서
-        # 빼고, 섹션이 아예 만들어지지 않는다 — 틀린 내용보다 빠진 섹션이 낫다.
-        stored = [*personal, *pool_documents] if pool_is_relevant else list(personal)
+        stored = [*select_personal_documents(hybrid), *pool_documents]
         # 단일 주제 경로와 같은 판정이다 — 창고에 확실히 쓸 만한 자료가 있으면
         # 외부 수집을 건너뛴다. 대부분의 주제가 여기서 끝난다.
-        if is_pool_sufficient(pool_documents) and pool_is_relevant:
+        if is_pool_sufficient(pool_documents) and await to_thread(
+            is_pool_relevant, topic, pool_documents
+        ):
             return stored, False
         if not allow_live:
             logger.info(
