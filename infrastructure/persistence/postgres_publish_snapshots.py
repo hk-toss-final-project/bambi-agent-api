@@ -98,6 +98,7 @@ class PostgresPublishSnapshotRepository:
                 "bundle_keywords": payload.get("bundle_keywords", []),
                 "taxonomy_topic_ids": payload.get("taxonomy_topic_ids", []),
                 "taxonomy_version": payload.get("taxonomy_version", ""),
+                "change_history_enabled": payload.get("change_history_enabled", False),
                 "created_at": row["created_at"],
             }
         )
@@ -123,6 +124,7 @@ class PostgresPublishSnapshotRepository:
             "bundle_keywords": list(snapshot.bundle_keywords),
             "taxonomy_topic_ids": list(snapshot.taxonomy_topic_ids),
             "taxonomy_version": snapshot.taxonomy_version,
+            "change_history_enabled": snapshot.change_history_enabled,
         }
 
     async def save(self, snapshot: PublishSnapshotResponse) -> None:

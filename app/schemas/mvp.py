@@ -655,6 +655,18 @@ class PublishSnapshotResponse(ImmutableSchema):
             "— 버전과 id가 따로 노는 값은 내보내지 않는다."
         ),
     )
+    change_history_enabled: bool = Field(
+        default=False,
+        description=(
+            "생성 요청의 `change_history_enabled` 토글을 그대로 돌려준다. "
+            "true면 body가 '이번에 달라진 점 → 보고서 내용 → 주목할 점 → "
+            "타임라인' 4단 구조를 따르며, 갱신 팩트는 `- (기존) ~~값~~` / "
+            "`  (변경) \\`값\\`` 두 줄로, 신규 팩트는 `- 문장 [L1]` 한 줄로 나온다. "
+            "false면 지금까지와 같은 자유 형식 본문이다. Service는 이 값으로 "
+            "body의 렌더링 규칙을 고르며, 본문 헤더 문자열을 파싱해 추측하지 "
+            "않는다."
+        ),
+    )
     created_at: datetime = Field(description="Snapshot 생성 시각")
 
 

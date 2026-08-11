@@ -730,6 +730,10 @@ async def enqueue_report_generation_job(
                     "interest_id": interest_id,
                     "interest_bundle": interest_bundle,
                     "execution_mode": execution_mode,
+                    # 발행 시 publish_payload로 그대로 흘려보내 Service가 본문
+                    # 렌더링 규칙을 고를 수 있게 한다(이 키가 없으면 body가 어느
+                    # 포맷인지 헤더 문자열을 추측해서 판별해야 한다).
+                    "change_history_enabled": change_history_enabled,
                 }
             ),
         ),
@@ -1718,6 +1722,10 @@ async def persist_report_generation(
         generation_request.get("request_idempotency_key") or ""
     )
     generation_scope = str(parameters.get("generation_scope") or "SINGLE_TOPIC")
+    # 요청 접수 시 고정한 토글값을 그대로 돌려준다. Service가 이 값으로 본문이
+    # "이번에 달라진 점" 폼인지 기존 폼인지 구분해 렌더링 규칙을 고를 수 있게
+    # 한다 — 헤더 문자열을 파싱해 추측하게 하면 안 된다.
+    change_history_enabled = bool(parameters.get("change_history_enabled") or False)
     source_interest_id = str(parameters.get("interest_id") or "")
     raw_interest_bundle = parameters.get("interest_bundle")
     interest_bundle = (
@@ -1763,6 +1771,7 @@ async def persist_report_generation(
         "bundle_keywords": bundle_keywords,
         "taxonomy_topic_ids": taxonomy_topic_ids,
         "taxonomy_version": taxonomy_version,
+        "change_history_enabled": change_history_enabled,
     }
     await connection.execute(
         """

@@ -1119,6 +1119,30 @@ def test_publish_payload_keeps_report_type_empty_for_older_requests() -> None:
     assert _publish_payload(connection)["report_type"] == ""
 
 
+def test_publish_payload_echoes_the_change_history_toggle() -> None:
+    """요청 접수 시 고정한 change_history_enabled를 발행 Snapshot에 그대로 싣는다.
+
+    이 값이 없으면 Service가 body를 "이번에 달라진 점" 4단 구조로 볼지 기존
+    자유 형식으로 볼지 헤더 문자열을 파싱해 추측해야 한다.
+    """
+    connection = _connection_for_persist(
+        "코스피", {"change_history_enabled": True}
+    )
+
+    _persist(connection)
+
+    assert _publish_payload(connection)["change_history_enabled"] is True
+
+
+def test_publish_payload_keeps_change_history_toggle_off_by_default() -> None:
+    """토글 값이 없던 요청 행은 False로 안전하게 읽힌다(회귀 0)."""
+    connection = _connection_for_persist("코스피")
+
+    _persist(connection)
+
+    assert _publish_payload(connection)["change_history_enabled"] is False
+
+
 def test_publish_payload_echoes_the_request_idempotency_key() -> None:
     """요청 멱등키를 발행 Snapshot에 원문 그대로 싣는다.
 

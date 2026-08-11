@@ -103,8 +103,6 @@ def build_delta_markdown(
     compose: ComposeOutcome,
     impact: ImpactOutcome,
     is_first_run: bool = False,
-    title: str = "",
-    summary: str = "",
 ) -> str:
     """섹션 헤더를 붙여 네 섹션을 하나의 markdown 문자열로 잇는다.
 
@@ -113,6 +111,10 @@ def build_delta_markdown(
     종합 요약을 그대로 쓰고(항상 채워진다), "이번에 달라진 점"에만
     highlight_facts(신규·갱신)를 따로 추려 보여준다.
 
+    제목·한 줄 결론은 여기 안 넣는다 — `GeneratedReportContent.title`·
+    `.summary` 필드가 이미 그 값을 나른다. 본문에 다시 박으면 카드 헤더와
+    본문 양쪽에 같은 제목이 중복 노출되는 소비 측 문제가 생긴다.
+
     Args:
         highlight_facts: 이번에 달라진 팩트(신규·갱신)만. 유지(중복)는 이미
             제외된 상태로 들어온다 — 비어 있으면 "달라진 점이 없다"는 뜻이다.
@@ -120,8 +122,6 @@ def build_delta_markdown(
         impact: 파급효과·확인 사항 추론 결과 (달라진 점이 없으면 실행되지
             않아 비어 있을 수 있다)
         is_first_run: 비교 대상이 없던 최초 실행인지
-        title: 보고서 제목 (마크다운 최상단 노출용)
-        summary: 3줄 결론 요약 (마크다운 최상단 노출용)
 
     Returns:
         이번에 달라진 점·핵심 요약·주목할 점·타임라인을 담은 markdown 본문
@@ -129,13 +129,7 @@ def build_delta_markdown(
     """
     no_change = not highlight_facts
 
-    blocks: list[str] = []
-    if title.strip():
-        blocks.append(f"# {title.strip()}")
-    if summary.strip():
-        blocks.append(f"> {summary.strip()}")
-
-    blocks.append(UPDATES_HEADING)
+    blocks: list[str] = [UPDATES_HEADING]
     if is_first_run:
         blocks.append(FIRST_RUN_NOTICE)
     if no_change:
@@ -230,8 +224,6 @@ def assemble_delta_report(
         compose=compose,
         impact=impact,
         is_first_run=is_first_run,
-        title=title,
-        summary=summary,
     )
     return GeneratedReportContent(
         title=title,
