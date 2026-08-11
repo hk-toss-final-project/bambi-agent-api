@@ -59,6 +59,7 @@ def test_returns_cached_markdown_and_image_url(monkeypatch) -> None:
             return [
                 (
                     "https://n.example/1",
+                    "저장된 본문 제목입니다",
                     "# 저장된 본문",
                     "https://cdn.example/cover.jpg",
                 )
@@ -84,3 +85,52 @@ def test_returns_cached_markdown_and_image_url(monkeypatch) -> None:
             "image_url": "https://cdn.example/cover.jpg",
         }
     }
+
+
+def test_replaces_cached_banner_with_image_from_stored_markdown(monkeypatch) -> None:
+    """DB에 잘못 저장된 배너 URL도 저장된 기사 본문 이미지로 교체한다."""
+    monkeypatch.setenv("AGENT_DATABASE_URL", "postgresql://cache")
+    import psycopg
+
+    class FakeCursor:
+        """배너 캐시와 본문 이미지가 함께 있는 조회 결과를 제공한다."""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def execute(self, query, params) -> None:
+            assert "title" in query
+
+        def fetchall(self):
+            return [
+                (
+                    "https://n.example/1",
+                    "본문 대표 이미지를 다시 찾는 긴 기사 제목",
+                    "# 본문 대표 이미지를 다시 찾는 긴 기사 제목\n"
+                    "![사진](https://cdn.example/article/hero.jpg)\n본문",
+                    "https://menu.example/news/banner/ad.jpg",
+                )
+            ]
+
+    class FakeConnection:
+        """테스트 Cursor Context를 제공한다."""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(psycopg, "connect", lambda dsn: FakeConnection())
+
+    assets = content_store.fetch_global_article_assets(["https://n.example/1"])
+
+    assert assets["https://n.example/1"]["image_url"] == (
+        "https://cdn.example/article/hero.jpg"
+    )

@@ -216,6 +216,31 @@ def test_probable_content_image_rejects_page_chrome_assets() -> None:
     )
 
 
+def test_resolve_article_image_replaces_cached_banner_with_body_image() -> None:
+    """기존 배너 캐시는 저장된 본문 대표 이미지로 다시 계산해 교체한다."""
+    markdown = (
+        "![광고](https://menu.example/news/banner/advertisement.jpg)\n"
+        "# 자연·건축·웰니스·미식, 다낭의 또 다른 휴양법\n"
+        "![본문](https://cdn.example/2026/danang-hero.jpg)\n"
+        "기사 본문입니다."
+    )
+
+    assert url_connector.resolve_article_image(
+        markdown=markdown,
+        title="자연·건축·웰니스·미식, 다낭의 또 다른 휴양법",
+        cached_url="https://menu.example/news/banner/advertisement.jpg",
+    ) == "https://cdn.example/2026/danang-hero.jpg"
+
+
+def test_resolve_article_image_keeps_safe_cache_without_body_image() -> None:
+    """본문 이미지가 없으면 안전한 기존 대표 이미지 URL은 유지한다."""
+    assert url_connector.resolve_article_image(
+        markdown="# 이미지 없는 긴 기사 제목입니다\n기사 본문입니다.",
+        title="이미지 없는 긴 기사 제목입니다",
+        cached_url="https://cdn.example/2026/previous-cover.jpg",
+    ) == "https://cdn.example/2026/previous-cover.jpg"
+
+
 def test_parse_jina_reader_response_ignores_unsafe_image_url() -> None:
     """HTTP(S)가 아닌 이미지 후보는 대표 이미지로 사용하지 않는다."""
     raw = "Title: 제목\nMarkdown Content:\n![대표](data:image/png;base64,AAAA)\n본문"

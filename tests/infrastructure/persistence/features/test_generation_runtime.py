@@ -940,6 +940,36 @@ def test_publish_payload_carries_cover_image_from_used_citation() -> None:
     }
 
 
+def test_context_image_replaces_global_cached_banner_from_markdown() -> None:
+    """Global 조회 Context는 배너 캐시 대신 본문 속 기사 이미지를 사용한다."""
+    row = {
+        "namespace_key": "global",
+        "title": "본문 대표 이미지를 다시 찾는 긴 기사 제목",
+        "content": (
+            "![광고](https://menu.example/news/banner/ad.jpg)\n"
+            "# 본문 대표 이미지를 다시 찾는 긴 기사 제목\n"
+            "![사진](https://cdn.example/article/hero.jpg)\n본문"
+        ),
+        "image_url": "https://menu.example/news/banner/ad.jpg",
+    }
+
+    assert generation_runtime._context_image_url(row) == (
+        "https://cdn.example/article/hero.jpg"
+    )
+
+
+def test_context_image_rejects_ui_asset_outside_global_cache() -> None:
+    """개인 Context에 남은 아이콘 URL도 대표 이미지 후보에서 제외한다."""
+    row = {
+        "namespace_key": "user/1",
+        "title": "개인 문서",
+        "content": "본문",
+        "image_url": "https://wiki.example/images/ico_search.png",
+    }
+
+    assert generation_runtime._context_image_url(row) is None
+
+
 def test_publish_payload_derives_taxonomy_topics_from_cited_sources() -> None:
     """인용한 Global 수집 문서의 수집 대상에서 taxonomy Topic을 파생한다(①).
 

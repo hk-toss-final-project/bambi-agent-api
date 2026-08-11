@@ -19,6 +19,10 @@ from psycopg.types.json import Jsonb
 
 from agent.images.api import select_report_cover_image
 from domain.interests.api import ActiveInterestRequiredError, int_012, int_013
+from infrastructure.sources.connectors.api import (
+    is_probable_content_image_url,
+    resolve_article_image,
+)
 from infrastructure.persistence.features.interest_bundles import (
     ConnectionInterestBundleRepository,
 )
@@ -29,6 +33,24 @@ from shared.report_models import ReportContextDocument, GeneratedReportContent
 from shared.wiki_navigation_models import WikiNavigationPacket
 
 type DictRow = dict[str, Any]
+
+
+def _context_image_url(row: Mapping[str, Any]) -> str | None:
+    """조회 Context의 대표 이미지를 본문 기준으로 재검증해 반환한다.
+
+    Global 캐시는 저장된 Markdown에서 기사 이미지를 다시 계산하고, 다른
+    Namespace는 배너·아이콘이 아닌 기존 HTTP(S) 이미지만 유지한다.
+    """
+    cached_url = str(row.get("image_url") or "").strip() or None
+    if str(row.get("namespace_key") or "") == "global":
+        return resolve_article_image(
+            markdown=str(row.get("content") or ""),
+            title=str(row.get("title") or ""),
+            cached_url=cached_url,
+        )
+    if cached_url and is_probable_content_image_url(cached_url):
+        return cached_url
+    return None
 
 
 class StaleContextVersionError(RuntimeError):
@@ -1123,9 +1145,7 @@ async def load_report_context(
                 title=row["title"],
                 content=row["content"],
                 url=row["url"],
-                image_url=(
-                    str(row["image_url"]) if row.get("image_url") else None
-                ),
+                image_url=_context_image_url(row),
                 score=float(row["score"]),
                 context_role=(
                     "global_retrieval"
@@ -1244,9 +1264,7 @@ async def load_global_report_context(
             title=str(row["title"]),
             content=str(row["content"]),
             url=str(row["url"]) if row.get("url") else None,
-            image_url=(
-                str(row["image_url"]) if row.get("image_url") else None
-            ),
+            image_url=_context_image_url(row),
             score=float(row["score"]),
             context_role="global_retrieval",
             source_updated_at=(

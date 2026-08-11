@@ -59,6 +59,17 @@ def test_select_report_cover_image_rejects_unsafe_url() -> None:
     assert selected is None
 
 
+def test_select_report_cover_image_rejects_page_chrome_asset() -> None:
+    """배너·아이콘 같은 사이트 UI 자산은 최종 발행 후보에서도 제외한다."""
+    selected = select_report_cover_image(
+        assets=[_asset("G1", image_url="https://menu.example/news/banner/ad.jpg")],
+        citation_references=["G1"],
+        body="본문 [G1]",
+    )
+
+    assert selected is None
+
+
 def test_img_013_returns_nullable_cover_payload() -> None:
     """IMG-013 facade는 선택 결과를 기존 FeatureResult 계약으로 반환한다."""
     result = asyncio.run(

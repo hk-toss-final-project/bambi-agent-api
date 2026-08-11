@@ -23,6 +23,7 @@ from .features.url import (
     fetch_url_via_jina,
     is_probable_content_image_url,
     parse_jina_reader_response,
+    resolve_article_image,
 )
 from .features.latest import (
     GdeltNewsProvider,
@@ -55,6 +56,7 @@ __all__ = [
     "fetch_url_via_jina",
     "is_probable_content_image_url",
     "parse_jina_reader_response",
+    "resolve_article_image",
     "thumbnail_url",
     "col_001",
     "col_002",

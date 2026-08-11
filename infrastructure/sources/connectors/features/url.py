@@ -147,6 +147,31 @@ def extract_jina_image(text: str, *, title: str = "") -> str | None:
     return next(iter(preferred or fallback), None)
 
 
+def resolve_article_image(
+    *, markdown: str, title: str, cached_url: str | None = None
+) -> str | None:
+    """저장된 기사 본문과 기존 캐시에서 안전한 대표 이미지를 결정한다.
+
+    저장 시점의 선택 규칙이 메뉴·배너를 집어 넣었을 수 있으므로 Markdown에서
+    기사 제목 이후 이미지를 다시 계산한다. 본문에 이미지가 없을 때만 사이트 UI
+    자산이 아닌 기존 캐시를 유지한다.
+
+    Args:
+        markdown: 저장된 Jina Markdown 본문
+        title: 저장된 기사 제목
+        cached_url: 과거에 선택해 저장한 대표 이미지 URL
+
+    Returns:
+        다시 계산한 본문 이미지 또는 안전한 기존 캐시. 둘 다 없으면 ``None``.
+    """
+    body_image = extract_jina_image(markdown, title=title)
+    if body_image is not None:
+        return body_image
+    if cached_url and is_probable_content_image_url(cached_url):
+        return html.unescape(cached_url).strip().strip("<>\"'")
+    return None
+
+
 def parse_jina_reader_response(text: str, *, requested_url: str) -> JinaReadResult:
     """Jina Reader 텍스트 응답을 메타데이터 헤더와 Markdown 본문으로 분리한다.
 
