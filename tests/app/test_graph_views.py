@@ -172,7 +172,27 @@ def test_graph_mermaid_raw_endpoint_rejects_unknown_slug() -> None:
     assert response.json()["code"] == "GRAPH_NOT_FOUND"
 
 
-def test_graphs_page_is_absent_without_dev_flag() -> None:
-    """개발 API 플래그가 없으면 시각화 페이지도 등록되지 않는다."""
-    with TestClient(create_app(Settings(environment="test"))) as client:
+def test_graphs_page_is_available_in_production() -> None:
+    """읽기 전용 그래프 화면은 production 배포에서도 기본 제공해야 한다."""
+    with TestClient(create_app(Settings(environment="production"))) as client:
+        response = client.get("/dev/graphs")
+
+    assert response.status_code == 200
+
+
+def test_graphs_page_is_absent_when_explicitly_disabled() -> None:
+    """그래프 화면 전용 플래그를 끄면 라우터를 등록하지 않는다."""
+    settings = Settings(environment="production", enable_dev_graph_views=False)
+    with TestClient(create_app(settings)) as client:
         assert client.get("/dev/graphs").status_code == 404
+
+
+def test_production_graph_view_does_not_enable_dev_execution_api() -> None:
+    """그래프 화면 공개가 production 동기 실행 API까지 활성화하면 안 된다."""
+    settings = Settings(environment="production", enable_dev_agent_api=True)
+    with TestClient(create_app(settings)) as client:
+        graph_response = client.get("/dev/graphs")
+        execution_response = client.post("/internal/v1/dev/jobs/test-job/run")
+
+    assert graph_response.status_code == 200
+    assert execution_response.status_code == 404

@@ -16,20 +16,22 @@ def build_api_router(settings: Settings) -> APIRouter:
     router.include_router(wiki_graph_router)
     router.include_router(service_router, prefix=settings.api_prefix)
     router.include_router(service_worker_router, prefix=settings.api_prefix)
+    if settings.enable_dev_graph_views:
+        from app.routers.development.graph_views import router as graph_views_router
+
+        # 실행 API와 달리 DB·LLM을 호출하지 않는 공개 읽기 전용 구조 화면이다.
+        router.include_router(graph_views_router, prefix="/dev")
     if settings.dev_agent_api_enabled:
         from app.routers.development.change_history_views import (
             router as change_history_views_router,
         )
         from app.routers.development.design_views import router as design_views_router
-        from app.routers.development.graph_views import router as graph_views_router
         from app.routers.development.routes import router as development_router
 
         router.include_router(
             development_router,
             prefix=f"{settings.api_prefix}/dev",
         )
-        # 사람이 브라우저로 여는 시각화 페이지라 내부 API prefix 없이 /dev에 둔다.
-        router.include_router(graph_views_router, prefix="/dev")
         router.include_router(design_views_router, prefix="/dev")
         # 변경점 추적 테스트 화면은 명세가 지정한 /changeHistory 경로를 그대로 쓴다.
         router.include_router(change_history_views_router)
