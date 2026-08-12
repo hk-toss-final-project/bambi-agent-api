@@ -69,6 +69,15 @@ _gdelt_lock = threading.Lock()
 _gdelt_next_call_at: float = 0.0
 _gdelt_cooldown_until: float = 0.0
 
+# Google News RSS 기사 URL 디코더가 429 또는 /sorry/index를 반환하면 같은 공인
+# IP의 후속 요청도 계속 차단된다. 차단을 감지한 프로세스는 일정 시간 디코딩을
+# 시도하지 않아 Google과 Worker Lease를 함께 보호한다.
+GOOGLE_NEWS_COOLDOWN_SECONDS: float = _env_float(
+    "GOOGLE_NEWS_COOLDOWN_SECONDS", 900.0
+)
+_google_news_lock = threading.Lock()
+_google_news_cooldown_until: float = 0.0
+
 
 def reset_gdelt_rate_limit_state() -> None:
     """GDELT 호출 간격·쿨다운 상태를 초기화한다 (테스트 격리용)."""
@@ -76,6 +85,51 @@ def reset_gdelt_rate_limit_state() -> None:
     with _gdelt_lock:
         _gdelt_next_call_at = 0.0
         _gdelt_cooldown_until = 0.0
+
+
+def reset_google_news_rate_limit_state() -> None:
+    """Google News 디코딩 쿨다운 상태를 초기화한다 (테스트 격리용)."""
+    global _google_news_cooldown_until
+    with _google_news_lock:
+        _google_news_cooldown_until = 0.0
+
+
+def _google_news_cooldown_active() -> bool:
+    """Google News 디코딩 쿨다운이 진행 중인지 반환한다."""
+    with _google_news_lock:
+        return time.monotonic() < _google_news_cooldown_until
+
+
+def _start_google_news_cooldown() -> None:
+    """Google 봇 차단을 감지한 시점부터 디코딩 쿨다운을 건다."""
+    global _google_news_cooldown_until
+    with _google_news_lock:
+        _google_news_cooldown_until = (
+            time.monotonic() + GOOGLE_NEWS_COOLDOWN_SECONDS
+        )
+
+
+def _is_google_news_rate_limit(value: object) -> bool:
+    """외부 디코더 메시지가 Google의 호출 제한·봇 차단인지 판별한다."""
+    message = str(value or "").casefold()
+    return any(
+        marker in message
+        for marker in (
+            "429",
+            "too many requests",
+            "google.com/sorry",
+            "/sorry/index",
+        )
+    )
+
+
+def _google_news_rate_limit_error() -> "LatestProviderError":
+    """내부 차단 URL을 노출하지 않는 Google News 호출 제한 오류를 만든다."""
+    return LatestProviderError(
+        "google_news",
+        "rate_limited",
+        "Google News 기사 URL 디코딩이 일시적으로 차단됐습니다.",
+    )
 
 
 def _reserve_gdelt_slot() -> float:
@@ -440,15 +494,24 @@ def decode_google_news_url(url: str) -> str:
     """
     if "news.google.com" not in url:
         return url
+    if _google_news_cooldown_active():
+        raise _google_news_rate_limit_error()
     try:
         from googlenewsdecoder import gnewsdecoder
 
         result = gnewsdecoder(url)
     except Exception as error:  # noqa: BLE001 — 외부 서비스 의존, 실패는 제외로 처리
+        if _is_google_news_rate_limit(error):
+            _start_google_news_cooldown()
+            raise _google_news_rate_limit_error() from error
         logger.info("Google News URL 디코딩 실패: %s", error)
         return ""
     if not result.get("status"):
-        logger.info("Google News URL 디코딩 실패: %s", result.get("message"))
+        message = result.get("message")
+        if _is_google_news_rate_limit(message):
+            _start_google_news_cooldown()
+            raise _google_news_rate_limit_error()
+        logger.info("Google News URL 디코딩 실패: %s", message)
         return ""
     decoded = str(result.get("decoded_url") or "").strip()
     return decoded if decoded and "news.google.com" not in decoded else ""

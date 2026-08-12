@@ -101,7 +101,7 @@
 
 ### 외부 데이터 자동 수집
 
-- [x] `COL-001` RSS 수집 — Google News RSS 검색 Provider (자격 증명 불필요)
+- [x] `COL-001` RSS 수집 — Google News RSS 검색 Provider (자격 증명 불필요). 기사 URL 디코딩에서 429 또는 Google `/sorry/index` 봇 차단을 감지하면 즉시 `rate_limited`로 실패하고 프로세스 쿨다운(`GOOGLE_NEWS_COOLDOWN_SECONDS`, 기본 900초)을 시작해 남은 기사와 후속 요청을 반복하지 않는다. 다른 뉴스 Provider가 성공하면 그 결과로 계속하고, 결과가 하나도 없으면 수집 실패로 상위 파이프라인에 전달한다
 - [x] `COL-002` Naver API 수집 — Adapter 구현 (자격 증명 필요)
 - [x] `COL-003` GDELT 수집
 - [x] `COL-004` NewsAPI 수집
@@ -109,7 +109,7 @@
 - [x] `GSP-004` API 응답 정규화 — Provider 공통 문서 구조로 변환
 - [x] `GSP-006` 문서 중복 제거 — URL 기준 멱등 Upsert
 - [x] `GSP-015` 개인 Wiki 자동 반영 금지 — Global Namespace 분리 저장
-- [x] `SCH-001` RSS 수집 스케줄 — Google News RSS(`google_news`, COL-001) 정기 수집. 2026-07-28 범위 추가: 영문 키워드에서 가장 정확한 Provider인데(실측 'Cloudflare' 수집 시 Naver 10건 중 관련 3건, google_news 5건 전부 관련) 스케줄에서 빠져 있었다. **명세의 "RSS Source"는 임의 피드 주소를 뜻하지만 이 구현은 키워드 검색이다** — 임의 피드 수집이 필요해지면 별도 Provider로 추가한다. 원본 URL 디코딩 때문에 키워드당 12초쯤 더 걸린다
+- [x] `SCH-001` RSS 수집 스케줄 — Google News RSS(`google_news`, COL-001) 정기 수집. 2026-07-28 범위 추가: 영문 키워드에서 가장 정확한 Provider인데(실측 'Cloudflare' 수집 시 Naver 10건 중 관련 3건, google_news 5건 전부 관련) 스케줄에서 빠져 있었다. **명세의 "RSS Source"는 임의 피드 주소를 뜻하지만 이 구현은 키워드 검색이다** — 임의 피드 수집이 필요해지면 별도 Provider로 추가한다. 정상 시 원본 URL 디코딩 때문에 키워드당 12초쯤 더 걸리며, 차단 시에는 COL-001의 fail-fast·쿨다운 정책을 따른다
 - [x] `SCH-002` Naver API 수집 스케줄 — 독립 Scheduler 프로세스(`scheduler/main.py`)가 tick마다 `agent.global_sources`의 `schedule_cron`·`keywords`를 읽어 실행 차례가 된 Source만 수집 Worker(WORKER-001)로 넘긴다. 판정 순서는 ① Cron 도달 ② 키워드 존재 ③ `quota_policy.daily_max_runs`
 - [x] `SCH-003` GDELT 수집 스케줄 — SCH-002와 동일한 판정·실행 규칙
 - [x] `SCH-004` NewsAPI 수집 스케줄 — 수집 Worker에 `newsapi` Provider(COL-004) 연결 포함. 무료 플랜 호출 한도(일 100회)가 낮아 기본 Provider 목록에서는 제외하고 `quota_policy.daily_max_runs`와 함께 쓴다. (참고: MVP 목록 외 `SCH-009` Wiki Build 조용 시간 트리거는 `enqueue_personal_wiki_build_job` 등록 직후 적용된다. 사용자 대화형 경로인 웹 클리핑·콘텐츠 북마크·URL 수집 후속 저장은 설정과 관계없이 0분으로 즉시 실행하고, 온보딩 시드와 운영 Batch 입력만 `WIKI_BUILD_QUIET_MINUTES`·`WIKI_BUILD_MAX_WAIT_MINUTES` 정책을 선택적으로 사용한다)

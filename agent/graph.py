@@ -1181,6 +1181,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         outcomes_by_topic: dict[str, Any] = {}
         live_keywords_by_topic: dict[str, list[str]] = {}
         completed_topics: list[str] = []
+        live_attempted_topics: list[str] = []
         collected_live = False
         prewarmed_by_topic = state.get("prewarmed_contexts_by_topic") or {}
         read_pipeline_version = str(
@@ -1259,6 +1260,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                         timeout=_TOPIC_RESEARCH_TIMEOUT_SECONDS,
                     )
             except TimeoutError:
+                live_attempted_topics.append(topic)
                 logger.warning(
                     "주제별 조사 실행 시간 초과(%.1f초), 기존 경로로 폴백: topic=%s",
                     _TOPIC_RESEARCH_TIMEOUT_SECONDS,
@@ -1279,6 +1281,8 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             )
             documents_by_topic[topic] = list(outcome.documents)
             collected_live = collected_live or outcome.collected_live
+            if outcome.collected_live:
+                live_attempted_topics.append(topic)
             # 조사 노드가 리포트 시간의 대부분을 쓰는데 안이 안 보였다
             # (2026-08-11 실측: 336초 중 320초). 도구별 호출 수·소요 시간을
             # 작업 결과까지 실어 서버 로그 없이 확인한다.
@@ -1315,6 +1319,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             for topic in topics
             if bool(getattr(outcomes_by_topic.get(topic), "requires_live", False))
         ][:_MAX_LIVE_COLLECT_TOPICS]
+        live_attempted_topics.extend(deferred_topics)
 
         async def collect_deferred_live(
             topic: str,
@@ -1326,11 +1331,20 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 kwargs: dict[str, object] = {"model": state["model"]}
                 if live_keywords_by_topic.get(topic):
                     kwargs["related_keywords"] = live_keywords_by_topic[topic]
-                documents = await to_thread(
-                    collect_live_context,
+                documents = await asyncio.wait_for(
+                    to_thread(
+                        collect_live_context,
+                        topic,
+                        state["user_id"],
+                        **kwargs,
+                    ),
+                    timeout=_TOPIC_RESEARCH_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "V2 다중 주제 실시간 수집 시간 초과(%.1f초): topic=%s",
+                    _TOPIC_RESEARCH_TIMEOUT_SECONDS,
                     topic,
-                    state["user_id"],
-                    **kwargs,
                 )
             except Exception:
                 logger.exception(
@@ -1384,6 +1398,9 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             "research_documents": flattened,
             "research_documents_by_topic": documents_by_topic,
             "research_completed_topics": completed_topics,
+            "research_live_attempted_topics": list(
+                dict.fromkeys(live_attempted_topics)
+            ),
             "research_notes": "\n".join(notes),
             "research_collected_live": collected_live,
             "research_calls": calls,
@@ -1648,8 +1665,14 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         # 빈손으로 돌아오면 이 경로로 넘어오는데, 같은 주제로 같은 수집을 한 번
         # 더 돌리면 지연과 외부 API 호출이 두 배가 된다. 실패했다면 조건이
         # 같으므로 대개 또 실패한다.
-        already_collected_live = bool(state.get("research_collected_live"))
-        skip_live = pool_is_enough or already_collected_live
+        attempted_live_topics = set(
+            state.get("research_live_attempted_topics") or []
+        )
+        live_already_attempted = (
+            bool(state.get("research_collected_live"))
+            or state["topic"] in attempted_live_topics
+        )
+        skip_live = pool_is_enough or live_already_attempted
         # 수집을 실제로 돌 때만 이웃을 조회한다 — 건너뛸 거면 DB 왕복이 낭비다.
         related_keywords = []
         if not skip_live:
@@ -1663,10 +1686,32 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                     context=_topic_context_hint(personal_documents, state["topic"]),
                 )
             )
-        if already_collected_live and not pool_is_enough:
+        if live_already_attempted and not pool_is_enough:
             logger.info(
                 "실시간 수집 생략: topic=%s 조사원이 이미 시도했다.", state["topic"]
             )
+
+        async def collect_single_live() -> list[Any]:
+            """단일 주제 실시간 수집을 시간 제한 안에서 실행한다."""
+            try:
+                return await asyncio.wait_for(
+                    to_thread(
+                        collect_live_context,
+                        state["topic"],
+                        state["user_id"],
+                        model=state["model"],
+                        related_keywords=related_keywords,
+                    ),
+                    timeout=_TOPIC_RESEARCH_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "단일 주제 실시간 수집 시간 초과(%.1f초): topic=%s",
+                    _TOPIC_RESEARCH_TIMEOUT_SECONDS,
+                    state["topic"],
+                )
+                return []
+
         live = await report_005(
             FeatureRequest(
                 request_id=state["job_id"],
@@ -1676,13 +1721,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                     "implementation": (
                         (lambda: [])
                         if skip_live
-                        else lambda: to_thread(
-                            collect_live_context,
-                            state["topic"],
-                            state["user_id"],
-                            model=state["model"],
-                            related_keywords=related_keywords,
-                        )
+                        else collect_single_live
                     )
                 },
             )
@@ -1847,6 +1886,11 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         )
         _record("relevance", relevance_started)
         if pool_is_usable:
+            return stored, False
+        if topic in set(state.get("research_live_attempted_topics") or []):
+            logger.info(
+                "실시간 수집 생략: topic=%s 조사 단계에서 이미 시도했다.", topic
+            )
             return stored, False
         if not allow_live:
             logger.info(

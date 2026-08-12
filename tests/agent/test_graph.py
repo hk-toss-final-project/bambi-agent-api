@@ -1099,6 +1099,39 @@ def test_research_failure_falls_back_to_fixed_collection_path(
     assert result["content_candidate_id"] == "candidate-1"
 
 
+def test_research_timeout_does_not_start_duplicate_live_collection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """조사 시간이 초과되면 폴백 경로가 같은 실시간 수집을 다시 시작하지 않는다."""
+    order: list[str] = []
+    _patch_generation_tail(monkeypatch, order)
+
+    async def slow_research(connection: Any, **kwargs: Any) -> None:
+        """조사 제한보다 오래 걸리는 수집을 재현한다."""
+        order.append("research")
+        await asyncio.sleep(0.05)
+
+    async def fake_global_search(connection: Any, **kwargs: Any) -> list[str]:
+        """시간 초과 뒤 저장 근거 검색을 대체한다."""
+        order.append("load_context")
+        return []
+
+    def fail_duplicate_collect(*args: Any, **kwargs: Any) -> list[Any]:
+        """동일 주제의 두 번째 실시간 수집이 시작되면 테스트를 실패시킨다."""
+        raise AssertionError("시간 초과 뒤 실시간 수집을 중복 실행했습니다.")
+
+    monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: True)
+    monkeypatch.setattr(agent_graph, "research_context", slow_research)
+    monkeypatch.setattr(agent_graph, "search_global_documents", fake_global_search)
+    monkeypatch.setattr(agent_graph, "collect_live_context", fail_duplicate_collect)
+    monkeypatch.setattr(agent_graph, "_TOPIC_RESEARCH_TIMEOUT_SECONDS", 0.01)
+
+    result = _run_generation()
+
+    assert order == ["research", "load_context", "generate", "persist"]
+    assert result["content_candidate_id"] == "candidate-1"
+
+
 def _patch_for_review(
     monkeypatch: pytest.MonkeyPatch, order: list[str]
 ) -> list[str]:

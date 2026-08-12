@@ -181,7 +181,10 @@ def test_claim_personal_wiki_jobs_uses_skip_locked_and_records_attempt() -> None
     claim_sql = connection.executed[0][0]
     assert "FOR UPDATE SKIP LOCKED" in claim_sql
     assert "lease_expires_at" in claim_sql
-    assert "agent.agent_job_attempts" in connection.executed[1][0]
+    attempt_sql = connection.executed[1][0]
+    assert "agent.agent_job_attempts" in attempt_sql
+    assert "status = 'timed_out'" in attempt_sql
+    assert "attempt_number < %s" in attempt_sql
     assert "status = 'processing'" in connection.executed[2][0]
 
 
@@ -397,7 +400,10 @@ def test_claim_agent_job_by_id_records_dev_lease_and_attempt() -> None:
     assert claimed is not None
     assert claimed.job_type == "personal_wiki_url"
     assert connection.executed[0][1] == ("dev-api:run-1", 180, 5, "job-1")
-    assert "agent.agent_job_attempts" in connection.executed[1][0]
+    attempt_sql = connection.executed[1][0]
+    assert "agent.agent_job_attempts" in attempt_sql
+    assert "status = 'timed_out'" in attempt_sql
+    assert "attempt_number < %s" in attempt_sql
 
 
 def test_complete_agent_job_updates_job_attempt_and_source_event() -> None:
@@ -768,6 +774,7 @@ def test_reap_stalled_agent_jobs_marks_exhausted_running_job_failed() -> None:
     assert fail_params[-1] == "job-1"
     attempt_sql = connection.executed[2][0]
     assert "agent.agent_job_attempts" in attempt_sql
+    assert "status = 'timed_out'" in attempt_sql
     event_sql = connection.executed[3][0]
     assert "agent.wiki_source_events" in event_sql
 

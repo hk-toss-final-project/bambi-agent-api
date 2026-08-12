@@ -40,6 +40,10 @@ _SNIPPET_CHARS = 280
 _DEFAULT_MAX_AGE_HOURS = 48.0
 
 
+class NewsProviderCollectionError(RuntimeError):
+    """뉴스 Provider 결과가 하나도 없고 하나 이상 실패했음을 알리는 예외."""
+
+
 def _build_default_providers() -> list["LatestInformationProvider"]:
     """환경 자격 증명에 맞춰 사용할 뉴스 Provider 목록을 만든다.
 
@@ -121,8 +125,10 @@ def fetch_provider_entries(
         )
 
     entries: list[dict[str, object]] = []
+    failed_providers: list[str] = []
     for provider, result in zip(selected, asyncio.run(_search_all()), strict=True):
         if isinstance(result, BaseException):
+            failed_providers.append(provider.name)
             logger.warning(
                 "뉴스 Provider %s 조회 실패, 나머지 소스로 계속한다: %s",
                 provider.name,
@@ -130,6 +136,11 @@ def fetch_provider_entries(
             )
             continue
         entries.extend(_article_to_entry(article) for article in result)
+    if not entries and failed_providers:
+        names = ", ".join(failed_providers)
+        raise NewsProviderCollectionError(
+            f"뉴스 Provider 수집에 실패했습니다: {names}"
+        )
     return entries
 
 
