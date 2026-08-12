@@ -326,18 +326,18 @@ def test_maintenance_rebuild_enqueues_for_each_stale_user(
 def test_maintenance_rebuild_pins_selected_pipeline_version(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """정기 유지 Job은 Scheduler가 선택한 실행 버전을 등록 시점에 고정한다."""
+    """정기 유지 Job은 Scheduler가 선택한 V3 실행 버전을 등록 시점에 고정한다."""
     calls = _stub_maintenance(monkeypatch, users=["user-1"])
 
     asyncio.run(
         wiki_scheduler.schedule_personal_wiki_maintenance_rebuilds(
             object(),  # type: ignore[arg-type]
             now=datetime(2026, 8, 10, 3, 0, tzinfo=UTC),
-            maintenance_pipeline_version="langgraph_v2",
+            maintenance_pipeline_version="langgraph_v3",
         )
     )
 
-    assert calls["enqueue"][0]["version"] == "langgraph_v2"
+    assert calls["enqueue"][0]["version"] == "langgraph_v3"
 
 
 def test_maintenance_rebuild_reports_existing_job(

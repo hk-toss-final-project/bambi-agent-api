@@ -21,12 +21,52 @@ from infrastructure.persistence.features.jobs import (
     defer_agent_job_for_provider,
     enqueue_global_collection_run_job,
     enqueue_personal_wiki_build_job,
+    enqueue_personal_wiki_maintenance_rebuild_job,
+    enqueue_personal_wiki_rebuild_job,
     extend_agent_job_lease,
     fail_agent_job,
     get_agent_jobs,
     reap_stalled_agent_jobs,
     release_user_wiki_build_jobs,
 )
+
+
+def test_rebuild_job_accepts_and_pins_langgraph_v3() -> None:
+    """원본 제거 재구성 Job Payload에 선택한 유지 V3를 접수 시점 고정한다."""
+    connection = _FakeConnection([[{"id": "job-v3"}], []])
+
+    result = asyncio.run(
+        enqueue_personal_wiki_rebuild_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            source_event_id="delete-event-1",
+            source_event_row_id="event-row-1",
+            removed_source_document_id="source-1",
+            maintenance_pipeline_version="langgraph_v3",
+        )
+    )
+
+    assert result.job_id == "job-v3"
+    payload = connection.executed[0][1][3].obj
+    assert payload["maintenance_pipeline_version"] == "langgraph_v3"
+
+
+def test_scheduled_maintenance_job_accepts_and_pins_langgraph_v3() -> None:
+    """정기 유지 Job Payload에도 선택한 유지 V3를 접수 시점 고정한다."""
+    connection = _FakeConnection([[{"id": "maintenance-job-v3"}]])
+
+    result = asyncio.run(
+        enqueue_personal_wiki_maintenance_rebuild_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            maintenance_key="2026-08-12",
+            maintenance_pipeline_version="langgraph_v3",
+        )
+    )
+
+    assert result.job_id == "maintenance-job-v3"
+    payload = connection.executed[0][1][3].obj
+    assert payload["maintenance_pipeline_version"] == "langgraph_v3"
 
 
 class _FakeCursor:

@@ -110,6 +110,10 @@ class AgentWorkflowService:
                         ),
                         rebuild_runner=self._wiki_rebuild_runner,
                         model=self._settings.wiki_llm_model,
+                        embedding_model=self._settings.wiki_embedding_model,
+                        embedding_batch_threshold=(
+                            self._settings.wiki_embedding_batch_threshold
+                        ),
                     )
                 return "wiki_rebuild", result
             source_version_id = str(

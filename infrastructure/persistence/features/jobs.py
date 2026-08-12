@@ -26,6 +26,10 @@ LEASE_TIMEOUT_ERROR_MESSAGE = (
 
 type DictRow = dict[str, Any]
 
+_MAINTENANCE_PIPELINE_VERSIONS = frozenset(
+    {"legacy_v1", "langgraph_v2", "langgraph_v3"}
+)
+
 
 @dataclass(frozen=True, slots=True)
 class CompletedAgentJobAnchor:
@@ -898,7 +902,7 @@ async def enqueue_personal_wiki_rebuild_job(
     기존 Worker와 상태 조회 계약을 재사용하기 위해 Job 유형은
     ``personal_wiki_build``를 유지하고 Payload의 ``mode``로 전체 재빌드를 구분한다.
     """
-    if maintenance_pipeline_version not in {"legacy_v1", "langgraph_v2"}:
+    if maintenance_pipeline_version not in _MAINTENANCE_PIPELINE_VERSIONS:
         raise ValueError(
             "지원하지 않는 Wiki 유지 파이프라인 버전입니다: "
             f"{maintenance_pipeline_version}"
@@ -1073,7 +1077,7 @@ async def enqueue_personal_wiki_maintenance_rebuild_job(
     """
     if not maintenance_key:
         raise ValueError("정기 재구성에 maintenance_key가 필요합니다.")
-    if maintenance_pipeline_version not in {"legacy_v1", "langgraph_v2"}:
+    if maintenance_pipeline_version not in _MAINTENANCE_PIPELINE_VERSIONS:
         raise ValueError(
             "지원하지 않는 Wiki 유지 파이프라인 버전입니다: "
             f"{maintenance_pipeline_version}"

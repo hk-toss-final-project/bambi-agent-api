@@ -6,6 +6,8 @@
 > Full Rebuild의 LangGraph 내부 단계화
 >
 > 호환 버전: `legacy_v1`, `langgraph_v2`, `langgraph_v3`
+>
+> 구현 상태: 코드·무료 결정적 테스트 완료, Provider 벤치마크는 비용 승인 전 미실행
 
 ## 1. 목표
 
@@ -51,18 +53,21 @@ Version과 provenance를 갖는다.
 
 ```text
 operational_audit
-  → route_operational_action
+  → plan_operational
       ├─ full_rebuild → V3 Full Rebuild Subgraph
       └─ continue
-  → load_semantic_snapshot
+  → load_snapshot
   → structural_lint
-  → generate_global_candidates
+      ├─ 오류이며 미재구성 → full_rebuild (최대 1회)
+      └─ 재구성 후에도 오류 → structural_failure
+  → generate_candidates
   → semantic_lint
   → plan_repairs
   → apply_internal_repairs
-  → request_external_research
+  → research_knowledge_gaps
   → repair_derivatives
-  → persist_lint_summary
+  → refresh_interest_profile
+  → persist_summary
   → finalize
 ```
 
@@ -81,13 +86,15 @@ load_manifest
   → classify_source
   → prepare_identity
   → resolve_identity
+  → validate_identity
+  → recall_relations
   → link_relations
   → plan_source
-  → accumulate_snapshot
+  → accumulate_source
   → select_source (다음 원본이 있으면 반복)
   → validate_snapshot
-  → commit_atomic_replacement
-  → embed_changed_documents
+  → atomic_persist
+  → embed
   → finalize
 ```
 
@@ -145,6 +152,10 @@ knowledge_gap
 않는다. 검색이나 URL 등록 실패는 해당 공백 결과에 기록하되, 이미 검증된 내부 Wiki
 수정은 되돌리지 않는다.
 
+URL은 HTTP(S) 공개 주소만 허용한다. localhost·사설/비전역 IP·인증정보 포함 URL·
+잘못된 port는 등록 전에 제외하고 fragment를 제거한다. 한 URL 등록 실패는 독립
+Transaction으로 격리해 나머지 URL 등록을 계속한다.
+
 ## 7. 안전성과 비용 상한
 
 - 자동 모순 처리는 기존 주장을 물리 삭제하거나 출처 없이 덮어쓰지 않는다.
@@ -166,6 +177,10 @@ knowledge_gap
 4. 문제가 생기면 환경변수를 `langgraph_v2` 또는 `legacy_v1`로 되돌린다. 이미
    등록된 Job은 Payload에 고정된 버전으로 완료한다.
 
+Scheduler의 기존 정기 유지 대상 선정·Job 등록 주기는 그대로 사용한다.
+`WIKI_MAINTENANCE_PIPELINE_VERSION=langgraph_v3`로 실행된 새 정기 Job만 V3 의미
+감사 경로를 타며, 기본값은 canary 검증 전까지 `langgraph_v2`다.
+
 ## 9. 완료 조건
 
 - `legacy_v1`과 `langgraph_v2` 테스트·결과 계약이 유지된다.
@@ -177,3 +192,12 @@ knowledge_gap
 - `/dev/graphs`, 설정 허용값, Job 등록 검증, Worker 버전 라우팅이 V3와 동기화된다.
 - 최소 10개 의미 감사 벤치마크 데이터셋과 실행기가 있으며 실제 실행 여부와 비용을
   사실대로 보고한다.
+
+## 10. 검증 현황
+
+- 의미 감사 데이터셋: 13개 케이스
+- 실제 호출 전 추정: 13 API 호출, 입력 약 19,774 Token 상한, 출력 13,000 Token 상한
+- `uv run pytest`: 실제 LLM·검색 호출 없이 mock과 결정적 함수로 실행
+- 실제 Provider 벤치마크: API 비용 승인이 필요하므로 아직 실행하지 않음
+- 그래프 시각화: `/dev/graphs`의 `wiki-maintenance-v3`,
+  `wiki-full-rebuild-v3`에서 실제 노드·엣지 확인 가능

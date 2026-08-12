@@ -75,7 +75,7 @@ def test_run_personal_wiki_batch_delegates_to_shared_runner(
 def test_process_job_uses_pinned_maintenance_pipeline_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Worker가 현재 설정 대신 Job에 고정된 유지 V2 버전과 트리거를 실행한다."""
+    """Worker가 Job에 고정된 유지 V3와 현재 Embedding 설정을 실행한다."""
     captured: dict[str, Any] = {}
 
     async def fake_maintenance(connection: Any, **kwargs: Any) -> dict[str, object]:
@@ -105,14 +105,16 @@ def test_process_job_uses_pinned_maintenance_pipeline_version(
     result = asyncio.run(
         personal_wiki_builder._process_job(
             _FakeConnection(),  # type: ignore[arg-type]
-            job=_full_rebuild_job("langgraph_v2"),
+            job=_full_rebuild_job("langgraph_v3"),
             worker_id="worker-1",
             model="wiki-model",
+            embedding_model="embedding-model",
             embedding_batch_threshold=20,
         )
     )
 
     assert result["maintenance_action"] == "noop"
-    assert captured["pipeline_version"] == "langgraph_v2"
+    assert captured["pipeline_version"] == "langgraph_v3"
     assert captured["trigger"] == "scheduled_maintenance"
     assert captured["model"] == "wiki-model"
+    assert captured["embedding_model"] == "embedding-model"

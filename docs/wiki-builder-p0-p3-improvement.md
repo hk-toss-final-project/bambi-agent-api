@@ -175,6 +175,11 @@ Job 접수 시 `maintenance_pipeline_version`을 고정하므로 V2 적용 뒤�
 실제 PostgreSQL을 사용한 전체 재구성 운영 검증과 정기 재구성의 LLM 비용 관측은
 아직 남아 있다.
 
+후속 `langgraph_v3`는 정기 트리거를 그대로 사용하되, 저장된 Metric만 보지 않고
+현재 Snapshot의 구조·의미를 다시 감사한다. 누락 주제·관계는 선택적으로 수리하고
+외부 지식 공백은 URL 수집과 쓰기 루프로 넘긴다. 구현·롤백 계약은
+`docs/wiki-maintenance-v3.md`에 기록한다.
+
 ## 6. Degree 의미
 
 `degree`는 화면·관심사·P3 Gate에서 의미가 다르므로 같은 숫자로 해석하면 안 된다.
