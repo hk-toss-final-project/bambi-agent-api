@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from hashlib import sha256
 from typing import Any
 
 from psycopg import AsyncConnection
@@ -120,7 +121,19 @@ async def wnav_006(
             max_pages=max_pages,
         )
     except Exception as error:  # noqa: BLE001 - Page Read 보존 폴백
-        logger.warning("Navigator 관계 탐색 실패, Seed Page만 사용합니다: %s", error)
+        logger.warning(
+            "event=wiki_navigation_relation_traversal_failed "
+            "user_id=%s query_hash=%s wiki_version_id=%s seed_page_count=%d "
+            "max_depth=%d max_pages=%d error_type=%s error=%s",
+            user_id,
+            sha256(query.strip().encode("utf-8")).hexdigest()[:16],
+            wiki_version_id or "-",
+            len(seed_document_ids),
+            max_depth,
+            max_pages,
+            type(error).__name__,
+            error,
+        )
         traversal = WikiNavigationTraversal(tuple(seed_document_ids), ())
         fallback_reason = "relation_traversal_failed"
     pages = await wnav_002(

@@ -1,10 +1,15 @@
 """LLM Wiki Navigator의 Locate·Read·Traverse·Packet 계약을 검증한다."""
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
+from hashlib import sha256
+from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 from domain.personal_wiki.navigation.features import locate, packet, read, traversal
 from shared.wiki_navigation_models import WikiNavigationCandidate
@@ -351,3 +356,51 @@ def test_packet_contains_context_without_answer_field() -> None:
     assert result.candidates == (candidate,)
     assert result.trace[0].step == "locate"
     assert not hasattr(result, "answer")
+
+
+def test_navigation_relation_failure_emits_countable_log(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """관계 폴백을 집계 가능한 이벤트로 남기고 원문 Query는 숨긴다."""
+    page = SimpleNamespace(
+        document_id="seed-document",
+        document_version_id="seed-version",
+    )
+
+    async def fake_pages(*args: Any, **kwargs: Any) -> list[Any]:
+        """Seed Page 읽기와 폴백 후 재읽기에 같은 Page를 반환한다."""
+        return [page]
+
+    async def fail_traversal(*args: Any, **kwargs: Any) -> Any:
+        """관계 저장소 장애를 재현한다."""
+        raise RuntimeError("relation database unavailable")
+
+    async def fake_sources(*args: Any, **kwargs: Any) -> list[Any]:
+        """관계 폴백 로그 검증에서 Source 조회를 비운다."""
+        return []
+
+    monkeypatch.setattr(packet, "wnav_002", fake_pages)
+    monkeypatch.setattr(packet, "wnav_003", fail_traversal)
+    monkeypatch.setattr(packet, "wnav_004", fake_sources)
+    raw_query = "사용자 원문 검색어"
+
+    with caplog.at_level(logging.WARNING, logger=packet.logger.name):
+        result = asyncio.run(
+            packet.wnav_006(
+                _Connection(),  # type: ignore[arg-type]
+                user_id="user-77",
+                query=raw_query,
+                selected_document_version_ids=["seed-version"],
+                max_depth=1,
+                max_pages=6,
+            )
+        )
+
+    assert result.fallback_reason == "relation_traversal_failed"
+    event = caplog.messages[-1]
+    assert "event=wiki_navigation_relation_traversal_failed" in event
+    assert f"query_hash={sha256(raw_query.encode('utf-8')).hexdigest()[:16]}" in event
+    assert "seed_page_count=1" in event
+    assert "error_type=RuntimeError" in event
+    assert raw_query not in event
