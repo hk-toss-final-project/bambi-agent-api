@@ -78,6 +78,7 @@ class GenerationScope(StrEnum):
 
     SINGLE_TOPIC = "SINGLE_TOPIC"
     INTEREST_BUNDLE = "INTEREST_BUNDLE"
+    WIKI_BRIEFING = "WIKI_BRIEFING"
 
 
 class HealthResponse(ImmutableSchema):
@@ -372,7 +373,8 @@ class GenerationRequest(ImmutableSchema):
         default=GenerationScope.SINGLE_TOPIC,
         description=(
             "검색 범위. SINGLE_TOPIC은 요청 topic·topics를 사용하고, "
-            "INTEREST_BUNDLE은 활성 LLM Wiki 관심사와 연결 노드 묶음을 사용한다."
+            "INTEREST_BUNDLE은 활성 LLM Wiki 관심사와 연결 노드 묶음을 사용하며, "
+            "WIKI_BRIEFING은 날짜별 개인 Wiki 주제를 준비한 뒤 사용한다."
         ),
     )
     interest_id: UUID | None = Field(
@@ -481,6 +483,16 @@ class GenerationRequest(ImmutableSchema):
             if self.topics:
                 raise ValueError("INTEREST_BUNDLE에서는 topics를 함께 보낼 수 없습니다.")
             return self
+        if self.generation_scope is GenerationScope.WIKI_BRIEFING:
+            if self.briefing_date is None:
+                raise ValueError("WIKI_BRIEFING에는 briefing_date가 필요합니다.")
+            if self.interest_id is not None:
+                raise ValueError("WIKI_BRIEFING에서는 interest_id를 보낼 수 없습니다.")
+            if self.topics:
+                raise ValueError("WIKI_BRIEFING에서는 topics를 미리 보낼 수 없습니다.")
+            if self.topic is None or not self.topic.strip():
+                raise ValueError("WIKI_BRIEFING에는 카드 제목용 topic이 필요합니다.")
+            return self
         if self.topic is None or not self.topic.strip():
             raise ValueError("SINGLE_TOPIC에는 topic이 필요합니다.")
         return self
@@ -496,6 +508,8 @@ class GenerationRequest(ImmutableSchema):
     def validate_execution_mode(self) -> "GenerationRequest":
         """Batch가 지원하지 않는 변경점 추적·다중 주제 요청을 접수 전에 차단한다."""
         if self.execution_mode is GenerationExecutionMode.BATCH:
+            if self.generation_scope is GenerationScope.WIKI_BRIEFING:
+                raise ValueError("batch 실행은 WIKI_BRIEFING을 지원하지 않습니다.")
             if self.change_history_enabled:
                 raise ValueError("batch 실행은 change_history_enabled를 지원하지 않습니다.")
             if self.topics:

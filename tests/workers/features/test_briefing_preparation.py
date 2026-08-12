@@ -141,6 +141,36 @@ class _FakeService:
         )
 
 
+def test_prepare_briefing_snapshot_selects_wiki_topics_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Snapshot 미준비 상태는 Wiki 선정·근거 수집·저장을 한 번씩 수행한다."""
+    service = _FakeService()
+
+    async def fake_collect(*args: Any, **kwargs: Any) -> dict[str, list[Any]]:
+        """선정 주제에 대응하는 고정 근거를 반환한다."""
+        assert kwargs["topics"] == ["반도체"]
+        return {"반도체": [_context("P1", "user/user-1")]}
+
+    monkeypatch.setattr(briefing_preparation, "_collect_prepared_contexts", fake_collect)
+
+    snapshot = asyncio.run(
+        briefing_preparation.prepare_briefing_snapshot(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            briefing_date=date(2026, 8, 12),
+            limit=3,
+            prepared_by_job_id="report-job-1",
+            model="report-model",
+            service=service,  # type: ignore[arg-type]
+        )
+    )
+
+    assert snapshot.topics == ("반도체",)
+    assert service.selected == 1
+    assert service.saved == 1
+
+
 def test_process_job_reuses_existing_snapshot_without_llm_or_research(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
