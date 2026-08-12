@@ -123,6 +123,38 @@ def test_low_scoring_interests_are_not_collected() -> None:
     assert subscribed == ["오스틴딘"]
 
 
+def test_non_subject_wiki_nodes_are_not_collection_targets() -> None:
+    """도구·출처·단순 언급 노드는 점수가 높아도 뉴스 검색어로 등록하지 않는다."""
+    connection = _connection()
+
+    subscribed = _sync(
+        connection,
+        [
+            {
+                "topic": "DBeaver Community",
+                "score": 1.0,
+                "evidence": {"interest_subject": False},
+            },
+            {
+                "topic": "PostgreSQL 인덱스",
+                "score": 0.8,
+                "evidence": {"interest_subject": True},
+            },
+        ],
+    )
+
+    assert subscribed == ["PostgreSQL 인덱스"]
+
+
+def test_legacy_interest_without_role_judgment_remains_collectable() -> None:
+    """역할 판정이 없던 기존 관심사는 재빌드 전에도 수집을 유지한다."""
+    connection = _connection()
+
+    subscribed = _sync(connection, [{"topic": "기존 관심사", "score": 1.0}])
+
+    assert subscribed == ["기존 관심사"]
+
+
 def test_registration_is_capped() -> None:
     """관심사가 많아도 상한까지만 등록한다."""
     connection = _connection()

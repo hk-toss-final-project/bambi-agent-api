@@ -1,8 +1,9 @@
 """관심사 taxonomy Snapshot과 Topic 수집 구독 영속화."""
 
 import hashlib
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
@@ -242,6 +243,21 @@ _WIKI_INTEREST_TARGET_LIMIT = 5
 _WIKI_INTEREST_SCORE_FLOOR = 0.3
 
 
+def _is_search_worthy_interest(interest: Mapping[str, Any]) -> bool:
+    """Wiki에서 실제 주제로 판정된 관심사만 자동 수집 대상으로 허용한다.
+
+    Wiki Builder는 노드가 원문의 주제인지, 도구·출처·단순 언급인지
+    ``interest_subject``로 누적 기록한다. 명시적으로 주제가 아니라고 판정된
+    노드는 제목을 그대로 뉴스 검색어로 등록하지 않는다. 이전 Build처럼 판정값이
+    없는 관심사는 호환성을 위해 허용한다.
+    """
+    evidence = interest.get("evidence")
+    return not (
+        isinstance(evidence, Mapping)
+        and evidence.get("interest_subject") is False
+    )
+
+
 async def sync_wiki_interest_collection_targets(
     connection: AsyncConnection[DictRow],
     *,
@@ -282,6 +298,8 @@ async def sync_wiki_interest_collection_targets(
     candidates: list[str] = []
     seen: set[str] = set()
     for interest in interests:
+        if not _is_search_worthy_interest(interest):
+            continue
         topic_name = " ".join(str(interest.get("topic") or "").split())
         if not topic_name:
             continue

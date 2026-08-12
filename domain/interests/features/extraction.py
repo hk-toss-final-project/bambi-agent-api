@@ -36,6 +36,7 @@ class _NodeGroup:
     aliases: set[str] = field(default_factory=set)
     source_types: set[str] = field(default_factory=set)
     last_activity_at: str | None = None
+    interest_subject: bool | None = None
 
     def absorb(self, node: Mapping[str, object]) -> None:
         """같은 제목을 가진 노드 하나의 신호를 누적한다."""
@@ -48,6 +49,11 @@ class _NodeGroup:
             self.document_kinds.add(document_kind)
         self.aliases.update(_aliases(node.get("source_metadata")))
         self.source_types.update(_source_types(node.get("source_types")))
+        subject_judgment = _interest_subject(node.get("source_metadata"))
+        if subject_judgment is True:
+            self.interest_subject = True
+        elif subject_judgment is False and self.interest_subject is None:
+            self.interest_subject = False
         if self.category is None and domain not in _GENERIC_DOMAINS:
             self.category = domain
         activity = _isoformat(node.get("last_activity_at"))
@@ -82,6 +88,18 @@ def _aliases(metadata: object) -> list[str]:
             seen.add(marker)
             result.append(alias)
     return result
+
+
+def _interest_subject(metadata: object) -> bool | None:
+    """노드 Metadata의 관심 주제 역할 판정을 읽는다.
+
+    기존 Build에서 만든 노드는 이 값이 없을 수 있다. 누락을 거짓으로 취급하면
+    재빌드 전 사용자 관심사가 한꺼번에 사라지므로 미판정 상태로 보존한다.
+    """
+    if not isinstance(metadata, Mapping):
+        return None
+    value = metadata.get("interest_subject")
+    return value if isinstance(value, bool) else None
 
 
 def _source_types(value: object) -> list[str]:
@@ -224,6 +242,7 @@ async def int_001(
                 "source_types": sorted(group.source_types),
                 "aliases": sorted(group.aliases),
                 "document_kinds": sorted(group.document_kinds),
+                "interest_subject": group.interest_subject,
                 "last_activity_at": group.last_activity_at,
                 "reasons": ["wiki_node"],
             },
