@@ -155,16 +155,28 @@ def _provider_error_code(error: Exception) -> str:
     return ""
 
 
-def is_retryable_openai_error(error: Exception) -> bool:
-    """일시 오류만 재시도하고 quota·billing 오류는 사용자 조치 대상으로 남긴다."""
-    code = _provider_error_code(error)
-    action_required_codes = {
+_ACTION_REQUIRED_ERROR_CODES = frozenset(
+    {
         "billing_hard_limit_reached",
         "billing_not_active",
         "insufficient_quota",
         "quota_exceeded",
     }
-    return code not in action_required_codes
+)
+
+
+def is_openai_action_required_error(error: Exception) -> bool:
+    """결제·Quota 조치가 필요한 OpenAI 오류인지 판정한다."""
+    return isinstance(error, _transient_error_types()) and (
+        _provider_error_code(error) in _ACTION_REQUIRED_ERROR_CODES
+    )
+
+
+def is_retryable_openai_error(error: Exception) -> bool:
+    """일시 오류만 재시도하고 quota·billing 오류는 사용자 조치 대상으로 남긴다."""
+    return isinstance(error, _transient_error_types()) and not (
+        is_openai_action_required_error(error)
+    )
 
 
 def retry_after_seconds_from_error(error: Exception) -> float | None:
