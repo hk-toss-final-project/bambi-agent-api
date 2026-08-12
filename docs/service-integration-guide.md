@@ -154,6 +154,7 @@ flowchart LR
 |---|---|---|
 | `idempotency_key` | O | **`{schedule window}-{user_id}-{content_type}` 규칙 권장** (예: `2026-07-21-user-1-interest_news_card`). 스케줄러 재시도·중복 실행에도 Job이 한 번만 생김. **완성 카드의 `request_idempotency_key`로 그대로 되돌아오므로**, Pending 행과 잇는 키로도 쓸 수 있음 |
 | `generation_scope` | X | 기본 `SINGLE_TOPIC`. 특정 활성 LLM Wiki 관심사 묶음은 `INTEREST_BUNDLE`, 미준비 아침 브리핑을 Job 안에서 준비할 때 `WIKI_BRIEFING` |
+| `navigation_profile` | X | 단일 주제 온디맨드는 `ON_DEMAND_2HOP`. 생략한 기존 요청과 아침 브리핑은 `DEFAULT_1HOP`. `topics`·`WIKI_BRIEFING`·Batch와 함께 사용 불가 |
 | `topic` | 조건부 | `SINGLE_TOPIC`에서 실제 검색어. `INTEREST_BUNDLE`에서는 생략. `WIKI_BRIEFING`에서는 카드 제목용 문구 |
 | `interest_id` | 조건부 | `INTEREST_BUNDLE`에서 필수. **온보딩 taxonomy ID가 아니라 현재 활성 `user_interests.id` UUID** |
 | `topics` | X | 서로 독립된 여러 주제를 한 장에 묶는 입력. `INTEREST_BUNDLE`·`WIKI_BRIEFING`과 함께 사용 불가 |
@@ -162,6 +163,21 @@ flowchart LR
 | `briefing_date` | X | REPORT-022 준비 Snapshot을 재사용할 KST 날짜(`YYYY-MM-DD`). 아침 브리핑에서만 명시하며, 같은 사용자·주제 목록이 일치할 때만 재사용 |
 | `language` | X | 생략 시 컨텍스트의 선호 언어 사용 |
 | `scheduled_at` | X | 실행 예약 시각. **시간대 필수** (`2026-07-21T07:00:00+09:00`). 시간대 없으면 `422`. 생략 시 즉시 실행 대상 |
+
+단일 주제 온디맨드 요청 예시:
+
+```json
+{
+  "idempotency_key": "ondemand:user-1:AI-에이전트:ON_DEMAND_2HOP:2026-08-12T09:30",
+  "topic": "AI 에이전트",
+  "navigation_profile": "ON_DEMAND_2HOP",
+  "content_type": "interest_news_card",
+  "report_type": "ON_DEMAND"
+}
+```
+
+이 프로필은 Seed 최대 2개에서 개인 Wiki 2홉까지 읽되 전체 6 Page·12 Chunk 상한을
+유지한다. 아침 브리핑 요청에는 보내지 않는다.
 
 특정 관심분야 리포트 요청 예시:
 

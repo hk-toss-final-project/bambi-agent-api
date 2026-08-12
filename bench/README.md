@@ -1,8 +1,16 @@
 # LLM 기능 벤치마크
 
-`tests/`와 달리 실제 Provider를 호출하므로 자동 테스트나 CI에서 실행하지 않습니다.
-각 실행기는 케이스별 결과, 지연시간, 토큰과 전달받은 단가 기준 예상 비용을
-`results/`에 기록합니다. 실행 전에는 반드시 예상 호출 수와 비용 승인을 받습니다.
+대부분 `tests/`와 달리 실제 Provider를 호출하므로 자동 테스트나 CI에서 실행하지
+않습니다. 각 실행기는 케이스별 결과, 지연시간, 토큰과 전달받은 단가 기준 예상
+비용을 `results/`에 기록합니다. 실행 전에는 반드시 예상 호출 수와 비용 승인을
+받습니다. `bench/ondemand_navigation/`처럼 Provider를 사용하지 않는 결정적 실행기는
+비용 승인 없이 실행할 수 있으며 결과에 `Token·비용: 0`을 명시합니다.
+
+온디맨드 전용 2-hop 정책은 같은 10개 Graph에서 기존 1-hop과 무료로 비교합니다.
+
+```bash
+uv run python bench/ondemand_navigation/run.py
+```
 
 ```bash
 uv run python bench/custom_topic_context/run.py --estimate-only

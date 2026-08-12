@@ -81,6 +81,12 @@ class GenerationScope(StrEnum):
     WIKI_BRIEFING = "WIKI_BRIEFING"
 
 
+class WikiNavigationProfile(StrEnum):
+    """리포트 생성에서 사용할 개인 Wiki 탐색 정책."""
+
+    ON_DEMAND_2HOP = "ON_DEMAND_2HOP"
+
+
 class HealthResponse(ImmutableSchema):
     """Liveness와 Readiness 상태 응답."""
 
@@ -377,6 +383,13 @@ class GenerationRequest(ImmutableSchema):
             "WIKI_BRIEFING은 날짜별 개인 Wiki 주제를 준비한 뒤 사용한다."
         ),
     )
+    navigation_profile: WikiNavigationProfile | None = Field(
+        default=None,
+        description=(
+            "개인 Wiki 탐색 정책. ON_DEMAND_2HOP은 단일 주제 온디맨드 생성에서만 "
+            "사용하며, 생략한 기존 요청과 아침 브리핑은 1-hop으로 실행한다."
+        ),
+    )
     interest_id: UUID | None = Field(
         default=None,
         description="INTEREST_BUNDLE에서 사용할 현재 활성 관심사 UUID",
@@ -477,6 +490,12 @@ class GenerationRequest(ImmutableSchema):
     @model_validator(mode="after")
     def validate_generation_scope(self) -> "GenerationRequest":
         """범위별 필수 식별자를 확인하고 서로 다른 입력 방식을 섞지 않게 한다."""
+        if self.navigation_profile is not None and (
+            self.generation_scope is not GenerationScope.SINGLE_TOPIC or self.topics
+        ):
+            raise ValueError(
+                "navigation_profile은 topics가 없는 SINGLE_TOPIC에서만 사용할 수 있습니다."
+            )
         if self.generation_scope is GenerationScope.INTEREST_BUNDLE:
             if self.interest_id is None:
                 raise ValueError("INTEREST_BUNDLE에는 interest_id가 필요합니다.")
@@ -508,6 +527,8 @@ class GenerationRequest(ImmutableSchema):
     def validate_execution_mode(self) -> "GenerationRequest":
         """Batch가 지원하지 않는 변경점 추적·다중 주제 요청을 접수 전에 차단한다."""
         if self.execution_mode is GenerationExecutionMode.BATCH:
+            if self.navigation_profile is not None:
+                raise ValueError("batch 실행은 navigation_profile을 지원하지 않습니다.")
             if self.generation_scope is GenerationScope.WIKI_BRIEFING:
                 raise ValueError("batch 실행은 WIKI_BRIEFING을 지원하지 않습니다.")
             if self.change_history_enabled:

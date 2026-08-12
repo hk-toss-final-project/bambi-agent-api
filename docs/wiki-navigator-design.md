@@ -132,6 +132,22 @@ Report Builder의 Reader가 Navigator Tool을 사용한다.
 개인 Wiki 조회는 Navigator facade만 사용한다. 관심사 Bundle의 고정 Version은
 Navigator Seed로 전달하고, 일반 주제도 같은 Packet 계약을 사용한다.
 
+리포트 생성은 다음 탐색 프로필을 사용한다.
+
+| 프로필 | 적용 경로 | Seed | 깊이별 Page 예산 | 전체 상한 |
+|---|---|---:|---|---|
+| `DEFAULT_1HOP` | 아침 브리핑·기존 Job | 기존 선택(최대 6, V2 자동 선택은 최대 3) | 1홉, 남은 전체 Page | 6 Page·12 Chunk |
+| `ON_DEMAND_2HOP` | 사용자가 고른 단일 주제 온디맨드 | 최대 2 | 1홉 2 + 2홉 2, 앞 단계 미사용분 이월 | 6 Page·12 Chunk |
+
+`ON_DEMAND_2HOP`이 관심사 Bundle Snapshot과 함께 쓰이면 루트 Wiki 문서만
+Navigator Seed로 삼는다. Bundle의 1홉 이웃 문서는 Global·Live 검색 키워드로는
+유지하지만 탐색 시작점으로 쓰지 않는다. 이웃에서 다시 2홉을 순회해 루트 기준
+3홉이 되는 것을 막기 위한 경계다.
+
+Page 후보가 깊이별 예산보다 많으면 관계 confidence를 경로마다 곱한 누적 신뢰도
+내림차순으로 고르고 Page·relation ID로 동률을 결정한다. 저신뢰·rejected·support
+없는 관계는 기존 Gate에서 제외한다.
+
 ## 8. 재시도와 관측
 
 Report Job은 접수 시 활성 Wiki Build Version을 고정한다. 첫 Navigation에서 선택한
@@ -141,6 +157,11 @@ Page Version, 관계, Source Version과 탐색 예산은 Job Payload에 Topic별
 Navigation Trace에는 Consumer, Job, Query Hash, Wiki Version, 후보·선택·순회 수,
 Vector 폴백, 소요 시간과 중단 사유를 기록한다. 원문 전체나 Secret은 로그에 남기지
 않는다.
+
+완료 로그 `event=wiki_navigation_completed`와 Job `research_stats.navigation`에는
+프로필, 고정 예산, 깊이별 Page·관계 수, 절단 여부, 폴백 사유와 최종 Wiki Context
+문서 수를 남긴다. Topic별 Snapshot도 Page의 `hops`와 실제 예산을 저장해 재시도와
+운영 비교가 같은 범위를 보게 한다.
 
 관계 조회 장애로 Seed Page만 사용하는 경우에는
 `event=wiki_navigation_relation_traversal_failed` 경고를 남긴다. 이 이벤트는 원문
@@ -157,3 +178,7 @@ rejected/superseded 관계 제외, Source 시간 폴백, Context 예산과 Job �
 Reader Prompt나 Tool Loop가 변경되면 `bench/wiki_navigation/`에 최소 10개 케이스를
 구성하고 실행 전 예상 Token·비용을 고지한다. Seed Recall@30, 선택 Page Precision,
 Path Precision, Source 시간 정확도, Citation 정확도, 지연과 Token 비용을 기록한다.
+
+깊이 정책만 변경할 때는 무료 결정적 `bench/ondemand_navigation/`으로 같은 Graph의
+1-hop·2-hop Page recall·precision·지연을 먼저 비교한다. 실제 리포트 문장·Citation
+품질은 Provider 호출 비용을 고지하고 승인받은 뒤 별도로 측정한다.

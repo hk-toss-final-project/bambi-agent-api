@@ -412,6 +412,44 @@ def test_generation_request_forwards_explicit_batch_mode(
     assert agent_jobs_fake.last_execution_mode == "batch"
 
 
+def test_generation_request_forwards_on_demand_navigation_profile(
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
+) -> None:
+    """온디맨드 단일 주제의 2-hop 탐색 프로필을 저장소까지 전달한다."""
+    _put_context(client, "user-on-demand")
+
+    accepted = client.post(
+        "/internal/v1/users/user-on-demand/generations",
+        json={
+            "idempotency_key": "generation-on-demand-2hop",
+            "topic": "AI 에이전트",
+            "navigation_profile": "ON_DEMAND_2HOP",
+        },
+    )
+
+    assert accepted.status_code == 202
+    assert agent_jobs_fake.last_navigation_profile == "ON_DEMAND_2HOP"
+
+
+def test_generation_request_rejects_navigation_profile_for_morning_briefing(
+    client: TestClient,
+) -> None:
+    """아침 브리핑에 온디맨드 전용 2-hop 프로필을 섞지 못하게 한다."""
+    rejected = client.post(
+        "/internal/v1/users/user-morning/generations",
+        json={
+            "idempotency_key": "generation-morning-2hop",
+            "generation_scope": "WIKI_BRIEFING",
+            "topic": "오늘의 관심사 브리핑",
+            "briefing_date": "2026-08-12",
+            "navigation_profile": "ON_DEMAND_2HOP",
+        },
+    )
+
+    assert rejected.status_code == 422
+    assert rejected.json()["code"] == "REQUEST_VALIDATION_ERROR"
+
+
 def test_generation_request_rejects_batch_change_history(client: TestClient) -> None:
     """동기 재조사가 필요한 변경점 추적은 Batch 요청으로 접수하지 않는다."""
     rejected = client.post(

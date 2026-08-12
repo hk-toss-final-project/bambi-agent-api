@@ -211,6 +211,7 @@ class AgentJobRepository(Protocol):
         topic: str | None,
         topics: list[str] | None = None,
         generation_scope: str = "SINGLE_TOPIC",
+        navigation_profile: str | None = None,
         interest_id: str | None = None,
         content_type: str,
         report_type: str,
