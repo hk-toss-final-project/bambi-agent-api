@@ -27,6 +27,7 @@ from .features.quality import (
     ALLOWED_WIKI_RELATION_TYPES,
     WikiQualityIssue,
     WikiQualityReport,
+    is_wiki_relation_kind_pair_allowed,
     validate_wiki_quality,
     wba_014,
 )
@@ -113,6 +114,16 @@ from .features.semantic_lint import (
     WikiSemanticSourceDocument,
     build_wiki_semantic_lint_context,
 )
+from .features.semantic_repairs import (
+    WikiSemanticRepairBatch,
+    WikiSemanticRepairPlan,
+    WikiSemanticRepairResult,
+    WikiSemanticStagedBatch,
+    WikiSemanticStaging,
+    apply_wiki_semantic_repairs,
+    plan_wiki_semantic_repairs,
+    stage_wiki_semantic_repairs,
+)
 
 __all__ = [
     "wba_001",
@@ -150,6 +161,7 @@ __all__ = [
     "ALLOWED_WIKI_RELATION_TYPES",
     "WikiQualityIssue",
     "WikiQualityReport",
+    "is_wiki_relation_kind_pair_allowed",
     "validate_wiki_quality",
     "WikiIdentityConflict",
     "WikiIdentityOption",
@@ -207,4 +219,12 @@ __all__ = [
     "WikiSemanticSource",
     "WikiSemanticSourceDocument",
     "build_wiki_semantic_lint_context",
+    "WikiSemanticRepairBatch",
+    "WikiSemanticRepairPlan",
+    "WikiSemanticRepairResult",
+    "WikiSemanticStagedBatch",
+    "WikiSemanticStaging",
+    "apply_wiki_semantic_repairs",
+    "plan_wiki_semantic_repairs",
+    "stage_wiki_semantic_repairs",
 ]

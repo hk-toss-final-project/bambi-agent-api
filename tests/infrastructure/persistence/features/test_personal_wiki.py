@@ -36,6 +36,7 @@ from infrastructure.persistence.features.personal_wiki import (
     sync_wiki_relation_supports,
     supersede_personal_wiki_for_rebuild,
     update_full_wiki_rebuild_summary,
+    update_wiki_maintenance_summary,
 )
 
 
@@ -206,6 +207,33 @@ def test_update_full_wiki_rebuild_summary_omits_quality_metrics_key_when_not_giv
 
     _query, params = connection.executed[0]
     assert "quality_metrics" not in params[0].obj
+
+
+def test_update_wiki_maintenance_summary_merges_structural_and_semantic_metrics() -> None:
+    """V3 유지 감사 지표를 활성 Snapshot 요약에 병합해 다음 주기에 재사용한다."""
+    connection = _FakeConnection(None)
+
+    asyncio.run(
+        update_wiki_maintenance_summary(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            wiki_version_id="wiki-1",
+            maintenance_pipeline_version="langgraph_v3",
+            maintenance_action="semantic_repair",
+            quality_metrics={"error_count": 0},
+            semantic_metrics={"missing_topic_count": 2},
+        )
+    )
+
+    query, params = connection.executed[0]
+    assert "COALESCE(change_summary" in query
+    assert params[0].obj == {
+        "maintenance_pipeline_version": "langgraph_v3",
+        "maintenance_action": "semantic_repair",
+        "quality_metrics": {"error_count": 0},
+        "semantic_metrics": {"missing_topic_count": 2},
+    }
+    assert params[1:] == ("wiki-1", "user-1", "user/user-1")
 
 
 class _FakeCursor:
@@ -1165,3 +1193,48 @@ def test_sync_wiki_relation_supports_keeps_head_when_another_support_remains() -
     supersede_query, params = connection.executed[3]
     assert "NOT EXISTS" in supersede_query
     assert params[0] == "user/user-1"
+
+
+def test_sync_wiki_relation_supports_append_mode_preserves_existing_supports() -> None:
+    """부분 의미 수리는 같은 원본의 기존 관계 근거를 교체하지 않고 새 근거만 추가한다."""
+    relation = _sample_relation()
+    connection = _SequencedConnection(
+        [
+            [
+                {
+                    "id": "document-seoul",
+                    "document_kind": "entity",
+                    "document_key": "서울",
+                },
+                {
+                    "id": "document-heatwave",
+                    "document_kind": "concept",
+                    "document_key": "폭염",
+                },
+            ],
+            {"id": "relation-new"},
+            None,
+        ]
+    )
+
+    result = asyncio.run(
+        sync_wiki_relation_supports(
+            connection,  # type: ignore[arg-type]
+            namespace_key="user/user-1",
+            source_document_id="source-document-1",
+            source_document_version_id="source-version-1",
+            job_id="job-1",
+            relations=[relation],
+            observed_relations=[relation],
+            replace_existing_supports=False,
+        )
+    )
+
+    assert result.superseded_support_count == 0
+    assert result.superseded_relation_count == 0
+    assert result.stored_support_count == 1
+    assert all(
+        "UPDATE agent.wiki_relation_supports AS support" not in query
+        for query, _params in connection.executed
+    )
+    assert "SELECT id, document_kind, document_key" in connection.executed[0][0]

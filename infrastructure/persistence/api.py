@@ -46,6 +46,7 @@ from .features.personal_wiki import (
     sync_wiki_relation_supports,
     supersede_personal_wiki_for_rebuild,
     update_full_wiki_rebuild_summary,
+    update_wiki_maintenance_summary,
 )
 from .features.global_source import (
     CollectionTargetPlan,
@@ -281,6 +282,7 @@ __all__ = [
     "save_custom_topic_contexts",
     "supersede_personal_wiki_for_rebuild",
     "update_full_wiki_rebuild_summary",
+    "update_wiki_maintenance_summary",
     "save_fetched_url_and_enqueue",
     "sync_wiki_relation_supports",
     "reset_personal_wiki",
