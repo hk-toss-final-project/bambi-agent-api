@@ -145,7 +145,7 @@ def test_no_heading_or_body_text_contains_emoji() -> None:
 
 
 def test_updated_fact_shows_before_and_after() -> None:
-    """갱신 팩트는 before(DB 값)와 after(오늘 값)가 대비되게 적힌다."""
+    """갱신 팩트는 before(DB 값 취소선)와 after(오늘 값 문장)가 대비되게 적힌다."""
     content = assemble_delta_report(
         topic="반도체",
         reference_date=REFERENCE_DATE,
@@ -155,7 +155,9 @@ def test_updated_fact_shows_before_and_after() -> None:
         contexts=CONTEXTS,
     )
 
-    assert "`2026-2Q` → `2026-3Q`" in content.body
+    assert "(기존) ~~2026-2Q~~" in content.body
+    assert "(변경)" in content.body
+    assert "양산이 2026-3Q로 연기됐다." in content.body
     assert CHANGED_SUBHEADING in content.body
 
 
@@ -290,10 +292,15 @@ def test_no_highlight_facts_still_produces_a_full_summary_report() -> None:
     # 핵심 요약은 Compose가 실제로 쓴 전체 맥락 문단 그대로다 — 짧아지지 않는다.
     assert _compose().overview in body
     # overview가 인용한 참조가 등장 순서대로 남는다(유지 팩트 인용 포함).
-    assert content.citation_references == ("G1", "P1")
+    # overview 원문은 "...[P1]... [G1]." 순이라 P1이 먼저다.
+    assert content.citation_references == ("P1", "G1")
     # 제목·요약이 비어도 코드가 기본값을 채워 저장이 실패하지 않는다.
     assert content.title
     assert content.summary
+    # 제목·요약은 구조화 필드로만 나가고 본문에는 중복으로 박히지 않는다 —
+    # 카드 헤더와 본문 양쪽에 같은 제목이 두 번 보이는 걸 막기 위함이다.
+    assert content.title not in body
+    assert content.summary not in body
 
 
 def test_title_and_summary_come_from_compose() -> None:
@@ -313,3 +320,22 @@ def test_title_and_summary_come_from_compose() -> None:
 
     assert content.title == "반도체 요약"
     assert content.summary == "양산 일정이 밀렸습니다 [G1]."
+
+
+def test_fresh_facts_capped_at_five() -> None:
+    """새로 확인된 사실이 15개 남발되지 않고 최대 5개로 제한되는지 검증한다."""
+    many_fresh = [
+        ValidatedFact(fact=DiffFact(subject=f"주제{i}", attribute=f"속성{i}", fact_value=f"값{i}", today_statement=f"새로운 사실 {i}", verdict="new"))
+        for i in range(15)
+    ]
+    content = assemble_delta_report(
+        topic="테스트",
+        reference_date=REFERENCE_DATE,
+        highlight_facts=many_fresh,
+        compose=_compose(),
+        impact=_impact(),
+        contexts=CONTEXTS,
+    )
+    assert "새로 확인된 사실 (5건)" in content.body
+    assert "새로운 사실 4" in content.body
+    assert "새로운 사실 5" not in content.body

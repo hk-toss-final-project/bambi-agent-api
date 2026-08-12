@@ -26,6 +26,8 @@ from typing import Any
 
 from psycopg import AsyncConnection
 
+from time import monotonic
+
 from agent.llm.api import ToolCallRecord, ToolSpec, run_tool_loop
 from domain.personal_wiki.navigation.api import (
     wnav_001,
@@ -63,7 +65,22 @@ logger = logging.getLogger("agent.report_builder.researcher")
 
 type DictRow = dict[str, Any]
 
-RESEARCH_MAX_ITERATIONS = 5
+# 조사원 Tool Loop 반복 상한. 5에서 3으로 낮췄다(2026-08-11, 이송우 합의).
+#
+# 3주제 리포트가 조사원에만 393~428초를 쓰는데 Worker lease가 600초라 여유가
+# 65~71%뿐이고, 워커 3대가 찬 상태에서 조금만 밀리면 리스를 넘긴다. 넘기면 다른
+# 워커가 같은 작업을 처음부터 다시 집어가 시간이 배로 뛴다(당일 27건 중 6건 재시도,
+# 시도3 평균 1597초).
+#
+# 실측(user 40, 배포 없이 research_context 직접 호출):
+#   5회  폭염 91.0초/10건(final)   LG트윈스 89.7초/4건(final)
+#   4회  폭염 88.5초/10건(상한)    LG트윈스 83.3초/4건(final)   ← 절감 5%뿐
+#   3회  폭염 66.9초/ 9건(상한)    LG트윈스 65.0초/4건(상한)    ← 27% 절감, 근거 -1건
+#
+# 조사원이 보통 wiki_search → wiki_read → search_pool ×2 를 쓰는데, 3회에서야
+# search_pool이 1회로 줄어 시간이 떨어진다. 4회는 그 패턴을 그대로 허용해 의미가 없다.
+# 근거 손실이 커지면 다시 올린다 — research_stats의 documents 수로 확인한다.
+RESEARCH_MAX_ITERATIONS = 3
 _OBSERVATION_SNIPPET_CHARS = 160
 
 
@@ -125,6 +142,8 @@ class ResearchOutcome:
         collected_live: 실시간 수집을 **시도했는지**. 성공 여부가 아니라 시도
             여부다 — 호출자(graph.load_context)가 같은 수집을 한 번 더
             돌리지 않도록 판단하는 데 쓴다.
+        requires_live: 저장 근거가 부족하지만 상위 다중 주제 오케스트레이터가
+            병렬 수집하도록 이번 실행에서는 Live 호출을 미뤘는지 여부
         input_tokens·output_tokens: 조사에 쓴 토큰 (벤치마크 비용 기록용)
     """
 
@@ -133,9 +152,13 @@ class ResearchOutcome:
     notes: str = ""
     stop_reason: str = "final"
     collected_live: bool = False
+    requires_live: bool = False
     input_tokens: int = 0
     output_tokens: int = 0
     wiki_packets: tuple[WikiNavigationPacket, ...] = ()
+    # 도구별 (호출 수, 누적 ms). 조사 노드가 리포트 시간의 대부분을 쓰는데
+    # 안이 안 보여 어디를 줄일지 판단할 수 없었다(2026-08-11, 이송우 협의).
+    tool_stats: tuple[tuple[str, int, int], ...] = ()
 
 
 @dataclass(slots=True)
@@ -342,6 +365,14 @@ def navigation_packet_documents(
                 content=_packet_page_content(packet, page_index=index - 1),
                 url=next(
                     (source.url for source in page_sources if source.url), None
+                ),
+                image_url=next(
+                    (
+                        source.image_url
+                        for source in page_sources
+                        if source.image_url
+                    ),
+                    None,
                 ),
                 score=(
                     max(float(score or 0.0), 1.0)
@@ -589,6 +620,26 @@ def merge_context_documents(
     for documents in groups:
         collector.add(documents)
     return list(collector.documents)
+
+
+def _timed_tool(tool: ToolSpec, stats: dict[str, list[int]]) -> ToolSpec:
+    """도구 실행을 감싸 호출 횟수와 누적 소요 시간을 기록한다.
+
+    `stats[이름] = [호출 수, 누적 ms]` 로 쌓는다. 실패한 호출도 시간을 쓰므로
+    예외가 나도 기록한 뒤 다시 올린다.
+    """
+    run = tool.run
+
+    async def _run(*args: object, **kwargs: object) -> str:
+        started = monotonic()
+        try:
+            return await run(*args, **kwargs)
+        finally:
+            entry = stats.setdefault(tool.name, [0, 0])
+            entry[0] += 1
+            entry[1] += int((monotonic() - started) * 1000)
+
+    return replace(tool, run=_run)
 
 
 def build_research_tools(
@@ -872,6 +923,11 @@ async def research_context(
         wiki_version_id=wiki_version_id,
         allow_wiki_navigation=not wiki_selection_fixed,
     )
+    # 도구별 호출 횟수와 소요 시간을 잰다. 3주제 리포트 336초 중 320초가 이
+    # 노드였는데 안이 안 보여 어디를 줄일지 판단할 수 없었다(2026-08-11 실측,
+    # 이송우 협의). 도구 실행만 감싸고 루프 로직은 건드리지 않는다.
+    tool_stats: dict[str, list[int]] = {}
+    tools = [_timed_tool(tool, tool_stats) for tool in tools]
     planned_note = (
         "\n아래 검색어는 요청에서 확정되어 이미 저장 자료 검색을 마쳤다: "
         + ", ".join([topic, *normalized_planned])
@@ -943,4 +999,7 @@ async def research_context(
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
         wiki_packets=tuple(navigation_session.packets),
+        tool_stats=tuple(
+            (name, calls, elapsed) for name, (calls, elapsed) in sorted(tool_stats.items())
+        ),
     )

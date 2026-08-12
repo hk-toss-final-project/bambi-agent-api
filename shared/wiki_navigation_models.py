@@ -28,6 +28,8 @@ class WikiNavigationCandidate:
     keyword_rank: int | None = None
     vector_rank: int | None = None
     rrf_score: float = 0.0
+    keyword_score: float | None = None
+    vector_score: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +106,7 @@ class WikiNavigationSource:
     stored_at: datetime
     published_at: datetime | None
     clipped_on: date | None
+    image_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

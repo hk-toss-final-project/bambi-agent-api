@@ -42,6 +42,8 @@ _SECTION_PATTERN = re.compile(r"^## (.+)$", re.MULTILINE)
 _SUBSECTION_PATTERN = re.compile(r"^###\s+(.+)$")
 # 갱신 팩트 표기 `이전값` → `오늘값` 을 찾아 화면에서 대비시킨다.
 _BEFORE_AFTER_PATTERN = re.compile(r"`([^`]*)`\s*→\s*`([^`]*)`")
+# 취소선 표기 ~~이전값~~ 변환 정규식
+_STRIKETHROUGH_PATTERN = re.compile(r"~~(.*?)~~")
 # 값 하나만 있는 표기(새로 확인된 사실). 화면에서 today 색으로 강조한다.
 _SINGLE_VALUE_PATTERN = re.compile(r"`([^`]*)`")
 # 굵게 표기한 대상 이름(**주체 · 속성**).
@@ -62,16 +64,32 @@ _PAGE_STYLE = """
     border: 1px solid rgba(127,127,127,0.5); border-radius: 8px; background: transparent;
     color: inherit;
   }
-  .toggle { display: flex; align-items: center; gap: 0.5rem; margin-top: 1rem; font-size: 0.95rem; }
-  button {
-    margin-top: 1.2rem; padding: 0.65rem 1.5rem; font-size: 1rem; border: 0;
-    border-radius: 8px; background: #d6402c; color: #fff; cursor: pointer;
-  }
   section {
     border: 1px solid rgba(127,127,127,0.35); border-radius: 10px;
     padding: 1rem 1.5rem; margin: 1.5rem 0;
   }
-  section h2 { font-size: 1.1rem; margin: 0 0 0.5rem; }
+  section.title-header {
+    background: transparent;
+    border: 1px solid rgba(127,127,127,0.35);
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem; text-align: center;
+  }
+  section.title-header h2.main-title {
+  }
+  section h2 {
+    font-size: 1.15rem; font-weight: 700; margin: 0 0 1rem 0 !important;
+    padding: 0.5rem 0.9rem !important;
+    background: rgba(99, 102, 241, 0.12) !important;
+    color: #4f46e5 !important;
+    border-left: none !important;
+    border-radius: 6px !important;
+    display: block !important;
+  }
+  blockquote {
+    margin: 0.8rem auto 0.5rem; padding: 0.2rem 0.5rem;
+    background: transparent; border-left: none !important;
+    font-style: italic; opacity: 0.9; color: inherit; text-align: center;
+  }
   section h3 {
     font-size: 0.95rem; margin: 1.2rem 0 0.4rem; padding: 0.25rem 0.6rem;
     border-radius: 6px; display: inline-block;
@@ -81,17 +99,18 @@ _PAGE_STYLE = """
   .meta { font-size: 0.85rem; color: #667; }
   .meta code { font-size: 0.85rem; }
   .before {
-    text-decoration: line-through; opacity: 0.65;
-    background: rgba(127,127,127,0.12); padding: 0.05rem 0.35rem; border-radius: 4px;
+    text-decoration: line-through; opacity: 0.75;
+    background: rgba(239, 68, 68, 0.12); color: #dc2626;
+    padding: 0.1rem 0.4rem; border-radius: 4px;
   }
   .arrow { margin: 0 0.4rem; color: #b3400f; font-weight: 700; }
   .after {
     font-weight: 700; color: #b3400f;
-    background: rgba(214, 64, 44, 0.1); padding: 0.05rem 0.35rem; border-radius: 4px;
+    background: rgba(239, 68, 68, 0.18); padding: 0.15rem 0.4rem; border-radius: 4px;
   }
   .value {
     font-weight: 600; color: #1e7d34;
-    background: rgba(30, 125, 52, 0.1); padding: 0.05rem 0.35rem; border-radius: 4px;
+    background: rgba(30, 125, 52, 0.15); padding: 0.15rem 0.4rem; border-radius: 4px;
   }
   .badge {
     display: inline-block; font-size: 0.72rem; font-weight: 700; padding: 0.1rem 0.5rem;
@@ -104,8 +123,12 @@ _PAGE_STYLE = """
   .err { border-color: #ffccc7; background: rgba(255,77,79,0.08); }
   @media (prefers-color-scheme: dark) {
     .subtitle, .meta, label { color: #99a; }
-    .after, .arrow { color: #ff9d6b; }
-    .value { color: #7bd694; }
+    section.title-header { background: rgba(99, 102, 241, 0.15); border-color: rgba(99, 102, 241, 0.4); }
+    section.title-header h2.main-title { color: #818cf8; }
+    section h2 { background: rgba(99, 102, 241, 0.22) !important; color: #818cf8 !important; border-left-color: #818cf8 !important; }
+    .before { background: rgba(239, 68, 68, 0.22); color: #f87171; }
+    .after, .arrow { color: #ff9d6b; background: rgba(239, 68, 68, 0.25); }
+    .value { color: #7bd694; background: rgba(30, 125, 52, 0.25); }
     section h3.changed { color: #ff9d6b; }
     section h3.fresh { color: #7bd694; }
   }
@@ -136,23 +159,20 @@ def split_report_sections(markdown: str) -> list[tuple[str, str]]:
 
 
 def highlight_before_after(escaped_line: str) -> str:
-    """`이전값` → `오늘값` 표기를 화면에서 대비되게 감싼다.
-
-    이미 HTML escape된 문자열을 받아 태그만 덧붙인다. 값 자체는 바꾸지 않는다 —
-    화면에 보이는 before/after는 저장된 본문의 값 그대로여야 한다.
-
-    두 값이 짝으로 있으면 이전/오늘로 대비시키고, 값이 하나뿐이면(새로 확인된
-    사실) 오늘 값으로만 강조한다.
-    """
+    """`이전값` → `오늘값` 및 ~~이전값~~ 표기를 화면에서 대비되게 감싼다."""
+    # 취소선 ~~텍스트~~ 변환
+    line_with_strike = _STRIKETHROUGH_PATTERN.sub(
+        lambda match: f'<del class="before">{match.group(1)}</del>', escaped_line
+    )
     marked, changed = _BEFORE_AFTER_PATTERN.subn(
         lambda match: (
             f'<span class="before">{match.group(1)}</span>'
             f'<span class="arrow">→</span>'
             f'<span class="after">{match.group(2)}</span>'
         ),
-        escaped_line,
+        line_with_strike,
     )
-    if changed:
+    if changed or line_with_strike != escaped_line:
         return marked
     return _SINGLE_VALUE_PATTERN.sub(
         lambda match: f'<span class="value">{match.group(1)}</span>', escaped_line
@@ -166,6 +186,19 @@ def _render_line(raw: str) -> str:
     return _BOLD_PATTERN.sub(lambda match: f"<strong>{match.group(1)}</strong>", marked)
 
 
+def _split_into_sentences_with_citations(text: str) -> list[str]:
+    """문장 마침표(.) 뒤에 오는 출처 인용표기([L1], [L2] 등)까지 한 문장으로 포함해 분리한다.
+
+    `43.3%` 같은 소수점 숫자의 점(.)을 문장 종결로 오인해 자르지 않도록 보호한다.
+    """
+    pattern = re.compile(
+        r"(.+?(?:(?<!\d)\.|\.(?!\d))(?:\s*\[[PGL]\d+\])*)(?=\s+|$)", re.DOTALL
+    )
+    matches = [m.group(1).strip() for m in pattern.finditer(text or "")]
+    filtered = [m for m in matches if m and m not in (".", ".]", "]")]
+    return filtered if filtered else [text.strip()]
+
+
 def _render_section(title: str, body: str) -> str:
     """섹션 하나를 HTML로 만든다.
 
@@ -174,16 +207,24 @@ def _render_section(title: str, body: str) -> str:
     """
     parts: list[str] = [f"    <h2>{html.escape(title)}</h2>"]
     for raw in body.splitlines():
-        if not raw.strip():
+        trimmed = raw.strip()
+        if not trimmed:
+            parts.append("    <div style='height: 0.75rem;'></div>")
             continue
-        subsection = _SUBSECTION_PATTERN.match(raw.strip())
+        subsection = _SUBSECTION_PATTERN.match(trimmed)
         if subsection:
             kind = "changed" if "달라진" in subsection.group(1) else "fresh"
             parts.append(
                 f'    <h3 class="{kind}">{html.escape(subsection.group(1))}</h3>'
             )
             continue
-        parts.append(f"    <p>{_render_line(raw)}</p>")
+        # 보고서 내용 또는 주목할 점 섹션의 본문 문장 개행 (출처 마커까지 포함하여 분리)
+        if ("주목" in title or "보고서" in title) and not trimmed.startswith("-"):
+            sentences = _split_into_sentences_with_citations(trimmed)
+            for sent in sentences:
+                parts.append(f"    <p style='margin: 0.65rem 0;'>{_render_line(sent)}</p>")
+        else:
+            parts.append(f"    <p style='margin: 0.55rem 0;'>{_render_line(trimmed)}</p>")
     return "  <section>\n" + "\n".join(parts) + "\n  </section>"
 
 
@@ -219,14 +260,15 @@ def _render_result(result: dict[str, Any], enabled: bool) -> str:
         _render_section(title, content) for title, content in split_report_sections(body)
     )
     citations = result.get("citations") or []
+    summary_html = f"<blockquote>{html.escape(str(result.get('summary') or ''))}</blockquote>" if result.get("summary") else ""
     return f"""
   <p class="meta">{badge}
     <code>{html.escape(str(result.get("content_id") or ""))}</code> ·
     v{html.escape(str(result.get("version") or ""))} ·
     인용 {len(citations)}건</p>
-  <section>
-    <h2>{html.escape(str(result.get("title") or "(제목 없음)"))}</h2>
-    <p>{html.escape(str(result.get("summary") or ""))}</p>
+  <section class="title-header">
+    <h2 class="main-title">{html.escape(str(result.get("title") or "(제목 없음)"))}</h2>
+    {summary_html}
   </section>
 {sections}
   <section>
@@ -300,12 +342,52 @@ async def run_change_history_page(
         accepted = await jobs.submit_generation(
             user_id=user_id, payload=payload, request_id=str(uuid4())
         )
+    except Exception as error:  # noqa: BLE001 — 개발 화면은 실패 사유를 그대로 보여준다
+        if "USER_CONTEXT_REQUIRED" in str(error) or "사용자 컨텍스트를 등록해야 합니다" in str(error):
+            # 개발 화면 편의 기능: 컨텍스트가 없는 새로운 user_id여도 자동 등록 후 재시도한다.
+            try:
+                from infrastructure.persistence.api import (
+                    set_personal_wiki_scope,
+                    upsert_user_context_snapshot,
+                )
+                async with jobs._agent_jobs._pool.connection() as conn:
+                    async with conn.transaction():
+                        await set_personal_wiki_scope(conn, user_id=user_id)
+                        await upsert_user_context_snapshot(
+                            conn,
+                            user_id=user_id,
+                            context_version=1,
+                            plan="free",
+                            preferred_language="ko",
+                            personalization_enabled=True,
+                            interest_taxonomy_version=None,
+                            selected_category_ids=(),
+                            selected_topic_ids=(),
+                            blocked_interest_ids=(),
+                            blocked_source_ids=(),
+                        )
+                accepted = await jobs.submit_generation(
+                    user_id=user_id, payload=payload, request_id=str(uuid4())
+                )
+            except Exception as retry_err:
+                return HTMLResponse(
+                    _render_page(
+                        user_id=user_id, topic=topic, enabled=enabled, error=str(retry_err)
+                    )
+                )
+        else:
+            return HTMLResponse(
+                _render_page(
+                    user_id=user_id, topic=topic, enabled=enabled, error=str(error)
+                )
+            )
+    try:
         run = await workflows.run_job(
             accepted.job_id,
             expected_job_type="report_generation",
             expected_user_id=user_id,
         )
-    except Exception as error:  # noqa: BLE001 — 개발 화면은 실패 사유를 그대로 보여준다
+    except Exception as error:
         return HTMLResponse(
             _render_page(
                 user_id=user_id, topic=topic, enabled=enabled, error=str(error)

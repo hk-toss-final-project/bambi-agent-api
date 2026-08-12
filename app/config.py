@@ -1,6 +1,7 @@
 """Agent API 환경 설정 스키마와 환경변수 로딩 기능."""
 
 import os
+from typing import Literal
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
@@ -24,6 +25,10 @@ class Settings(BaseModel):
     enable_assistant_ui: bool = Field(
         default=True,
         description="키워드 비서 웹 UI(/assistant/**)를 같은 프로세스에 등록할지 여부",
+    )
+    enable_dev_graph_views: bool = Field(
+        default=True,
+        description="읽기 전용 에이전트 그래프 화면(/dev/graphs) 활성화 여부",
     )
     enable_dev_agent_api: bool = Field(
         default=False,
@@ -94,6 +99,16 @@ class Settings(BaseModel):
     report_llm_model: str = Field(
         default="gpt-4.1-mini", description="Report Builder 콘텐츠 생성 모델"
     )
+    wiki_read_pipeline_version: Literal["legacy_v1", "langgraph_v2"] = Field(
+        default="langgraph_v2",
+        description="새 Report Job에 고정할 Wiki 읽기 루프 버전",
+    )
+    wiki_maintenance_pipeline_version: Literal[
+        "legacy_v1", "langgraph_v2"
+    ] = Field(
+        default="langgraph_v2",
+        description="새 Wiki 유지보수 Job에 고정할 실행 루프 버전",
+    )
     wiki_embedding_model: str = Field(
         default="text-embedding-3-small",
         description="Personal Wiki Chunk Embedding 모델",
@@ -104,19 +119,46 @@ class Settings(BaseModel):
         description="이 Chunk 수 이상인 Wiki Embedding을 OpenAI Batch로 전환",
     )
     personal_wiki_worker_batch_size: int = Field(
-        default=1, ge=1, le=100, description="Personal Wiki Worker Job Claim 개수"
+        default=10, ge=1, le=100, description="Personal Wiki Worker Job Claim 개수"
     )
     personal_wiki_job_concurrency: int = Field(
-        default=1,
+        default=4,
         ge=1,
         le=50,
         description="Personal Wiki Worker의 실제 동시 Job 실행 수",
+    )
+    url_collection_worker_batch_size: int = Field(
+        default=10, ge=1, le=100, description="URL 수집 Worker Job Claim 개수"
+    )
+    url_collection_job_concurrency: int = Field(
+        default=4,
+        ge=1,
+        le=20,
+        description="URL 수집 Worker의 실제 동시 Job 실행 수",
+    )
+    report_worker_batch_size: int = Field(
+        default=1,
+        ge=1,
+        le=100,
+        description="Report Builder Worker가 한 실행에서 처리할 최대 Job 수",
     )
     report_job_concurrency: int = Field(
         default=1,
         ge=1,
         le=50,
         description="Report Builder Worker의 실제 동시 Job 실행 수",
+    )
+    briefing_worker_batch_size: int = Field(
+        default=1,
+        ge=1,
+        le=100,
+        description="브리핑 준비 Worker가 한 실행에서 처리할 최대 Job 수",
+    )
+    briefing_job_concurrency: int = Field(
+        default=1,
+        ge=1,
+        le=50,
+        description="브리핑 준비 Worker의 실제 동시 Job 실행 수",
     )
     openai_default_rpm: int = Field(
         default=60,
@@ -147,6 +189,16 @@ class Settings(BaseModel):
         default=50_000,
         ge=0,
         description="Report Job 하나의 보수적 OpenAI Token 예약량",
+    )
+    briefing_openai_requests_per_job: int = Field(
+        default=8,
+        ge=1,
+        description="브리핑 준비 Job 하나의 보수적 OpenAI 요청 예약량",
+    )
+    briefing_openai_tokens_per_job: int = Field(
+        default=30_000,
+        ge=0,
+        description="브리핑 준비 Job 하나의 보수적 OpenAI Token 예약량",
     )
     openai_batch_max_items: int = Field(
         default=500,
@@ -301,6 +353,7 @@ def load_settings() -> Settings:
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         log_directory=os.getenv("LOG_DIR", "logs"),
         enable_assistant_ui=_boolean_env("ENABLE_ASSISTANT_UI", True),
+        enable_dev_graph_views=_boolean_env("ENABLE_DEV_GRAPH_VIEWS", True),
         enable_dev_agent_api=_boolean_env("ENABLE_DEV_AGENT_API", False),
         internal_api_token=_optional_env("AGENT_INTERNAL_TOKEN"),
         mcp_server_port=_integer_env("MCP_SERVER_PORT", 8100),
@@ -327,6 +380,12 @@ def load_settings() -> Settings:
         gdelt_base_url=_optional_env("GDELT_BASE_URL"),
         wiki_llm_model=os.getenv("WIKI_LLM_MODEL", "gpt-4.1-mini"),
         report_llm_model=os.getenv("REPORT_LLM_MODEL", "gpt-4.1-mini"),
+        wiki_read_pipeline_version=os.getenv(
+            "WIKI_READ_PIPELINE_VERSION", "langgraph_v2"
+        ),
+        wiki_maintenance_pipeline_version=os.getenv(
+            "WIKI_MAINTENANCE_PIPELINE_VERSION", "langgraph_v2"
+        ),
         wiki_embedding_model=os.getenv(
             "WIKI_EMBEDDING_MODEL", "text-embedding-3-small"
         ),
@@ -334,12 +393,33 @@ def load_settings() -> Settings:
             "WIKI_EMBEDDING_BATCH_THRESHOLD", 100
         ),
         personal_wiki_worker_batch_size=_integer_env(
-            "PERSONAL_WIKI_WORKER_BATCH_SIZE", 1
+            "PERSONAL_WIKI_WORKER_BATCH_SIZE", 10
         ),
         personal_wiki_job_concurrency=_integer_env(
-            "PERSONAL_WIKI_JOB_CONCURRENCY", 1
+            "PERSONAL_WIKI_JOB_CONCURRENCY", 4
+        ),
+        url_collection_worker_batch_size=_integer_env(
+            "URL_COLLECTION_WORKER_BATCH_SIZE", 10
+        ),
+        url_collection_job_concurrency=_integer_env(
+            "URL_COLLECTION_JOB_CONCURRENCY", 4
+        ),
+        report_worker_batch_size=_integer_env(
+            "REPORT_WORKER_BATCH_SIZE",
+            _integer_env("PERSONAL_WIKI_WORKER_BATCH_SIZE", 1),
         ),
         report_job_concurrency=_integer_env("REPORT_JOB_CONCURRENCY", 1),
+        briefing_worker_batch_size=_integer_env(
+            "BRIEFING_WORKER_BATCH_SIZE",
+            _integer_env(
+                "REPORT_WORKER_BATCH_SIZE",
+                _integer_env("PERSONAL_WIKI_WORKER_BATCH_SIZE", 1),
+            ),
+        ),
+        briefing_job_concurrency=_integer_env(
+            "BRIEFING_JOB_CONCURRENCY",
+            _integer_env("REPORT_JOB_CONCURRENCY", 1),
+        ),
         openai_default_rpm=_integer_env("OPENAI_DEFAULT_RPM", 60),
         openai_default_tpm=_integer_env("OPENAI_DEFAULT_TPM", 60_000),
         wiki_openai_requests_per_job=_integer_env(
@@ -353,6 +433,12 @@ def load_settings() -> Settings:
         ),
         report_openai_tokens_per_job=_integer_env(
             "REPORT_OPENAI_TOKENS_PER_JOB", 50_000
+        ),
+        briefing_openai_requests_per_job=_integer_env(
+            "BRIEFING_OPENAI_REQUESTS_PER_JOB", 8
+        ),
+        briefing_openai_tokens_per_job=_integer_env(
+            "BRIEFING_OPENAI_TOKENS_PER_JOB", 30_000
         ),
         openai_batch_max_items=_integer_env("OPENAI_BATCH_MAX_ITEMS", 500),
         openai_batch_max_submissions=_integer_env(

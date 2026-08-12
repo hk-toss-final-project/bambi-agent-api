@@ -1,32 +1,31 @@
 """에이전트 LangGraph 구조 시각화 페이지(/dev/graphs) 라우터.
 
 네 에이전트 그래프의 구조를 Mermaid 차트로 렌더하고, 각 노드를 선택하면
-기능 설명을 보여주는 개발 전용 HTML 페이지를 제공한다. 서버는 Mermaid 정의와
+기능 설명을 보여주는 읽기 전용 HTML 페이지를 제공한다. 서버는 Mermaid 정의와
 설명 텍스트를 만들고, 그리기와 선택 동작은 브라우저가 수행한다.
 
-개발 API와 같은 게이트(require_development_access)를 쓰므로 local/test
-환경에서 명시적으로 활성화했을 때만 접근할 수 있다. 사람이 보는 화면이라
-OpenAPI 문서에는 올리지 않는다.
+서버 측 DB·LLM·외부 API를 호출하지 않으므로 개발 실행 API와 분리해 배포
+환경에서도 제공한다. 등록 여부는 ENABLE_DEV_GRAPH_VIEWS로 제어하며, 사람이
+보는 화면이라 OpenAPI 문서에는 올리지 않는다.
 """
 
 from __future__ import annotations
 
 import html
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, status
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from app.exceptions import AgentApiError, ErrorDetail
-from app.routers.development.routes import require_development_access
 from app.services.graph_diagrams import (
     GraphDiagram,
     get_graph_diagram,
     list_graph_diagrams,
 )
 
-router = APIRouter(dependencies=[Depends(require_development_access)])
+router = APIRouter()
 
-# 렌더에 쓰는 mermaid.js 버전. 개발 전용 페이지라 CDN 로드를 허용한다.
+# 렌더에 쓰는 mermaid.js 버전. 읽기 전용 구조 화면은 브라우저에서 CDN으로 그린다.
 _MERMAID_CDN = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"
 
 _PAGE_STYLE = """

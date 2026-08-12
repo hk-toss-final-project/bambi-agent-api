@@ -10,14 +10,19 @@ import logging
 import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Sequence
 from uuid import UUID
 
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
+from agent.images.api import select_report_cover_image
 from domain.interests.api import ActiveInterestRequiredError, int_012, int_013
+from infrastructure.sources.connectors.api import (
+    is_probable_content_image_url,
+    resolve_article_image,
+)
 from infrastructure.persistence.features.interest_bundles import (
     ConnectionInterestBundleRepository,
 )
@@ -28,6 +33,24 @@ from shared.report_models import ReportContextDocument, GeneratedReportContent
 from shared.wiki_navigation_models import WikiNavigationPacket
 
 type DictRow = dict[str, Any]
+
+
+def _context_image_url(row: Mapping[str, Any]) -> str | None:
+    """조회 Context의 대표 이미지를 본문 기준으로 재검증해 반환한다.
+
+    Global 캐시는 저장된 Markdown에서 기사 이미지를 다시 계산하고, 다른
+    Namespace는 배너·아이콘이 아닌 기존 HTTP(S) 이미지만 유지한다.
+    """
+    cached_url = str(row.get("image_url") or "").strip() or None
+    if str(row.get("namespace_key") or "") == "global":
+        return resolve_article_image(
+            markdown=str(row.get("content") or ""),
+            title=str(row.get("title") or ""),
+            cached_url=cached_url,
+        )
+    if cached_url and is_probable_content_image_url(cached_url):
+        return cached_url
+    return None
 
 
 class StaleContextVersionError(RuntimeError):
@@ -529,11 +552,13 @@ async def enqueue_report_generation_job(
     interest_id: str | None = None,
     content_type: str,
     report_type: str = "",
+    briefing_date: date | None = None,
     language: str | None,
     scheduled_at: datetime | None = None,
     request_id: str,
     change_history_enabled: bool = False,
     execution_mode: str = "sync",
+    read_pipeline_version: str = "legacy_v1",
 ) -> PersistedGenerationSubmission:
     """최신 사용자 Context에 연결된 Report Builder Job과 생성 요청을 멱등 등록한다.
 
@@ -545,6 +570,9 @@ async def enqueue_report_generation_job(
     change_history_enabled는 Job Payload(jsonb)에만 싣는다. 서버가 사용자별로
     켬/끔 상태를 들고 있지 않고 요청마다 따라오는 값이라, 별도 컬럼이나 테이블
     변경 없이 실행 시점에 그대로 전달하면 된다.
+
+    read_pipeline_version도 접수 시점 Payload에 고정한다. Worker 배포 설정이
+    바뀌어도 이미 접수된 Job과 그 재시도는 같은 읽기 루프를 사용한다.
     """
     context_cursor = await connection.execute(
         """
@@ -623,6 +651,10 @@ async def enqueue_report_generation_job(
         raise ValueError("Batch Report는 변경점 추적을 지원하지 않습니다.")
     if execution_mode == "batch" and resolved_topics:
         raise ValueError("Batch Report는 다중 주제를 지원하지 않습니다.")
+    if read_pipeline_version not in {"legacy_v1", "langgraph_v2"}:
+        raise ValueError(
+            f"지원하지 않는 Wiki 읽기 파이프라인 버전입니다: {read_pipeline_version}"
+        )
     batch_contexts: list[dict[str, object]] = []
     if execution_mode == "batch":
         fixed_contexts = await load_report_context(
@@ -650,8 +682,13 @@ async def enqueue_report_generation_job(
             if context.get("wiki_version_id") is not None
             else None
         ),
+        "read_pipeline_version": read_pipeline_version,
         "content_type": content_type,
         "report_type": report_type,
+        # report_type 의미를 해석하지 않고, Service가 명시한 날짜가 있을 때만
+        # REPORT-022 Snapshot 재사용을 시도한다. Worker는 주제 목록까지 일치해야
+        # 이 값을 신뢰하고, 불일치·미준비 상태에서는 일반 조사로 폴백한다.
+        "briefing_date": briefing_date.isoformat() if briefing_date else None,
         "language": resolved_language,
         "change_history_enabled": change_history_enabled,
         "execution_mode": execution_mode,
@@ -726,10 +763,17 @@ async def enqueue_report_generation_job(
                 {
                     "retrieval": "personal-wiki-global-cache-keyword-v2",
                     "report_type": report_type,
+                    "briefing_date": (
+                        briefing_date.isoformat() if briefing_date else None
+                    ),
                     "generation_scope": generation_scope,
                     "interest_id": interest_id,
                     "interest_bundle": interest_bundle,
                     "execution_mode": execution_mode,
+                    # 발행 시 publish_payload로 그대로 흘려보내 Service가 본문
+                    # 렌더링 규칙을 고를 수 있게 한다(이 키가 없으면 body가 어느
+                    # 포맷인지 헤더 문자열을 추측해서 판별해야 한다).
+                    "change_history_enabled": change_history_enabled,
                 }
             ),
         ),
@@ -939,6 +983,7 @@ async def load_report_context(
                 version.title,
                 chunk.content,
                 COALESCE(document.canonical_url, version.source_metadata->>'url') AS url,
+                NULL::text AS image_url,
                 version.created_at AS source_updated_at,
                 GREATEST(
                     similarity(chunk.content, %s),
@@ -968,6 +1013,7 @@ async def load_report_context(
                 cache.title,
                 cache.markdown AS content,
                 COALESCE(cache.resolved_url, cache.canonical_url) AS url,
+                cache.image_url,
                 cache.updated_at AS source_updated_at,
                 CASE WHEN topic_match.exact THEN 1.0 ELSE 0.0 END +
                 GREATEST(
@@ -1038,6 +1084,7 @@ async def load_report_context(
                     version.title,
                     chunk.content,
                     COALESCE(document.canonical_url, version.source_metadata->>'url') AS url,
+                    NULL::text AS image_url,
                     0::float AS score,
                     document.updated_at AS recency,
                     chunk.chunk_index AS tiebreak
@@ -1061,6 +1108,7 @@ async def load_report_context(
                     cache.title,
                     cache.markdown AS content,
                     COALESCE(cache.resolved_url, cache.canonical_url) AS url,
+                    cache.image_url,
                     0::float AS score,
                     cache.updated_at AS recency,
                     0 AS tiebreak
@@ -1085,6 +1133,7 @@ async def load_report_context(
                 title,
                 content,
                 url,
+                image_url,
                 score,
                 recency AS source_updated_at
             FROM recent
@@ -1113,6 +1162,7 @@ async def load_report_context(
                 title=row["title"],
                 content=row["content"],
                 url=row["url"],
+                image_url=_context_image_url(row),
                 score=float(row["score"]),
                 context_role=(
                     "global_retrieval"
@@ -1163,6 +1213,7 @@ async def load_global_report_context(
                 cache.title,
                 cache.markdown AS content,
                 COALESCE(cache.resolved_url, cache.canonical_url) AS url,
+                cache.image_url,
                 cache.updated_at AS source_updated_at,
                 CASE WHEN topic_match.exact THEN 1.0 ELSE 0.0 END +
                 GREATEST(
@@ -1209,6 +1260,7 @@ async def load_global_report_context(
                 cache.title,
                 cache.markdown AS content,
                 COALESCE(cache.resolved_url, cache.canonical_url) AS url,
+                cache.image_url,
                 cache.updated_at AS source_updated_at,
                 0::float AS score
             FROM agent.global_source_documents AS cache
@@ -1229,6 +1281,7 @@ async def load_global_report_context(
             title=str(row["title"]),
             content=str(row["content"]),
             url=str(row["url"]) if row.get("url") else None,
+            image_url=_context_image_url(row),
             score=float(row["score"]),
             context_role="global_retrieval",
             source_updated_at=(
@@ -1506,6 +1559,7 @@ async def persist_report_generation(
     latency_ms: int,
     review_outcome: str = "",
     review_problem: str = "",
+    change_history_used: bool = False,
 ) -> dict[str, object]:
     """생성 Run·후보·Citation·Publish Snapshot·Outbox를 한 트랜잭션에 저장한다.
 
@@ -1514,6 +1568,13 @@ async def persist_report_generation(
     없어서 함께 남긴다 — 검토자는 실패해도 발행을 막지 않기 때문이다
     (2026-08-05 실측: 인용이 엉뚱한 리포트가 발행됐는데 검토자가 돌았는지조차
     로그 없이는 알 수 없었다).
+
+    change_history_used는 **요청이 토글을 켰는지가 아니라, 델타 경로가 실제로
+    이 본문을 만들었는지**다. 호출자(agent/graph.py의 persist 노드)가
+    change_history 노드의 성공 여부로 판단해 넘긴다. 요청 파라미터를 그대로
+    읽으면 서버 차단 스위치(CHANGE_HISTORY_ENABLED=0)나 델타 경로 자체 실패로
+    기존 generate() 본문이 나갔을 때도 값이 true로 남아 body 구조와 어긋난다
+    (2026-08-11 풀스택 피드백).
     """
     # 요청 멱등키는 Job 행이 원문 그대로 갖고 있으므로 여기서 함께 읽는다
     # (2026-08-06 협의: Service가 generation_pendings와 완료 카드를 잇는 열쇠).
@@ -1595,8 +1656,26 @@ async def persist_report_generation(
     )
     version_row = await version_cursor.fetchone()
     content_version = int(version_row["next_version"])
+    selected_cover = select_report_cover_image(
+        assets=[
+            {
+                "reference": context.reference,
+                "namespace_key": context.namespace_key,
+                "image_url": context.image_url,
+                "source_url": context.url,
+                "source_title": context.title,
+            }
+            for context in contexts
+        ],
+        citation_references=generated.citation_references,
+        body=generated.body,
+    )
+    cover_image_payload = selected_cover.to_payload() if selected_cover else None
     snapshot_hash = hashlib.sha256(
-        f"{generated.title}\n{generated.summary}\n{generated.body}".encode("utf-8")
+        (
+            f"{generated.title}\n{generated.summary}\n{generated.body}\n"
+            f"{json.dumps(cover_image_payload, ensure_ascii=False, sort_keys=True)}"
+        ).encode("utf-8")
     ).hexdigest()
     await connection.execute(
         """
@@ -1718,6 +1797,12 @@ async def persist_report_generation(
         generation_request.get("request_idempotency_key") or ""
     )
     generation_scope = str(parameters.get("generation_scope") or "SINGLE_TOPIC")
+    # 요청 파라미터가 아니라 호출자가 넘긴 실제 실행 결과를 싣는다 — 서버 차단
+    # 스위치나 델타 경로 실패로 body가 기존 형식으로 나갔는데 값만 true로 남는
+    # 것을 막기 위해서다. Service가 이 값으로 본문이 "이번에 달라진 점" 폼인지
+    # 기존 폼인지 구분해 렌더링 규칙을 고를 수 있게 한다 — 헤더 문자열을 파싱해
+    # 추측하게 하면 안 된다.
+    change_history_enabled = change_history_used
     source_interest_id = str(parameters.get("interest_id") or "")
     raw_interest_bundle = parameters.get("interest_bundle")
     interest_bundle = (
@@ -1752,6 +1837,7 @@ async def persist_report_generation(
         "summary": generated.summary,
         "body": generated.body,
         "citations": citation_payloads,
+        "cover_image": cover_image_payload,
         "generation_topic": topic,
         "tags": [topic] if topic else [],
         "content_tags": list(generated.content_tags),
@@ -1763,6 +1849,7 @@ async def persist_report_generation(
         "bundle_keywords": bundle_keywords,
         "taxonomy_topic_ids": taxonomy_topic_ids,
         "taxonomy_version": taxonomy_version,
+        "change_history_enabled": change_history_enabled,
     }
     await connection.execute(
         """
@@ -1822,6 +1909,7 @@ async def persist_report_generation(
         "body": generated.body,
         "snapshot_hash": snapshot_hash,
         "citations": citation_payloads,
+        "cover_image": cover_image_payload,
     }
 
 

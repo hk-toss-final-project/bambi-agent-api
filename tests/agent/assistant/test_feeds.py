@@ -44,6 +44,7 @@ def test_fetch_provider_entries_merges_sources_and_isolates_failure() -> None:
                     published_at=datetime(2026, 7, 23, 9, 0, tzinfo=UTC),
                     source_name="매일경제",
                     source_url="https://maeil.com",
+                    image_url="https://cdn.example/provider-cover.jpg",
                 )
             ]
 
@@ -63,6 +64,7 @@ def test_fetch_provider_entries_merges_sources_and_isolates_failure() -> None:
     assert entry["link"] == "https://news.google.com/rss/articles/a"
     assert entry["summary"] == "요약"
     assert entry["source_url"] == "https://maeil.com"  # 신뢰도 판정용 발행처
+    assert entry["image_url"] == "https://cdn.example/provider-cover.jpg"
     assert entry["published_ts"] == int(
         datetime(2026, 7, 23, 9, 0, tzinfo=UTC).timestamp()
     )
@@ -173,6 +175,24 @@ def test_extract_jina_image_picks_content_image_over_icon() -> None:
 def test_extract_jina_image_returns_none_when_no_image() -> None:
     """이미지가 없으면 None을 반환한다."""
     assert feeds._extract_jina_image("Markdown Content:\n본문만 있음") is None
+
+
+def test_fetch_article_image_uses_original_html_metadata(monkeypatch) -> None:
+    """기사 이미지 조회는 Jina가 아니라 원본 HTML 메타데이터를 사용한다."""
+    from infrastructure.sources.connectors import api as connectors_api
+
+    monkeypatch.setattr(
+        connectors_api,
+        "fetch_article_image_metadata",
+        lambda url: connectors_api.ArticleImageMetadata(
+            url="https://cdn.example/danang.jpg",
+            source="open_graph",
+        ),
+    )
+
+    assert feeds.fetch_article_image("https://news.example/danang") == (
+        "https://cdn.example/danang.jpg"
+    )
 
 
 def test_jina_read_delegates_to_shared_connector(monkeypatch) -> None:

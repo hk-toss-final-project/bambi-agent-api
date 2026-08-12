@@ -20,11 +20,24 @@ Critic은 오늘 수집한 contexts만 볼 수 있고 델타 테이블(과거 �
    것**이다. 프롬프트로 부탁만 해서는 지켜지지 않아(2026-08-05 실측:
    overview 보유율 0.692) 코드로 확인하고 해당 워커만 다시 시킨다.
 4. **갱신 값의 실질 변화** — updated로 찍힌 팩트의 오늘 값이 before 값(DB 기록)과
-   글자까지 동일한가. Diff 규칙(값이 같으면 duplicate)은 LLM 판단이라 가끔
-   지켜지지 않는다(2026-08-11 실측: "18일 만에 열대야 쉬어가" → "18일 만에
-   열대야 쉬어가"처럼 before/after가 완전히 같은 채로 "달라진 사실"에 나갔다).
-   같은 문자열을 화살표로 이어 붙이면 사용자에게 "달라졌다"는 거짓 신호가
-   되므로, 여기서 걸러 duplicate로 되돌린다.
+   견줘 수치·날짜가 실제로 달라졌는가. Diff 규칙(값이 같으면 duplicate)은 LLM
+   판단이라 가끔 지켜지지 않는다(2026-08-11 실측: "18일 만에 열대야 쉬어가" →
+   "18일 만에 열대야 쉬어가"처럼 before/after가 완전히 같은 채로 "달라진 사실"에
+   나갔고, 같은 날 "18일부터 시행된다." → "오는 18일부터 시행된다."처럼 조사만
+   붙은 재서술이 4회 연속 updated로 기록됐다).
+   같은 사실을 화살표로 이어 붙이면 사용자에게 "달라졌다"는 거짓 신호가 되므로,
+   여기서 걸러 duplicate로 되돌린다. 판정은 `values.is_restated_value`가 맡는다.
+5. **이름표 안정성** — attribute에 날짜·회차가 섞이지 않았는가. 대조는 (subject,
+   attribute)로 하므로 이름표가 흐르면 내일 같은 사실을 찾지 못하고 매번 신규로
+   쌓인다. 겉으로는 정상 동작처럼 보여 드러나지 않는 실패라 코드로 잡는다
+   (2026-08-11 실측: subject='로또', attribute='제1237회').
+   팩트 내용 자체는 멀쩡하므로 드롭하지 않고 이름표만 다시 붙이게 한다.
+   판정은 `attributes.find_drifting_marker`가 맡는다.
+6. **놓친 갱신 되살리기** — 과거에 같은 (subject, attribute)가 있는데 new로 찍힌
+   팩트를 갱신으로 되돌린다. LLM이 도구로 과거 팩트를 **찾아 놓고도** new로 적는
+   일이 있다(2026-08-11 실측: 코스닥/등락률 과거 값을 받아 놓고 오늘 값을 new로
+   찍었다). 이러면 사용자에게 변화가 보이지 않고 같은 이름표가 계속 쌓인다.
+   매칭 키는 설계가 정한 것 그대로라 코드가 결정적으로 이을 수 있다.
 
 검증은 **조립 이전, 워커별 출력이 아직 분리되어 있는 시점**에 수행한다. 그래야
 실패했을 때 어느 워커가 문제였는지 특정해 그 워커만 다시 시킬 수 있다.
@@ -35,18 +48,20 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any
 
 from psycopg import AsyncConnection
 
 from infrastructure.persistence.api import (
+    list_change_history_facts,
     load_change_history_facts_by_ids,
     set_personal_wiki_scope,
 )
-from shared.change_history_models import UPDATED
+from shared.change_history_models import NEW, UPDATED, ChangeHistoryFact
 
+from .attributes import find_drifting_marker
 from .compose import TimelineDraft
 from .dates import (
     describe_date_problem,
@@ -55,6 +70,7 @@ from .dates import (
     parse_absolute_date,
 )
 from .diff import DiffFact
+from .values import is_restated_value
 
 logger = logging.getLogger("agent.change_history.validation")
 
@@ -68,6 +84,63 @@ IMPACT_WORKER = "impact"
 # 본문 속 인용 표기. quality.py·critic.py·assembly.py의 정규식과 같은 형식이며,
 # 함께 유지해야 한다(P=개인 Wiki, G=Global, L=실시간).
 _CITATION_REF = re.compile(r"\[([PGL]\d+)\]")
+
+
+def _match_key(subject: str, attribute: str) -> tuple[str, str]:
+    """(subject, attribute) 매칭 키를 표기 흔들림만 흡수해 정규화한다.
+
+    대소문자와 앞뒤 공백만 없앤다. 뜻이 같은 다른 표현까지 이어 붙이는 것은
+    LLM의 몫이고, 여기서 흐릿하게 맞추면 엉뚱한 과거 팩트에 갱신을 걸게 된다.
+    """
+    return (subject.strip().casefold(), attribute.strip().casefold())
+
+
+def promote_mislabeled_new_facts(
+    facts: Sequence[DiffFact], base_facts: Sequence[ChangeHistoryFact]
+) -> tuple[list[DiffFact], int]:
+    """같은 (subject, attribute) 과거 팩트가 있는데 new로 찍힌 팩트를 갱신으로 되돌린다.
+
+    이 매칭은 새로 만든 규칙이 아니라 **설계가 정한 판정 키 그대로**다
+    (shared/change_history_models.py: "중복·갱신 판정은 (subject, attribute)
+    매칭으로 하고, fact_value가 다르면 갱신으로 본다").
+
+    LLM이 도구로 과거 팩트를 **찾아 놓고도** new로 적는 일이 있다(2026-08-11 실측:
+    코스닥/등락률을 검색해 `3거래일 만에 21% 급등`을 받아 놓고, 오늘 값
+    `5거래일 만에 30% 넘게 상승`을 updates_fact_id 없이 new로 찍었다).
+    이러면 사용자에게 변화가 보이지 않고, 같은 이름표의 팩트가 계속 쌓여
+    다음 실행의 대조까지 흐려진다.
+
+    값이 실제로 같은지는 여기서 보지 않는다 — 승격 뒤 기존 재서술 억제 검사가
+    이어서 판단하므로, 값이 그대로면 그 단계에서 duplicate로 걸러진다.
+
+    Args:
+        facts: Diff worker가 뽑은 팩트
+        base_facts: 이 (user_id, topic)의 활성 과거 팩트
+
+    Returns:
+        승격을 반영한 팩트 목록과 승격 건수
+    """
+    base_by_key: dict[tuple[str, str], ChangeHistoryFact] = {}
+    for base in base_facts:
+        base_by_key.setdefault(_match_key(base.subject, base.attribute), base)
+    if not base_by_key:
+        return list(facts), 0
+    promoted = 0
+    result: list[DiffFact] = []
+    for fact in facts:
+        base = (
+            base_by_key.get(_match_key(fact.subject, fact.attribute))
+            if fact.verdict == NEW and not fact.updates_fact_id
+            else None
+        )
+        if base is None:
+            result.append(fact)
+            continue
+        promoted += 1
+        result.append(
+            replace(fact, verdict=UPDATED, updates_fact_id=base.fact_id)
+        )
+    return result, promoted
 
 
 def has_valid_citation(text: str, available_references: Sequence[str]) -> bool:
@@ -99,12 +172,20 @@ class ValidatedFact:
 
 @dataclass(frozen=True, slots=True)
 class ValidationProblem:
-    """검증에서 걸러진 항목 하나와 그 사유."""
+    """검증에서 걸러진 항목 하나와 그 사유.
+
+    Attributes:
+        requires_rework: 워커를 다시 돌려야 고칠 수 있는 문제인지. **코드가 이미
+            결론을 낸 문제는 False다** — 재작업해도 같은 판단을 다시 시킬 뿐인데,
+            diff 재작업은 compose·impact까지 리셋해 LLM 호출 세 번을 더 쓴다.
+            기록(dropped_flags)에는 True/False 모두 남는다.
+    """
 
     worker: str
     reason: str
     subject: str = ""
     detail: str = ""
+    requires_rework: bool = True
 
     def as_flag(self) -> dict[str, object]:
         """실행 기록(dropped_flags)에 남길 형태로 바꾼다."""
@@ -122,8 +203,8 @@ class ValidationOutcome:
 
     Attributes:
         facts: 통과한 팩트. 조립과 저장은 이것만 쓴다.
-        problems: 걸러진 항목과 사유. 비어 있지 않으면 Supervisor가 해당 워커를
-            1회 재작업시키고, 재작업 후에도 남으면 드롭 플래그로 남긴다.
+        problems: 걸러진 항목과 사유. 재작업이 필요한 항목이 있으면 Supervisor가
+            해당 워커를 1회 재작업시키고, 재작업 후에도 남으면 드롭 플래그로 남긴다.
     """
 
     facts: tuple[ValidatedFact, ...] = ()
@@ -131,8 +212,15 @@ class ValidationOutcome:
 
     @property
     def failed_workers(self) -> frozenset[str]:
-        """문제를 만든 워커 이름 집합."""
-        return frozenset(problem.worker for problem in self.problems)
+        """**재작업으로 고칠 수 있는** 문제를 만든 워커 이름 집합.
+
+        코드가 이미 결론을 낸 문제(requires_rework=False)는 세지 않는다. 그런
+        항목까지 재작업 방아쇠로 삼으면, 같은 판단을 다시 시키려고 diff·compose·
+        impact를 통째로 한 번 더 도는 값을 치르게 된다.
+        """
+        return frozenset(
+            problem.worker for problem in self.problems if problem.requires_rework
+        )
 
 
 async def validate_delta_outputs(
@@ -161,6 +249,23 @@ async def validate_delta_outputs(
     Returns:
         통과한 팩트와 걸러진 항목 목록
     """
+    # 과거 팩트를 찾아 놓고도 new로 적은 팩트를 먼저 갱신으로 되돌린다. 이후
+    # 검사(before 값 채우기·재서술 억제)가 승격된 팩트에도 그대로 적용되도록
+    # 순서를 앞에 둔다.
+    async with connection.transaction():
+        await set_personal_wiki_scope(connection, user_id=user_id)
+        active_base_facts = await list_change_history_facts(
+            connection, user_id=user_id, topic=topic
+        )
+    facts, promoted_count = promote_mislabeled_new_facts(facts, active_base_facts)
+    if promoted_count:
+        logger.info(
+            "과거 팩트와 같은 (subject, attribute)인데 new로 찍힌 팩트 %d건을 "
+            "갱신으로 되돌렸습니다: topic=%s",
+            promoted_count,
+            topic,
+        )
+
     referenced_ids = [
         fact.updates_fact_id
         for fact in facts
@@ -212,7 +317,7 @@ async def validate_delta_outputs(
             before_value = base.fact_value
             before_statement = base.statement
 
-            if before_value.strip() == fact.fact_value.strip():
+            if is_restated_value(before_value, fact.fact_value):
                 # LLM이 값이 같은데도 updated로 착각했다. 사용자에게 "달라졌다"는 거짓
                 # 신호를 주지 않기 위해 여기서 걸러 duplicate로 되돌린다(조립에서 뺀다).
                 problems.append(
@@ -221,12 +326,32 @@ async def validate_delta_outputs(
                         reason="updated_value_unchanged",
                         subject=f"{fact.subject} / {fact.attribute}",
                         detail=(
-                            "과거 값과 오늘 값이 완전히 동일합니다. "
+                            "과거 값과 오늘 값의 수치·날짜가 같아 표현만 달라진 재서술입니다. "
                             "실질적인 변화가 없으므로 duplicate로 간주해 보고서에서 제외합니다."
                         ),
+                        # 코드가 이미 duplicate로 결론을 냈다. 다시 시켜도 같은 자료에서
+                        # 같은 재서술이 나올 뿐이라 재작업 방아쇠로 쓰지 않는다.
+                        requires_rework=False,
                     )
                 )
                 continue
+
+        # 이름표에 날짜·회차가 섞이면 내일 같은 사실을 찾지 못해 델타가 조용히
+        # 죽는다. 팩트 내용 자체는 멀쩡하므로 드롭하지 않고, 이름표만 다시 붙이도록
+        # diff worker에게 되돌린다.
+        drifting_marker = find_drifting_marker(fact.attribute)
+        if drifting_marker:
+            problems.append(
+                ValidationProblem(
+                    worker=DIFF_WORKER,
+                    reason="attribute_contains_drifting_value",
+                    subject=f"{fact.subject} / {fact.attribute}",
+                    detail=(
+                        f"이름표에 시점·순번 표기('{drifting_marker}')가 섞여 있습니다. "
+                        "다음 실행에서는 같은 사실을 찾지 못해 매번 신규로 쌓입니다."
+                    ),
+                )
+            )
 
         entry = timeline_by_index.get(index)
         occurred_on: date | None = None

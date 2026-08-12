@@ -16,6 +16,7 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("API_PREFIX", "/agent/internal/v1")
     monkeypatch.setenv("DOCS_ENABLED", "false")
+    monkeypatch.setenv("ENABLE_DEV_GRAPH_VIEWS", "false")
     monkeypatch.setenv(
         "AGENT_INTERNAL_TOKEN", "test-agent-internal-token-0123456789abcdef"
     )
@@ -23,17 +24,26 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-secret")
     monkeypatch.setenv("WIKI_LLM_MODEL", "gpt-4.1-mini")
     monkeypatch.setenv("REPORT_LLM_MODEL", "gpt-4.1-nano")
+    monkeypatch.setenv("WIKI_READ_PIPELINE_VERSION", "langgraph_v2")
+    monkeypatch.setenv("WIKI_MAINTENANCE_PIPELINE_VERSION", "langgraph_v2")
     monkeypatch.setenv("WIKI_EMBEDDING_MODEL", "text-embedding-3-small")
     monkeypatch.setenv("WIKI_EMBEDDING_BATCH_THRESHOLD", "80")
     monkeypatch.setenv("PERSONAL_WIKI_WORKER_BATCH_SIZE", "3")
     monkeypatch.setenv("PERSONAL_WIKI_JOB_CONCURRENCY", "2")
+    monkeypatch.setenv("URL_COLLECTION_WORKER_BATCH_SIZE", "6")
+    monkeypatch.setenv("URL_COLLECTION_JOB_CONCURRENCY", "3")
+    monkeypatch.setenv("REPORT_WORKER_BATCH_SIZE", "7")
     monkeypatch.setenv("REPORT_JOB_CONCURRENCY", "4")
+    monkeypatch.setenv("BRIEFING_WORKER_BATCH_SIZE", "11")
+    monkeypatch.setenv("BRIEFING_JOB_CONCURRENCY", "3")
     monkeypatch.setenv("OPENAI_DEFAULT_RPM", "120")
     monkeypatch.setenv("OPENAI_DEFAULT_TPM", "90000")
     monkeypatch.setenv("WIKI_OPENAI_REQUESTS_PER_JOB", "6")
     monkeypatch.setenv("WIKI_OPENAI_TOKENS_PER_JOB", "24000")
     monkeypatch.setenv("REPORT_OPENAI_REQUESTS_PER_JOB", "10")
     monkeypatch.setenv("REPORT_OPENAI_TOKENS_PER_JOB", "45000")
+    monkeypatch.setenv("BRIEFING_OPENAI_REQUESTS_PER_JOB", "7")
+    monkeypatch.setenv("BRIEFING_OPENAI_TOKENS_PER_JOB", "28000")
     monkeypatch.setenv("OPENAI_BATCH_MAX_ITEMS", "400")
     monkeypatch.setenv("OPENAI_BATCH_MAX_SUBMISSIONS", "2")
     monkeypatch.setenv("OPENAI_BATCH_POLL_LIMIT", "20")
@@ -50,6 +60,7 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     assert settings.environment == "production"
     assert settings.api_prefix == "/agent/internal/v1"
     assert settings.docs_enabled is False
+    assert settings.enable_dev_graph_views is False
     assert settings.internal_api_token is not None
     assert (
         settings.internal_api_token.get_secret_value()
@@ -60,22 +71,31 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     assert settings.openai_api_key.get_secret_value() == "test-secret"
     assert settings.wiki_llm_model == "gpt-4.1-mini"
     assert settings.report_llm_model == "gpt-4.1-nano"
+    assert settings.wiki_read_pipeline_version == "langgraph_v2"
+    assert settings.wiki_maintenance_pipeline_version == "langgraph_v2"
     assert settings.wiki_embedding_model == "text-embedding-3-small"
     assert settings.wiki_embedding_batch_threshold == 80
     assert settings.personal_wiki_worker_batch_size == 3
     assert settings.personal_wiki_job_concurrency == 2
+    assert settings.url_collection_worker_batch_size == 6
+    assert settings.url_collection_job_concurrency == 3
     assert settings.report_job_concurrency == 4
+    assert settings.briefing_worker_batch_size == 11
+    assert settings.briefing_job_concurrency == 3
     assert settings.openai_default_rpm == 120
     assert settings.openai_default_tpm == 90_000
     assert settings.wiki_openai_requests_per_job == 6
     assert settings.wiki_openai_tokens_per_job == 24_000
     assert settings.report_openai_requests_per_job == 10
     assert settings.report_openai_tokens_per_job == 45_000
+    assert settings.briefing_openai_requests_per_job == 7
+    assert settings.briefing_openai_tokens_per_job == 28_000
     assert settings.openai_batch_max_items == 400
     assert settings.openai_batch_max_submissions == 2
     assert settings.openai_batch_poll_limit == 20
     assert settings.openai_batch_poll_interval_seconds == 45
     assert settings.openai_batch_poll_lease_seconds == 90
+    assert settings.report_worker_batch_size == 7
     assert settings.personal_wiki_job_lease_seconds == 900
     assert settings.wiki_build_quiet_minutes == 15
     assert settings.wiki_build_max_wait_minutes == 45
@@ -87,6 +107,52 @@ def test_settings_uses_dedicated_mcp_port_by_default() -> None:
 
     assert settings.mcp_server_port == 8100
     assert settings.mcp_server_url == "http://localhost:8100/mcp"
+
+
+def test_wiki_pipeline_versions_default_to_langgraph_v2() -> None:
+    """새 Job은 Wiki 읽기·유지 LangGraph V2를 기본 실행 경로로 사용한다."""
+    settings = Settings()
+
+    assert settings.wiki_read_pipeline_version == "langgraph_v2"
+    assert settings.wiki_maintenance_pipeline_version == "langgraph_v2"
+
+
+def test_interactive_worker_defaults_prioritize_short_queue_delay() -> None:
+    """환경변수가 없어도 Wiki·URL Worker가 짧은 대기와 병렬 처리를 기본으로 쓴다."""
+    settings = Settings()
+
+    assert settings.personal_wiki_worker_batch_size == 10
+    assert settings.personal_wiki_job_concurrency == 4
+    assert settings.url_collection_worker_batch_size == 10
+    assert settings.url_collection_job_concurrency == 4
+    assert settings.wiki_build_quiet_minutes == 0
+
+
+def test_report_batch_size_falls_back_to_personal_wiki_batch_size(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """전용 설정이 없는 기존 배포는 종전 Worker Batch 크기를 유지한다."""
+    monkeypatch.setenv("PERSONAL_WIKI_WORKER_BATCH_SIZE", "9")
+    monkeypatch.delenv("REPORT_WORKER_BATCH_SIZE", raising=False)
+
+    settings = load_settings()
+
+    assert settings.report_worker_batch_size == 9
+
+
+def test_briefing_worker_settings_fall_back_to_report_worker_settings(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """전용 설정이 없는 기존 배포는 종전 Report Worker 처리량을 유지한다."""
+    monkeypatch.setenv("REPORT_WORKER_BATCH_SIZE", "9")
+    monkeypatch.setenv("REPORT_JOB_CONCURRENCY", "3")
+    monkeypatch.delenv("BRIEFING_WORKER_BATCH_SIZE", raising=False)
+    monkeypatch.delenv("BRIEFING_JOB_CONCURRENCY", raising=False)
+
+    settings = load_settings()
+
+    assert settings.briefing_worker_batch_size == 9
+    assert settings.briefing_job_concurrency == 3
 
 
 def test_create_container_uses_postgres_for_publish_snapshots() -> None:

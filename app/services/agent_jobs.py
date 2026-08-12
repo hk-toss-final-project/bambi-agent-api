@@ -214,6 +214,7 @@ class AgentJobRepository(Protocol):
         interest_id: str | None = None,
         content_type: str,
         report_type: str,
+        briefing_date: date | None = None,
         language: str | None,
         scheduled_at: datetime | None,
         request_id: str,
@@ -221,6 +222,18 @@ class AgentJobRepository(Protocol):
         execution_mode: str = "sync",
     ) -> SubmittedGenerationJob:
         """Report Builder Generation Job과 생성 요청을 멱등 저장한다."""
+        ...
+
+    async def submit_briefing_preparation(
+        self,
+        *,
+        user_id: str,
+        briefing_date: date,
+        idempotency_key: str,
+        limit: int,
+        request_id: str,
+    ) -> AgentJobRecord:
+        """아침 브리핑 주제·근거 준비 Job을 사용자·날짜별로 멱등 등록한다."""
         ...
 
     async def get_job(self, job_id: str) -> AgentJobRecord | None:
@@ -251,6 +264,7 @@ class AgentJobRepository(Protocol):
         markdown: str,
         resolved_url: str,
         published_at: datetime | None,
+        image_url: str | None = None,
     ) -> dict[str, object]:
         """URL 수집 결과를 원본 Version으로 저장하고 Wiki Job을 등록한다."""
         ...

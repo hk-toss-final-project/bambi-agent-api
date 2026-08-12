@@ -597,7 +597,14 @@ def test_run_once_enqueues_maintenance_rebuilds(
     )
     results = asyncio.run(build_scheduler(settings).run_once(now=_NOW))
 
-    assert calls == [{"stale_after_hours": 72.0, "limit": 4, "now": _NOW}]
+    assert calls == [
+        {
+            "stale_after_hours": 72.0,
+            "limit": 4,
+            "now": _NOW,
+            "maintenance_pipeline_version": "langgraph_v2",
+        }
+    ]
     step = next(
         item for item in results if item.provider == runtime.MAINTENANCE_REBUILD_STEP
     )

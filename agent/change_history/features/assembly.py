@@ -38,7 +38,7 @@ from .validation import ValidatedFact
 _CITATION_REF = re.compile(r"\[([PGL]\d+)\]")
 
 UPDATES_HEADING = "## 이번에 달라진 점"
-OVERVIEW_HEADING = "## 핵심 요약·맥락"
+OVERVIEW_HEADING = "## 보고서 내용"
 IMPLICATIONS_HEADING = "## 주목할 점"
 TIMELINE_HEADING = "## 타임라인"
 
@@ -54,30 +54,21 @@ NO_WATCH_ITEMS_NOTICE = "이번에 특별히 주목할 사항은 없습니다."
 
 
 def _changed_line(item: ValidatedFact) -> str:
-    """달라진 사실 한 줄을 `이전 → 오늘` 형태로 만든다.
-
-    before는 코드가 DB에서 읽은 과거값이라 LLM이 손댈 수 없다. 두 값을 백틱으로
-    나란히 붙여, 읽는 쪽이 무엇이 무엇으로 바뀌었는지 한눈에 보게 한다.
-    """
+    """달라진 사실을 (기존)과 (변경) 텍스트로 위아래 렌더링한다."""
     fact = item.fact
     marker = f" [{fact.source_reference}]" if fact.source_reference else ""
     before = item.before_value or "(이전 값 없음)"
-    after = fact.fact_value or "(값 없음)"
     return (
-        f"- **{fact.subject} · {fact.attribute}** — `{before}` → `{after}`{marker}\n"
-        f"  - {fact.today_statement}"
+        f"  (기존) ~~{before}~~\n"
+        f"  (변경) `{fact.today_statement}`{marker}"
     )
 
 
 def _new_line(item: ValidatedFact) -> str:
-    """새로 확인된 사실 한 줄을 만든다(비교 대상이 없으므로 값 하나만 적는다)."""
+    """새로 확인된 사실을 배경색 없는 일반 텍스트로 만든다."""
     fact = item.fact
     marker = f" [{fact.source_reference}]" if fact.source_reference else ""
-    value = fact.fact_value or "(값 없음)"
-    return (
-        f"- **{fact.subject} · {fact.attribute}** — `{value}`{marker}\n"
-        f"  - {fact.today_statement}"
-    )
+    return f"- {fact.today_statement}{marker}"
 
 
 def _timeline_lines(facts: Sequence[ValidatedFact]) -> list[str]:
@@ -94,14 +85,24 @@ def _timeline_lines(facts: Sequence[ValidatedFact]) -> list[str]:
     return lines
 
 
+def _deduplicate_facts(facts: Sequence[ValidatedFact]) -> list[ValidatedFact]:
+    """동일 서술문이 중복되거나 유사 팩트가 겹칠 경우 첫 팩트만 남기고 정제한다."""
+    seen_statements: set[str] = set()
+    result: list[ValidatedFact] = []
+    for item in facts:
+        stmt = item.fact.today_statement.strip()
+        if stmt not in seen_statements:
+            seen_statements.add(stmt)
+            result.append(item)
+    return result
+
+
 def build_delta_markdown(
     *,
     highlight_facts: Sequence[ValidatedFact],
     compose: ComposeOutcome,
     impact: ImpactOutcome,
     is_first_run: bool = False,
-    title: str = "",
-    summary: str = "",
 ) -> str:
     """섹션 헤더를 붙여 네 섹션을 하나의 markdown 문자열로 잇는다.
 
@@ -110,6 +111,10 @@ def build_delta_markdown(
     종합 요약을 그대로 쓰고(항상 채워진다), "이번에 달라진 점"에만
     highlight_facts(신규·갱신)를 따로 추려 보여준다.
 
+    제목·한 줄 결론은 여기 안 넣는다 — `GeneratedReportContent.title`·
+    `.summary` 필드가 이미 그 값을 나른다. 본문에 다시 박으면 카드 헤더와
+    본문 양쪽에 같은 제목이 중복 노출되는 소비 측 문제가 생긴다.
+
     Args:
         highlight_facts: 이번에 달라진 팩트(신규·갱신)만. 유지(중복)는 이미
             제외된 상태로 들어온다 — 비어 있으면 "달라진 점이 없다"는 뜻이다.
@@ -117,8 +122,6 @@ def build_delta_markdown(
         impact: 파급효과·확인 사항 추론 결과 (달라진 점이 없으면 실행되지
             않아 비어 있을 수 있다)
         is_first_run: 비교 대상이 없던 최초 실행인지
-        title: 보고서 제목 (마크다운 최상단 노출용)
-        summary: 3줄 결론 요약 (마크다운 최상단 노출용)
 
     Returns:
         이번에 달라진 점·핵심 요약·주목할 점·타임라인을 담은 markdown 본문
@@ -126,27 +129,21 @@ def build_delta_markdown(
     """
     no_change = not highlight_facts
 
-    blocks: list[str] = []
-    if title.strip():
-        blocks.append(f"# {title.strip()}")
-    if summary.strip():
-        blocks.append(f"### 핵심 요약\n{summary.strip()}")
-
-    blocks.append(UPDATES_HEADING)
+    blocks: list[str] = [UPDATES_HEADING]
     if is_first_run:
         blocks.append(FIRST_RUN_NOTICE)
     if no_change:
         blocks.append(NO_CHANGE_NOTICE)
     else:
-        changed = [item for item in highlight_facts if item.fact.verdict == UPDATED]
-        fresh = [item for item in highlight_facts if item.fact.verdict != UPDATED]
+        changed = _deduplicate_facts([item for item in highlight_facts if item.fact.verdict == UPDATED])
+        fresh = _deduplicate_facts([item for item in highlight_facts if item.fact.verdict != UPDATED])[:5]
         # 달라진 것을 먼저 보여준다 — 이 보고서를 여는 이유가 그것이다.
         if changed:
             blocks.append(f"{CHANGED_SUBHEADING} ({len(changed)}건)")
-            blocks.extend(_changed_line(item) for item in changed)
+            blocks.append("\n\n".join(_changed_line(item) for item in changed))
         if fresh:
             blocks.append(f"{NEW_SUBHEADING} ({len(fresh)}건)")
-            blocks.extend(_new_line(item) for item in fresh)
+            blocks.append("\n\n".join(_new_line(item) for item in fresh))
 
     blocks.append(OVERVIEW_HEADING)
     blocks.append(compose.overview.strip() or "정리할 내용이 없습니다.")
@@ -156,7 +153,7 @@ def build_delta_markdown(
         blocks.append(impact.implications.strip())
         if impact.actions:
             blocks.append("**확인이 필요한 부분**")
-            blocks.extend(f"- {action}" for action in impact.actions)
+            blocks.append("\n".join(f"- {action}" for action in impact.actions))
     else:
         blocks.append(NO_WATCH_ITEMS_NOTICE)
 
@@ -227,8 +224,6 @@ def assemble_delta_report(
         compose=compose,
         impact=impact,
         is_first_run=is_first_run,
-        title=title,
-        summary=summary,
     )
     return GeneratedReportContent(
         title=title,
@@ -263,22 +258,28 @@ def merge_topic_delta_reports(
     (user_id, topic)이라 한 축으로 묶으면 주제별 변화가 구분되지 않기 때문이다.
     합치는 일은 문자열 조작이라 여기서도 LLM을 쓰지 않는다(chg_006과 같은 이유).
 
+    **주제가 하나만 살아남아도 항상 감싸고 헤딩을 한 칸 내린다.** 이 함수를
+    부르는 시점 자체가 "다주제 델타 요청이었다"는 뜻이라, 근거 부족으로 다른
+    주제가 빠져 결과가 1건이 됐다고 안 감싸면, 같은 다주제 요청인데도 살아남은
+    주제 수(생성 이후에야 정해지는 값)에 따라 `##`/`###` 헤딩 단계가 갈린다.
+    프론트가 body 구조를 요청 시점에 예측할 수 없게 되므로(2026-08-11 풀스택
+    피드백), 헤딩 단계는 오직 "다주제 요청이었는가"로만 정해지게 고정한다.
+
     Args:
-        reports: (주제, 그 주제의 델타 보고서) 목록. 순서를 그대로 유지한다
+        reports: (주제, 그 주제의 델타 보고서) 목록. 순서를 그대로 유지한다.
+            1건이어도(다른 주제가 근거 부족으로 빠졌어도) 감싼다
         topic: 카드 제목에 쓸 요청 대표 주제
         reference_date: 기본 제목에 쓸 기준일
 
     Returns:
-        주제별 섹션을 이어 붙인 하나의 생성 콘텐츠
+        주제별 섹션을 이어 붙인 하나의 생성 콘텐츠. 항상 `## {주제}` 아래
+        `### `로 한 칸 내려간 섹션 헤딩을 담는다
 
     Raises:
         ValueError: 합칠 보고서가 한 건도 없는 경우
     """
     if not reports:
         raise ValueError("합칠 주제별 델타 보고서가 없습니다.")
-    if len(reports) == 1:
-        # 주제가 하나로 줄었으면(나머지가 근거 부족으로 빠졌다) 굳이 감싸지 않는다.
-        return reports[0][1]
 
     blocks: list[str] = []
     summaries: list[str] = []

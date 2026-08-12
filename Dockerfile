@@ -3,6 +3,7 @@
 #  · API 와 Worker 가 같은 이미지를 쓴다. 실행 대상은 command 로 가른다.
 #      API    : (기본 CMD) uvicorn app.main:app --host 0.0.0.0 --port 8000
 #      Worker : python -m workers.main --worker report-generation --loop
+#               python -m workers.main --worker briefing-preparation --loop
 #  · uv 로 의존성을 설치한다(AGENTS.md 규칙 5 — pip 직접 사용 금지).
 #    uv.lock 을 그대로 쓰는 --frozen 설치라 CI 와 로컬 버전이 어긋나지 않는다.
 #  · 의존성 레이어와 소스 레이어를 분리해 소스만 바뀌면 재설치를 건너뛴다.

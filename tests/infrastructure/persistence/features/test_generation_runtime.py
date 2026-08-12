@@ -2,7 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
@@ -217,6 +217,49 @@ def test_enqueue_defaults_change_history_toggle_to_off() -> None:
     assert insert_params[2].obj["change_history_enabled"] is False
 
 
+def test_enqueue_pins_read_pipeline_version_in_job_payload() -> None:
+    """Report Job은 접수 시점의 읽기 루프 버전을 Payload에 고정한다."""
+    connection = _connection_with_context()
+
+    asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-v2-reader",
+            topic="반도체",
+            content_type="interest_news_card",
+            language="ko",
+            request_id="request-1",
+            read_pipeline_version="langgraph_v2",
+        )
+    )
+
+    _, insert_params = connection.executed[2]
+    assert insert_params is not None
+    assert insert_params[2].obj["read_pipeline_version"] == "langgraph_v2"
+
+
+def test_enqueue_defaults_missing_read_pipeline_version_to_legacy() -> None:
+    """전환 설정을 생략한 접수는 V1 호환 버전을 명시적으로 저장한다."""
+    connection = _connection_with_context()
+
+    asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-v1-reader",
+            topic="반도체",
+            content_type="interest_news_card",
+            language="ko",
+            request_id="request-1",
+        )
+    )
+
+    _, insert_params = connection.executed[2]
+    assert insert_params is not None
+    assert insert_params[2].obj["read_pipeline_version"] == "legacy_v1"
+
+
 def test_enqueue_batch_report_freezes_database_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -392,6 +435,43 @@ def test_enqueue_stores_report_type_for_the_publish_snapshot() -> None:
     _, request_params = connection.executed[3]
     assert request_params is not None
     assert request_params[-1].obj["report_type"] == "MORNING_BRIEFING"
+
+
+def test_enqueue_pins_explicit_briefing_date_without_interpreting_report_type() -> None:
+    """Service가 명시한 브리핑 날짜만 Job에 고정하고 report_type은 해석하지 않는다."""
+    connection = _FakeConnection(
+        [
+            [{"id": "context-1", "plan": "free", "preferred_language": "ko"}],
+            [],  # 대표 topic INT-013
+            [],  # 반도체 INT-013
+            [],  # 프로야구 INT-013
+            [{"id": "job-1"}],
+            [{"id": "request-1"}],
+        ]
+    )
+
+    asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-prewarmed-morning",
+            topic="오늘의 관심사 브리핑",
+            topics=["반도체", "프로야구"],
+            content_type="interest_news_card",
+            report_type="CUSTOM_SERVICE_VALUE",
+            briefing_date=date(2026, 8, 12),
+            language="ko",
+            request_id="request-1",
+        )
+    )
+
+    _, job_params = connection.executed[4]
+    assert job_params is not None
+    assert job_params[2].obj["briefing_date"] == "2026-08-12"
+    assert job_params[2].obj["report_type"] == "CUSTOM_SERVICE_VALUE"
+    _, request_params = connection.executed[5]
+    assert request_params is not None
+    assert request_params[-1].obj["briefing_date"] == "2026-08-12"
 
 
 def test_enqueue_snapshots_active_interest_bundle() -> None:
@@ -767,6 +847,7 @@ def _connection_for_persist(
     job_payload: dict[str, Any] | None = None,
     cited_taxonomy_rows: list[dict[str, Any]] | None = None,
     catalog: list[dict[str, Any]] | None = None,
+    citation_count: int = 0,
 ) -> _FakeConnection:
     """인용 없는 리포트 저장 경로가 실행할 질의 순서대로 응답을 준비한다.
 
@@ -791,6 +872,7 @@ def _connection_for_persist(
         [{"next_version": 1}],  # 다음 content 버전
         [],  # 이전 후보 superseded
         [{"id": "cand-1", "created_at": datetime(2026, 7, 30, tzinfo=UTC)}],
+        *[[{"id": f"citation-{index}"}] for index in range(citation_count)],
         [],  # generation_runs completed
         [],  # generation_requests completed
         cited,  # taxonomy 파생 ① 인용 원본
@@ -860,7 +942,9 @@ def _publish_payload(connection: _FakeConnection) -> dict[str, Any]:
     raise AssertionError("publish_snapshots INSERT를 찾지 못했다.")
 
 
-def _persist(connection: _FakeConnection) -> None:
+def _persist(
+    connection: _FakeConnection, *, change_history_used: bool = False
+) -> None:
     """인용 없는 최소 리포트 한 건을 저장 경로에 통과시킨다."""
     asyncio.run(
         persist_report_generation(
@@ -877,6 +961,7 @@ def _persist(connection: _FakeConnection) -> None:
             ),
             contexts=[],
             latency_ms=100,
+            change_history_used=change_history_used,
         )
     )
 
@@ -892,6 +977,77 @@ def test_publish_payload_carries_request_topic_as_interest_tag() -> None:
     _persist(connection)
 
     assert _publish_payload(connection)["tags"] == ["코스피"]
+
+
+def test_publish_payload_carries_cover_image_from_used_citation() -> None:
+    """실제로 인용한 외부 출처의 이미지만 발행 Snapshot 상단 이미지가 된다."""
+    connection = _connection_for_persist("코스피", citation_count=1)
+    context = ReportContextDocument(
+        reference="G1",
+        document_version_id="gsrc:00000000-0000-0000-0000-000000000001",
+        chunk_id="gsrc:00000000-0000-0000-0000-000000000001",
+        namespace_key="global",
+        title="코스피 기사",
+        content="코스피가 상승했다.",
+        url="https://news.example/kospi",
+        score=1.0,
+        image_url="https://cdn.example/kospi.jpg",
+    )
+
+    asyncio.run(
+        persist_report_generation(
+            connection,  # type: ignore[arg-type]
+            job_id="job-1",
+            user_id="user-1",
+            attempt_number=1,
+            content_type="interest_news_card",
+            generated=GeneratedReportContent(
+                title="제목",
+                summary="요약",
+                body="코스피 동향이다 [G1]",
+                citation_references=("G1",),
+            ),
+            contexts=[context],
+            latency_ms=100,
+        )
+    )
+
+    assert _publish_payload(connection)["cover_image"] == {
+        "url": "https://cdn.example/kospi.jpg",
+        "source_url": "https://news.example/kospi",
+        "source_title": "코스피 기사",
+        "reference": "G1",
+    }
+
+
+def test_context_image_replaces_global_cached_banner_from_markdown() -> None:
+    """Global 조회 Context는 배너 캐시 대신 본문 속 기사 이미지를 사용한다."""
+    row = {
+        "namespace_key": "global",
+        "title": "본문 대표 이미지를 다시 찾는 긴 기사 제목",
+        "content": (
+            "![광고](https://menu.example/news/banner/ad.jpg)\n"
+            "# 본문 대표 이미지를 다시 찾는 긴 기사 제목\n"
+            "![사진](https://cdn.example/article/hero.jpg)\n본문"
+        ),
+        "image_url": "https://menu.example/news/banner/ad.jpg",
+    }
+
+    assert generation_runtime._context_image_url(row) == (
+        "https://cdn.example/article/hero.jpg"
+    )
+
+
+def test_context_image_rejects_ui_asset_outside_global_cache() -> None:
+    """개인 Context에 남은 아이콘 URL도 대표 이미지 후보에서 제외한다."""
+    row = {
+        "namespace_key": "user/1",
+        "title": "개인 문서",
+        "content": "본문",
+        "image_url": "https://wiki.example/images/ico_search.png",
+    }
+
+    assert generation_runtime._context_image_url(row) is None
 
 
 def test_publish_payload_derives_taxonomy_topics_from_cited_sources() -> None:
@@ -1117,6 +1273,45 @@ def test_publish_payload_keeps_report_type_empty_for_older_requests() -> None:
     _persist(connection)
 
     assert _publish_payload(connection)["report_type"] == ""
+
+
+def test_publish_payload_reflects_that_the_delta_path_actually_ran() -> None:
+    """change_history_enabled는 호출자가 넘긴 실제 실행 결과를 싣는다.
+
+    이 값이 없으면 Service가 body를 "이번에 달라진 점" 4단 구조로 볼지 기존
+    자유 형식으로 볼지 헤더 문자열을 파싱해 추측해야 한다.
+    """
+    connection = _connection_for_persist("코스피")
+
+    _persist(connection, change_history_used=True)
+
+    assert _publish_payload(connection)["change_history_enabled"] is True
+
+
+def test_publish_payload_ignores_the_requested_toggle_when_the_delta_path_did_not_run() -> None:
+    """요청 파라미터가 켜져 있어도, 실제로 델타 경로를 안 탔으면 false로 나간다.
+
+    서버 차단 스위치(CHANGE_HISTORY_ENABLED=0)나 델타 경로 실패로 기존
+    generate() 본문이 나갔을 때, 요청 파라미터만 보고 true를 실으면 값과 body
+    구조가 어긋난다(2026-08-11 풀스택 피드백). 호출자가 넘긴 실행 결과만
+    신뢰해야 한다.
+    """
+    connection = _connection_for_persist(
+        "코스피", {"change_history_enabled": True}
+    )
+
+    _persist(connection, change_history_used=False)
+
+    assert _publish_payload(connection)["change_history_enabled"] is False
+
+
+def test_publish_payload_keeps_change_history_toggle_off_by_default() -> None:
+    """호출자가 실행 결과를 안 넘기면 False로 안전하게 처리된다(회귀 0)."""
+    connection = _connection_for_persist("코스피")
+
+    _persist(connection)
+
+    assert _publish_payload(connection)["change_history_enabled"] is False
 
 
 def test_publish_payload_echoes_the_request_idempotency_key() -> None:
@@ -1435,6 +1630,7 @@ def test_snapshot_row_mapping_tolerates_snapshots_saved_before_new_fields() -> N
     assert snapshot.source_interest_id == ""
     assert snapshot.interest_profile_id == ""
     assert snapshot.bundle_keywords == []
+    assert snapshot.cover_image is None
 
 
 def test_snapshot_save_payload_preserves_interest_bundle_fields() -> None:
@@ -1457,6 +1653,12 @@ def test_snapshot_save_payload_preserves_interest_bundle_fields() -> None:
         interest_profile_id="profile-1",
         bundle_keywords=["생성형 AI", "RAG"],
         request_idempotency_key="interest-bundle:2026-08-10:user-1:interest-1",
+        cover_image={
+            "url": "https://cdn.example/cover.jpg",
+            "source_url": "https://news.example/article",
+            "source_title": "기사",
+            "reference": "G1",
+        },
         created_at=datetime(2026, 8, 7, tzinfo=UTC),
     )
 
@@ -1470,6 +1672,12 @@ def test_snapshot_save_payload_preserves_interest_bundle_fields() -> None:
     assert payload["source_interest_id"] == "interest-1"
     assert payload["interest_profile_id"] == "profile-1"
     assert payload["bundle_keywords"] == ["생성형 AI", "RAG"]
+    assert payload["cover_image"] == {
+        "url": "https://cdn.example/cover.jpg",
+        "source_url": "https://news.example/article",
+        "source_title": "기사",
+        "reference": "G1",
+    }
 
 
 def _run_metadata(connection: _FakeConnection) -> dict[str, Any]:

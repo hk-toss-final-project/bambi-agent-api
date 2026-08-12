@@ -3,6 +3,11 @@
 구현 모듈의 기능 함수를 안정적인 import 경로로 다시 노출한다.
 """
 
+from .features.briefing_selections import (
+    StoredBriefingTopicSelection,
+    load_briefing_topic_selection,
+    save_briefing_topic_selection,
+)
 from .features.users import db_001
 from .features.personal_wiki import (
     UserSourceDocumentForAgent,
@@ -93,6 +98,7 @@ from .features.jobs import (
     list_users_for_maintenance_rebuild,
     enqueue_url_collection_job,
     fail_agent_job,
+    extend_agent_job_lease,
     get_agent_job,
     get_agent_jobs,
     list_runnable_agent_jobs,
@@ -199,6 +205,12 @@ from .features.wiki_deletion import (
     delete_wiki_document_and_record_event,
 )
 from .features.wiki_reset import reset_personal_wiki
+from .features.briefing_preparations import (
+    StoredBriefingTopicSnapshot,
+    enqueue_briefing_preparation_job,
+    load_briefing_topic_snapshot,
+    upsert_briefing_topic_snapshot,
+)
 
 __all__ = [
     "db_001",
@@ -272,4 +284,12 @@ __all__ = [
     "sync_wiki_relation_supports",
     "reset_personal_wiki",
     "get_agent_jobs",
+    "extend_agent_job_lease",
+    "StoredBriefingTopicSelection",
+    "load_briefing_topic_selection",
+    "save_briefing_topic_selection",
+    "StoredBriefingTopicSnapshot",
+    "enqueue_briefing_preparation_job",
+    "load_briefing_topic_snapshot",
+    "upsert_briefing_topic_snapshot",
 ]

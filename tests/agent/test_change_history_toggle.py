@@ -80,9 +80,10 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, order: list[str]) -> dict[str
         )
 
     async def fake_prag_007(connection: Any, **kwargs: Any) -> dict[str, object]:
-        """저장 단계에 들어간 본문을 기록한다."""
+        """저장 단계에 들어간 본문과 실제 델타 사용 여부를 기록한다."""
         order.append("persist")
         captured["generated"] = kwargs["generated"]
+        captured["change_history_used"] = kwargs.get("change_history_used")
         return {"content_candidate_id": "candidate-1"}
 
     monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
@@ -139,6 +140,7 @@ def test_toggle_off_keeps_the_existing_generate_path(
     assert order == ["generate", "persist"]
     assert captured["generated"].title == "일반 리포트"
     assert result == {"content_candidate_id": "candidate-1"}
+    assert captured["change_history_used"] is False
 
 
 def test_toggle_on_replaces_generate_with_the_delta_path(
@@ -165,14 +167,20 @@ def test_toggle_on_replaces_generate_with_the_delta_path(
 
     assert order == ["change_history", "persist"]  # generate는 돌지 않는다
     assert captured["generated"].body.startswith("## Overview")
+    assert captured["change_history_used"] is True
 
 
 def test_server_switch_overrides_the_request_toggle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """서버 차단 스위치가 꺼져 있으면 요청이 켜도 기존 경로로 간다."""
+    """서버 차단 스위치가 꺼져 있으면 요청이 켜도 기존 경로로 간다.
+
+    이때 발행되는 change_history_enabled도 반드시 False여야 한다 — 요청
+    파라미터만 echo하면 값은 true인데 body는 기존 형식이 나가는 불일치가
+    생긴다(2026-08-11 풀스택 피드백으로 발견된 실제 버그).
+    """
     order: list[str] = []
-    _patch_common(monkeypatch, order)
+    captured = _patch_common(monkeypatch, order)
     monkeypatch.setattr(agent_graph, "change_history_available", lambda: False)
     monkeypatch.setattr(
         agent_graph,
@@ -183,6 +191,7 @@ def test_server_switch_overrides_the_request_toggle(
     _run(change_history_enabled=True)
 
     assert order == ["generate", "persist"]
+    assert captured["change_history_used"] is False
 
 
 def _patch_per_topic_documents(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -197,6 +206,8 @@ def _patch_per_topic_documents(monkeypatch: pytest.MonkeyPatch) -> None:
         query = str(kwargs["query"])
         document = _context()
         object.__setattr__(document, "reference", f"G-{query}")
+        object.__setattr__(document, "document_version_id", f"ver-{query}")
+        object.__setattr__(document, "chunk_id", f"chunk-{query}")
         return [document]
 
     monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
@@ -223,15 +234,15 @@ def test_multi_topic_request_runs_a_delta_per_topic(
     async def fake_change_history(connection: Any, **kwargs: Any) -> dict[str, Any]:
         """주제별 호출을 기록하고 그 주제의 델타 보고서를 돌려준다."""
         topic = str(kwargs["topic"])
-        calls.append(
-            (topic, [document.reference for document in kwargs["contexts"]])
-        )
+        references = [document.reference for document in kwargs["contexts"]]
+        calls.append((topic, references))
+        reference = references[0]
         return {
             "generated": GeneratedReportContent(
                 title=f"{topic} 변경점",
                 summary=f"{topic} 요약",
-                body=f"## Overview\n\n{topic} 브리핑 [G-{topic}]",
-                citation_references=(f"G-{topic}",),
+                body=f"## Overview\n\n{topic} 브리핑 [{reference}]",
+                citation_references=(reference,),
             ),
             "fact_count": 1,
             "input_tokens": 10,
@@ -256,11 +267,12 @@ def test_multi_topic_request_runs_a_delta_per_topic(
 
     # 대표 문자열("오늘의 브리핑")이 아니라 실제 주제로 비교축이 잡혀야 한다.
     assert [topic for topic, _ in calls] == ["반도체", "환율"]
-    assert calls[0][1] == ["G-반도체"]
-    assert calls[1][1] == ["G-환율"]
+    assert calls[0][1] == ["G1"]
+    assert calls[1][1] == ["G2"]
     body = captured["generated"].body
     assert "## 반도체" in body and "## 환율" in body
     assert order == ["persist"]  # generate는 돌지 않는다
+    assert captured["change_history_used"] is True
 
 
 def test_multi_topic_delta_keeps_going_when_one_topic_fails(
@@ -279,12 +291,13 @@ def test_multi_topic_delta_keeps_going_when_one_topic_fails(
         topic = str(kwargs["topic"])
         if topic == "반도체":
             raise RuntimeError("delta down")
+        reference = kwargs["contexts"][0].reference
         return {
             "generated": GeneratedReportContent(
                 title=f"{topic} 변경점",
                 summary=f"{topic} 요약",
-                body=f"## Overview\n\n{topic} 브리핑 [G-{topic}]",
-                citation_references=(f"G-{topic}",),
+                body=f"## Overview\n\n{topic} 브리핑 [{reference}]",
+                citation_references=(reference,),
             ),
             "fact_count": 1,
         }
@@ -307,8 +320,12 @@ def test_multi_topic_delta_keeps_going_when_one_topic_fails(
     )
 
     assert order == ["persist"]
-    # 살아남은 주제가 하나면 그 보고서를 그대로 쓴다.
-    assert captured["generated"].title == "환율 변경점"
+    # 살아남은 주제가 하나여도 다주제 요청이었으므로 감싸고 헤딩을 내린다
+    # (2026-08-11 풀스택 피드백: 살아남은 주제 수에 따라 구조가 갈리면 안 됨).
+    generated = captured["generated"]
+    assert generated.title.startswith("오늘의 브리핑 요약")
+    assert "## 환율" in generated.body
+    assert "### Overview" in generated.body
 
 
 def test_multi_topic_delta_falls_back_when_every_topic_fails(
@@ -342,12 +359,17 @@ def test_multi_topic_delta_falls_back_when_every_topic_fails(
 
     assert order == ["generate", "persist"]
     assert captured["generated"].title == "일반 리포트"
+    assert captured["change_history_used"] is False
 
 
 def test_delta_failure_falls_back_to_the_existing_generate_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """델타 경로가 실패해도 발행을 막지 않고 기존 생성으로 되돌아간다."""
+    """델타 경로가 실패해도 발행을 막지 않고 기존 생성으로 되돌아간다.
+
+    이때도 change_history_enabled는 False로 나가야 한다 — 실제로는
+    generate()가 만든 기존 형식 본문이 나갔기 때문이다.
+    """
     order: list[str] = []
     captured = _patch_common(monkeypatch, order)
 
@@ -362,3 +384,4 @@ def test_delta_failure_falls_back_to_the_existing_generate_path(
 
     assert order == ["change_history", "generate", "persist"]
     assert captured["generated"].title == "일반 리포트"
+    assert captured["change_history_used"] is False

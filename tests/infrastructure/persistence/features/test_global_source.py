@@ -52,7 +52,9 @@ class _FakeConnection:
         return _FakeCursor(rows)
 
 
-def _article(url: str, *, title: str = "제목") -> LatestArticle:
+def _article(
+    url: str, *, title: str = "제목", image_url: str | None = None
+) -> LatestArticle:
     """테스트용 정규화 기사 하나를 만든다."""
     return LatestArticle(
         provider="gdelt",
@@ -62,6 +64,7 @@ def _article(url: str, *, title: str = "제목") -> LatestArticle:
         published_at=datetime(2026, 7, 20, tzinfo=UTC),
         source_name="example.com",
         language="ko",
+        image_url=image_url,
     )
 
 
@@ -83,7 +86,10 @@ def test_persist_skips_existing_url_and_saves_new_as_pending() -> None:
             provider="gdelt",
             query="AI Agent",
             articles=[
-                _article("https://example.com/new"),
+                _article(
+                    "https://example.com/new",
+                    image_url="https://cdn.example/provider-cover.jpg",
+                ),
                 _article("https://example.com/dup"),
             ],
         )
@@ -102,7 +108,8 @@ def test_persist_skips_existing_url_and_saves_new_as_pending() -> None:
     assert "INSERT INTO agent.global_source_documents" in document_sql
     assert "ON CONFLICT (canonical_url) DO NOTHING" in document_sql
     assert document_params is not None
-    assert document_params[8] == "pending"
+    assert document_params[8] == "https://cdn.example/provider-cover.jpg"
+    assert document_params[9] == "pending"
     assert any(
         "INSERT INTO agent.global_source_document_topics" in query
         for query, _params in connection.executed
@@ -353,6 +360,7 @@ def test_save_fetched_content_fills_cache_document() -> None:
             title="본문 제목",
             markdown="# 전체 본문\n\n내용",
             published_at=datetime(2026, 7, 20, tzinfo=UTC),
+            image_url="https://cdn.example/cover.jpg",
         )
     )
 
@@ -370,6 +378,7 @@ def test_save_fetched_content_fills_cache_document() -> None:
     assert "search_body = %s" in update_sql
     assert update_params[2]
     assert update_params[4] == "https://example.com/final"
+    assert update_params[5] == "https://cdn.example/cover.jpg"
 
 
 def test_save_fetched_content_raises_for_missing_document() -> None:
@@ -450,6 +459,23 @@ def test_load_collection_schedules_reads_source_settings() -> None:
     assert schedule.daily_max_runs == 4
     assert schedule.last_started_at == last_started_at
     assert schedule.runs_today == 2
+
+
+def test_load_collection_schedules_counts_daily_quota_by_kst_midnight() -> None:
+    """일일 한도 집계를 KST 자정 기준으로 끊는지 검증한다.
+
+    서버 세션 TimeZone이 UTC라 그냥 date_trunc하면 UTC 자정(=KST 09:00)에
+    리셋된다. 그러면 아침 브리핑에 쓸 새벽 수집이 전날 예산의 꼬리에 걸려
+    통째로 건너뛰어진다(2026-08-12 실측: KST 03:00·06:00 tick 미실행).
+    """
+    connection = _FakeConnection([[]])
+
+    asyncio.run(load_collection_schedules(connection))  # type: ignore[arg-type]
+
+    query, _ = connection.executed[0]
+    assert "clock_timestamp() AT TIME ZONE 'Asia/Seoul'" in query
+    # UTC 자정으로 끊는 옛 표현이 남아 있으면 안 된다.
+    assert "date_trunc('day', clock_timestamp())" not in query
 
 
 def test_load_collection_schedules_falls_back_to_defaults() -> None:

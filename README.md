@@ -45,6 +45,8 @@ cp .env.example .env
   키워드 비서 UI만 쓸 경우 비워둬도 됩니다.
 - `ENABLE_DEV_AGENT_API=true` — Swagger 개발 실행 API(`/internal/v1/dev/**`)
   활성화. 로컬 개발 시 권장합니다.
+- `ENABLE_DEV_GRAPH_VIEWS=true` — 읽기 전용 에이전트 구조 화면(`/dev/graphs`)
+  활성화. 기본값이 `true`라 배포 환경에서도 열리며, 필요하면 명시적으로 끌 수 있습니다.
 
 ### 1. PostgreSQL 실행 (Agent API 선행 조건)
 
@@ -74,8 +76,9 @@ uv run uvicorn app.main:app --port 8000 --reload --loop app.main:selector_event_
   개발 실행 API가 함께 등록됩니다. 엔드포인트별 계약은
   [FastAPI MVP API 설계](docs/fastapi-mvp-api.md)를 참고하세요.
 - 에이전트 그래프 구조 시각화: <http://127.0.0.1:8000/dev/graphs> —
-  Personal Wiki·Report Generation·키워드 비서 그래프를 Mermaid 차트로
-  보여줍니다(개발 API와 같은 플래그로 활성화).
+  Personal Wiki·Report Generation·키워드 비서·변경점 추적 그래프를 Mermaid
+  차트로 보여줍니다. 실행 API와 분리된 `ENABLE_DEV_GRAPH_VIEWS`로 제어하며
+  모든 `APP_ENV`에서 기본 활성화됩니다.
 - Swagger UI와 개발 시각화 페이지는 토큰 없이 열 수 있지만,
   `/internal/v1/**` 실행에는 `AGENT_INTERNAL_TOKEN` Bearer 인증이 필요합니다.
   Swagger의 `Authorize`에 토큰을 한 번 입력하면 브라우저에 유지되어 이후
@@ -142,13 +145,15 @@ SERVICE_NOT_READY`로 응답합니다). 분해 전 구조와 설계 배경은
 
 ### 6. Worker 실행
 
-등록된 Agent Job(Wiki 빌드, Report Builder 생성)과 외부 수집을 처리하는 CLI입니다.
-Wiki 빌드와 Report Builder 생성은 OpenAI를 실제 호출하므로 비용이 발생합니다.
+등록된 Agent Job(Wiki 빌드, 아침 브리핑 준비, Report Builder 생성)과 외부 수집을
+처리하는 CLI입니다. Wiki 빌드와 브리핑 준비, Report Builder 생성은 OpenAI를 실제
+호출하므로 비용이 발생합니다.
 
 | Worker | 용도 | 모드 |
 |---|---|---|
 | `url-collection` | 사용자 URL을 Jina Reader로 읽어 Markdown 원문 Version 저장 | 단발 / `--loop` 상주 |
 | `personal-wiki` | 클리핑·URL 원본을 LLM Wiki로 빌드하고 변경 Chunk를 best-effort 재임베딩 | 단발 / `--loop` 상주 |
+| `briefing-preparation` | 날짜별 아침 주제와 Wiki·Global·Live 근거를 Snapshot으로 준비 | 단발 / `--loop` 상주 |
 | `report-generation` | 생성 Job을 처리해 콘텐츠·발행 Snapshot 저장 | 단발 / `--loop` 상주 |
 | `global-collector` | 키워드로 외부 기사 수집 (`--keywords` 필수, Provider 기본 `gdelt,naver,google_news`) | 단발 |
 | `global-content` | 수집된 기사의 본문 확보 (**Scheduler가 tick마다 자동 실행**, 이 CLI는 수동 점검·backlog 소진용) | 단발 |
@@ -157,11 +162,13 @@ Wiki 빌드와 Report Builder 생성은 OpenAI를 실제 호출하므로 비용�
 # 단발: 대기 Job 한 Batch를 처리하고 종료
 uv run python -m workers.main --worker url-collection
 uv run python -m workers.main --worker personal-wiki
+uv run python -m workers.main --worker briefing-preparation
 uv run python -m workers.main --worker report-generation
 
 # 상주: Job이 생기면 자동 처리 (없으면 60초 간격으로 확인)
 uv run python -m workers.main --worker url-collection --loop --interval-seconds 5
 uv run python -m workers.main --worker personal-wiki --loop
+uv run python -m workers.main --worker briefing-preparation --loop
 uv run python -m workers.main --worker report-generation --loop
 
 # 외부 기사 수집 → 본문 확보
@@ -169,9 +176,17 @@ uv run python -m workers.main --worker global-collector --keywords "AI 에이전
 uv run python -m workers.main --worker global-content
 ```
 
-`--limit`, `--lease-seconds`, `--model`, `--interval-seconds`(상주 모드) 옵션으로
-Batch 크기와 실행을 조정합니다. 상주 Worker는 `scheduled_at`이 도래한 Job만
-Claim하므로 예약 생성 요청은 지정 시각에 처리됩니다.
+`--limit`, `--concurrency`, `--lease-seconds`, `--model`,
+`--interval-seconds`(상주 모드) 옵션으로 Batch 크기와 실행을 조정합니다. 상주
+Worker는 `scheduled_at`이 도래한 Job만 Claim하므로 예약 생성 요청은 지정 시각에
+처리됩니다.
+
+운영 환경에서는 `briefing-preparation`을 `report-generation`과 **별도 프로세스나
+컨테이너로 상시 실행**해야 합니다. Service 스케줄러가 준비 시각에 POST로 등록한
+`briefing_preparation` Job은 이 Worker만 처리합니다. 준비 Worker가 없으면 Job은
+`queued`에 남고 생성 시각의 주제 GET은 빈 응답을 반환합니다. 준비 처리량은
+`BRIEFING_WORKER_BATCH_SIZE`와 `BRIEFING_JOB_CONCURRENCY`로 독립 조정하며, 즉시
+Report Worker의 설정과 생성 경로는 바뀌지 않습니다.
 
 URL 등록 API는 URL Head와 `personal_wiki_url` Job을 먼저 Commit하고 202를
 반환합니다. `url-collection` 상주 Worker가 Job을 감지하면 Jina Reader로 본문을

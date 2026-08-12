@@ -3,6 +3,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -10,6 +11,7 @@ import pytest
 
 from workers.features import report_generation
 from workers.features.report_generation import worker_003
+from infrastructure.persistence.api import StoredBriefingTopicSnapshot
 
 
 class _FakeConnection:
@@ -131,6 +133,119 @@ def test_worker_defaults_the_toggle_off_for_jobs_without_the_flag(
     )
 
     assert captured["change_history_enabled"] is False
+    assert captured["read_pipeline_version"] == "legacy_v1"
+
+
+def test_worker_passes_pinned_read_pipeline_version_to_the_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """운영 Worker는 현재 설정이 아니라 Job Payload에 고정된 V2 버전을 전달한다."""
+    captured = _run_worker_job(
+        monkeypatch,
+        {
+            "topic": "반도체",
+            "content_type": "interest_news_card",
+            "language": "ko",
+            "read_pipeline_version": "langgraph_v2",
+        },
+    )
+
+    assert captured["read_pipeline_version"] == "langgraph_v2"
+
+
+def test_worker_loads_matching_briefing_snapshot_for_the_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """같은 날짜·주제의 REPORT-022 근거는 검증된 Context로 그래프에 전달된다."""
+    snapshot = StoredBriefingTopicSnapshot(
+        user_id="user-1",
+        briefing_date=date(2026, 8, 12),
+        topics=("반도체", "프로야구"),
+        reason="준비됨",
+        candidate_count=8,
+        contexts_by_topic={
+            "반도체": [
+                {
+                    "reference": "G1",
+                    "document_version_id": "version-semiconductor",
+                    "chunk_id": "chunk-semiconductor",
+                    "namespace_key": "global",
+                    "title": "반도체 기사",
+                    "content": "반도체 근거",
+                    "url": "https://example.com/semiconductor",
+                    "score": 0.9,
+                }
+            ],
+            "프로야구": [],
+        },
+        prepared_by_job_id="briefing-job-1",
+        prepared_at=datetime(2026, 8, 11, tzinfo=UTC),
+    )
+
+    async def fake_load(connection: Any, **kwargs: Any) -> Any:
+        """같은 날짜의 준비 Snapshot을 반환한다."""
+        assert kwargs["briefing_date"] == date(2026, 8, 12)
+        return snapshot
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """Snapshot 조회의 사용자 Scope 설정을 생략한다."""
+
+    monkeypatch.setattr(report_generation, "load_briefing_topic_snapshot", fake_load)
+    monkeypatch.setattr(report_generation, "set_personal_wiki_scope", fake_scope)
+
+    captured = _run_worker_job(
+        monkeypatch,
+        {
+            "topic": "오늘의 관심사 브리핑",
+            "topics": ["반도체", "프로야구"],
+            "content_type": "interest_news_card",
+            "language": "ko",
+            "briefing_date": "2026-08-12",
+        },
+    )
+
+    contexts = captured["prewarmed_contexts_by_topic"]
+    assert set(contexts) == {"반도체"}
+    assert contexts["반도체"][0].document_version_id == "version-semiconductor"
+
+
+def test_worker_ignores_briefing_snapshot_when_topics_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """준비 후 주제가 바뀐 요청은 오래된 근거를 섞지 않고 일반 조사로 폴백한다."""
+    snapshot = StoredBriefingTopicSnapshot(
+        user_id="user-1",
+        briefing_date=date(2026, 8, 12),
+        topics=("반도체",),
+        reason="준비됨",
+        candidate_count=4,
+        contexts_by_topic={"반도체": []},
+        prepared_by_job_id="briefing-job-1",
+        prepared_at=datetime(2026, 8, 11, tzinfo=UTC),
+    )
+
+    async def fake_load(connection: Any, **kwargs: Any) -> Any:
+        """주제 목록이 다른 Snapshot을 반환한다."""
+        return snapshot
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """Snapshot 조회의 사용자 Scope 설정을 생략한다."""
+
+    monkeypatch.setattr(report_generation, "load_briefing_topic_snapshot", fake_load)
+    monkeypatch.setattr(report_generation, "set_personal_wiki_scope", fake_scope)
+
+    captured = _run_worker_job(
+        monkeypatch,
+        {
+            "topic": "오늘의 관심사 브리핑",
+            "topics": ["프로야구"],
+            "content_type": "interest_news_card",
+            "language": "ko",
+            "briefing_date": "2026-08-12",
+        },
+    )
+
+    assert captured["prewarmed_contexts_by_topic"] == {}
 
 
 def test_worker_stages_explicit_batch_report_and_releases_job_lease(

@@ -1,11 +1,12 @@
-"""사용자 URL 원문을 Jina Reader로 수집하는 PostgreSQL Worker.
+"""사용자 URL 본문과 대표 이미지를 수집하는 PostgreSQL Worker.
 
 Lease로 점유한 personal_wiki_url Job의 URL을 Jina Reader로 읽고 Markdown
-원본 Version을 Agent DB에 저장한 뒤, 변경된 본문에 대해 Personal Wiki Build
-Job을 등록한다.
+원본 Version을 저장한다. 대표 이미지는 원본 HTML 메타데이터에서 별도로 읽고,
+변경된 본문에 대해 Personal Wiki Build Job을 등록한다.
 """
 
 import asyncio
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -21,12 +22,21 @@ from infrastructure.persistence.api import (
     set_personal_wiki_scope,
     set_system_job_scope,
 )
-from infrastructure.sources.connectors.api import JinaReadResult, fetch_url_via_jina
+from infrastructure.sources.connectors.api import (
+    ArticleImageMetadata,
+    JinaReadResult,
+    fetch_article_image_metadata,
+    fetch_url_via_jina,
+)
 from shared.fetch_guard import ensure_fetch_is_readable
 from workers.features.batch_runner import run_job_batch
+from workers.runtime.api import JobInputError
 
 type DictRow = dict[str, Any]
 type UrlFetcher = Callable[[str], JinaReadResult]
+type ImageFetcher = Callable[[str], ArticleImageMetadata | None]
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_published_at(value: str | None) -> datetime | None:
@@ -46,16 +56,17 @@ async def _process_job(
     job: ClaimedAgentJob,
     worker_id: str,
     url_fetcher: UrlFetcher,
+    image_fetcher: ImageFetcher | None = None,
 ) -> dict[str, object]:
-    """점유한 URL Job 하나를 Jina로 수집·저장하고 완료 상태로 바꾼다."""
+    """점유한 URL Job의 본문과 HTML 대표 이미지를 수집·저장한다."""
     url = str(job.payload.get("url") or "").strip()
     source_document_id = str(job.payload.get("source_document_id") or "").strip()
     source_event_id = str(job.payload.get("source_event_id") or "").strip()
     source_event_row_id = str(job.payload.get("source_event_row_id") or "").strip()
     if not url:
-        raise ValueError("URL 수집 Job Payload에 url이 없습니다.")
+        raise JobInputError("URL 수집 Job Payload에 url이 없습니다.")
     if not source_document_id or not source_event_id or not source_event_row_id:
-        raise ValueError("URL 수집 Job Payload에 원본 식별자가 없습니다.")
+        raise JobInputError("URL 수집 Job Payload에 원본 식별자가 없습니다.")
 
     fetched = await asyncio.to_thread(url_fetcher, url)
     # 차단 안내 페이지를 본문으로 저장하지 않는다. 저장하면 LLM이 그 안내문을
@@ -66,6 +77,18 @@ async def _process_job(
     # 여기서 예외를 올리면 Job이 실패로 기록돼 사용자가 원인을 볼 수 있다.
     # 조용히 성공시키는 것보다 낫다.
     ensure_fetch_is_readable(fetched.title, fetched.markdown)
+    try:
+        image = await asyncio.to_thread(
+            image_fetcher or fetch_article_image_metadata,
+            fetched.resolved_url or url,
+        )
+    except Exception as error:  # 이미지 실패는 본문·Wiki 저장을 막지 않는다.
+        logger.warning(
+            "사용자 URL 이미지 메타데이터 조회 실패, 본문만 저장한다: %s: %s",
+            fetched.resolved_url or url,
+            error,
+        )
+        image = None
     async with connection.transaction():
         await set_personal_wiki_scope(connection, user_id=job.user_id)
         result = await save_fetched_url_and_enqueue(
@@ -77,7 +100,9 @@ async def _process_job(
             title=fetched.title,
             markdown=fetched.markdown,
             resolved_url=fetched.resolved_url,
+            image_url=image.url if image is not None else None,
             published_at=_parse_published_at(fetched.published_time),
+            quiet_minutes=0,
         )
 
     linked_result = await job_007(result)
@@ -99,10 +124,12 @@ async def run_url_collection_batch(
     database_url: str,
     worker_id: str,
     limit: int = 1,
+    concurrency: int = 4,
     lease_seconds: int = 600,
     url_fetcher: UrlFetcher = fetch_url_via_jina,
+    image_fetcher: ImageFetcher | None = None,
 ) -> list[dict[str, object]]:
-    """대기 중인 사용자 URL 수집 Job Batch를 점유해 순차적으로 처리한다."""
+    """대기 중인 사용자 URL 수집 Job을 제한된 동시성으로 처리한다."""
     if not database_url:
         raise ValueError("URL 수집 Worker에 database_url이 필요합니다.")
     if not worker_id:
@@ -117,6 +144,7 @@ async def run_url_collection_batch(
             job=job,
             worker_id=worker_id,
             url_fetcher=url_fetcher,
+            image_fetcher=image_fetcher or fetch_article_image_metadata,
         )
 
     return await run_job_batch(
@@ -125,7 +153,7 @@ async def run_url_collection_batch(
         worker_id=worker_id,
         limit=limit,
         lease_seconds=lease_seconds,
-        concurrency=1,
+        concurrency=concurrency,
         error_code_prefix="URL_COLLECTION",
         process=process,
     )

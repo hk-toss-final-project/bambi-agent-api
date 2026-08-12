@@ -194,6 +194,23 @@ Job의 각 Worker 실행 시도를 독립적인 불변 이력으로 기록합니
 | started_at | timestamptz | 자동 | 시도 시작 시각 |
 | completed_at | timestamptz | 선택 | 시도 종료 시각 |
 
+### briefing_topic_snapshots
+
+03시 준비 Worker가 선정한 아침 브리핑 주제와 사전 수집 근거를 07시 생성까지 고정합니다.
+
+| 컬럼 | 타입 | 필수·기본값 | 설명 |
+|---|---|---|---|
+| id | uuid | 자동, PK | 브리핑 Snapshot 내부 식별자 |
+| user_id | text | 필수, Unique 구성 | 브리핑 대상 사용자 식별자 |
+| briefing_date | date | 필수, Unique 구성 | 브리핑을 생성할 KST 기준 날짜 |
+| topics | text[] | 자동, 빈 Array | 선정 순서를 보존한 브리핑 주제 목록 |
+| reason | text | 자동, 빈 문자열 | 주제 선정 사유 |
+| candidate_count | integer | 자동, 0 | 선정 시 평가한 Wiki 후보 수 |
+| contexts_by_topic | jsonb | 자동, 빈 Object | Topic별 Wiki·Global·Live 근거 문서 Snapshot |
+| prepared_by_job_id | uuid | 필수, FK | 준비를 수행한 agent_jobs 식별자 |
+| created_at | timestamptz | 자동 | Snapshot 최초 생성 시각 |
+| updated_at | timestamptz | 자동 | 준비 결과가 마지막으로 갱신된 시각 |
+
 ## 4. 지식 문서와 검색
 
 ### user_source_documents
@@ -567,6 +584,7 @@ LLM Wiki 문서가 아니라 "한 번 읽은 URL 본문을 모두가 재사용"�
 | title | text | 자동, 빈 문자열 | 기사 제목 (본문 수집 시 Jina 제목으로 갱신) |
 | description | text | 선택 | Provider가 준 기사 설명·Snippet |
 | markdown | text | 선택 | Jina Reader가 채운 본문. pending 동안 NULL |
+| image_url | text | 선택 | Provider 또는 원본 HTML 메타데이터에서 얻은 대표 이미지 URL |
 | content_hash | text | 선택 | 본문 SHA-256 (64자) |
 | content_status | text | 자동, pending | pending, fetching, fetched, failed 상태 머신 |
 | resolved_url | text | 선택 | Jina가 리다이렉트까지 반영한 최종 URL |

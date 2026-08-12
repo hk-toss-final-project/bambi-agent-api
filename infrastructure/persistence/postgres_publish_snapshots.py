@@ -80,6 +80,7 @@ class PostgresPublishSnapshotRepository:
                 "summary": payload["summary"],
                 "body": payload["body"],
                 "citations": payload.get("citations", []),
+                "cover_image": payload.get("cover_image"),
                 # 아래 필드들은 나중에 추가돼, 그 전에 저장된 Snapshot에는 없다.
                 # 쓰는 쪽(generation_runtime.persist_report_generation)에 필드를
                 # 추가할 때 이 매핑도 함께 고쳐야 한다 — 여기서 키를 명시적으로
@@ -98,6 +99,7 @@ class PostgresPublishSnapshotRepository:
                 "bundle_keywords": payload.get("bundle_keywords", []),
                 "taxonomy_topic_ids": payload.get("taxonomy_topic_ids", []),
                 "taxonomy_version": payload.get("taxonomy_version", ""),
+                "change_history_enabled": payload.get("change_history_enabled", False),
                 "created_at": row["created_at"],
             }
         )
@@ -112,6 +114,11 @@ class PostgresPublishSnapshotRepository:
             "citations": [
                 citation.model_dump(mode="json") for citation in snapshot.citations
             ],
+            "cover_image": (
+                snapshot.cover_image.model_dump(mode="json")
+                if snapshot.cover_image
+                else None
+            ),
             "generation_topic": snapshot.generation_topic,
             "tags": list(snapshot.tags),
             "content_tags": list(snapshot.content_tags),
@@ -123,6 +130,7 @@ class PostgresPublishSnapshotRepository:
             "bundle_keywords": list(snapshot.bundle_keywords),
             "taxonomy_topic_ids": list(snapshot.taxonomy_topic_ids),
             "taxonomy_version": snapshot.taxonomy_version,
+            "change_history_enabled": snapshot.change_history_enabled,
         }
 
     async def save(self, snapshot: PublishSnapshotResponse) -> None:

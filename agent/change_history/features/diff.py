@@ -35,7 +35,7 @@ logger = logging.getLogger("agent.change_history.diff")
 
 type DictRow = dict[str, Any]
 
-DIFF_MAX_ITERATIONS = 6
+DIFF_MAX_ITERATIONS = 4
 _CONTEXT_SNIPPET_CHARS = 1200
 _MAX_CONTEXT_CHARS = 14000
 _VERDICTS = {NEW, UPDATED, DUPLICATE}
@@ -55,6 +55,13 @@ SYSTEM_PROMPT = (
     "  맞는 예: subject='코스닥', attribute='등락률', fact_value='3거래일 만에 21% 급등'\n"
     "  틀린 예: subject='코스닥', attribute='3거래일 만에 21% 급등'  ← 값이 이름표에 섞였다\n"
     "\n"
+    "**날짜·회차·분기는 특히 이름표에 넣지 마라.** 다음 회차·다음 분기·다음 날이\n"
+    "되면 그 이름표는 영원히 매칭되지 않아, 같은 사실이 매번 새 소식으로 쌓인다.\n"
+    "  틀린 예: subject='로또', attribute='제1237회'  ← 회차가 이름표에 박혔다\n"
+    "  맞는 예: subject='로또', attribute='당첨번호', fact_value='제1237회 …'\n"
+    "  틀린 예: subject='C사', attribute='3분기 영업이익'  ← 분기가 이름표에 박혔다\n"
+    "  맞는 예: subject='C사', attribute='영업이익', fact_value='3분기 1조2천억원'\n"
+    "\n"
     "도구:\n"
     "- search_base_facts(query): 이 주제로 과거에 저장해 둔 팩트를 찾는다.\n"
     "  팩트를 하나 뽑을 때마다 '이건 예전에도 있었나'가 궁금하면 부른다.\n"
@@ -69,7 +76,10 @@ SYSTEM_PROMPT = (
     "   뿐 같은 시점을 가리키므로 duplicate다. 새로 들어온 자료가 어제 사실을\n"
     "   다른 말로 재확인·재보도한 것뿐이면 duplicate이지 updated가 아니다.\n"
     "   실질 값이 실제로 달라졌을 때만(수치·날짜·상태가 바뀜) updated다.\n"
-    "   duplicate는 보고서에 쓰지 않는다.\n"
+    "   **duplicate로 판단한 팩트도 facts 배열에서 빼지 마라.** verdict를\n"
+    "   \"duplicate\"로 적어 그대로 포함해라. 최종 사용자 보고서에서 감추는 일은\n"
+    "   다음 단계가 알아서 하니 네가 미리 지울 필요가 없다 — 네가 통째로 빼면\n"
+    "   그 판단을 했다는 근거 자체가 사라져 실행 기록에서 확인할 수 없다.\n"
     "4. **속성 이름도 표현이 아니라 뜻으로 맞춰라.** 같은 주체의 같은 성질을\n"
     "   가리키면 단어가 달라도 같은 attribute다 — '급등률'과 '등락률', '양산\n"
     "   일정'과 '생산 개시 시점'은 같은 것으로 본다. 이때 새 표현을 만들지 말고\n"
@@ -110,6 +120,13 @@ FIRST_RUN_SYSTEM_PROMPT = (
     "찾아내려면 이름표가 안정적이어야 한다.\n"
     "  맞는 예: subject='코스닥', attribute='등락률', fact_value='3거래일 만에 21% 급등'\n"
     "  틀린 예: subject='코스닥', attribute='3거래일 만에 21% 급등'  ← 값이 이름표에 섞였다\n"
+    "\n"
+    "**날짜·회차·분기는 특히 이름표에 넣지 마라.** 다음 회차·다음 분기·다음 날이\n"
+    "되면 그 이름표는 영원히 매칭되지 않아, 같은 사실이 매번 새 소식으로 쌓인다.\n"
+    "  틀린 예: subject='로또', attribute='제1237회'  ← 회차가 이름표에 박혔다\n"
+    "  맞는 예: subject='로또', attribute='당첨번호', fact_value='제1237회 …'\n"
+    "  틀린 예: subject='C사', attribute='3분기 영업이익'  ← 분기가 이름표에 박혔다\n"
+    "  맞는 예: subject='C사', attribute='영업이익', fact_value='3분기 1조2천억원'\n"
     "\n"
     "모든 팩트의 verdict는 new이고 updates_fact_id는 null이다.\n"
     "자료에 없는 사실을 지어내지 않는다.\n"

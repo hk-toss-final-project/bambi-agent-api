@@ -13,7 +13,21 @@ from typing import Any
 import pytest
 
 import workers.features.global_content_fetcher as fetcher
-from infrastructure.sources.connectors.api import JinaReadError, JinaReadResult
+from infrastructure.sources.connectors.api import (
+    ArticleImageMetadata,
+    JinaReadError,
+    JinaReadResult,
+)
+
+
+@pytest.fixture(autouse=True)
+def _disable_default_image_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Worker 단위 테스트가 실제 기사 HTML을 요청하지 않도록 기본 수집기를 막는다."""
+    monkeypatch.setattr(
+        fetcher,
+        "fetch_article_image_metadata",
+        lambda url, provider_image_url=None: None,
+    )
 
 
 class _FakeCursor:
@@ -147,6 +161,36 @@ def test_content_fetch_returns_empty_when_no_pending(
     )
 
     assert results == []
+
+
+def test_downloaded_article_uses_html_metadata_instead_of_jina_image() -> None:
+    """대표 이미지는 Jina 후보보다 원본 HTML 메타데이터 결과를 사용한다."""
+    article = fetcher.GlobalArticleToFetch(
+        document_id="d1",
+        url="https://news.example/article",
+        provider="news",
+    )
+
+    downloaded = asyncio.run(
+        fetcher._download_one(
+            article,
+            url_fetcher=lambda url: JinaReadResult(
+                requested_url=url,
+                resolved_url=url,
+                title="기사",
+                published_time=None,
+                markdown="기사 본문입니다. " * 30,
+                image_url="https://cdn.example/global_ani.png",
+            ),
+            transcript_fetcher=lambda _: None,
+            image_fetcher=lambda url, provider_image_url=None: ArticleImageMetadata(
+                url="https://cdn.example/article.webp",
+                source="open_graph",
+            ),
+        )
+    )
+
+    assert downloaded.image_url == "https://cdn.example/article.webp"
 
 
 def test_youtube_document_uses_transcript_as_body(

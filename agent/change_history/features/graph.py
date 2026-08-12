@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from contextlib import asynccontextmanager
 from typing import Any
 
 from langgraph.graph import END, StateGraph
@@ -83,6 +84,14 @@ _CITATION_CORRECTION = (
     "이전 시도의 서술에 유효한 인용 마커가 없었다. 팩트를 서술할 때마다 그 "
     "팩트의 참조 ID를 [G2] 형식으로 붙여라. 문단마다 최소 하나는 있어야 한다."
 )
+_ATTRIBUTE_CORRECTION = (
+    "이전 시도의 attribute에 날짜·회차·분기 같은 흐르는 값이 섞여 있었다. "
+    "attribute는 날이 바뀌어도 그대로인 이름표여야 하고, 회차·날짜·분기·수치는 "
+    "전부 fact_value로 보내라. 예: attribute='제1237회'는 틀렸고, "
+    "attribute='당첨번호' + fact_value='제1237회 …'가 맞다. "
+    "마찬가지로 attribute='3분기 영업이익'은 틀렸고, "
+    "attribute='영업이익' + fact_value='3분기 1조2천억원'이 맞다."
+)
 
 # 검증에서 나온 사유별 교정 지시. "다시 써라"만으로는 같은 글이 나오므로,
 # 무엇이 문제였는지를 워커에게 그대로 전달한다.
@@ -93,10 +102,14 @@ _CORRECTION_BY_REASON = {
     "timeline_date_out_of_range": _COMPOSE_CORRECTION,
     "timeline_fact_index_missing": _COMPOSE_CORRECTION,
     "updates_fact_id_not_found": _DIFF_CORRECTION,
+    "attribute_contains_drifting_value": _ATTRIBUTE_CORRECTION,
 }
 
 
-def build_change_history_graph(connection: AsyncConnection[DictRow]) -> Any:
+def build_change_history_graph(
+    connection: AsyncConnection[DictRow],
+    db_lock: Any | None = None,
+) -> Any:
     """변경점 추적 서브그래프의 노드와 엣지를 조립해 컴파일된 그래프를 반환한다.
 
     prepare(Base 조회) → supervisor(판단) → diff/compose/impact/validate →
@@ -107,6 +120,16 @@ def build_change_history_graph(connection: AsyncConnection[DictRow]) -> Any:
     /dev/graphs 레지스트리는 None 스텁으로 구조를 추출할 수 있다.
     """
 
+    @asynccontextmanager
+    async def _tx_scope() -> AsyncIterator[None]:
+        if db_lock is not None:
+            async with db_lock:
+                async with connection.transaction():
+                    yield
+        else:
+            async with connection.transaction():
+                yield
+
     async def prepare(state: ChangeHistoryState) -> dict[str, Any]:
         """직전 보고서 맥락과 과거 팩트 유무를 한 조회 Transaction으로 읽는다.
 
@@ -116,7 +139,7 @@ def build_change_history_graph(connection: AsyncConnection[DictRow]) -> Any:
         """
         user_id = state["user_id"]
         topic = state["topic"]
-        async with connection.transaction():
+        async with _tx_scope():
             await set_personal_wiki_scope(connection, user_id=user_id)
             snapshot = await load_latest_report_snapshot(
                 connection, user_id=user_id, topic=topic
@@ -449,7 +472,7 @@ def build_change_history_graph(connection: AsyncConnection[DictRow]) -> Any:
             for item in highlight_items
         ]
         try:
-            async with connection.transaction():
+            async with _tx_scope():
                 await set_personal_wiki_scope(connection, user_id=state["user_id"])
                 persisted = await persist_change_history_run(
                     connection,
@@ -560,6 +583,7 @@ async def chg_001(
     contexts: list[Any],
     model: str = "gpt-4.1-mini",
     reference_date: date | None = None,
+    db_lock: Any | None = None,
 ) -> dict[str, Any]:
     """[CHG-001] 변경점 추적 오케스트레이션.
 
@@ -575,11 +599,12 @@ async def chg_001(
         contexts: report_builder가 만든 오늘의 근거 문서
         model: 워커가 사용할 기본 모델
         reference_date: 절대 날짜 정형화 기준일. 생략하면 서비스 시간대 기준 오늘
+        db_lock: 병렬 실행 시 DB 트랜잭션 충돌 방지용 동기화 락
 
     Returns:
         조립된 보고서(generated)와 실행 요약(팩트 수·드롭 플래그 등)
     """
-    graph = build_change_history_graph(connection)
+    graph = build_change_history_graph(connection, db_lock=db_lock)
     state = await graph.ainvoke(
         {
             "user_id": user_id,

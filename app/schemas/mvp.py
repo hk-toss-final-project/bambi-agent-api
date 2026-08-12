@@ -150,6 +150,12 @@ class UserContextUpsertRequest(ImmutableSchema):
         default_factory=list,
         description="회원가입 시 선택한 관심 카테고리·토픽 목록 (콜드스타트 관심사 시드)",
     )
+    onboarding_reports_managed_by_service: bool = Field(
+        default=False,
+        description=(
+            "Service API가 온보딩 리포트 생성·멱등성·펜딩 상태를 관리하는지 여부"
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_interest_taxonomy_version(self) -> "UserContextUpsertRequest":
@@ -408,6 +414,13 @@ class GenerationRequest(ImmutableSchema):
             "Publish Snapshot에 실어 돌려준다."
         ),
     )
+    briefing_date: date | None = Field(
+        default=None,
+        description=(
+            "REPORT-022가 준비한 날짜별 주제·근거 Snapshot을 재사용할 KST 날짜. "
+            "아침 브리핑 외 요청은 생략한다."
+        ),
+    )
     language: str | None = Field(
         default=None, min_length=2, max_length=16, description="요청 콘텐츠 언어"
     )
@@ -570,6 +583,15 @@ class CitationSchema(ImmutableSchema):
     url: str = Field(description="출처 URL")
 
 
+class ReportCoverImageSchema(ImmutableSchema):
+    """리포트 상단 대표 이미지와 원문 출처."""
+
+    url: str = Field(description="원문에서 수집한 대표 이미지 HTTP(S) URL")
+    source_url: str = Field(description="이미지가 연결된 실제 인용 출처 URL")
+    source_title: str = Field(description="화면 출처 표시에 사용할 원문 제목")
+    reference: str = Field(description="대표 이미지가 연결된 Citation 참조(P/G/L)")
+
+
 class PublishSnapshotResponse(ImmutableSchema):
     """Service Worker가 service-db에 저장할 발행 Snapshot."""
 
@@ -582,6 +604,13 @@ class PublishSnapshotResponse(ImmutableSchema):
     body: str = Field(description="발행 콘텐츠 본문")
     citations: list[CitationSchema] = Field(
         default_factory=list, description="본문과 연결된 출처 목록"
+    )
+    cover_image: ReportCoverImageSchema | None = Field(
+        default=None,
+        description=(
+            "실제 인용 출처 중 IMG-013이 결정론적으로 고른 리포트 상단 이미지. "
+            "적합한 이미지가 없거나 구 Snapshot이면 null"
+        ),
     )
     generation_topic: str = Field(
         default="",
@@ -647,6 +676,18 @@ class PublishSnapshotResponse(ImmutableSchema):
         description=(
             "위 topic_id들을 풀 taxonomy 버전. topic_ids가 비면 함께 빈 문자열이다 "
             "— 버전과 id가 따로 노는 값은 내보내지 않는다."
+        ),
+    )
+    change_history_enabled: bool = Field(
+        default=False,
+        description=(
+            "생성 요청의 `change_history_enabled` 토글을 그대로 돌려준다. "
+            "true면 body가 '이번에 달라진 점 → 보고서 내용 → 주목할 점 → "
+            "타임라인' 4단 구조를 따르며, 갱신 팩트는 `- (기존) ~~값~~` / "
+            "`  (변경) \\`값\\`` 두 줄로, 신규 팩트는 `- 문장 [L1]` 한 줄로 나온다. "
+            "false면 지금까지와 같은 자유 형식 본문이다. Service는 이 값으로 "
+            "body의 렌더링 규칙을 고르며, 본문 헤더 문자열을 파싱해 추측하지 "
+            "않는다."
         ),
     )
     created_at: datetime = Field(description="Snapshot 생성 시각")

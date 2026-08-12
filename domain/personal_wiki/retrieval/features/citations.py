@@ -24,10 +24,14 @@ async def prag_007(
     latency_ms: int,
     review_outcome: str = "",
     review_problem: str = "",
+    change_history_used: bool = False,
 ) -> dict[str, object]:
     """[PRAG-007] Citation 연결.
 
     생성 결과와 참조한 개인 Wiki 문서를 연결한다.
+
+    change_history_used는 요청 토글이 아니라 델타 경로가 실제로 이 본문을
+    만들었는지를 그대로 전달만 한다 — 여기서 판단하지 않는다.
     """
     available = {context.reference for context in contexts}
     missing = sorted(set(generated.citation_references) - available)
@@ -46,4 +50,5 @@ async def prag_007(
         latency_ms=latency_ms,
         review_outcome=review_outcome,
         review_problem=review_problem,
+        change_history_used=change_history_used,
     )

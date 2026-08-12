@@ -17,7 +17,9 @@ uv run uvicorn app.main:app --reload
 - 프로토타입(직접 조작 가능): <http://localhost:8000/dev/design/interest-feedback>
 - 설계 근거 메모: <http://localhost:8000/dev/design/interest-feedback-rationale>
 
-`/dev/*`는 `enable_dev_agent_api`가 켜진 local·test 환경에서만 열린다(`.env`의 `ENABLE_DEV_AGENT_API=true`).
+`/dev/design*`은 `enable_dev_agent_api`가 켜진 local·test 환경에서만 열린다
+(`.env`의 `ENABLE_DEV_AGENT_API=true`). 읽기 전용 `/dev/graphs`는 별도
+`ENABLE_DEV_GRAPH_VIEWS`로 제어하며 배포 환경에서도 기본 활성화된다.
 시안은 외부 CDN을 쓰지 않는 단독 HTML이라 서버 없이
 `app/routers/development/templates/*.html`을 브라우저로 직접 열어도 동작한다.
 

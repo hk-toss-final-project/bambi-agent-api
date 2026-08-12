@@ -68,6 +68,11 @@ class ReportGenerationState(TypedDict):
     # 첫 Reader 실행이 Topic별로 고정한 Page Version·관계·Source. 같은 Job의
     # 재시도는 새 Seed를 고르지 않고 이 Snapshot을 재사용한다.
     wiki_navigation_snapshots: NotRequired[dict[str, dict[str, object]]]
+    # Job 접수 시 고정한 읽기 실행 버전. 키가 없는 과거 Job은 legacy_v1이다.
+    read_pipeline_version: NotRequired[str]
+    # REPORT-022가 같은 날짜·주제로 준비한 근거. 존재하는 주제는 research가
+    # Wiki·Global·Live 수집을 반복하지 않고 이 Snapshot을 그대로 사용한다.
+    prewarmed_contexts_by_topic: NotRequired[dict[str, list[object]]]
     content_type: str
     language: str
     model: str
@@ -84,6 +89,9 @@ class ReportGenerationState(TypedDict):
     # 주제마다 근거 몫을 배정하려면 어느 문서가 어느 주제 것인지 알아야 한다.
     topic_intents: NotRequired[dict[str, str]]
     research_documents_by_topic: NotRequired[dict[str, list[object]]]
+    # V2 읽기 루프의 DB 단계까지 정상 완료한 주제. 근거가 비어도 load_context가
+    # 같은 DB 조회와 Live 수집을 다시 실행하지 않도록 완료 여부를 별도로 보존한다.
+    research_completed_topics: NotRequired[list[str]]
     # 근거를 실제로 확보한 주제만. 생성 프롬프트에는 이 목록만 넘긴다 —
     # 근거 없는 주제를 남기면 LLM이 그 섹션을 일반론으로 채운다.
     covered_topics: NotRequired[list[str]]
@@ -95,6 +103,8 @@ class ReportGenerationState(TypedDict):
     # 주제별 근거 단계 건수(수집 → 선별 → 확보). 섹션이 빠졌을 때 어디서
     # 근거를 잃었는지 작업 결과로 확인하려고 남긴다.
     evidence_trace: NotRequired[list[dict[str, object]]]
+    # 조사 노드의 주제별 도구 호출 수·소요 시간.
+    research_stats: NotRequired[list[dict[str, object]]]
     # 변경점(Delta) 추적 토글. 요청이 켜서 보낼 때만 True이며, 기본값은 꺼짐이라
     # 이 키가 없으면 기존 generate 경로로 그대로 간다(회귀 0).
     change_history_enabled: NotRequired[bool]

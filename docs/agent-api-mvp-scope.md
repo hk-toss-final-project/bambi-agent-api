@@ -19,7 +19,7 @@
 > 동작하는지 기준으로 판정했다. 표기: `[x]` 구현 완료, `[x] ⚠️` 핵심 동작은 되지만 제약 있음,
 > `[ ] ❌` 미구현, `[ ] ➖` Agent API 범위 아님(service-worker 책임).
 >
-> **집계: 완료 107 · 부분 6 · 미구현 4 · 범위 외 3 (총 120)**
+> **집계: 완료 108 · 부분 6 · 미구현 4 · 범위 외 3 (총 121)**
 
 ### 내부 API 인증
 
@@ -112,7 +112,7 @@
 - [x] `SCH-001` RSS 수집 스케줄 — Google News RSS(`google_news`, COL-001) 정기 수집. 2026-07-28 범위 추가: 영문 키워드에서 가장 정확한 Provider인데(실측 'Cloudflare' 수집 시 Naver 10건 중 관련 3건, google_news 5건 전부 관련) 스케줄에서 빠져 있었다. **명세의 "RSS Source"는 임의 피드 주소를 뜻하지만 이 구현은 키워드 검색이다** — 임의 피드 수집이 필요해지면 별도 Provider로 추가한다. 원본 URL 디코딩 때문에 키워드당 12초쯤 더 걸린다
 - [x] `SCH-002` Naver API 수집 스케줄 — 독립 Scheduler 프로세스(`scheduler/main.py`)가 tick마다 `agent.global_sources`의 `schedule_cron`·`keywords`를 읽어 실행 차례가 된 Source만 수집 Worker(WORKER-001)로 넘긴다. 판정 순서는 ① Cron 도달 ② 키워드 존재 ③ `quota_policy.daily_max_runs`
 - [x] `SCH-003` GDELT 수집 스케줄 — SCH-002와 동일한 판정·실행 규칙
-- [x] `SCH-004` NewsAPI 수집 스케줄 — 수집 Worker에 `newsapi` Provider(COL-004) 연결 포함. 무료 플랜 호출 한도(일 100회)가 낮아 기본 Provider 목록에서는 제외하고 `quota_policy.daily_max_runs`와 함께 쓴다. (참고: MVP 목록 외 `SCH-009` Wiki Build 조용 시간 트리거는 `enqueue_personal_wiki_build_job` 등록 직후 자동 적용됨 — 웹 클리핑·온보딩 시드·북마크·URL 수집 후속 저장이 모두 이 함수를 거친다. 기본값은 `WIKI_BUILD_QUIET_MINUTES=0`(즉시 반영, 시연·개발 기본값)이라 평소에는 저장 즉시 Wiki Build가 돈다. 저장이 몰리는 운영 환경에서는 이 값을 10 등으로 늘리면, 짧은 시간에 여러 건을 저장해도 대기 Job이 매번 따로 돌지 않고 `WIKI_BUILD_MAX_WAIT_MINUTES` 상한 안에서 한 번에 묶인다)
+- [x] `SCH-004` NewsAPI 수집 스케줄 — 수집 Worker에 `newsapi` Provider(COL-004) 연결 포함. 무료 플랜 호출 한도(일 100회)가 낮아 기본 Provider 목록에서는 제외하고 `quota_policy.daily_max_runs`와 함께 쓴다. (참고: MVP 목록 외 `SCH-009` Wiki Build 조용 시간 트리거는 `enqueue_personal_wiki_build_job` 등록 직후 적용된다. 사용자 대화형 경로인 웹 클리핑·콘텐츠 북마크·URL 수집 후속 저장은 설정과 관계없이 0분으로 즉시 실행하고, 온보딩 시드와 운영 Batch 입력만 `WIKI_BUILD_QUIET_MINUTES`·`WIKI_BUILD_MAX_WAIT_MINUTES` 정책을 선택적으로 사용한다)
 - [x] `SCH-010` 사용자 관심사 재계산 — Scheduler tick마다 활성 Wiki가 있고 관심사 Profile이 `INTEREST_RECALCULATION_STALE_HOURS`(기본 24시간)보다 오래된 사용자를 오래된 순서로 최대 `INTEREST_RECALCULATION_LIMIT`(기본 20)명 골라 INT-011을 다시 돌리고, 상위 관심사를 창고 수집 대상으로 갱신한다. 관심사 점수(INT-005)는 계산 시각 기준으로 최신성을 감쇠시키므로 이 단계가 없으면 저장이 멈춘 사용자의 점수가 마지막 Build 시점에 고정된다. 대상 선정이 `calculated_at` 기준이라 별도 처리 이력 없이 같은 주기 중복 실행을 막는다. 재계산은 LLM을 호출하지 않으며, 사용자 한 명의 실패는 나머지와 수집 tick을 막지 않는다
 - [x] `SCH-017` 스케줄 등록 — `POST /internal/v1/collection-schedules` (멱등 Upsert, Cron·키워드 검증)
 - [x] `SCH-018` 스케줄 수정 — `PATCH /internal/v1/collection-schedules/{source_key}` (부분 수정, 다음 tick부터 반영)
@@ -135,6 +135,8 @@
 - [x] `REPORT-018` 생성 콘텐츠 후보 저장 — `generation_runs`·`generated_content_candidates`
 - [x] `REPORT-020` 콘텐츠 완료 이벤트 — `CONTENT_READY`를 `event_outbox`에 기록까지 구현. **Event Bus 발행 Relay(`WORKER-012`)는 보류**(2026-07-24 결정): 이벤트를 받는 쪽이 service-api(full stack 팀)라 전달 방식·payload 형식 합의와 양쪽 동시 테스트가 필요하다. full stack 연동 시점에 함께 진행한다.
 - [x] `REPORT-021` 자동 Wiki 편입 금지 — 생성 결과는 후보 테이블에만 저장
+- [x] `REPORT-022` 아침 브리핑 사전 준비 — 날짜별 주제 선정과 Wiki·Global·Live 근거 수집을 비동기 Job으로 수행하고 Snapshot으로 고정한다. 같은 사용자·날짜는 멱등 재사용하며, Worker Batch 크기와 실제 동시성·OpenAI RPM/TPM 예약을 분리한다.
+- [x] `IMG-013` 대표 이미지 선택 — Provider·원본 HTML의 Open Graph/Twitter Card/Schema.org·기사 DOM 순서로 수집한 이미지가 있을 때 실제 인용 외부 자료와 본문 첫 등장 순서로 한 건을 골라 발행 Snapshot에 포함
 
 ### 변경점 추적 (Change History)
 
@@ -158,7 +160,7 @@
 - [ ] `SW-007` service-db 콘텐츠 Upsert — ➖ service-worker 책임
 - [x] `SW-009` 발행 완료 ACK — 단건 + 부분 성공 Batch ACK
 - [x] `WBA-001` Incremental Wiki Build
-- [x] `WBA-002` Full Wiki Rebuild — ⚠️ 삭제되지 않은 원본 Head의 최신 Version 전체를 메모리에서 재분류·검증한 뒤 최종 Transaction에서 기존 파생 Wiki를 supersede하고 새 Snapshot을 저장한다. 실행 경로는 `personal_wiki_build` Job Payload의 `mode=full_rebuild`이며 상주 Worker(WORKER-002)가 처리한다. 트리거는 ① 북마크 해제 등 원본 제거(`enqueue_personal_wiki_rebuild_job`) ② Scheduler 정기 유지보수(`MAINTENANCE_REBUILD_LIMIT`, 기본 7일 간격) 두 가지다. 정기 트리거는 사용자·날짜 단위 멱등이며 대기·실행 중인 재구성이 있는 사용자는 건너뛴다. WBA-014 품질 지표(`.metrics`)를 재구성마다 `wiki_versions.change_summary.quality_metrics`에 함께 기록해, 새 이력 테이블 없이 `version` 순으로 훑는 것만으로 고아·중복·모순 건수 추이를 볼 수 있다. 실제 DB E2E 운영 검증은 남아 있다
+- [x] `WBA-002` Full Wiki Rebuild — ⚠️ 삭제되지 않은 원본 Head의 최신 Version 전체를 메모리에서 재분류·검증한 뒤 최종 Transaction에서 기존 파생 Wiki를 supersede하고 새 Snapshot을 저장한다. 실행 경로는 `personal_wiki_build` Job Payload의 `mode=full_rebuild`이며 상주 Worker(WORKER-002)가 처리한다. 트리거는 ① 북마크 해제 등 원본 제거(`enqueue_personal_wiki_rebuild_job`) ② Scheduler 정기 유지보수(`MAINTENANCE_REBUILD_LIMIT`, 기본 7일 간격) 두 가지다. V2 유지 그래프는 활성 원본·Snapshot·품질·Embedding을 감사해 `noop`·파생 복구·V1 원자 재구성 중 최소 범위를 실행하며, Job에 실행 버전을 고정해 V1 롤백을 보장한다. WBA-014 품질 지표(`.metrics`)를 재구성마다 `wiki_versions.change_summary.quality_metrics`에 함께 기록해, 새 이력 테이블 없이 `version` 순으로 훑는 것만으로 고아·중복·모순 건수 추이를 볼 수 있다. 실제 DB E2E 운영 검증은 남아 있다
 - [x] `WBA-003` Wiki 문서 정규화 — Build 파이프라인에 포함
 - [x] `WBA-011` Wiki 재임베딩 — Incremental Build와 Full Rebuild의 변경 Entity·Concept Chunk를 재임베딩한다. 설정 임계값 이상은 OpenAI Batch로 전환하고 Vector 수·차원 검증 후 멱등 반영한다
 - [x] `WBA-014` Wiki 품질 검증 — canonical 중복, endpoint·관계 유형, provenance·confidence·review·lifecycle·근거, 고아·모순·과밀 Hub를 결정적으로 검사하고 오류는 저장 전 차단
@@ -171,6 +173,7 @@
 - [x] `JOB-010` Agent Job Idempotency
 - [x] `WC-001` Queue Job Consume — 상주 소비 루프
 - [x] `WC-002` Job Claim — `FOR UPDATE SKIP LOCKED` + Lease
+- [x] `WC-003` Worker Heartbeat — 실행·동시성 대기 중 별도 DB 연결로 현재 Attempt의 Lease를 최대 60초 간격으로 연장하며, 소유권을 잃으면 해당 실행을 중단한다
 - [x] `WC-006` Retry 정책 — retryable 실패 시 지연 후 queued 복귀
 - [x] `WC-007` Exponential Backoff — OpenAI `Retry-After`를 최소값으로 존중하고
   지수 Backoff+jitter를 적용한다. quota·billing 오류는 재시도하지 않는다
@@ -195,7 +198,9 @@ Swagger UI, `/wiki-graph`, `/dev/graphs` 같은 개발 화면은 토큰 없이 �
 필요합니다. `/wiki-graph`는 Swagger에 영속 저장된 `InternalBearer` 토큰 또는
 화면에서 한 번 입력해 저장한 토큰을 Graph API 요청 헤더에 적용합니다. 서버 Secret을
 HTML이나 URL에 삽입하지 않습니다. `/system/*` 상태 확인 API는 인증 대상에서
-제외합니다.
+제외합니다. `/dev/graphs`는 DB·LLM을 호출하지 않는 읽기 전용 화면이라
+`ENABLE_DEV_GRAPH_VIEWS=true`이면 `APP_ENV`와 관계없이 등록하며, 개발용 동기 실행
+API(`/internal/v1/dev/**`)의 local·test 제한과 분리합니다.
 
 ## 1. Service API 연동
 
@@ -390,6 +395,8 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | REPORT-018 | 생성 콘텐츠 후보 저장 | 발행 전 콘텐츠를 agent-db에 저장한다. |
 | REPORT-020 | 콘텐츠 완료 이벤트 | 생성 완료 사실을 Integration Event로 발행한다. |
 | REPORT-021 | 자동 Wiki 편입 금지 | 생성된 콘텐츠를 사용자 선택 없이 개인 Wiki에 넣지 않는다. |
+| REPORT-022 | 아침 브리핑 사전 준비 | 날짜별 주제와 생성 근거를 미리 수집해 Snapshot으로 고정한다. |
+| IMG-013 | 대표 이미지 선택 | 실제 인용한 출처 이미지 중 리포트 상단에 표시할 한 건을 선택한다. |
 
 ### 5-1. 변경점 추적 (Change History)
 
@@ -431,6 +438,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | JOB-010 | Agent Job Idempotency | 동일 클리핑 요청이 Worker Job을 중복 생성하지 않도록 한다. |
 | WC-001 | Queue Job Consume | Worker가 실행 가능한 Personal Wiki Job Batch를 가져온다. |
 | WC-002 | Job Claim | FOR UPDATE SKIP LOCKED와 Lease로 Job Batch를 점유한다. |
+| WC-003 | Worker Heartbeat | Claim한 Job이 동시성·Provider 대기 또는 LLM 실행 중일 때 현재 Attempt의 Lease를 주기적으로 연장한다. |
 | WC-006 | Retry 정책 | 재시도 가능한 Chunking·Embedding 실패를 Backoff 후 다시 처리한다. |
 | WC-009 | Idempotency 처리 | 같은 원본을 다시 처리해도 document_kind+document_key, Wiki·출처·관계·Snapshot Row가 중복되지 않게 한다. |
 | WC-013 | Concurrency 제어 | Claim 크기와 Embedding 동시 실행 수를 별도로 제한한다. |
@@ -451,6 +459,9 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 
 ### MVP Batch 처리 계약
 
+- 사용자 Wiki·URL 수집 상주 Worker는 환경변수가 없어도 각각 Batch 10건·동시성
+  4개·빈 Queue 재조회 5초를 기본으로 사용한다. 같은 사용자의 Wiki Build는 기존
+  Advisory Lock으로 직렬화하고 서로 다른 사용자 Job만 병렬 처리한다.
 - 콘텐츠 생성 트리거는 service 계층 스케줄러가 담당한다(2026-07-20 결정). 사용자 지정 생성 시간의 원천 데이터가 service-db에 있으므로, service 스케줄러가 `schedule window + user_id + content_type` 규칙의 `idempotency_key`로 `POST /generations`를 호출하고, 미리 등록할 때는 `scheduled_at`으로 실행 시각을 예약한다. Agent는 별도의 생성 Scheduler를 두지 않는다(구 SCH-011 제거).
 - Agent Worker는 한 트랜잭션에서 실행 가능한 Job 여러 건을 `FOR UPDATE SKIP LOCKED`로 Claim하고, DB Transaction 밖에서 제한된 동시성으로 각 Job을 독립 실행한다.
 - Batch Claim 크기와 실제 LLM 호출 동시성은 별도 설정으로 관리한다. 한 Batch를 하나의 LLM 요청으로 합치지 않는다.

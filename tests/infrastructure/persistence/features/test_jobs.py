@@ -21,6 +21,7 @@ from infrastructure.persistence.features.jobs import (
     defer_agent_job_for_provider,
     enqueue_global_collection_run_job,
     enqueue_personal_wiki_build_job,
+    extend_agent_job_lease,
     fail_agent_job,
     get_agent_jobs,
     release_user_wiki_build_jobs,
@@ -158,6 +159,86 @@ def test_claim_personal_wiki_jobs_validates_limits() -> None:
         )
 
 
+def test_extend_agent_job_lease_checks_worker_and_attempt_ownership() -> None:
+    """Heartbeat가 현재 Worker·Attempt 소유권을 확인하고 새 만료 시각을 반환한다."""
+    expires_at = datetime(2026, 8, 11, 12, 10, tzinfo=UTC)
+    connection = _FakeConnection([[{"lease_expires_at": expires_at}]])
+    job = ClaimedAgentJob(
+        job_id="job-1",
+        user_id="user-1",
+        feature_id="SVC-008",
+        job_type="report_generation",
+        attempt_number=2,
+        max_attempts=3,
+    )
+
+    result = asyncio.run(
+        extend_agent_job_lease(
+            connection,  # type: ignore[arg-type]
+            job=job,
+            worker_id="worker-1",
+            lease_seconds=600,
+        )
+    )
+
+    assert result == expires_at
+    sql, params = connection.executed[0]
+    assert "status = 'running'" in sql
+    assert "locked_by = %s" in sql
+    assert "attempt_count = %s" in sql
+    assert "lease_expires_at > clock_timestamp()" in sql
+    assert params == (600, "job-1", "worker-1", 2)
+
+
+def test_extend_agent_job_lease_rejects_lost_ownership() -> None:
+    """이미 만료되거나 재점유된 Job은 이전 heartbeat가 연장하지 못한다."""
+    connection = _FakeConnection([[], []])
+    job = ClaimedAgentJob(
+        job_id="job-1",
+        user_id="user-1",
+        feature_id="SVC-008",
+        job_type="report_generation",
+        attempt_number=1,
+        max_attempts=3,
+    )
+
+    with pytest.raises(RuntimeError, match="Lease 소유권"):
+        asyncio.run(
+            extend_agent_job_lease(
+                connection,  # type: ignore[arg-type]
+                job=job,
+                worker_id="stale-worker",
+                lease_seconds=600,
+            )
+        )
+
+
+def test_extend_agent_job_lease_accepts_same_attempt_completion() -> None:
+    """동일 Worker·Attempt가 방금 완료한 Job은 heartbeat 소유권 오류가 아니다."""
+    connection = _FakeConnection([[], [{"exists": 1}]])
+    job = ClaimedAgentJob(
+        job_id="job-1",
+        user_id="user-1",
+        feature_id="SVC-008",
+        job_type="report_generation",
+        attempt_number=2,
+        max_attempts=3,
+    )
+
+    result = asyncio.run(
+        extend_agent_job_lease(
+            connection,  # type: ignore[arg-type]
+            job=job,
+            worker_id="worker-1",
+            lease_seconds=600,
+        )
+    )
+
+    assert result is None
+    assert "agent.agent_job_attempts" in connection.executed[1][0]
+    assert connection.executed[1][1] == ("job-1", 2, "worker-1")
+
+
 def test_claim_runnable_agent_jobs_parameterizes_job_type() -> None:
     """일반화된 Batch Claim이 Job 유형을 SQL 파라미터로 받아 점유한다."""
     connection = _FakeConnection(
@@ -193,6 +274,54 @@ def test_claim_runnable_agent_jobs_parameterizes_job_type() -> None:
     assert "job_type = %s" in claim_sql
     assert "FOR UPDATE SKIP LOCKED" in claim_sql
     assert claim_params is not None and claim_params[0] == "report_generation"
+
+
+def test_claim_runnable_agent_jobs_prefers_on_demand_over_morning_briefing() -> None:
+    """온디맨드 리포트를 아침 브리핑보다 먼저 점유하도록 정렬하는지 검증한다.
+
+    둘 다 report_generation Job이고 Service가 priority를 넣지 않아 전부 기본값
+    100이라, 정렬에 이 규칙이 없으면 07:00에 쌓인 아침 브리핑 뒤에 온디맨드가
+    선다.
+    """
+    connection = _FakeConnection([[], [], []])
+
+    asyncio.run(
+        claim_runnable_agent_jobs(
+            connection,  # type: ignore[arg-type]
+            job_type="report_generation",
+            worker_id="worker-1",
+            limit=5,
+            lease_seconds=600,
+        )
+    )
+
+    claim_sql = connection.executed[0][0]
+    assert "'ON_DEMAND'" in claim_sql
+    # priority가 먼저다 — Service가 나중에 priority를 넣으면 그 값이 우선한다.
+    assert claim_sql.index("priority DESC") < claim_sql.index("'ON_DEMAND'")
+    assert claim_sql.index("'ON_DEMAND'") < claim_sql.index("scheduled_at,")
+
+
+def test_claim_runnable_agent_jobs_ordering_guards_missing_report_type() -> None:
+    """report_type이 없는 Job이 새치기하지 않도록 NULL을 막는지 검증한다.
+
+    `payload->>'report_type' = 'ON_DEMAND'`만 쓰면 report_type이 없을 때 NULL이
+    되고, DESC 정렬은 NULLS FIRST라 온디맨드가 아닌 Job이 맨 앞으로 온다.
+    """
+    connection = _FakeConnection([[], [], []])
+
+    asyncio.run(
+        claim_runnable_agent_jobs(
+            connection,  # type: ignore[arg-type]
+            job_type="report_generation",
+            worker_id="worker-1",
+            limit=5,
+            lease_seconds=600,
+        )
+    )
+
+    claim_sql = connection.executed[0][0]
+    assert "COALESCE(payload->>'report_type', '')" in claim_sql
 
 
 def test_claim_agent_job_by_id_records_dev_lease_and_attempt() -> None:

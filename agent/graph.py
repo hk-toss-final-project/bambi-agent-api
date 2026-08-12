@@ -8,6 +8,7 @@ Transaction을 소유하고, LLM 노드는 Transaction 밖(스레드)에서 실�
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from asyncio import to_thread
 from dataclasses import dataclass, replace
@@ -40,12 +41,15 @@ from agent.report_builder.api import (
     is_pool_sufficient,
     merge_context_documents,
     navigation_packet_documents,
+    LEGACY_READ_PIPELINE_VERSION,
     research_agent_enabled,
     research_context,
+    research_context_for_version,
     review_report,
     select_personal_documents,
     select_pool_documents,
     focus_documents_on_topic,
+    generate_topic_facets,
     select_generation_context,
     search_global_documents,
 )
@@ -101,6 +105,7 @@ from infrastructure.persistence.api import (
 )
 from agent.assistant.api import resolve_topic_intent
 from shared.contracts import FeatureRequest
+from shared.report_models import ReportContextDocument
 from shared.wiki_models import ExistingWikiEntry
 
 logger = logging.getLogger("agent.graph")
@@ -851,9 +856,19 @@ _MIN_TOPIC_CONTEXT_DOCUMENTS = 3
 # lease(600초)의 절반 이하다. 상한을 없애지는 않는다 — 계약상 topics는 최대 5개까지
 # 올 수 있고, 5개를 전부 수집하면 lease에 근접한다.
 _MAX_LIVE_COLLECT_TOPICS = 3
+# 주제당 더할 보조 검색어 수. 3개로 시작했다가 되돌렸다 — 검색어가 4배가 되자
+# 조사원이 결과를 보고 다시 판단하는 왕복이 그만큼 늘어 리스 600초를 두 번
+# 연속 넘겼다(2026-08-11 실측: 192초 → 1485·1713초). 검색 자체는 16~22초로
+# 그대로였고 늘어난 것은 LLM 판단 시간이었다. 1개부터 다시 잰다.
+_MAX_TOPIC_FACETS = 1
 
 # 생성 프롬프트에 넣는 근거 문서 상한(REPORT-006 기본값과 같아야 한다).
 _MAX_REPORT_CONTEXTS = 12
+
+# 주제별 조사 및 수집 실행 시간 상한(초). 특정 외부 API 응답 지연이 전체 보고서
+# 생성을 10분 이상 지연시켜 워커 타임아웃/재시도가 발생하는 것을 방지한다.
+_TOPIC_RESEARCH_TIMEOUT_SECONDS = 90.0
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -1078,6 +1093,18 @@ def _report_topics(state: ReportGenerationState) -> list[str]:
     return [topic for topic in topics if topic] or [state["topic"]]
 
 
+def _report_context_identity(document: Any) -> str:
+    """주제별로 다시 매겨지는 참조 번호 대신 원본 문서의 안정 식별자를 만든다."""
+    version_id = str(getattr(document, "document_version_id", "") or "")
+    chunk_id = str(getattr(document, "chunk_id", "") or "")
+    if version_id or chunk_id:
+        return f"version:{version_id}:chunk:{chunk_id}"
+    url = str(getattr(document, "url", "") or "")
+    if url:
+        return f"url:{url}"
+    return str(getattr(document, "reference", None) or document)
+
+
 def _topic_bundle(
     state: ReportGenerationState, topic: str
 ) -> dict[str, object] | None:
@@ -1149,14 +1176,48 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         documents_by_topic: dict[str, list[Any]] = {}
         notes: list[str] = []
         calls: list[dict[str, object]] = []
+        research_stats: list[dict[str, Any]] = []
+        research_stats_by_topic: dict[str, dict[str, Any]] = {}
+        outcomes_by_topic: dict[str, Any] = {}
+        live_keywords_by_topic: dict[str, list[str]] = {}
+        completed_topics: list[str] = []
         collected_live = False
+        prewarmed_by_topic = state.get("prewarmed_contexts_by_topic") or {}
+        read_pipeline_version = str(
+            state.get("read_pipeline_version") or LEGACY_READ_PIPELINE_VERSION
+        )
         for topic in topics:
+            prewarmed = list(prewarmed_by_topic.get(topic) or [])
+            if prewarmed:
+                intents[topic] = "news"
+                documents_by_topic[topic] = prewarmed
+                completed_topics.append(topic)
+                collected_live = collected_live or any(
+                    str(getattr(document, "namespace_key", "")) == "live"
+                    for document in prewarmed
+                )
+                research_stats.append(
+                    {
+                        "topic": topic,
+                        "pipeline_version": "briefing_snapshot",
+                        "elapsed_ms": 0,
+                        "tools": [],
+                        "stop_reason": "prewarmed",
+                        "documents": len(prewarmed),
+                    }
+                )
+                notes.append(f"[{topic}] REPORT-022 준비 근거를 재사용했습니다.")
+                continue
             intents[topic] = await to_thread(
                 resolve_topic_intent, topic, state["user_id"]
             )
             documents_by_topic[topic] = []
-            if not research_agent_enabled():
+            if (
+                read_pipeline_version == LEGACY_READ_PIPELINE_VERSION
+                and not research_agent_enabled()
+            ):
                 continue
+            topic_started = monotonic()
             try:
                 research_kwargs: dict[str, Any] = {
                     "topic": topic,
@@ -1182,7 +1243,28 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 planned_versions = _bundle_wiki_version_ids(topic_bundle)
                 if planned_versions:
                     research_kwargs["planned_wiki_version_ids"] = planned_versions
-                outcome = await research_context(connection, **research_kwargs)
+                if read_pipeline_version == LEGACY_READ_PIPELINE_VERSION:
+                    outcome = await asyncio.wait_for(
+                        research_context(connection, **research_kwargs),
+                        timeout=_TOPIC_RESEARCH_TIMEOUT_SECONDS,
+                    )
+                else:
+                    outcome = await asyncio.wait_for(
+                        research_context_for_version(
+                            connection,
+                            pipeline_version=read_pipeline_version,
+                            defer_live=len(topics) > 1,
+                            **research_kwargs,
+                        ),
+                        timeout=_TOPIC_RESEARCH_TIMEOUT_SECONDS,
+                    )
+            except TimeoutError:
+                logger.warning(
+                    "주제별 조사 실행 시간 초과(%.1f초), 기존 경로로 폴백: topic=%s",
+                    _TOPIC_RESEARCH_TIMEOUT_SECONDS,
+                    topic,
+                )
+                continue
             except Exception:
                 # 주제 하나가 실패해도 나머지 주제는 계속 조사한다. 실패한 주제는
                 # load_context가 고정 경로로 다시 시도한다.
@@ -1190,8 +1272,30 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                     "조사원 실행에 실패해 기존 수집 경로로 되돌립니다: topic=%s", topic
                 )
                 continue
+            completed_topics.append(topic)
+            outcomes_by_topic[topic] = outcome
+            live_keywords_by_topic[topic] = list(
+                research_kwargs.get("planned_queries") or []
+            )
             documents_by_topic[topic] = list(outcome.documents)
             collected_live = collected_live or outcome.collected_live
+            # 조사 노드가 리포트 시간의 대부분을 쓰는데 안이 안 보였다
+            # (2026-08-11 실측: 336초 중 320초). 도구별 호출 수·소요 시간을
+            # 작업 결과까지 실어 서버 로그 없이 확인한다.
+            topic_stats = {
+                "topic": topic,
+                "pipeline_version": read_pipeline_version,
+                "elapsed_ms": int((monotonic() - topic_started) * 1000),
+                "tools": [
+                    {"tool": name, "calls": count, "elapsed_ms": elapsed}
+                    # 도구 통계가 없는 형태(테스트 더미 등)도 그대로 통과시킨다.
+                    for name, count, elapsed in getattr(outcome, "tool_stats", ())
+                ],
+                "stop_reason": str(getattr(outcome, "stop_reason", "")),
+                "documents": len(outcome.documents),
+            }
+            research_stats.append(topic_stats)
+            research_stats_by_topic[topic] = topic_stats
             if outcome.notes:
                 notes.append(
                     outcome.notes if len(topics) == 1 else f"[{topic}] {outcome.notes}"
@@ -1205,6 +1309,68 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 }
                 for call in outcome.calls
             )
+
+        deferred_topics = [
+            topic
+            for topic in topics
+            if bool(getattr(outcomes_by_topic.get(topic), "requires_live", False))
+        ][:_MAX_LIVE_COLLECT_TOPICS]
+
+        async def collect_deferred_live(
+            topic: str,
+        ) -> tuple[str, list[Any], int]:
+            """V2 DB 단계를 마친 주제의 Live 근거를 DB 연결 없이 병렬 수집한다."""
+            started = monotonic()
+            documents: list[Any] = []
+            try:
+                kwargs: dict[str, object] = {"model": state["model"]}
+                if live_keywords_by_topic.get(topic):
+                    kwargs["related_keywords"] = live_keywords_by_topic[topic]
+                documents = await to_thread(
+                    collect_live_context,
+                    topic,
+                    state["user_id"],
+                    **kwargs,
+                )
+            except Exception:
+                logger.exception(
+                    "V2 다중 주제 실시간 수집 실패, 저장 근거만 사용합니다: topic=%s",
+                    topic,
+                )
+            return topic, documents, int((monotonic() - started) * 1000)
+
+        if deferred_topics:
+            deferred_results = await asyncio.gather(
+                *(collect_deferred_live(topic) for topic in deferred_topics)
+            )
+            for topic, live_documents, elapsed_ms in deferred_results:
+                outcome = outcomes_by_topic[topic]
+                documents = merge_context_documents(
+                    outcome.documents,
+                    live_documents,
+                )
+                outcomes_by_topic[topic] = replace(
+                    outcome,
+                    documents=tuple(documents),
+                    collected_live=True,
+                    requires_live=False,
+                    tool_stats=(
+                        *outcome.tool_stats,
+                        ("collect_live_parallel", 1, elapsed_ms),
+                    ),
+                )
+                documents_by_topic[topic] = list(documents)
+                collected_live = True
+                topic_stats = research_stats_by_topic[topic]
+                topic_stats["documents"] = len(documents)
+                topic_stats["parallel_live_elapsed_ms"] = elapsed_ms
+                topic_stats["tools"].append(
+                    {
+                        "tool": "collect_live_parallel",
+                        "calls": 1,
+                        "elapsed_ms": elapsed_ms,
+                    }
+                )
         flattened = [
             document
             for topic in topics
@@ -1217,12 +1383,33 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             "topic_intents": intents,
             "research_documents": flattened,
             "research_documents_by_topic": documents_by_topic,
+            "research_completed_topics": completed_topics,
             "research_notes": "\n".join(notes),
             "research_collected_live": collected_live,
             "research_calls": calls,
+            "research_stats": research_stats,
         }
 
-    async def load_related_keywords(user_id: str, topic: str) -> list[str]:
+    def _topic_context_hint(documents: Sequence[Any], topic: str) -> str:
+        """이미 조회한 문서에서 이 주제가 무엇인지 알려줄 한 줄을 뽑는다.
+
+        주제어만으로는 보조 검색어가 헛돈다(2026-08-11 실측: `코리`에 "최신 뉴스",
+        "활동 소식"이 생성됐다 — 제약 기업인지 모르니 아무 데나 붙는 말이 나왔다).
+        개인 Wiki 문서에 그 설명이 이미 들어 있으므로 DB를 다시 부르지 않는다.
+        """
+        marker = "".join(topic.split()).casefold()
+        for document in documents:
+            title = str(getattr(document, "title", "") or "")
+            if "".join(title.split()).casefold() != marker:
+                continue
+            content = " ".join(str(getattr(document, "content", "") or "").split())
+            if content:
+                return content[:200]
+        return ""
+
+    async def load_related_keywords(
+        user_id: str, topic: str, *, intent: str = "news", context: str = ""
+    ) -> list[str]:
         """개인 Wiki Graph Gate로 bounded PPR 또는 검증 1-hop 키워드를 읽는다.
 
         관심 키워드 하나로만 수집하면 '코스피' 리포트에 코스닥시장 기사가 걸리지
@@ -1258,7 +1445,28 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             list(expansion.keywords),
             list(expansion.maturity_reasons),
         )
-        return list(expansion.keywords)
+        keywords = list(expansion.keywords)
+        # 이웃이 모자란 자리만 보조 검색어로 채운다. 방금 생긴 관심사는 Wiki에
+        # 이웃이 없어 주제어 하나로만 수집하는데, 그런 주제일수록 창고도 얕아
+        # 결과가 홍보성 자료로 채워진다(2026-08-11 실측: '다낭 여행').
+        # 이웃이 충분하면 부르지 않는다 — LLM 호출을 아낀다.
+        if len(keywords) < limit:
+            facets = await to_thread(
+                generate_topic_facets,
+                topic,
+                intent=intent,
+                context=context,
+                limit=min(_MAX_TOPIC_FACETS, limit - len(keywords)),
+            )
+            existing = {"".join(topic.split()).casefold()} | {
+                "".join(keyword.split()).casefold() for keyword in keywords
+            }
+            keywords.extend(
+                facet
+                for facet in facets
+                if "".join(facet.split()).casefold() not in existing
+            )
+        return keywords
 
     async def load_bundle_navigation_context(
         state: ReportGenerationState,
@@ -1448,7 +1656,12 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             related_keywords = (
                 bundle_keywords[1:]
                 if topic_bundle
-                else await load_related_keywords(state["user_id"], state["topic"])
+                else await load_related_keywords(
+                    state["user_id"],
+                    state["topic"],
+                    intent=str(state.get("topic_intent") or "news"),
+                    context=_topic_context_hint(personal_documents, state["topic"]),
+                )
             )
         if already_collected_live and not pool_is_enough:
             logger.info(
@@ -1534,7 +1747,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         researched = list(
             (state.get("research_documents_by_topic") or {}).get(topic) or []
         )
-        if researched:
+        if researched or topic in set(state.get("research_completed_topics") or []):
             return researched, False
 
         def _record(stage: str, since: float) -> None:
@@ -1648,17 +1861,33 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         related_keywords = (
             bundle_keywords[1:]
             if topic_bundle
-            else await load_related_keywords(state["user_id"], topic)
+            else await load_related_keywords(
+                state["user_id"],
+                topic,
+                intent=topic_intent,
+                context=_topic_context_hint(stored, topic),
+            )
         )
         _record("related_keywords", keywords_started)
         live_started = monotonic()
-        live = await to_thread(
-            collect_live_context,
-            topic,
-            state["user_id"],
-            model=state["model"],
-            related_keywords=related_keywords,
-        )
+        try:
+            live = await asyncio.wait_for(
+                to_thread(
+                    collect_live_context,
+                    topic,
+                    state["user_id"],
+                    model=state["model"],
+                    related_keywords=related_keywords,
+                ),
+                timeout=_TOPIC_RESEARCH_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning(
+                "주제별 실시간 수집 시간 초과(%.1f초): topic=%s",
+                _TOPIC_RESEARCH_TIMEOUT_SECONDS,
+                topic,
+            )
+            live = []
         _record("live_collect", live_started)
         logger.info(
             "주제별 실시간 수집: topic=%s %d건 (이웃 키워드 %d개)",
@@ -1704,13 +1933,27 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             )
             elapsed["focus"] = int((monotonic() - focus_started) * 1000)
             focused = len(documents)
+            # 앞 주제가 이미 가져간 문서는 **상한을 적용하기 전에** 뺀다. 뒤에서
+            # 거르면 상한이 중복 문서로 다 차서, 그 주제만의 근거가 남아 있어도
+            # 확보 0건이 되어 섹션이 통째로 빠진다(2026-08-11 실측: '폭염'이 근거를
+            # 7건 모으고 선별도 통과했는데 상한 4건이 전부 '코스닥'과 겹쳐 사라졌다).
+            #
+            # 겹친 문서를 그냥 두 주제에 같이 쓸 수는 없다. focus가 앞 주제 기준으로
+            # 본문을 이미 잘라놔서, 뒤 주제가 그 문서를 인용하면 자기 주제와 무관한
+            # 문장을 근거로 삼게 된다.
+            documents = [
+                document
+                for document in documents
+                if _report_context_identity(document) not in seen
+            ]
+            deduped = len(documents)
             finalize_started = monotonic()
             finalized = await _finalize_contexts(state, documents, max_documents=quota)
             elapsed["finalize"] = int((monotonic() - finalize_started) * 1000)
             selected = len(finalized.get("contexts", []))
             picked = 0
             for context in finalized.get("contexts", []):
-                key = str(getattr(context, "reference", None) or context)
+                key = _report_context_identity(context)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -1727,6 +1970,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                     "topic": topic,
                     "gathered": gathered,
                     "after_focus": focused,
+                    "after_dedupe": deduped,
                     "selected": selected,
                     "picked": picked,
                     "quota": quota,
@@ -1738,17 +1982,40 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 }
             )
             logger.info(
-                "주제별 근거 배정: topic=%s 몫=%d건 수집=%d건 선별후=%d건 확보=%d건 %dms %s",
+                "주제별 근거 배정: topic=%s 몫=%d건 수집=%d건 선별후=%d건 "
+                "중복제외후=%d건 확보=%d건 %dms %s",
                 topic,
                 quota,
                 gathered,
                 focused,
+                deduped,
                 picked,
                 int((monotonic() - topic_started) * 1000),
                 elapsed,
             )
         if not merged:
             raise RuntimeError("여러 주제 리포트에 쓸 근거를 한 건도 모으지 못했습니다.")
+        # Topic별 준비 Snapshot은 각각 P1/G1/L1부터 번호가 시작한다. 그대로
+        # 합치면 서로 다른 문서가 같은 Citation을 공유하므로 최종 합집합에서 한 번
+        # 번호를 다시 매기고, 주제별 델타 Context도 같은 객체를 보게 맞춘다.
+        if all(isinstance(document, ReportContextDocument) for document in merged):
+            renumbered = merge_context_documents(
+                *(by_topic.get(topic, []) for topic in topics)
+            )
+            by_identity = {
+                _report_context_identity(document): document
+                for document in renumbered
+            }
+            by_topic = {
+                topic: [
+                    by_identity[_report_context_identity(document)]
+                    for document in by_topic.get(topic, [])
+                    if _report_context_identity(document) in by_identity
+                ]
+                for topic in topics
+                if by_topic.get(topic)
+            }
+            merged = renumbered
         if len(covered) < len(topics):
             # 근거를 한 건도 못 구한 주제는 생성 프롬프트에서 뺀다. 남겨 두면
             # "소주제를 순서대로 빠짐없이 다루라"는 지시 때문에 근거 없는 일반론으로
@@ -1910,37 +2177,47 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         """주제마다 델타를 따로 돌리고 하나의 본문으로 합친다.
 
         비교축이 (user_id, topic)이라 여러 주제를 한 축으로 묶으면 주제별 변화가
-        구분되지 않는다(팩트가 대표 문자열 하나에 섞여 쌓인다). 주제마다 돌리면
-        LLM 호출이 주제 수만큼 늘지만, 그러지 않으면 이 경로에서 기능 자체가
-        성립하지 않는다.
+        구분되지 않는다(팩트가 대표 문자열 하나에 섞여 쌓인다).
 
-        주제 하나가 실패해도 나머지는 계속 돈다 — 한 주제 때문에 브리핑 전체가
-        기존 생성으로 되돌아가면 손해가 더 크다. 전부 실패했을 때만 되돌린다.
+        asyncio.gather와 Semaphore(3)로 주제별 델타를 동시 병렬 처리하여 지연 시간을 단축한다.
+        단일 DB connection 상의 트랜잭션 충돌을 방지하기 위해 db_lock을 전달한다.
         """
         contexts_by_topic = state.get("contexts_by_topic") or {}
+        db_lock = asyncio.Lock()
+        semaphore = asyncio.Semaphore(3)
+
+        async def _run_topic_delta(topic: str) -> tuple[str, dict[str, Any] | None]:
+            contexts = list(contexts_by_topic.get(topic) or [])
+            if not contexts:
+                return topic, None
+            async with semaphore:
+                try:
+                    outcome = await chg_001(
+                        connection,
+                        user_id=state["user_id"],
+                        job_id=state["job_id"],
+                        topic=topic,
+                        contexts=contexts,
+                        model=state["model"],
+                        db_lock=db_lock,
+                    )
+                    return topic, outcome
+                except Exception:
+                    logger.exception("주제 델타에 실패해 이 주제는 빼고 진행합니다: topic=%s", topic)
+                    return topic, None
+
+        results = await asyncio.gather(*[_run_topic_delta(t) for t in topics])
         collected: list[tuple[str, Any]] = []
         outcomes: list[dict[str, Any]] = []
         skipped: list[str] = []
-        for topic in topics:
-            contexts = list(contexts_by_topic.get(topic) or [])
-            if not contexts:
+
+        for topic, outcome in results:
+            if outcome is None:
                 skipped.append(topic)
-                continue
-            try:
-                outcome = await chg_001(
-                    connection,
-                    user_id=state["user_id"],
-                    job_id=state["job_id"],
-                    topic=topic,
-                    contexts=contexts,
-                    model=state["model"],
-                )
-            except Exception:
-                logger.exception("주제 델타에 실패해 이 주제는 빼고 진행합니다: topic=%s", topic)
-                skipped.append(topic)
-                continue
-            collected.append((topic, outcome["generated"]))
-            outcomes.append(outcome)
+            else:
+                collected.append((topic, outcome["generated"]))
+                outcomes.append(outcome)
+
         if not collected:
             logger.warning("모든 주제의 델타가 실패해 기존 생성 경로로 되돌립니다.")
             return {"change_history": {"failed": True}}
@@ -2086,19 +2363,30 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
 
     async def persist(state: ReportGenerationState) -> dict[str, Any]:
         """생성 Run·후보·Citation·Snapshot·Outbox를 저장 Transaction으로 기록한다."""
+        # 요청 토글이 아니라 델타 경로가 **실제로 이 본문을 만들었는지**를 판단해
+        # 넘긴다. change_history 노드는 성공하면 summary.failed=False를 채우고,
+        # 서버 차단 스위치로 아예 안 탔거나 실패해 generate()로 되돌아갔으면 이
+        # 키 자체가 없거나 failed=True다 — 요청 파라미터를 그대로 읽으면
+        # CHANGE_HISTORY_ENABLED=0일 때 값과 body 구조가 어긋난다(2026-08-11
+        # 풀스택 피드백).
+        change_history_result = state.get("change_history")
+        change_history_used = isinstance(change_history_result, dict) and not bool(
+            change_history_result.get("failed", True)
+        )
         async with connection.transaction():
             await set_personal_wiki_scope(connection, user_id=state["user_id"])
             citations = await prag_007(
                 connection,
                 job_id=state["job_id"],
                 user_id=state["user_id"],
-                attempt_number=state["attempt_number"],
+                attempt_number=state.get("attempt_number", 1),
                 content_type=state["content_type"],
                 generated=state["generated"],
                 contexts=state["contexts"],
                 latency_ms=state["latency_ms"],
                 review_outcome=str(state.get("review_outcome") or ""),
                 review_problem=str(state.get("review_problem") or ""),
+                change_history_used=change_history_used,
             )
             persisted = await report_018(
                 FeatureRequest(
@@ -2131,6 +2419,14 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         trace = state.get("evidence_trace")
         if trace:
             result["evidence_trace"] = list(trace)
+        research_stats = state.get("research_stats")
+        if research_stats:
+            result["research_stats"] = list(research_stats)
+        read_pipeline_version = str(
+            state.get("read_pipeline_version") or LEGACY_READ_PIPELINE_VERSION
+        )
+        if read_pipeline_version != LEGACY_READ_PIPELINE_VERSION:
+            result["read_pipeline_version"] = read_pipeline_version
         return {"result": result}
 
     graph = StateGraph(ReportGenerationState)
@@ -2180,6 +2476,10 @@ async def run_report_generation(
     topic_interest_bundles: dict[str, dict[str, object]] | None = None,
     wiki_version_id: str | None = None,
     wiki_navigation_snapshots: dict[str, dict[str, object]] | None = None,
+    read_pipeline_version: str = LEGACY_READ_PIPELINE_VERSION,
+    prewarmed_contexts_by_topic: (
+        dict[str, list[ReportContextDocument]] | None
+    ) = None,
 ) -> dict[str, object]:
     """Report Builder Generation 그래프를 실행하고 저장 결과 Payload를 반환한다.
 
@@ -2192,6 +2492,8 @@ async def run_report_generation(
             관심사와 매칭된 주제의 INT-012 스냅샷(키: 주제 문자열).
         wiki_version_id: Job 접수 시 고정한 활성 Wiki Build UUID
         wiki_navigation_snapshots: 첫 Reader 실행이 Topic별로 고정한 Packet Metadata
+        read_pipeline_version: Job 접수 시 고정한 읽기 루프 버전. 과거 Job은 V1
+        prewarmed_contexts_by_topic: REPORT-022가 날짜·주제별로 준비한 생성 근거
     """
     graph = build_report_generation_graph(connection)
     state = await graph.ainvoke(
@@ -2206,6 +2508,10 @@ async def run_report_generation(
             "topic_interest_bundles": dict(topic_interest_bundles or {}),
             "wiki_version_id": wiki_version_id,
             "wiki_navigation_snapshots": dict(wiki_navigation_snapshots or {}),
+            "read_pipeline_version": read_pipeline_version,
+            "prewarmed_contexts_by_topic": dict(
+                prewarmed_contexts_by_topic or {}
+            ),
             "content_type": content_type,
             "language": language,
             "model": model,

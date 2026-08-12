@@ -1,8 +1,9 @@
 """LangGraph 오케스트레이션 그래프의 노드 순서와 결과 조립을 검증한다."""
 
 import asyncio
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from threading import Barrier
 from types import SimpleNamespace
 from typing import Any
 
@@ -577,6 +578,9 @@ def _disable_research(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setattr(agent_graph, "research_agent_enabled", lambda: False)
     monkeypatch.setattr(agent_graph, "resolve_topic_intent", lambda *args: "news")
+    # 보조 검색어 생성도 LLM을 부른다. 대체하지 않으면 그래프 테스트가 실제
+    # OpenAI를 호출한다.
+    monkeypatch.setattr(agent_graph, "generate_topic_facets", lambda *a, **k: ())
     monkeypatch.setattr(agent_graph, "embed_wiki_queries", lambda queries: {})
     _disable_critic(monkeypatch)
 
@@ -865,7 +869,7 @@ def test_run_report_generation_chains_search_generate_persist(
         "generate",
         "persist",
     ]
-    assert result == {"content_candidate_id": "candidate-1"}
+    assert result["content_candidate_id"] == "candidate-1"
     # 이웃 조회는 개인 Wiki 검색과 Transaction을 분리한다(실패 격리).
     assert connection.transactions == 3
 
@@ -957,7 +961,7 @@ def test_research_agent_output_becomes_generation_context(
 
     assert order == ["research", "generate", "persist"]
     assert used_contexts == [["doc-1", "doc-2"]]
-    assert result == {"content_candidate_id": "candidate-1"}
+    assert result["content_candidate_id"] == "candidate-1"
 
 
 def test_interest_bundle_snapshot_reaches_research_and_generation(
@@ -1092,7 +1096,7 @@ def test_research_failure_falls_back_to_fixed_collection_path(
     result = _run_generation()
 
     assert order == ["research", "load_context", "collect_live", "generate", "persist"]
-    assert result == {"content_candidate_id": "candidate-1"}
+    assert result["content_candidate_id"] == "candidate-1"
 
 
 def _patch_for_review(
@@ -1176,7 +1180,7 @@ def test_critic_revision_sends_the_draft_back_to_generate(
 
     assert order == ["generate", "review", "generate", "review", "persist"]
     assert corrections == ["", "급락 폭을 본문에 넣으세요"]
-    assert result == {"content_candidate_id": "candidate-1"}
+    assert result["content_candidate_id"] == "candidate-1"
 
 
 def test_critic_revision_is_capped_at_one_round(
@@ -1205,7 +1209,7 @@ def test_critic_revision_is_capped_at_one_round(
     result = _run_generation()
 
     assert order == ["generate", "review", "generate", "review", "persist"]
-    assert result == {"content_candidate_id": "candidate-1"}
+    assert result["content_candidate_id"] == "candidate-1"
 
 
 def test_critic_failure_does_not_block_publishing(
@@ -1231,7 +1235,7 @@ def test_critic_failure_does_not_block_publishing(
     result = _run_generation()
 
     assert order == ["generate", "review", "persist"]
-    assert result == {"content_candidate_id": "candidate-1"}
+    assert result["content_candidate_id"] == "candidate-1"
 
 
 def test_research_node_is_skipped_when_disabled(
@@ -1262,7 +1266,7 @@ def test_research_node_is_skipped_when_disabled(
     result = _run_generation()
 
     assert order[0] == "load_context"
-    assert result == {"content_candidate_id": "candidate-1"}
+    assert result["content_candidate_id"] == "candidate-1"
 
 
 def test_legacy_path_skips_live_collection_when_researcher_already_tried(
@@ -1310,7 +1314,7 @@ def test_legacy_path_skips_live_collection_when_researcher_already_tried(
 
     assert order == ["research", "load_context", "generate", "persist"]
     assert "collect_live" not in order
-    assert result == {"content_candidate_id": "candidate-1"}
+    assert result["content_candidate_id"] == "candidate-1"
 
 
 def test_multi_topic_report_gathers_evidence_per_topic(
@@ -1396,6 +1400,155 @@ def test_multi_topic_report_gathers_evidence_per_topic(
     )
 
 
+def test_langgraph_v2_multi_topic_collects_missing_live_evidence_in_parallel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """V2는 Topic별 DB 읽기를 마친 뒤 부족한 Live 근거를 동시에 보강한다."""
+    order: list[str] = []
+    used_contexts = _patch_generation_tail(monkeypatch, order)
+    barrier = Barrier(2, timeout=1)
+    requested_topics: list[str] = []
+
+    def document(topic: str, source: str) -> ReportContextDocument:
+        """주제와 수집 단계를 식별할 테스트 근거를 만든다."""
+        marker = f"{topic}-{source}"
+        return ReportContextDocument(
+            reference=marker,
+            document_version_id=f"version-{marker}",
+            chunk_id=f"chunk-{marker}",
+            namespace_key="global",
+            title=marker,
+            content=f"{topic} 근거",
+            url=f"https://example.com/{marker}",
+            score=0.9,
+        )
+
+    async def fake_research_for_version(
+        connection: Any, **kwargs: Any
+    ) -> ResearchOutcome:
+        """저장 근거가 부족해 Live 보강을 미룬 V2 결과를 반환한다."""
+        assert kwargs["pipeline_version"] == "langgraph_v2"
+        assert kwargs["defer_live"] is True
+        topic = kwargs["topic"]
+        return ResearchOutcome(
+            documents=(document(topic, "stored"),),
+            stop_reason="langgraph_v2",
+            requires_live=True,
+        )
+
+    def fake_collect_live(topic: str, user_id: str, **kwargs: Any) -> list[Any]:
+        """두 Topic 수집이 동시에 시작돼야 통과하는 Live Provider 대역이다."""
+        requested_topics.append(topic)
+        barrier.wait()
+        return [document(topic, "live")]
+
+    monkeypatch.setattr(
+        agent_graph, "research_context_for_version", fake_research_for_version
+    )
+    monkeypatch.setattr(agent_graph, "collect_live_context", fake_collect_live)
+    monkeypatch.setattr(
+        agent_graph,
+        "focus_documents_on_topic",
+        lambda topic, documents, **kwargs: documents,
+    )
+
+    result = asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 관심사 브리핑",
+            topics=["반도체", "프로야구"],
+            content_type="interest_news_card",
+            language="ko",
+            model="test-model",
+            read_pipeline_version="langgraph_v2",
+        )
+    )
+
+    assert set(requested_topics) == {"반도체", "프로야구"}
+    version_ids = {
+        context.document_version_id for context in used_contexts[0]
+    }
+    assert version_ids == {
+        "version-반도체-stored",
+        "version-반도체-live",
+        "version-프로야구-stored",
+        "version-프로야구-live",
+    }
+    assert all(
+        any(tool["tool"] == "collect_live_parallel" for tool in stats["tools"])
+        for stats in result["research_stats"]
+    )
+
+
+def test_prepared_briefing_contexts_skip_research_and_get_unique_references(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REPORT-022 근거는 재조사 없이 사용하고 Topic 간 Citation 번호를 재정렬한다."""
+    order: list[str] = []
+    used_contexts = _patch_generation_tail(monkeypatch, order)
+
+    def document(topic: str) -> ReportContextDocument:
+        """Topic별로 안정 ID는 다르지만 같은 G1 참조를 가진 준비 근거를 만든다."""
+        return ReportContextDocument(
+            reference="G1",
+            document_version_id=f"version-{topic}",
+            chunk_id=f"chunk-{topic}",
+            namespace_key="global",
+            title=f"{topic} 기사",
+            content=f"{topic} 근거",
+            url=f"https://example.com/{topic}",
+            score=0.9,
+        )
+
+    async def fail_research(*args: Any, **kwargs: Any) -> Any:
+        """준비 근거가 있는 Topic을 다시 조사하면 실패한다."""
+        raise AssertionError("REPORT-022 근거를 다시 조사하면 안 됩니다.")
+
+    def fail_intent(*args: Any, **kwargs: Any) -> str:
+        """준비 근거 경로에서 주제 성격을 다시 판정하면 실패한다."""
+        raise AssertionError("준비된 Topic의 intent를 다시 판정하면 안 됩니다.")
+
+    monkeypatch.setattr(agent_graph, "research_context_for_version", fail_research)
+    monkeypatch.setattr(agent_graph, "resolve_topic_intent", fail_intent)
+    monkeypatch.setattr(
+        agent_graph,
+        "focus_documents_on_topic",
+        lambda topic, documents, **kwargs: documents,
+    )
+
+    result = asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 관심사 브리핑",
+            topics=["반도체", "프로야구"],
+            content_type="interest_news_card",
+            language="ko",
+            model="test-model",
+            read_pipeline_version="langgraph_v2",
+            prewarmed_contexts_by_topic={
+                "반도체": [document("반도체")],
+                "프로야구": [document("프로야구")],
+            },
+        )
+    )
+
+    assert order == ["generate", "persist"]
+    assert {
+        context.document_version_id for context in used_contexts[0]
+    } == {"version-반도체", "version-프로야구"}
+    assert [context.reference for context in used_contexts[0]] == ["G1", "G2"]
+    assert all(
+        stats["pipeline_version"] == "briefing_snapshot"
+        for stats in result["research_stats"]
+    )
+
+
 def test_multi_topic_report_drops_topics_without_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1455,6 +1608,68 @@ def test_multi_topic_report_drops_topics_without_evidence(
     # 근거가 붙은 두 주제만 프롬프트로 간다.
     assert generated_with["topics"] == ["반도체", "프로야구"]
     assert generated_with["contexts"] == ["context-반도체", "context-프로야구"]
+
+
+def test_multi_topic_report_keeps_a_topic_whose_top_evidence_is_already_used(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """앞 주제와 겹치는 근거는 상한을 적용하기 전에 뺀다.
+
+    2026-08-11 실측: '폭염'이 근거를 7건 모으고 선별도 통과했는데, 상한 4건이
+    전부 '코스닥'이 먼저 가져간 문서라 확보 0건이 되어 섹션이 통째로 빠졌다.
+    그 주제만의 근거가 남아 있었는데도 상한이 중복으로 다 찬 것이다.
+    """
+    generated_with: dict[str, Any] = {}
+    shared = [f"shared-{index}" for index in range(4)]
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """DB 사용자 Scope 설정을 생략한다."""
+        return None
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[str]:
+        """뒤 주제가 앞 주제와 겹치는 문서에 더해 자기 근거를 하나 갖게 한다."""
+        query = kwargs["query"]
+        return shared if query == "코스닥" else [*shared, f"only-{query}"]
+
+    async def fake_prag_006(contexts: list[str]) -> list[str]:
+        """검색 Context를 변경 없이 반환한다."""
+        return contexts
+
+    def fake_generate(**kwargs: Any) -> str:
+        """생성 입력을 붙잡아 두고 고정 콘텐츠를 반환한다."""
+        generated_with.update(kwargs)
+        return "generated"
+
+    async def fake_prag_007(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """저장 호출을 고정 결과로 대체한다."""
+        return {"content_candidate_id": "candidate-1"}
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
+    monkeypatch.setattr(agent_graph, "generate_report_content_with_quality", fake_generate)
+    monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
+    monkeypatch.setattr(agent_graph, "collect_live_context", lambda *a, **k: [])
+    _disable_research(monkeypatch)
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 관심사 브리핑",
+            topics=["코스닥", "폭염", "다낭 여행"],
+            content_type="interest_news_card",
+            language="ko",
+            model="test-model",
+        )
+    )
+
+    # 겹치는 문서를 먼저 빼면 뒤 주제도 자기 근거로 섹션을 얻는다.
+    assert generated_with["topics"] == ["코스닥", "폭염", "다낭 여행"]
+    assert "only-폭염" in generated_with["contexts"]
+    assert "only-다낭 여행" in generated_with["contexts"]
 
 
 def test_multi_topic_report_collects_live_when_the_pool_is_thin(
@@ -2173,3 +2388,71 @@ def test_single_topic_falls_back_to_reactive_search_without_a_match(
     assert searched == ["환율"]
     assert expansion_calls == ["환율"]
     assert collected_with == ["환헤지"]
+
+
+def test_topic_facets_are_capped_at_one_per_topic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """보조 검색어는 주제당 한 개만 더한다.
+
+    3개로 시작했다가 리스 600초를 두 번 연속 넘겨 되돌렸다(2026-08-11 실측:
+    192초 → 1485·1713초). 검색어가 늘면 조사원이 결과를 보고 다시 판단하는
+    왕복이 그만큼 늘어난다.
+    """
+    requested: list[int] = []
+
+    async def fake_scope(connection: Any, *, user_id: str) -> None:
+        """DB 사용자 Scope 설정을 생략한다."""
+        return None
+
+    async def fake_prag_003(connection: Any, **kwargs: Any) -> list[str]:
+        """창고가 비어 있어 실시간 수집으로 넘어가게 한다."""
+        return []
+
+    async def fake_expansion(connection: Any, **kwargs: Any) -> Any:
+        """Wiki 이웃이 하나도 없는 주제를 만든다."""
+        return SimpleNamespace(
+            keywords=(), mode="empty", gate_passed=False, maturity_reasons=()
+        )
+
+    async def fake_prag_006(contexts: list[str]) -> list[str]:
+        """검색 Context를 변경 없이 반환한다."""
+        return contexts
+
+    def fake_facets(topic: str, **kwargs: Any) -> tuple[str, ...]:
+        """요청받은 개수를 기록하고 검색어 하나를 돌려준다."""
+        requested.append(int(kwargs["limit"]))
+        return (f"{topic}-보조",)
+
+    async def fake_prag_007(connection: Any, **kwargs: Any) -> dict[str, object]:
+        """저장 호출을 고정 결과로 대체한다."""
+        return {"content_candidate_id": "candidate-1"}
+
+    monkeypatch.setattr(agent_graph, "set_personal_wiki_scope", fake_scope)
+    monkeypatch.setattr(agent_graph, "prag_003", fake_prag_003)
+    monkeypatch.setattr(agent_graph, "prag_006", fake_prag_006)
+    monkeypatch.setattr(agent_graph, "_load_related_keyword_expansion", fake_expansion)
+    monkeypatch.setattr(agent_graph, "generate_topic_facets", fake_facets)
+    monkeypatch.setattr(agent_graph, "collect_live_context", lambda *a, **k: ["live-1"])
+    monkeypatch.setattr(
+        agent_graph, "generate_report_content_with_quality", lambda **k: "generated"
+    )
+    monkeypatch.setattr(agent_graph, "prag_007", fake_prag_007)
+    _disable_research(monkeypatch)
+    monkeypatch.setattr(agent_graph, "generate_topic_facets", fake_facets)
+
+    asyncio.run(
+        agent_graph.run_report_generation(
+            _FakeConnection(),  # type: ignore[arg-type]
+            user_id="user-1",
+            job_id="job-1",
+            attempt_number=1,
+            topic="오늘의 관심사 브리핑",
+            topics=["다낭 여행", "코스닥"],
+            content_type="interest_news_card",
+            language="ko",
+            model="test-model",
+        )
+    )
+
+    assert requested == [1, 1]

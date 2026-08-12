@@ -156,6 +156,62 @@ def _normalize(text: str) -> str:
     return "".join(text.split()).casefold()
 
 
+def _closes_with_interpretation(content: str) -> bool:
+    """섹션이 참조 없는 문단으로 끝나는지 본다.
+
+    해석은 사실이 아니라 판단이라 참조를 붙이지 않는 것이 생성 규칙이다. 그래서
+    "마지막 문단에 인용 표시가 없다"를 해석 단락이 있다는 신호로 쓴다. 문단이
+    하나뿐이면 사실 서술만 있고 해석이 없는 것으로 본다.
+    """
+    paragraphs = [block.strip() for block in content.split("\n\n") if block.strip()]
+    if len(paragraphs) < 2:
+        return False
+    return not _CITATION_PATTERN.findall(paragraphs[-1])
+
+
+# 사실을 다시 말한 뒤 붙이는 빈 평가어. 이 말들은 "그래서 무엇이 달라지는가"에
+# 답하지 않는다(2026-08-11 실측: 세 섹션이 전부 이 형태로 끝났다).
+#
+# 어미가 아니라 **평가 명사구**를 본다. "~수 있다"로 거르면 정상 해석까지 잡힌다 —
+# 프롬프트의 좋은 해석 예시부터가 "되돌림 폭도 클 수 있다"로 끝난다.
+_HOLLOW_VERDICTS = (
+    "중요한 전략",
+    "중요한 기회",
+    "중요한 요소",
+    "중요한 역할",
+    "중요한 전환점",
+    "긍정적인 영향을 미칠",
+    "주목된다",
+    "주목할 만하다",
+    "기대를 모은다",
+    # "무엇이 필요함을 시사한다"는 필요의 내용이 비어 있다. "시사한다" 자체는 넣지
+    # 않는다 — "재고 조정이 임박했음을 시사한다"처럼 알맹이가 있는 쓰임이 있다.
+    "필요함을 시사",
+    "필요성을 시사",
+)
+
+
+def _hollow_interpretation(content: str) -> str | None:
+    """해석 단락이 빈 평가어로 끝나는지 본다.
+
+    Args:
+        content: 섹션 본문
+
+    Returns:
+        걸린 평가어. 없으면 None
+    """
+    paragraphs = [block.strip() for block in content.split("\n\n") if block.strip()]
+    if len(paragraphs) < 2:
+        return None
+    closing = paragraphs[-1]
+    if _CITATION_PATTERN.findall(closing):
+        return None
+    for verdict in _HOLLOW_VERDICTS:
+        if verdict in closing:
+            return verdict
+    return None
+
+
 def split_sections(body: str) -> list[tuple[str, str]]:
     """본문을 Markdown 제목 기준으로 (제목, 내용) 섹션 목록으로 나눈다.
 
@@ -240,6 +296,40 @@ def evaluate(case: dict[str, object], body: str, included: list[str]) -> dict[st
         for phrase in (case.get("forbidden_phrases") or [])  # type: ignore[union-attr]
         if str(phrase) in body
     ]
+    # 소주제마다 해석 단락이 붙었는가. 해석은 사실이 아니라 판단이라 참조를 달지
+    # 않는 것이 규칙이므로, 섹션의 마지막 문단에 인용 표시가 없으면 해석으로 본다
+    # (2026-08-11 실측: 3주제 리포트에 해석이 한 단락도 없었다).
+    # 소주제마다 해석 단락이 붙었는가. 해석은 사실이 아니라 판단이라 참조를 달지
+    # 않는 것이 규칙이므로, 섹션의 마지막 문단에 인용 표시가 없으면 해석으로 본다
+    # (2026-08-11 실측: 3주제 리포트에 해석이 한 단락도 없었다).
+    #
+    # 해석의 **질**(근거 없는 일반론인가)은 여기서 재지 않는다. 근거 수로 대신
+    # 세어 봤다가 정상 섹션 17건이 실패로 잡혔다 — 근거 1건이어도 "산재 사망자
+    # 598명"처럼 알맹이가 있으면 해석할 재료가 된다. 개수와 알맹이는 다른 축이다.
+    missing_interpretation = [
+        heading
+        for heading, content in split_sections(body)
+        if heading
+        and any(_normalize(topic) in _normalize(heading) for topic in topics)
+        and not _closes_with_interpretation(content)
+    ]
+    # 프롬프트 예시를 그대로 베껴 쓴 흔적. 2026-08-11 실측에서 예시에 적어둔
+    # "(해석 — 참조 없음)"이 사용자 화면에 그대로 출력됐고, 해석 단락 전체가
+    # 괄호로 감싸여 나왔다. 예시를 자리표시자로 쓴 것이 원인이었다.
+    placeholder_leaked = [
+        marker
+        for marker in ("(해석", "(사실 서술", "참조 없음")
+        if marker in body
+    ]
+    # 해석이 붙긴 했는데 알맹이가 없는 경우. missing_interpretation과 축이 다르다 —
+    # 저쪽은 "있는가", 이쪽은 "무엇을 말하는가"다.
+    hollow_interpretation = [
+        f"{heading}: {verdict}"
+        for heading, content in split_sections(body)
+        if heading
+        and any(_normalize(topic) in _normalize(heading) for topic in topics)
+        and (verdict := _hollow_interpretation(content)) is not None
+    ]
     # 채점을 두 갈래로 나눈다. 근거가 잘려 사라진 주제를 LLM 탓으로 돌리면
     # 프롬프트 품질과 파이프라인 결함이 한 숫자에 섞여 원인을 못 가린다.
     #   llm_passed    : 받은 근거 안에서 주제를 빠뜨리거나 섞지 않았는가
@@ -250,6 +340,9 @@ def evaluate(case: dict[str, object], body: str, included: list[str]) -> dict[st
         and not fabricated
         and not uncited
         and not leaked
+        and not missing_interpretation
+        and not placeholder_leaked
+        and not hollow_interpretation
     )
     return {
         "topics": len(topics),
@@ -260,6 +353,9 @@ def evaluate(case: dict[str, object], body: str, included: list[str]) -> dict[st
         "fabricated_sections": fabricated,
         "uncited_sections": uncited,
         "leaked_offtopic_phrases": leaked,
+        "missing_interpretation": missing_interpretation,
+        "placeholder_leaked": placeholder_leaked,
+        "hollow_interpretation": hollow_interpretation,
         "starved_topics": starved,
         "dropped_references": [
             ref for ref in owner_of if ref not in included_set
@@ -346,7 +442,9 @@ def main() -> int:
     llm_passed = sum(int(bool(result["llm_passed"])) for result in results)
     system_passed = sum(int(bool(result["system_passed"])) for result in results)
     total_latency = sum(int(result["latency_ms"]) for result in results)
+    hollow = sum(len(result["hollow_interpretation"]) for result in results)
     print(f"llm_passed={llm_passed}/{len(results)} (받은 근거 안에서의 생성 품질)")
+    print(f"빈 평가어로 끝난 해석 단락={hollow}개")
     print(f"system_passed={system_passed}/{len(results)} (근거 절단까지 포함한 최종 결과)")
     print(f"model={args.model}, average_latency_ms={total_latency // max(1, len(results))}")
     print(f"상세 결과: {LAST_RUN}")

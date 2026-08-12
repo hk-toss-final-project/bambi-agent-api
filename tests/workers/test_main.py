@@ -79,11 +79,13 @@ def test_run_batch_once_dispatches_url_collection_worker(
     args = Namespace(
         worker="url-collection",
         limit=7,
+        concurrency=None,
         lease_seconds=180,
     )
     settings = Settings(
         agent_database_url="postgresql://test",
-        personal_wiki_worker_batch_size=1,
+        url_collection_worker_batch_size=10,
+        url_collection_job_concurrency=4,
         personal_wiki_job_lease_seconds=600,
     )
 
@@ -96,8 +98,32 @@ def test_run_batch_once_dispatches_url_collection_worker(
         "database_url": "postgresql://test",
         "worker_id": "url-worker-1",
         "limit": 7,
+        "concurrency": 4,
         "lease_seconds": 180,
     }
+
+
+def test_parse_args_defaults_resident_poll_interval_to_five_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """별도 옵션이 없으면 상주 Worker가 빈 Queue를 5초마다 다시 확인한다."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["workers.main", "--worker", "personal-wiki"],
+    )
+
+    args = worker_main._parse_args()
+
+    assert args.interval_seconds is None
+    assert worker_main._worker_interval_seconds(args) == 5
+
+
+def test_noninteractive_worker_keeps_sixty_second_poll_interval() -> None:
+    """Report 등 비대화형 Worker는 기존 60초 기본 재조회 간격을 유지한다."""
+    args = Namespace(worker="report-generation", interval_seconds=None)
+
+    assert worker_main._worker_interval_seconds(args) == 60
 
 
 def test_run_batch_once_dispatches_openai_batch_worker(
@@ -136,6 +162,120 @@ def test_run_batch_once_dispatches_openai_batch_worker(
     assert recorded["poll_interval_seconds"] == 45
 
 
+def test_run_batch_once_uses_dedicated_report_batch_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Report Worker가 Personal Wiki와 분리된 Batch 상한을 사용한다."""
+    recorded: dict[str, Any] = {}
+
+    async def fake_report_worker(**kwargs: Any) -> list[dict[str, object]]:
+        """Report Worker 실행 인자를 기록한다."""
+        recorded.update(kwargs)
+        return []
+
+    monkeypatch.setattr(worker_main, "worker_003", fake_report_worker)
+    args = Namespace(
+        worker="report-generation",
+        model=None,
+        limit=None,
+        concurrency=None,
+        lease_seconds=None,
+    )
+    settings = Settings(
+        agent_database_url="postgresql://test",
+        personal_wiki_worker_batch_size=20,
+        report_worker_batch_size=6,
+        report_job_concurrency=2,
+    )
+
+    asyncio.run(worker_main._run_batch_once(args, settings, "report-worker-1"))
+
+    assert recorded["limit"] == 6
+    assert recorded["concurrency"] == 2
+
+
+def test_run_batch_once_dispatches_briefing_preparation_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CLI 브리핑 준비 유형이 전용 Worker와 Rate 예약 설정으로 연결된다."""
+    recorded: dict[str, Any] = {}
+
+    async def fake_briefing_worker(**kwargs: Any) -> list[dict[str, object]]:
+        """브리핑 준비 Worker 실행 인자를 기록한다."""
+        recorded.update(kwargs)
+        return []
+
+    monkeypatch.setattr(
+        worker_main,
+        "run_briefing_preparation_batch",
+        fake_briefing_worker,
+    )
+    args = Namespace(
+        worker="briefing-preparation",
+        model=None,
+        limit=None,
+        concurrency=None,
+        lease_seconds=None,
+    )
+    settings = Settings(
+        agent_database_url="postgresql://test",
+        report_worker_batch_size=2,
+        report_job_concurrency=1,
+        briefing_worker_batch_size=8,
+        briefing_job_concurrency=3,
+        briefing_openai_requests_per_job=7,
+        briefing_openai_tokens_per_job=28_000,
+    )
+
+    asyncio.run(worker_main._run_batch_once(args, settings, "briefing-worker-1"))
+
+    assert recorded["limit"] == 8
+    assert recorded["concurrency"] == 3
+    assert recorded["rate_limit_policy"].estimated_requests == 7
+    assert recorded["rate_limit_policy"].estimated_tokens == 28_000
+
+
+def test_run_loop_uses_dedicated_briefing_worker_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """브리핑 준비 상주 Worker가 즉시 Report와 분리된 처리량으로 Queue를 소비한다."""
+    recorded: dict[str, Any] = {}
+    args = Namespace(
+        worker="briefing-preparation",
+        worker_id="briefing-worker-1",
+        model=None,
+        limit=None,
+        concurrency=None,
+        lease_seconds=None,
+        loop=True,
+        interval_seconds=30,
+    )
+    settings = Settings(
+        agent_database_url="postgresql://test",
+        report_worker_batch_size=2,
+        report_job_concurrency=1,
+        briefing_worker_batch_size=12,
+        briefing_job_concurrency=4,
+    )
+
+    async def fake_consume(**kwargs: Any) -> list[dict[str, object]]:
+        """브리핑 준비 Queue 소비 인자를 기록하고 즉시 종료한다."""
+        recorded.update(kwargs)
+        return []
+
+    monkeypatch.setattr(worker_main, "_parse_args", lambda: args)
+    monkeypatch.setattr(worker_main, "load_settings", lambda: settings)
+    monkeypatch.setattr(worker_main, "wc_001", fake_consume)
+
+    asyncio.run(worker_main._run())
+
+    assert recorded["job_type"] == "briefing_preparation"
+    assert recorded["limit"] == 12
+    assert recorded["concurrency"] == 4
+    assert recorded["interval_seconds"] == 30
+    assert recorded["max_batches"] is None
+
+
 def test_run_loop_dispatches_resident_url_collection_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -145,6 +285,7 @@ def test_run_loop_dispatches_resident_url_collection_worker(
         worker="url-collection",
         worker_id="url-worker-1",
         limit=4,
+        concurrency=None,
         lease_seconds=120,
         loop=True,
         interval_seconds=5,
@@ -166,6 +307,7 @@ def test_run_loop_dispatches_resident_url_collection_worker(
     assert recorded["interval_seconds"] == 5
     assert recorded["max_batches"] is None
     assert recorded["worker_id"] == "url-worker-1"
+    assert recorded["concurrency"] == 4
 
 
 def test_worker_entrypoint_configures_logging(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -51,6 +51,7 @@ flowchart LR
 | `blocked_interest_ids` | X | 차단 관심사 ID 목록 |
 | `blocked_source_ids` | X | 차단 Source ID 목록 |
 | `signup_interests` | X | 회원가입 시 고른 관심 카테고리·토픽 시드. `[{"category": "기술", "topics": ["AI", "반도체"]}, ...]` — 카테고리만 골랐으면 `topics`는 빈 배열. 생략하면 빈 목록으로 저장 |
+| `onboarding_reports_managed_by_service` | X | 기본 `false`. `true`이면 Agent의 가입 관심사별 자동 리포트 등록을 건너뛰고 Service가 생성·멱등성·펜딩 상태를 관리 |
 
 - 호출 시점: **회원가입 직후 1회(필수)** + 플랜·언어·차단 설정 변경 시마다.
 - `signup_interests`는 사용자가 **선언한** 관심사 시드다. 위키에서 파생·재계산되는
@@ -68,12 +69,13 @@ flowchart LR
   Service의 추가 호출은 필요 없다. 이 접수는 컨텍스트 저장과 분리된 best-effort이며,
   같은 선택은 현재 Version을 재사용하고, 선택이 바뀌면 같은 Head의 다음 Version과
   Full Rebuild로 이전 시드만 근거로 한 노드를 제거한다.
-- **가입 즉시 웰컴 리포트 (Service 트리거)**: "가입하자마자 리포트 1개"는 생성 트리거라
-  MVP 결정(2026-07-20)상 **Service 소유**다. Service가 온보딩 완료 직후
-  `POST /internal/v1/users/{user_id}/generations`를 아래 값으로 1회 호출한다.
-  - `topic`: `signup_interests`에서 고른 대표 관심사(여러 개면 랜덤 1개)
+- **가입 즉시 온보딩 리포트 (Service 트리거)**: 생성 트리거는 **Service 소유**다.
+  Service는 컨텍스트에 `onboarding_reports_managed_by_service=true`를 보내고, 온보딩
+  완료 직후 선정한 관심사마다 `POST /internal/v1/users/{user_id}/generations`를 최대
+  3회 호출한다.
+  - `topic`: Service의 온보딩 관심사 선정 규칙으로 고른 실제 검색어
   - `content_type`: `interest_news_card` (기본값)
-  - `idempotency_key`: `welcome:{user_id}` — 멱등키로 재호출해도 리포트는 1개만 생성됨
+  - `idempotency_key`: `onboarding:{user_id}:slot:{1..3}` — 슬롯별 멱등키로 재호출해도 최대 3개만 생성됨
 - ⚠️ 컨텍스트가 없는 사용자의 생성 요청은 `409 USER_CONTEXT_REQUIRED`로
   거부됩니다. 가입 플로우에 반드시 포함하세요.
 - ⚠️ `blocked_*_ids`의 ID 체계(무엇의 ID인지)는 아직 양팀 미합의 상태입니다.
@@ -114,7 +116,30 @@ flowchart LR
 - Jina 수집 실패는 Job과 Source Event에 기록되고 재시도 정책을 따르며, URL 저장
   요청 자체의 202 응답을 되돌리지 않습니다.
 
-### 3.4 콘텐츠 생성 요청 + 사용자 지정 시간 스케줄러
+### 3.4 아침 브리핑 준비 + 콘텐츠 생성 요청
+
+아침 브리핑은 생성 시각보다 먼저 날짜별 준비 Job을 등록합니다.
+
+`POST /internal/v1/users/{user_id}/briefing-preparations`
+
+```json
+{
+  "briefing_date": "2026-08-12",
+  "idempotency_key": "briefing:2026-08-12:user-1",
+  "limit": 3
+}
+```
+
+- Service 스케줄러는 준비 시각(예: 03:00)에 GET이 아니라 이 POST를 호출합니다.
+- Agent 배포에는 `python -m workers.main --worker briefing-preparation --loop`를
+  Report Worker와 별도 프로세스로 상주시켜야 합니다. 이 Worker가 없으면 202로
+  접수된 Job도 `queued`에 남습니다.
+- 생성 시각(예: 07:00)에
+  `GET /internal/v1/users/{user_id}/briefing-topics?briefing_date=YYYY-MM-DD&limit=3`로
+  준비 결과를 읽고, 같은 `topics[]`와 `briefing_date`를 아래 생성 요청에 넣습니다.
+- 같은 `idempotency_key` 재등록은 기존 Job을 반환하므로 스케줄러 재시도에 안전합니다.
+
+콘텐츠 생성 요청:
 
 `POST /internal/v1/users/{user_id}/generations`
 
@@ -127,6 +152,7 @@ flowchart LR
 | `topics` | X | 서로 독립된 여러 주제를 한 장에 묶는 기존 아침요약 입력. `INTEREST_BUNDLE`과 함께 사용 불가 |
 | `content_type` | X | 기본 `interest_news_card` |
 | `report_type` | X | Service 소유 생성 맥락. Agent가 해석하지 않고 Snapshot에 반환 |
+| `briefing_date` | X | REPORT-022 준비 Snapshot을 재사용할 KST 날짜(`YYYY-MM-DD`). 아침 브리핑에서만 명시하며, 같은 사용자·주제 목록이 일치할 때만 재사용 |
 | `language` | X | 생략 시 컨텍스트의 선호 언어 사용 |
 | `scheduled_at` | X | 실행 예약 시각. **시간대 필수** (`2026-07-21T07:00:00+09:00`). 시간대 없으면 `422`. 생략 시 즉시 실행 대상 |
 
@@ -139,6 +165,19 @@ flowchart LR
   "interest_id": "33333333-3333-4333-8333-333333333333",
   "content_type": "interest_news_card",
   "report_type": "ON_DEMAND"
+}
+```
+
+아침 브리핑은 준비 Job 완료 후 같은 날짜와 주제를 생성 요청에 고정합니다.
+
+```json
+{
+  "idempotency_key": "morning:2026-08-12:user-1",
+  "topic": "오늘의 관심사 브리핑",
+  "topics": ["반도체", "프로야구"],
+  "content_type": "interest_news_card",
+  "report_type": "MORNING_BRIEFING",
+  "briefing_date": "2026-08-12"
 }
 ```
 
@@ -263,7 +302,7 @@ loop (10~30초):
 
 `batch_id`, `lease_expires_at`과 함께 각 item에 **전체 Payload**(content_id,
 user_id, version, snapshot_hash, title, summary, body, citations, tags,
-`report_type`·`request_idempotency_key`와 생성 범주 메타데이터)가 포함되므로
+`cover_image`, `report_type`·`request_idempotency_key`와 생성 범주 메타데이터)가 포함되므로
 추가 조회 없이 바로 Upsert할 수 있습니다. 처리할 것이 없으면 `items=[]`.
 
 **`request_idempotency_key`(2026-08-10 추가)** — 이 카드를 만들게 한 생성 요청의
@@ -338,6 +377,89 @@ Service는 이 필드로 어떤 LLM Wiki 관심사와 연결 노드가 카드 �
 - `custom:` 수집 대상(직접 입력·Wiki 자동 등록 주제)은 topic id가 없어 제외됩니다.
   **taxonomy id가 없는 관심사만 가진 사용자는 이 필드로 닫히지 않습니다** —
   그쪽은 service가 `interest_topics.keywords` 카탈로그로 따로 덮기로 했습니다.
+
+**`change_history_enabled`(2026-08-11 추가)** — `body`가 어느 형식인지 이
+값으로 구분해야 합니다 — 헤더 문자열을 파싱해 추측하면 안 됩니다.
+
+⚠️ **요청 토글의 단순 echo가 아닙니다.** 델타 경로가 **실제로 이 body를
+만들었는지**를 나타냅니다. 요청이 켜져 있어도 서버 차단 스위치
+(`CHANGE_HISTORY_ENABLED=0`)가 켜져 있거나 델타 경로 자체가 실패하면 기존
+`generate()` 경로로 자동 폴백하고, 이때 이 값도 함께 `false`로 내려갑니다 —
+요청 시 보낸 값과 달라질 수 있다는 뜻이며, 이게 정상 동작입니다. 그래서 이
+값과 `body` 구조는 **항상 일치가 보장**됩니다.
+
+```json
+"change_history_enabled": true
+```
+
+- **`false`(기본값, 지금까지와 동일)** — `body`는 자유 형식 markdown입니다.
+  기존 렌더링을 그대로 쓰면 됩니다. **이 값이 없던 과거 Snapshot도 `false`로
+  내려갑니다.**
+- **`true`** — `body`가 다음 4개 섹션을 이 순서·이 `##` 헤더로 담습니다. 없는
+  섹션(달라진 점이 없을 때의 "달라진 사실", 확정 날짜가 없을 때의 "타임라인")은
+  헤더째 생략되므로, 파싱은 섹션 존재 자체를 조건부로 다뤄야 합니다.
+
+  | 순서 | 헤더 | 항상 있음 |
+  |---|---|---|
+  | 1 | `## 이번에 달라진 점` | 예 |
+  | 2 | `## 보고서 내용` | 예 |
+  | 3 | `## 주목할 점` | 예 |
+  | 4 | `## 타임라인` | 아니오 — 확정 날짜 있는 항목이 있을 때만 |
+
+  ⚠️ **위 헤더 단계는 아침 브리핑처럼 `topics`가 여러 개인 요청에서 한 칸씩
+  내려갑니다** (`## 이번에 달라진 점` → `### 이번에 달라진 점` 등). 이때
+  본문은 주제별로 `## {주제명}` 아래 위 4개 섹션이 `###`로 반복됩니다. **이
+  단계는 요청의 `topics` 배열 길이(2개 이상이었는지)로만 정해지고, 생성 중
+  일부 주제가 근거 부족으로 빠져 실제로 1개만 남아도 그대로 유지됩니다** —
+  살아남은 주제 수에 따라 단계가 바뀌지 않으므로, 요청을 보낼 때 이미 어느
+  단계가 올지 알 수 있습니다.
+
+  섹션 1 안에는 소제목이 최대 둘 붙습니다(둘 다 없을 수도 있음 — 이번 실행에
+  달라진 점이 없으면 안내 문장 한 줄만 옵니다).
+
+  - `### 달라진 사실 (N건)` — 갱신 팩트. 항목마다 **두 줄**입니다.
+    ```
+    - (기존) ~~2026-2Q~~
+      (변경) `2026-3Q로 연기됐다.` [G1]
+    ```
+    `~~...~~`(취소선)가 이전 값, `` `...` ``(백틱)가 오늘 값입니다. 인용 마커
+    `[G1]`/`[P1]`/`[L1]`은 `citations`의 `citation_id`가 아니라 이 카드
+    `body` 안에서만 쓰는 참조 기호입니다.
+  - `### 새로 확인된 사실 (N건)` — 신규 팩트. 항목마다 **한 줄**이고 강조 표기가
+    없습니다.
+    ```
+    - B사가 신제품을 발표했다. [G2]
+    ```
+
+  섹션 3(`주목할 점`) 끝에는 `**확인이 필요한 부분**` 굵게 표기 뒤에 불릿
+  목록이 붙을 수 있습니다(없을 수도 있음). 이건 행동 지시가 아니라 "앞으로
+  확인할 지표" 안내이므로, 알림·CTA 버튼 같은 행동 유도 UI로 바꾸지 마세요.
+
+- 제목·한 줄 결론은 `body` 안에 없습니다. `title`·`summary` 필드만 쓰면
+  됩니다 — 카드 헤더에 그 필드로 제목을 그리면서 `body`에도 같은 제목이
+  중복으로 나오는 일은 없습니다.
+
+**`cover_image`(2026-08-11 추가)** — 리포트 상단에 노출할 대표 이미지와 원문
+출처입니다. 적합한 이미지가 없거나 이 필드 도입 전 Snapshot이면 `null`입니다.
+
+```json
+"cover_image": {
+  "url": "https://cdn.example.com/article.jpg",
+  "source_url": "https://news.example.com/article",
+  "source_title": "기사 제목",
+  "reference": "G1"
+}
+```
+
+- Agent는 LLM이 만든 URL을 쓰지 않고, 리포트가 **실제로 인용한** Context에서만
+  고릅니다. 본문 Citation 첫 등장 순서를 따르되 Global·Live 외부 출처를 개인
+  Wiki보다 우선합니다.
+- `url`과 `source_url`은 절대 HTTP(S) URL일 때만 발행합니다. 이미지 수집·선택
+  실패는 리포트 생성 실패가 아니며 `null`로 폴백합니다.
+- Service는 이미지 URL뿐 아니라 `source_url`·`source_title`도 함께 저장해 화면에서
+  이미지 출처를 표시합니다. `reference`는 선택 근거 추적용입니다.
+- 기존 Snapshot 하위 호환을 위해 Service는 필드 누락과 명시적 `null`을 모두
+  대표 이미지 없음으로 처리해야 합니다.
 
 **`citations`는 `{citation_id, title, url}` 세 필드뿐입니다.**
 

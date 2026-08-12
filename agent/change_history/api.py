@@ -27,6 +27,12 @@ from .features.dates import is_plausible_date, parse_absolute_date
 from .features.diff import DiffFact, DiffOutcome, chg_002, parse_diff_facts
 from .features.graph import build_change_history_graph, chg_001
 from .features.impact import ImpactOutcome, chg_004
+from .features.attributes import find_drifting_marker, is_stable_attribute
+from .features.values import (
+    extract_hard_tokens,
+    is_restated_value,
+    tokens_by_unit,
+)
 from .features.validation import (
     COMPOSE_WORKER,
     DIFF_WORKER,
@@ -36,6 +42,7 @@ from .features.validation import (
     ValidationProblem,
     chg_005,
     has_valid_citation,
+    promote_mislabeled_new_facts,
 )
 
 __all__ = [
@@ -68,7 +75,13 @@ __all__ = [
     "change_history_available",
     "collect_allowed_citations",
     "current_reference_date",
+    "extract_hard_tokens",
+    "find_drifting_marker",
     "has_valid_citation",
+    "is_restated_value",
+    "is_stable_attribute",
+    "promote_mislabeled_new_facts",
+    "tokens_by_unit",
     "impact_model",
     "merge_topic_delta_reports",
     "reference_timezone",

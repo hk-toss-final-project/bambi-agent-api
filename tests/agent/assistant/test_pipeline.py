@@ -100,6 +100,29 @@ def test_daily_mode_selects_clusters_above_threshold(monkeypatch) -> None:
     assert any(stage == "similarity_filter" and "low_similarity" in reason for stage, reason in reasons)
 
 
+def test_daily_items_preserve_source_image_metadata(monkeypatch) -> None:
+    """클러스터 출처가 뉴스 이미지와 YouTube 썸네일을 잃지 않는다."""
+    _seed_collect_history()
+    monkeypatch.setattr(pipeline, "resolve_topic_intent", lambda topic, user_id="": "news")
+
+    def docs_with_images() -> list[dict[str, object]]:
+        """서로 다른 이미지 필드명을 가진 수집 문서를 만든다."""
+        docs = _make_docs()
+        docs[0]["image_url"] = "https://cdn.example/news.jpg"
+        docs[1]["thumbnail_url"] = "https://cdn.example/youtube.jpg"
+        return docs
+
+    _patch_collect(monkeypatch, docs_with_images)
+
+    result = pipeline.run_daily(_TOPIC, "minji", reference_now=_NOW)
+
+    sources = result["items"][0]["sources"]
+    assert [source["image_url"] for source in sources] == [
+        "https://cdn.example/news.jpg",
+        "https://cdn.example/youtube.jpg",
+    ]
+
+
 def test_duplicate_cluster_is_excluded(monkeypatch) -> None:
     """최근 7일 보고서에 실린 것과 사실상 같은 클러스터는 '이미 다룬 소식'으로 뺀다."""
     _seed_collect_history()
@@ -315,7 +338,7 @@ def test_youtube_documents_use_video_id_as_url_key(monkeypatch) -> None:
 
 
 def test_news_documents_reuse_global_body_when_available(monkeypatch) -> None:
-    """Global 저장소에 본문이 있으면 스니펫 대신 본문을 텍스트로 쓴다.
+    """Global 저장소에 본문과 이미지가 있으면 뉴스 문서 자산으로 재사용한다.
 
     본문이 없는 기사는 기존처럼 Provider 설명 스니펫으로 동작한다(폴백).
     """
@@ -340,8 +363,13 @@ def test_news_documents_reuse_global_body_when_available(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         pipeline.content_store,
-        "fetch_global_article_texts",
-        lambda urls: {"https://n.example/full": "# 제목\n\n저장된 **전체 본문**입니다."},
+        "fetch_global_article_assets",
+        lambda urls: {
+            "https://n.example/full": {
+                "markdown": "# 제목\n\n저장된 **전체 본문**입니다.",
+                "image_url": "https://cdn.example/full.jpg",
+            }
+        },
     )
 
     docs = pipeline._news_documents("키워드", datetime.now(UTC))
@@ -350,7 +378,9 @@ def test_news_documents_reuse_global_body_when_available(monkeypatch) -> None:
     # 마크다운 표기(#, **)는 걷어내고 본문 텍스트만 남는다.
     assert "저장된 전체 본문" in str(by_url["https://n.example/full"]["text"])
     assert "**" not in str(by_url["https://n.example/full"]["text"])
+    assert by_url["https://n.example/full"]["image_url"] == "https://cdn.example/full.jpg"
     assert "짧은 설명만 있음" in str(by_url["https://n.example/short"]["text"])
+    assert by_url["https://n.example/short"]["image_url"] is None
 
 
 def test_record_history_false_does_not_write_history(monkeypatch) -> None:

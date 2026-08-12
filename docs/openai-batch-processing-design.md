@@ -24,6 +24,7 @@ Transaction으로 끝낸다.
 
 - `*_WORKER_BATCH_SIZE`는 한 번에 Claim할 최대 Job 수다.
 - `*_JOB_CONCURRENCY`는 Claim한 Job을 동시에 실행할 최대 수다.
+- Worker는 빈 실행 슬롯만큼만 Claim하고 Job 완료 직후 다음 Job을 보충한다.
 - Job마다 Connection Pool에서 독립된 연결을 빌린다. 하나의
   `AsyncConnection`을 동시 Task가 공유하지 않는다.
 - 기본 동시성은 1로 두고 운영 지표를 보며 올린다.

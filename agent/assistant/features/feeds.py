@@ -78,6 +78,7 @@ def _article_to_entry(article: "LatestArticle") -> dict[str, object]:
         "published_ts": int(published_at.timestamp()) if published_at else 0,
         "source_url": article.source_url or "",
         "source_name": article.source_name or "",
+        "image_url": article.image_url or "",
     }
 
 
@@ -186,7 +187,7 @@ def jina_read(url: str) -> str | None:
 
     호출은 공유 Jina 커넥터에 위임한다(인증·오류 처리 일원화). 비서는 기사
     하나쯤 실패해도 리포트를 계속 만들어야 하므로 예외 대신 None을 준다.
-    'Image N:' 헤더로 대표 이미지를 뽑아야 해서 원문 전체를 받는다.
+    본문 요약에 헤더 정보가 필요해 원문 전체를 받는다.
     """
     from infrastructure.sources.connectors.api import (
         JinaReadError,
@@ -223,23 +224,24 @@ def _clean_jina_content(text: str) -> str:
 
 
 def _extract_jina_image(text: str) -> str | None:
-    """Jina 응답에서 기사 대표 이미지 URL을 하나 뽑는다. 없으면 None.
+    """공용 Jina 파서로 기사 대표 이미지 URL을 하나 고른다."""
+    from infrastructure.sources.connectors.api import extract_jina_image
 
-    Jina는 헤더에 'Image N: <url>' 형태로, 본문에는 마크다운 이미지 '![alt](url)'
-    형태로 이미지를 남긴다. 아이콘·로고·트래킹 픽셀 등은 대표 이미지가 아니므로
-    최소 폭을 가진 흔한 이미지 확장자를 우선한다.
-    """
-    import re
+    return extract_jina_image(text)
 
-    candidates = re.findall(r"Image \d+:\s*(https?://\S+)", text)
-    candidates += re.findall(r"!\[[^\]]*\]\((https?://[^)]+)\)", text)
-    for url in candidates:
-        low = url.lower()
-        if any(bad in low for bad in ("logo", "icon", "sprite", "1x1", "blank", "avatar")):
-            continue
-        if re.search(r"\.(jpg|jpeg|png|webp)(\?|$)", low):
-            return url
-    return candidates[0] if candidates else None
+
+def fetch_article_image(url: str) -> str | None:
+    """원본 HTML 메타데이터에서 기사 대표 이미지 URL 한 건을 반환한다."""
+    from infrastructure.sources.connectors.api import (
+        ArticleImageFetchError,
+        fetch_article_image_metadata,
+    )
+
+    try:
+        result = fetch_article_image_metadata(url)
+    except ArticleImageFetchError:
+        return None
+    return result.url if result is not None else None
 
 
 def article_body_offset(markdown: str, title: str) -> int:
@@ -263,15 +265,10 @@ def article_body_offset(markdown: str, title: str) -> int:
     Returns:
         본문 시작 위치(문자 인덱스). 제목을 찾지 못하면 0.
     """
-    import re
+    from infrastructure.sources.connectors.api import find_article_body_offset
 
-    letters = re.findall(r"[0-9A-Za-z가-힣]", title)[:12]
-    # 글자가 너무 적으면 우연히 메뉴에 걸릴 수 있어 시도하지 않는다.
-    if len(letters) < 6:
-        return 0
-    pattern = r"[^0-9A-Za-z가-힣]{0,4}".join(re.escape(c) for c in letters)
-    match = re.search(pattern, markdown)
-    return match.start() if match else 0
+    offset = find_article_body_offset(markdown, title)
+    return offset if offset is not None else 0
 
 
 def clean_article_body(markdown: str, max_chars: int = 2000, *, title: str = "") -> str:

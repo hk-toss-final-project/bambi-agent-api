@@ -6,7 +6,7 @@ wiki_document_relations를 읽어 Obsidian 스타일 Graph 응답으로 조립�
 
 import hashlib
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from psycopg.rows import dict_row
@@ -19,13 +19,19 @@ from agent.wiki_builder.api import wba_018
 from domain.personal_wiki.navigation.api import wnav_001, wnav_002, wnav_004, wnav_006
 from domain.personal_wiki.source_events.api import wse_010
 from infrastructure.persistence.api import (
+    StoredBriefingTopicSelection,
     delete_wiki_document_and_record_event,
+    load_briefing_topic_snapshot,
     enqueue_wiki_rebuild_for_source,
+    load_briefing_topic_selection,
     load_interest_documents_for_user,
     load_recent_feedback_signals_for_user,
+    save_briefing_topic_selection,
     reset_personal_wiki,
     save_interest_profile_for_user,
     save_mcp_source_submission,
+    StoredBriefingTopicSnapshot,
+    upsert_briefing_topic_snapshot,
 )
 from infrastructure.sources.connectors.api import LatestArticle
 from shared.wiki_navigation_models import WikiNavigationPacket
@@ -266,6 +272,83 @@ class PostgresWikiGraphRepository:
                 )
             )
         return materials
+
+    async def load_topic_selection(
+        self, user_id: str, *, candidate_digest: str, topic_limit: int
+    ) -> StoredBriefingTopicSelection | None:
+        """03:00에 저장해 둔 주제 선정 결과 중 재사용 가능한 것을 읽는다."""
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await self._set_user_scope(connection, user_id=user_id)
+                return await load_briefing_topic_selection(
+                    connection,
+                    user_id=user_id,
+                    candidate_digest=candidate_digest,
+                    topic_limit=topic_limit,
+                )
+
+    async def save_topic_selection(
+        self,
+        user_id: str,
+        *,
+        candidate_digest: str,
+        topics: list[str],
+        reason: str,
+        candidate_count: int,
+        topic_limit: int,
+    ) -> None:
+        """이번에 고른 주제를 07:00 호출이 다시 쓸 수 있게 저장한다."""
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await self._set_user_scope(connection, user_id=user_id)
+                await save_briefing_topic_selection(
+                    connection,
+                    user_id=user_id,
+                    candidate_digest=candidate_digest,
+                    topics=topics,
+                    reason=reason,
+                    candidate_count=candidate_count,
+                    topic_limit=topic_limit,
+                )
+
+    async def load_briefing_topic_snapshot(
+        self, user_id: str, *, briefing_date: date
+    ) -> StoredBriefingTopicSnapshot | None:
+        """사용자·날짜별로 준비된 아침 브리핑 Snapshot을 조회한다."""
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await self._set_user_scope(connection, user_id=user_id)
+                return await load_briefing_topic_snapshot(
+                    connection,
+                    user_id=user_id,
+                    briefing_date=briefing_date,
+                )
+
+    async def save_briefing_topic_snapshot(
+        self,
+        user_id: str,
+        *,
+        briefing_date: date,
+        topics: Sequence[str],
+        reason: str,
+        candidate_count: int,
+        contexts_by_topic: Mapping[str, Sequence[Mapping[str, object]]],
+        prepared_by_job_id: str,
+    ) -> StoredBriefingTopicSnapshot:
+        """선정 주제와 사전 수집 근거를 날짜별 Snapshot으로 저장한다."""
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await self._set_user_scope(connection, user_id=user_id)
+                return await upsert_briefing_topic_snapshot(
+                    connection,
+                    user_id=user_id,
+                    briefing_date=briefing_date,
+                    topics=topics,
+                    reason=reason,
+                    candidate_count=candidate_count,
+                    contexts_by_topic=contexts_by_topic,
+                    prepared_by_job_id=prepared_by_job_id,
+                )
 
     async def get_graph(self, user_id: str) -> Mapping[str, object]:
         """현재 사용자 Namespace의 Wiki Node·Edge와 집계를 반환한다."""

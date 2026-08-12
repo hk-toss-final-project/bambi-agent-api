@@ -340,6 +340,7 @@ class InMemoryAgentJobRepository:
         interest_id: str | None = None,
         content_type: str,
         report_type: str = "",
+        briefing_date: date | None = None,
         language: str | None,
         scheduled_at: datetime | None = None,
         request_id: str,
@@ -351,6 +352,7 @@ class InMemoryAgentJobRepository:
             raise UserContextRequiredError(user_id)
         # 라우트가 요청의 report_type을 저장소까지 전달하는지 확인하기 위해 남긴다.
         self.last_report_type = report_type
+        self.last_briefing_date = briefing_date
         self.last_generation_scope = generation_scope
         self.last_interest_id = interest_id
         self.last_execution_mode = execution_mode

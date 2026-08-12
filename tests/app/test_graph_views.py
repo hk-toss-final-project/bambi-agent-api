@@ -21,11 +21,13 @@ def _dev_client() -> TestClient:
 
 
 def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
-    """네 에이전트 그래프의 Mermaid 정의를 연결 없이 추출한다."""
+    """모든 에이전트 그래프의 Mermaid 정의를 연결 없이 추출한다."""
     diagrams = {d.slug: d for d in list_graph_diagrams()}
 
     assert set(diagrams) == {
         "personal-wiki",
+        "wiki-maintenance-v2",
+        "wiki-read-v2",
         "report-generation",
         "assistant",
         "change-history",
@@ -47,6 +49,24 @@ def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
     ):
         assert node in diagrams["personal-wiki"].mermaid
     assert "load_context" in diagrams["report-generation"].mermaid
+    for node in (
+        "restore_or_locate",
+        "select_seed",
+        "navigate",
+        "search_global",
+        "assess",
+        "collect_live",
+        "finalize",
+    ):
+        assert node in diagrams["wiki-read-v2"].mermaid
+    for node in (
+        "audit",
+        "plan",
+        "repair_derivatives",
+        "full_rebuild",
+        "finalize",
+    ):
+        assert node in diagrams["wiki-maintenance-v2"].mermaid
     # 토글이 켜졌을 때 generate를 대체하는 분기가 그래프에 실제로 있어야 한다.
     assert "change_history" in diagrams["report-generation"].mermaid
     assert "reformulate" in diagrams["assistant"].mermaid
@@ -68,6 +88,29 @@ def test_every_graph_node_has_display_text() -> None:
         for node in diagram.nodes:
             assert node.title.strip()
             assert node.description.strip()
+
+
+def test_graph_descriptions_match_current_agent_contracts() -> None:
+    """수동 그래프 설명이 최근 실행 계약의 핵심 분기를 유지해야 한다."""
+    diagrams = {diagram.slug: diagram for diagram in list_graph_diagrams()}
+
+    wiki_nodes = {node.node_id: node for node in diagrams["personal-wiki"].nodes}
+    assert "OpenAI Batch Item" in wiki_nodes["embed"].description
+
+    report = diagrams["report-generation"]
+    report_nodes = {node.node_id: node for node in report.nodes}
+    assert "wiki_search·wiki_read·search_pool" in report_nodes["research"].description
+    assert "REPORT-022" in report_nodes["research"].description
+    assert "collect_live 도구" not in report.description
+    assert "근거 없는 주제는 생성에서 제외" in report_nodes["load_context"].description
+    assert "주제마다" in report_nodes["change_history"].description
+    assert "전부 실패했을 때만 generate" in report_nodes["change_history"].description
+
+    change_history = diagrams["change-history"]
+    change_nodes = {node.node_id: node for node in change_history.nodes}
+    assert "신규·갱신·유지 팩트 전체" in change_nodes["compose"].description
+    assert "전부 유지면 impact를 건너" in change_nodes["supervisor"].description
+    assert "신규·갱신 팩트만" in change_nodes["store"].description
 
 
 def test_every_stategraph_definition_is_registered() -> None:
@@ -104,12 +147,14 @@ def test_graphs_page_renders_all_diagrams() -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     body = response.text
-    assert body.count('<pre class="mermaid">') == 4
-    assert body.count('class="node-panel"') == 4
+    assert body.count('<pre class="mermaid">') == 6
+    assert body.count('class="node-panel"') == 6
     assert body.count('class="node-detail"') == sum(
         len(diagram.nodes) for diagram in list_graph_diagrams()
     )
     assert "Personal Wiki Build" in body
+    assert "Wiki Read Loop V2" in body
+    assert "Wiki Maintenance Loop V2" in body
     assert "키워드 비서 리서치 에이전트" in body
     assert "변경점(Delta) 추적" in body
     assert 'data-node-id="load_source"' in body
@@ -150,7 +195,27 @@ def test_graph_mermaid_raw_endpoint_rejects_unknown_slug() -> None:
     assert response.json()["code"] == "GRAPH_NOT_FOUND"
 
 
-def test_graphs_page_is_absent_without_dev_flag() -> None:
-    """개발 API 플래그가 없으면 시각화 페이지도 등록되지 않는다."""
-    with TestClient(create_app(Settings(environment="test"))) as client:
+def test_graphs_page_is_available_in_production() -> None:
+    """읽기 전용 그래프 화면은 production 배포에서도 기본 제공해야 한다."""
+    with TestClient(create_app(Settings(environment="production"))) as client:
+        response = client.get("/dev/graphs")
+
+    assert response.status_code == 200
+
+
+def test_graphs_page_is_absent_when_explicitly_disabled() -> None:
+    """그래프 화면 전용 플래그를 끄면 라우터를 등록하지 않는다."""
+    settings = Settings(environment="production", enable_dev_graph_views=False)
+    with TestClient(create_app(settings)) as client:
         assert client.get("/dev/graphs").status_code == 404
+
+
+def test_production_graph_view_does_not_enable_dev_execution_api() -> None:
+    """그래프 화면 공개가 production 동기 실행 API까지 활성화하면 안 된다."""
+    settings = Settings(environment="production", enable_dev_agent_api=True)
+    with TestClient(create_app(settings)) as client:
+        graph_response = client.get("/dev/graphs")
+        execution_response = client.post("/internal/v1/dev/jobs/test-job/run")
+
+    assert graph_response.status_code == 200
+    assert execution_response.status_code == 404

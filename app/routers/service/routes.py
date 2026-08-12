@@ -1,7 +1,9 @@
 """Service API가 호출하는 FastAPI MVP 내부 라우터."""
 
+from datetime import date, datetime
 from typing import Annotated, Literal
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 
@@ -82,7 +84,10 @@ from app.routers.service.api import (
 from app.services.collection_schedules import CollectionScheduleService
 from app.services.mvp import AgentApiMvpService
 from agent.report_builder.api import DEFAULT_BRIEFING_TOPIC_COUNT
-from app.schemas.briefing_topics import BriefingTopicsResponse
+from app.schemas.briefing_topics import (
+    BriefingPreparationRequest,
+    BriefingTopicsResponse,
+)
 from app.services.briefing_topics import BriefingTopicsService
 from app.services.wiki_graph import WikiGraphService
 from app.services.wiki_navigator import WikiNavigatorService
@@ -96,6 +101,7 @@ router = APIRouter(
     dependencies=[Depends(require_service_api_access)],
 )
 UserId = Annotated[str, Path(min_length=1, max_length=128, description="사용자 ID")]
+KST = ZoneInfo("Asia/Seoul")
 
 
 def _request_id(request: Request) -> str:
@@ -398,18 +404,49 @@ async def list_top_connected_wiki_nodes(
 )
 async def select_morning_briefing_topics(
     user_id: UserId,
+    briefing_date: Annotated[
+        date | None,
+        Query(description="조회할 KST 기준 브리핑 날짜. 생략하면 오늘"),
+    ] = None,
     limit: Annotated[
         int, Query(ge=1, le=5, description="고를 주제 수")
     ] = DEFAULT_BRIEFING_TOPIC_COUNT,
     service: BriefingTopicsService = Depends(get_briefing_topics_service),
 ) -> BriefingTopicsResponse:
-    """개인 Wiki 맥락을 읽어 아침 브리핑에 쓸 주제를 고른다.
+    """준비 Worker가 저장한 아침 브리핑 주제를 LLM 호출 없이 조회한다.
 
     Service는 이 결과를 아침 생성 요청의 `topics[]`에 넣는다. 연결 수 상위 3개를
     그대로 쓰면 도구·출처가 주제가 되므로(실측: `DBeaver Community` 1.00),
-    후보를 넓게 받아 맥락을 읽고 고른다.
+    후보를 넓게 받아 맥락을 읽고 고른다. 준비 Snapshot이 없으면 빈 목록을
+    반환해 Service가 등록 관심사 폴백을 사용하게 한다.
     """
-    return await service.get_topics(user_id, limit=limit)
+    resolved_date = briefing_date or datetime.now(KST).date()
+    return await service.get_topics(
+        user_id,
+        briefing_date=resolved_date,
+        limit=limit,
+    )
+
+
+@router.post(
+    "/users/{user_id}/briefing-preparations",
+    response_model=AcceptedJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    operation_id="report_022",
+    summary="아침 브리핑 주제·근거 준비 요청",
+)
+async def prepare_morning_briefing(
+    user_id: UserId,
+    payload: BriefingPreparationRequest,
+    request: Request,
+    service: BriefingTopicsService = Depends(get_briefing_topics_service),
+) -> AcceptedJobResponse:
+    """[REPORT-022] 날짜별 주제 선정과 근거 예열을 비동기 Job으로 등록한다."""
+    return await service.enqueue_preparation(
+        user_id,
+        payload,
+        request_id=_request_id(request),
+    )
 
 
 @router.get(

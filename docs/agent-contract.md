@@ -114,6 +114,7 @@
 | `summary` | report.summary, card.summary | 그대로 (카드는 요약만 노출) |
 | `body` | **report.body** | 카드엔 안 넣음. 리포트에 보존 |
 | `citations[…]` | report(citations) / card_sources | citation 구조는 아래 주의 |
+| `cover_image` | **report 대표 이미지** | 실제 인용 출처 중 IMG-013이 고른 이미지+원문 출처. 없으면 null |
 | interests(관심사) | **card 관심사 태그** | why_for_you 문장 대체. ✅ 2026-07-30 연결됨 — 발행 Snapshot payload의 `tags`(생성 요청 topic, 항상 1개)를 service가 `card_interest_tags`에 그대로 저장 |
 | ~~why_for_you~~ | (폐기) | "왜 당신에게" 문장 안 씀 → 관심사 태그로 대체 |
 
@@ -181,9 +182,14 @@
 | `blocked_interest_ids` | X | 사용자가 삭제한 관심사 | 송우 확인(07-21): agent가 `agent.user_context_snapshots`(테이블 실재 확인)에 반영. 현재 빈 배열, 삭제 기능 붙으면 채움 |
 | `blocked_source_ids` | X | 사용자가 삭제한 소스 | 위와 동일 |
 | `signup_interests` | X | 가입 시 고른 관심 카테고리·토픽 | `[{"category","topics":[...]}]`. agent가 `user_context_snapshots.attributes.signup_interests`에 버전과 함께 보존(재계산에 안 지워짐). **있으면 agent가 온보딩 시드(WSE-014)를 자동 접수해 콜드스타트 관심사를 파생** — 아래 참고 |
+| `onboarding_reports_managed_by_service` | X | Service 온보딩 완료 처리 | 기본 `false`. `true`이면 Agent의 가입 관심사별 자동 리포트 등록을 생략하고 Service가 SVC-008 호출과 펜딩 상태를 소유 |
 
 ### 4.2-1 온보딩 관심사 시드 + 웰컴 리포트 (콜드스타트)
 - **시드 (WSE-014, agent 자동):** `signup_interests`가 있으면 context 수신 시 agent가 선택을 시드 Markdown으로 합성해 사용자별 단일 활성 `onboarding_seed` Head의 Version·Personal Wiki Build Job으로 **자동 접수**한다. `selected_topic_ids`는 Agent DB에 미리 관리한 결정론적 정의·특징·활용을 사용하고 정식 복합 명칭을 분해하지 않는다. `category=null` 그룹의 Topic은 사용자 추가 키워드이며 taxonomy 별칭→기존 Wiki→사용자 서명 캐시→LLM 일반론→결정론 폴백 순으로 해석한다. 같은 선택은 현재 Version을 재사용하고 변경된 선택은 다음 Version+Full Rebuild로 이전 시드 전용 노드를 제거한다. 빌드 완료 후 INT-011 훅이 관심사 프로필을 파생시킨다. 컨텍스트 저장과 분리된 best-effort이고 Service의 추가 호출은 불필요하다.
+- **온보딩 리포트 (Service 소유):** Service는 컨텍스트에
+  `onboarding_reports_managed_by_service=true`를 보내 Agent의 레거시 자동 등록을
+  끈 뒤, 선정한 실제 관심사로 SVC-008을 최대 3회 호출한다. 구버전 Service 호환을
+  위해 필드 생략 시에는 기존 Agent 자동 등록을 유지한다.
 - **⚠️ `topic` 은 표시용 라벨이 아니라 agent 의 실제 검색어다 (2026-08-05 확인, 실사고 있었음).**
   Service 가 `"오늘의 관심사 뉴스"` 같은 **고정 문구**를 넣었더니 agent 가 그 문구로 검색해
   관심사와 무관한 기사를 물어왔다. 지금은 **사용자의 실제 관심 주제 문자열**(예: `"SK하이닉스"`)을 넣는다.
@@ -250,11 +256,19 @@
 
     **아침 주제는 사용자가 고르지 않는다.** Service 는 이 순서로 채운다.
 
-    1. **`GET /internal/v1/users/{user_id}/briefing-topics?limit=3`** — 개인 Wiki 맥락을 읽어
-       agent 가 고른다
-    2. 비면 **사용자 등록 관심사**(온보딩에서 고른 것 + 직접 추가한 것) 최근 3개
+    1. Service Scheduler가 생성일 전 준비 시각에
+       **`POST /internal/v1/users/{user_id}/briefing-preparations`**로 날짜별 비동기 Job을
+       멱등 등록한다. Agent는 개인 Wiki 맥락으로 주제를 고르고 Wiki·Global·Live 근거를
+       Snapshot으로 고정한다.
+    2. 생성 시각에는
+       **`GET /internal/v1/users/{user_id}/briefing-topics?briefing_date=YYYY-MM-DD&limit=3`**로
+       준비된 주제만 DB에서 읽는다. 이 GET은 LLM이나 외부 검색을 호출하지 않는다.
+       이어지는 `POST /generations`에는 같은 `topics[]`와 `briefing_date`를 넣는다.
+       Agent Worker는 사용자·날짜·주제 순서가 모두 일치할 때만 준비 근거를 재사용하고,
+       Snapshot이 없거나 달라졌으면 일반 `langgraph_v2` 조사로 안전하게 폴백한다.
+    3. 비면 **사용자 등록 관심사**(온보딩에서 고른 것 + 직접 추가한 것) 최근 3개
        (`InterestRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc`)
-    3. 그것도 없으면 **건너뛴다**
+    4. 그것도 없으면 **건너뛴다**
 
     - ⚠️ **08-11 낮에 "사용자 선택을 1단계로 앞에 둔다"는 안이 잠깐 확정됐다가 같은 날
       철회됐다.** 최종은 위 2단이고 **선택 화면은 없앤다**(service-web #74). 그 사이에 오간
@@ -396,11 +410,13 @@
   ⚠️ 온보딩 `selected_category_ids`·`selected_topic_ids` 와는 **다른 ID 공간**이다.
   `topics[]` 에 넣는 값은 이 id 가 아니라 **태그 이름(`tag`)** 이다 — 아침(사용자가 고른 이름)도,
   온디맨드(`topTags(3)` 으로 뽑은 상위 3개 이름)도 마찬가지다. UUID 는 어느 경로에도 들어가지 않는다.
-- **온보딩 첫 리포트 = agent 자체 경로 (`ONBOARDING`)**
-  - 위 시드(WSE-014)가 끝나면 **agent가 스스로** 첫 리포트 생성을 건다. **Service 트리거가 아니다** — `POST /generations` 호출이 없다.
-  - 그래서 이 경로의 Snapshot은 `report_type`을 **agent가 `ONBOARDING`으로 채운다**(Service가 실어 보낼 값이 없으므로).
-  - 값 이름은 Service가 정했다(2026-08-06). agent는 이 문자열을 하드코딩해 넣기만 한다.
-  - ⚠️ **2026-07-20 MVP 문서에 있던 "웰컴 리포트 = Service가 `idempotency_key=welcome:{user_id}`로 1회 호출"은 폐기됐다.** Service에 그 호출은 구현되지 않았고, 같은 자리를 위 agent 자체 경로가 채운다. 옛 문서를 보고 Service 쪽에서 중복 트리거를 만들지 않도록 여기 남긴다.
+- **온보딩 첫 리포트 = Service 소유 경로 (`ONBOARDING`)**
+  - Service는 컨텍스트에 `onboarding_reports_managed_by_service=true`를 보내 Agent의
+    레거시 관심사별 자동 등록을 끈다.
+  - 이어서 선정한 실제 Topic마다 `POST /generations`를 최대 3회 호출하고
+    `report_type=ONBOARDING`을 싣는다.
+  - 멱등키는 `onboarding:{user_id}:slot:{1..3}`이며, Service가 펜딩 행과 화면 상태를 소유한다.
+  - 필드를 생략하는 구버전 Service에만 Agent의 기존 자동 등록을 유지한다.
 
 ### 4.3 버전 관리 (핵심)
 - `context_version`은 **사용자별로 단조 증가**해야 한다. 같거나 작은 값 재전송 → `STALE_CONTEXT_VERSION`.

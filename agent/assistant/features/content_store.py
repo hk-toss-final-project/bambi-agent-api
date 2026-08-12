@@ -16,18 +16,30 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Sequence
+from typing import TypedDict
+
+from infrastructure.sources.connectors.api import resolve_article_image
 
 logger = logging.getLogger("agent.assistant.content_store")
 
 
-def fetch_global_article_texts(urls: Sequence[str]) -> dict[str, str]:
-    """canonical_url이 일치하는 fetched 캐시 문서의 본문을 일괄 조회한다.
+class CachedArticleAsset(TypedDict):
+    """비서가 재사용하는 Global 기사 본문과 대표 이미지다."""
+
+    markdown: str
+    image_url: str | None
+
+
+def fetch_global_article_assets(
+    urls: Sequence[str],
+) -> dict[str, CachedArticleAsset]:
+    """canonical_url이 일치하는 fetched 캐시 기사 자산을 일괄 조회한다.
 
     Args:
         urls: 조회할 기사 URL 목록 (Provider가 준 원본 URL 그대로)
 
     Returns:
-        {기사 URL: 본문 Markdown}. 본문이 없거나 조회가 불가능하면 해당 키 없음.
+        {기사 URL: 본문·대표 이미지}. 본문이 없거나 조회가 불가능하면 해당 키 없음.
     """
     targets = [url for url in urls if url]
     dsn = os.environ.get("AGENT_DATABASE_URL")
@@ -39,7 +51,7 @@ def fetch_global_article_texts(urls: Sequence[str]) -> dict[str, str]:
         with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT canonical_url, markdown
+                SELECT canonical_url, title, markdown, image_url
                 FROM agent.global_source_documents
                 WHERE content_status = 'fetched'
                   AND markdown IS NOT NULL
@@ -48,8 +60,15 @@ def fetch_global_article_texts(urls: Sequence[str]) -> dict[str, str]:
                 (targets,),
             )
             return {
-                str(canonical_url): str(content)
-                for canonical_url, content in cursor.fetchall()
+                str(canonical_url): {
+                    "markdown": str(content),
+                    "image_url": resolve_article_image(
+                        markdown=str(content),
+                        title=str(title),
+                        cached_url=str(image_url) if image_url else None,
+                    ),
+                }
+                for canonical_url, title, content, image_url in cursor.fetchall()
                 if content
             }
     except Exception as error:

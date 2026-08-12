@@ -39,6 +39,7 @@ from infrastructure.persistence.api import (
     get_agent_job,
     get_agent_jobs,
     enqueue_report_generation_job,
+    enqueue_briefing_preparation_job,
     list_runnable_agent_jobs,
     register_url_and_enqueue,
     set_personal_wiki_scope,
@@ -52,6 +53,8 @@ type DictRow = dict[str, Any]
 
 logger = logging.getLogger(__name__)
 
+INTERACTIVE_WIKI_BUILD_QUIET_MINUTES = 0
+
 
 class PostgresAgentJobRepository:
     """PostgreSQL에서 사용자 원본과 Agent Job 수명주기를 관리한다."""
@@ -62,6 +65,8 @@ class PostgresAgentJobRepository:
         *,
         wiki_build_quiet_minutes: int = 0,
         wiki_build_max_wait_minutes: int = 30,
+        wiki_read_pipeline_version: str = "legacy_v1",
+        wiki_maintenance_pipeline_version: str = "legacy_v1",
     ) -> None:
         """지연 시작 방식의 Agent Job PostgreSQL Pool을 구성한다.
 
@@ -70,6 +75,8 @@ class PostgresAgentJobRepository:
             wiki_build_quiet_minutes: 원본 저장 직후 대기 Wiki Build를 미루는
                 조용 시간(분). SCH-009가 새 원본 저장마다 적용한다
             wiki_build_max_wait_minutes: 첫 대기 Job 발생 후 최대 대기시간(분)
+            wiki_read_pipeline_version: 새 Report Job에 고정할 읽기 루프 버전
+            wiki_maintenance_pipeline_version: 새 Full Rebuild Job에 고정할 유지 루프 버전
         """
         self._pool: AsyncConnectionPool[DictRow] = AsyncConnectionPool(
             conninfo=database_url,
@@ -80,6 +87,8 @@ class PostgresAgentJobRepository:
         )
         self._wiki_build_quiet_minutes = wiki_build_quiet_minutes
         self._wiki_build_max_wait_minutes = wiki_build_max_wait_minutes
+        self._wiki_read_pipeline_version = wiki_read_pipeline_version
+        self._wiki_maintenance_pipeline_version = wiki_maintenance_pipeline_version
 
     async def startup(self) -> None:
         """원본·Job 저장용 연결 Pool을 열고 준비될 때까지 기다린다."""
@@ -151,7 +160,7 @@ class PostgresAgentJobRepository:
         memo: str | None,
         request_id: str,
     ) -> SubmittedSourceJob:
-        """클리핑 원본과 Wiki Build Job을 저장하고 조회 가능한 결과를 반환한다."""
+        """클리핑 원본과 즉시 실행 가능한 Wiki Build Job을 저장한다."""
         async with self._pool.connection() as connection:
             async with connection.transaction():
                 await set_personal_wiki_scope(connection, user_id=user_id)
@@ -170,7 +179,7 @@ class PostgresAgentJobRepository:
                     occurred_at=occurred_at,
                     memo=memo,
                     request_id=request_id,
-                    quiet_minutes=self._wiki_build_quiet_minutes,
+                    quiet_minutes=INTERACTIVE_WIKI_BUILD_QUIET_MINUTES,
                     max_wait_minutes=self._wiki_build_max_wait_minutes,
                 )
                 stored = await get_agent_job(connection, job_id=saved.job_id)
@@ -262,7 +271,7 @@ class PostgresAgentJobRepository:
         memo: str | None,
         request_id: str,
     ) -> SubmittedSourceJob:
-        """북마크한 리포트 원본과 Wiki Build Job을 저장하고 조회 가능한 결과를 반환한다.
+        """북마크한 리포트 원본과 즉시 실행 가능한 Wiki Build Job을 저장한다.
 
         대상 리포트는 작성자와 무관하게 조회해야 하므로(내 것/피드의 남의 것 모두
         같은 경로) 이 트랜잭션은 system scope로 실행한다. RLS의 사용자 격리를
@@ -281,7 +290,7 @@ class PostgresAgentJobRepository:
                     occurred_at=occurred_at,
                     memo=memo,
                     request_id=request_id,
-                    quiet_minutes=self._wiki_build_quiet_minutes,
+                    quiet_minutes=INTERACTIVE_WIKI_BUILD_QUIET_MINUTES,
                     max_wait_minutes=self._wiki_build_max_wait_minutes,
                 )
                 stored = await get_agent_job(connection, job_id=saved.job_id)
@@ -317,6 +326,9 @@ class PostgresAgentJobRepository:
                     occurred_at=occurred_at,
                     memo=memo,
                     request_id=request_id,
+                    maintenance_pipeline_version=(
+                        self._wiki_maintenance_pipeline_version
+                    ),
                 )
                 stored = await get_agent_job(connection, job_id=saved.job_id)
                 if stored is None:
@@ -455,6 +467,7 @@ class PostgresAgentJobRepository:
         interest_id: str | None = None,
         content_type: str,
         report_type: str = "",
+        briefing_date: date | None = None,
         language: str | None,
         scheduled_at: datetime | None = None,
         request_id: str,
@@ -475,11 +488,13 @@ class PostgresAgentJobRepository:
                     interest_id=interest_id,
                     content_type=content_type,
                     report_type=report_type,
+                    briefing_date=briefing_date,
                     language=language,
                     scheduled_at=scheduled_at,
                     change_history_enabled=change_history_enabled,
                     execution_mode=execution_mode,
                     request_id=request_id,
+                    read_pipeline_version=self._wiki_read_pipeline_version,
                 )
                 stored = await get_agent_job(connection, job_id=submitted.job_id)
                 if stored is None:
@@ -498,6 +513,34 @@ class PostgresAgentJobRepository:
                 await set_system_job_scope(connection)
                 stored = await get_agent_job(connection, job_id=job_id)
         return self._to_job_record(stored) if stored is not None else None
+
+    async def submit_briefing_preparation(
+        self,
+        *,
+        user_id: str,
+        briefing_date: date,
+        idempotency_key: str,
+        limit: int,
+        request_id: str,
+    ) -> AgentJobRecord:
+        """브리핑 준비 Job을 저장하고 현재 Job 상태를 반환한다."""
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                await set_personal_wiki_scope(connection, user_id=user_id)
+                job_id = await enqueue_briefing_preparation_job(
+                    connection,
+                    user_id=user_id,
+                    briefing_date=briefing_date,
+                    idempotency_key=idempotency_key,
+                    limit=limit,
+                    request_id=request_id,
+                )
+                stored = await get_agent_job(connection, job_id=job_id)
+                if stored is None:
+                    raise RuntimeError(
+                        f"저장한 브리핑 준비 Job을 찾을 수 없습니다: {job_id}"
+                    )
+        return self._to_job_record(stored)
 
     async def get_jobs(self, job_ids: list[str]) -> list[AgentJobRecord]:
         """시스템 Scope로 여러 Agent Job 상태를 단일 조회한다."""
@@ -544,8 +587,9 @@ class PostgresAgentJobRepository:
         markdown: str,
         resolved_url: str,
         published_at: datetime | None,
+        image_url: str | None = None,
     ) -> dict[str, object]:
-        """Jina 결과를 원본 Version으로 저장하고 후속 Wiki Job을 등록한다."""
+        """Jina 결과를 저장하고 즉시 실행 가능한 후속 Wiki Job을 등록한다."""
         source_document_id = str(job.payload.get("source_document_id") or "")
         source_event_id = str(job.payload.get("source_event_id") or "")
         source_event_row_id = str(job.payload.get("source_event_row_id") or "")
@@ -563,8 +607,9 @@ class PostgresAgentJobRepository:
                     title=title,
                     markdown=markdown,
                     resolved_url=resolved_url,
+                    image_url=image_url,
                     published_at=published_at,
-                    quiet_minutes=self._wiki_build_quiet_minutes,
+                    quiet_minutes=INTERACTIVE_WIKI_BUILD_QUIET_MINUTES,
                     max_wait_minutes=self._wiki_build_max_wait_minutes,
                 )
 

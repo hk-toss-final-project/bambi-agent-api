@@ -14,6 +14,7 @@ from app.logging_config import configure_logging
 from workers.api import (
     consume_openai_batches,
     run_global_content_fetch_batch,
+    run_briefing_preparation_batch,
     run_url_collection_batch,
     run_openai_batch_cycle,
     worker_001,
@@ -21,6 +22,9 @@ from workers.api import (
     worker_003,
 )
 from workers.runtime.api import ProviderRateLimitPolicy, wc_001
+
+DEFAULT_WORKER_INTERVAL_SECONDS = 60
+INTERACTIVE_WORKER_INTERVAL_SECONDS = 5
 
 
 def _openai_rate_policy(
@@ -50,6 +54,7 @@ def _parse_args() -> argparse.Namespace:
             "personal-wiki",
             "url-collection",
             "report-generation",
+            "briefing-preparation",
             "global-collector",
             "global-content",
             "openai-batch",
@@ -107,10 +112,22 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--interval-seconds",
         type=int,
-        default=60,
-        help="상주 모드에서 처리할 Job이 없을 때 다음 확인까지 대기 초",
+        help=(
+            "상주 모드에서 처리할 Job이 없을 때 다음 확인까지 대기 초 "
+            "(기본: Wiki·URL 5초, 나머지 60초)"
+        ),
     )
     return parser.parse_args()
+
+
+def _worker_interval_seconds(args: argparse.Namespace) -> int:
+    """Worker 종류와 명시 옵션으로 빈 Queue 재조회 간격을 결정한다."""
+    configured = getattr(args, "interval_seconds", None)
+    if configured is not None:
+        return int(configured)
+    if args.worker in ("personal-wiki", "url-collection"):
+        return INTERACTIVE_WORKER_INTERVAL_SECONDS
+    return DEFAULT_WORKER_INTERVAL_SECONDS
 
 
 async def _run_batch_once(
@@ -171,7 +188,10 @@ async def _run_batch_once(
         return await run_url_collection_batch(
             database_url=settings.agent_database_url,
             worker_id=worker_id,
-            limit=args.limit or settings.personal_wiki_worker_batch_size,
+            limit=args.limit or settings.url_collection_worker_batch_size,
+            concurrency=(
+                args.concurrency or settings.url_collection_job_concurrency
+            ),
             lease_seconds=(
                 args.lease_seconds or settings.personal_wiki_job_lease_seconds
             ),
@@ -181,7 +201,7 @@ async def _run_batch_once(
         return await worker_003(
             database_url=settings.agent_database_url,
             worker_id=worker_id,
-            limit=args.limit or settings.personal_wiki_worker_batch_size,
+            limit=args.limit or settings.report_worker_batch_size,
             concurrency=args.concurrency or settings.report_job_concurrency,
             lease_seconds=(
                 args.lease_seconds or settings.personal_wiki_job_lease_seconds
@@ -192,6 +212,24 @@ async def _run_batch_once(
                 model=model,
                 estimated_requests=settings.report_openai_requests_per_job,
                 estimated_tokens=settings.report_openai_tokens_per_job,
+            ),
+        )
+    if args.worker == "briefing-preparation":
+        model = args.model or settings.report_llm_model
+        return await run_briefing_preparation_batch(
+            database_url=settings.agent_database_url,
+            worker_id=worker_id,
+            limit=args.limit or settings.briefing_worker_batch_size,
+            concurrency=args.concurrency or settings.briefing_job_concurrency,
+            lease_seconds=(
+                args.lease_seconds or settings.personal_wiki_job_lease_seconds
+            ),
+            model=model,
+            rate_limit_policy=_openai_rate_policy(
+                settings,
+                model=model,
+                estimated_requests=settings.briefing_openai_requests_per_job,
+                estimated_tokens=settings.briefing_openai_tokens_per_job,
             ),
         )
     model = args.model or settings.wiki_llm_model
@@ -224,6 +262,7 @@ async def _run() -> None:
     """
     args = _parse_args()
     settings = load_settings()
+    interval_seconds = _worker_interval_seconds(args)
     # Worker는 FastAPI 앱을 만들지 않으므로 로깅을 여기서 직접 구성한다. 없으면
     # root에 핸들러가 없어 agent.*·workers.* 로거 출력이 통째로 버려진다
     # (2026-08-05 실측: 배포 Worker stdout에 logger 라인 0건. print만 보였다).
@@ -254,7 +293,7 @@ async def _run() -> None:
         await consume_openai_batches(
             database_url=settings.agent_database_url,
             api_key=settings.openai_api_key.get_secret_value(),
-            interval_seconds=args.interval_seconds,
+            interval_seconds=interval_seconds,
             max_cycles=None,
             max_items=settings.openai_batch_max_items,
             max_submissions=settings.openai_batch_max_submissions,
@@ -271,7 +310,7 @@ async def _run() -> None:
         await wc_001(
             database_url=settings.agent_database_url,
             worker_id=worker_id,
-            limit=args.limit or settings.personal_wiki_worker_batch_size,
+            limit=args.limit or settings.report_worker_batch_size,
             concurrency=args.concurrency or settings.report_job_concurrency,
             lease_seconds=(
                 args.lease_seconds or settings.personal_wiki_job_lease_seconds
@@ -283,9 +322,32 @@ async def _run() -> None:
                 estimated_requests=settings.report_openai_requests_per_job,
                 estimated_tokens=settings.report_openai_tokens_per_job,
             ),
-            interval_seconds=args.interval_seconds,
+            interval_seconds=interval_seconds,
             max_batches=None,
             job_type="report_generation",
+            on_batch=on_batch,
+        )
+        return
+    if args.worker == "briefing-preparation":
+        model = args.model or settings.report_llm_model
+        await wc_001(
+            database_url=settings.agent_database_url,
+            worker_id=worker_id,
+            limit=args.limit or settings.briefing_worker_batch_size,
+            concurrency=args.concurrency or settings.briefing_job_concurrency,
+            lease_seconds=(
+                args.lease_seconds or settings.personal_wiki_job_lease_seconds
+            ),
+            model=model,
+            rate_limit_policy=_openai_rate_policy(
+                settings,
+                model=model,
+                estimated_requests=settings.briefing_openai_requests_per_job,
+                estimated_tokens=settings.briefing_openai_tokens_per_job,
+            ),
+            interval_seconds=interval_seconds,
+            max_batches=None,
+            job_type="briefing_preparation",
             on_batch=on_batch,
         )
         return
@@ -293,11 +355,14 @@ async def _run() -> None:
         await wc_001(
             database_url=settings.agent_database_url,
             worker_id=worker_id,
-            limit=args.limit or settings.personal_wiki_worker_batch_size,
+            limit=args.limit or settings.url_collection_worker_batch_size,
+            concurrency=(
+                args.concurrency or settings.url_collection_job_concurrency
+            ),
             lease_seconds=(
                 args.lease_seconds or settings.personal_wiki_job_lease_seconds
             ),
-            interval_seconds=args.interval_seconds,
+            interval_seconds=interval_seconds,
             max_batches=None,
             job_type="personal_wiki_url",
             on_batch=on_batch,
@@ -318,7 +383,7 @@ async def _run() -> None:
             estimated_tokens=settings.wiki_openai_tokens_per_job,
         ),
         embedding_batch_threshold=settings.wiki_embedding_batch_threshold,
-        interval_seconds=args.interval_seconds,
+        interval_seconds=interval_seconds,
         max_batches=None,
         job_type="personal_wiki_build",
         on_batch=on_batch,

@@ -273,10 +273,20 @@ def _stub_maintenance(
         return users
 
     async def fake_enqueue(
-        connection: object, *, user_id: str, maintenance_key: str
+        connection: object,
+        *,
+        user_id: str,
+        maintenance_key: str,
+        maintenance_pipeline_version: str,
     ) -> Any:
         """등록 인자를 기록하고 고정 등록 결과를 반환한다."""
-        calls["enqueue"].append({"user_id": user_id, "key": maintenance_key})
+        calls["enqueue"].append(
+            {
+                "user_id": user_id,
+                "key": maintenance_key,
+                "version": maintenance_pipeline_version,
+            }
+        )
         result = (enqueued or {}).get(user_id)
         if isinstance(result, Exception):
             raise result
@@ -310,6 +320,24 @@ def test_maintenance_rebuild_enqueues_for_each_stale_user(
     assert results[0].job_id == "job-user-1"
     # 같은 날 등록은 같은 주기 키를 써서 멱등하게 겹쳐야 한다.
     assert {call["key"] for call in calls["enqueue"]} == {"2026-08-10"}
+    assert {call["version"] for call in calls["enqueue"]} == {"legacy_v1"}
+
+
+def test_maintenance_rebuild_pins_selected_pipeline_version(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """정기 유지 Job은 Scheduler가 선택한 실행 버전을 등록 시점에 고정한다."""
+    calls = _stub_maintenance(monkeypatch, users=["user-1"])
+
+    asyncio.run(
+        wiki_scheduler.schedule_personal_wiki_maintenance_rebuilds(
+            object(),  # type: ignore[arg-type]
+            now=datetime(2026, 8, 10, 3, 0, tzinfo=UTC),
+            maintenance_pipeline_version="langgraph_v2",
+        )
+    )
+
+    assert calls["enqueue"][0]["version"] == "langgraph_v2"
 
 
 def test_maintenance_rebuild_reports_existing_job(
