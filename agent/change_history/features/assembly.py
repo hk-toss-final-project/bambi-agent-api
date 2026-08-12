@@ -8,9 +8,9 @@
 보고서 그대로 + 달라진 점 하이라이트다. 그래서 title·summary는 이번 보고서
 전체의 제목과 한 줄 결론이고, 본문은 네 섹션 순서로 구성된다.
 
-    1. 이번에 달라진 점  — 신규·갱신 팩트만, before → after 비교
-    2. 핵심 요약·맥락    — Compose가 신규·갱신·유지 전체로 쓴 종합 요약
-    3. 주목할 점         — 앞으로 확인할 지표·리스크(행동 지시 아님)
+    1. 변경사항           — 신규·갱신 팩트만, before → after 비교
+    2. 내용               — Compose가 신규·갱신·유지 전체로 쓴 종합 요약
+    3. 시사점             — 앞으로 확인할 지표·리스크(행동 지시 아님)
     4. 타임라인          — 확정 가능한 날짜가 있을 때만 노출
 
 장식 기호(이모지)는 쓰지 않는다.
@@ -37,16 +37,16 @@ from .validation import ValidatedFact
 # 셋을 함께 유지해야 한다(P=개인 Wiki, G=Global, L=실시간).
 _CITATION_REF = re.compile(r"\[([PGL]\d+)\]")
 
-UPDATES_HEADING = "## 이번에 달라진 점"
-OVERVIEW_HEADING = "## 보고서 내용"
-IMPLICATIONS_HEADING = "## 주목할 점"
+UPDATES_HEADING = "## 변경사항"
+OVERVIEW_HEADING = "## 내용"
+IMPLICATIONS_HEADING = "## 시사점"
 TIMELINE_HEADING = "## 타임라인"
 
-# "이번에 달라진 점" 안을 성격별로 나누는 소제목. 갱신과 신규를 한 목록에 섞으면
+# "변경사항" 안을 성격별로 나누는 소제목. 갱신과 신규를 한 목록에 섞으면
 # "무엇이 달라졌나"가 눈에 들어오지 않는다 — 이 기능의 존재 이유가 그것이므로
 # 섹션부터 갈라 놓는다. 소비하는 쪽(웹 화면·풀스택)도 이 소제목으로 구분한다.
-CHANGED_SUBHEADING = "### 달라진 사실"
-NEW_SUBHEADING = "### 새로 확인된 사실"
+CHANGED_SUBHEADING = "### 변경된 사실"
+NEW_SUBHEADING = "### 새롭게 확인된 사실"
 
 NO_CHANGE_NOTICE = "직전 보고서 이후 새로 확인되거나 달라진 내용이 없습니다."
 NO_WATCH_ITEMS_NOTICE = "이번에 특별히 주목할 사항은 없습니다."

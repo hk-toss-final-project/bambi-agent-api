@@ -341,6 +341,6 @@ def test_fresh_facts_capped_at_five() -> None:
         impact=_impact(),
         contexts=CONTEXTS,
     )
-    assert "새로 확인된 사실 (5건)" in content.body
+    assert f"{NEW_SUBHEADING} (5건)" in content.body
     assert "새로운 사실 4" in content.body
     assert "새로운 사실 5" not in content.body

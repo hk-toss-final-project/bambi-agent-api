@@ -22,11 +22,11 @@ MARKDOWN = """## Overview
 
 ## 🔥 주요 업데이트
 
-### 🔁 달라진 사실 (1건)
+### 🔁 변경된 사실 (1건)
 
 - **B사 HBM4 · 양산 일정** — `2026-2Q` → `2026-3Q` [G1]
 
-### 🆕 새로 확인된 사실 (1건)
+### 🆕 새롭게 확인된 사실 (1건)
 
 - **원달러 환율 · 환율 수준** — `1450원 돌파` [G2]
 
@@ -95,8 +95,8 @@ def test_changed_and_new_subsections_render_with_distinct_styles() -> None:
 
     rendered = _render_section("🔥 주요 업데이트", updates)
 
-    assert '<h3 class="changed">🔁 달라진 사실 (1건)</h3>' in rendered
-    assert '<h3 class="fresh">🆕 새로 확인된 사실 (1건)</h3>' in rendered
+    assert '<h3 class="changed">🔁 변경된 사실 (1건)</h3>' in rendered
+    assert '<h3 class="fresh">🆕 새롭게 확인된 사실 (1건)</h3>' in rendered
     # 갱신은 이전/오늘 대비로, 신규는 오늘 값 하나로 강조한다.
     assert '<span class="before">2026-2Q</span>' in rendered
     assert '<span class="after">2026-3Q</span>' in rendered

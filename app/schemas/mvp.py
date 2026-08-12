@@ -682,7 +682,7 @@ class PublishSnapshotResponse(ImmutableSchema):
         default=False,
         description=(
             "생성 요청의 `change_history_enabled` 토글을 그대로 돌려준다. "
-            "true면 body가 '이번에 달라진 점 → 보고서 내용 → 주목할 점 → "
+            "true면 body가 '변경사항 → 내용 → 시사점 → "
             "타임라인' 4단 구조를 따르며, 갱신 팩트는 `- (기존) ~~값~~` / "
             "`  (변경) \\`값\\`` 두 줄로, 신규 팩트는 `- 문장 [L1]` 한 줄로 나온다. "
             "false면 지금까지와 같은 자유 형식 본문이다. Service는 이 값으로 "

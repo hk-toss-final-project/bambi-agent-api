@@ -213,13 +213,13 @@ def _render_section(title: str, body: str) -> str:
             continue
         subsection = _SUBSECTION_PATTERN.match(trimmed)
         if subsection:
-            kind = "changed" if "달라진" in subsection.group(1) else "fresh"
+            kind = "changed" if ("변경된" in subsection.group(1) or "달라진" in subsection.group(1)) else "fresh"
             parts.append(
                 f'    <h3 class="{kind}">{html.escape(subsection.group(1))}</h3>'
             )
             continue
-        # 보고서 내용 또는 주목할 점 섹션의 본문 문장 개행 (출처 마커까지 포함하여 분리)
-        if ("주목" in title or "보고서" in title) and not trimmed.startswith("-"):
+        # 보고서 내용/내용 또는 주목할 점/시사점 섹션의 본문 문장 개행 (출처 마커까지 포함하여 분리)
+        if ("시사점" in title or "내용" in title or "주목" in title or "보고서" in title) and not trimmed.startswith("-"):
             sentences = _split_into_sentences_with_citations(trimmed)
             for sent in sentences:
                 parts.append(f"    <p style='margin: 0.65rem 0;'>{_render_line(sent)}</p>")
