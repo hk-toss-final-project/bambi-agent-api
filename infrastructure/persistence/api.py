@@ -102,6 +102,7 @@ from .features.jobs import (
     get_agent_job,
     get_agent_jobs,
     list_runnable_agent_jobs,
+    reap_stalled_agent_jobs,
     release_user_wiki_build_jobs,
     set_system_job_scope,
 )

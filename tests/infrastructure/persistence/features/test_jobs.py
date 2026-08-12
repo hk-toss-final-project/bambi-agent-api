@@ -24,6 +24,7 @@ from infrastructure.persistence.features.jobs import (
     extend_agent_job_lease,
     fail_agent_job,
     get_agent_jobs,
+    reap_stalled_agent_jobs,
     release_user_wiki_build_jobs,
 )
 
@@ -695,3 +696,67 @@ def test_complete_waiting_provider_job_finishes_without_worker_lease() -> None:
     assert "status = 'completed'" in sql
     assert "status = 'waiting_provider'" in sql
     assert params[2] == "user-1"
+
+
+def test_reap_stalled_agent_jobs_marks_exhausted_running_job_failed() -> None:
+    """[JOB-009] 시도를 다 쓴 채 Lease가 만료된 running Job을 failed로 마감한다."""
+    connection = _FakeConnection(
+        [
+            [
+                {
+                    "id": "job-1",
+                    "attempt_count": 3,
+                    "max_attempts": 3,
+                    "lease_expires_at": datetime(2026, 8, 12, 0, 38, tzinfo=UTC),
+                }
+            ],
+            [{"id": "job-1"}],
+            [],
+            [],
+        ]
+    )
+
+    reaped = asyncio.run(reap_stalled_agent_jobs(connection, limit=20))  # type: ignore[arg-type]
+
+    assert reaped == ["job-1"]
+    select_sql = connection.executed[0][0]
+    assert "FOR UPDATE SKIP LOCKED" in select_sql
+    assert "attempt_count >= max_attempts" in select_sql
+    fail_sql, fail_params = connection.executed[1]
+    assert "status = 'failed'" in fail_sql
+    assert "WHERE id = %s AND status = 'running'" in fail_sql
+    assert fail_params[-1] == "job-1"
+    attempt_sql = connection.executed[2][0]
+    assert "agent.agent_job_attempts" in attempt_sql
+    event_sql = connection.executed[3][0]
+    assert "agent.wiki_source_events" in event_sql
+
+
+def test_reap_stalled_agent_jobs_skips_when_lease_already_reclaimed() -> None:
+    """다른 Worker가 그사이 다시 집었으면(RETURNING 없음) 후속 정리를 건너뛴다."""
+    connection = _FakeConnection(
+        [
+            [
+                {
+                    "id": "job-1",
+                    "attempt_count": 3,
+                    "max_attempts": 3,
+                    "lease_expires_at": datetime(2026, 8, 12, 0, 38, tzinfo=UTC),
+                }
+            ],
+            [],
+        ]
+    )
+
+    reaped = asyncio.run(reap_stalled_agent_jobs(connection, limit=20))  # type: ignore[arg-type]
+
+    assert reaped == []
+    assert len(connection.executed) == 2
+
+
+def test_reap_stalled_agent_jobs_validates_limit() -> None:
+    """회수 Batch 크기를 DB 호출 전에 검증한다."""
+    connection = _FakeConnection([])
+
+    with pytest.raises(ValueError, match="limit"):
+        asyncio.run(reap_stalled_agent_jobs(connection, limit=0))  # type: ignore[arg-type]

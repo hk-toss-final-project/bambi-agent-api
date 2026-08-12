@@ -308,6 +308,16 @@ class Settings(BaseModel):
             "비용이 크므로 관심사 재계산보다 훨씬 드물게 돈다"
         ),
     )
+    stalled_job_reap_limit: int = Field(
+        default=20,
+        ge=0,
+        le=100,
+        description=(
+            "Scheduler tick마다 강제 회수할, 시도를 다 쓴 채 Lease가 만료된 "
+            "running Job 수 (0이면 끔). claim_runnable_agent_jobs는 이런 Job을 "
+            "다시 집지 못해 화면에 '생성 중'이 영구히 멈춰 보이는 문제(JOB-009)를 막는다"
+        ),
+    )
 
     @property
     def dev_agent_api_enabled(self) -> bool:
@@ -475,4 +485,5 @@ def load_settings() -> Settings:
         maintenance_rebuild_stale_hours=_float_env(
             "MAINTENANCE_REBUILD_STALE_HOURS", 168.0
         ),
+        stalled_job_reap_limit=_integer_env("STALLED_JOB_REAP_LIMIT", 20),
     )

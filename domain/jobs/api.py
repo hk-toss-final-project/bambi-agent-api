@@ -8,7 +8,7 @@ from .features.retries import job_005, job_012
 from .features.progress import job_006
 from .features.results import job_007
 from .features.logs import job_008
-from .features.timeout import job_009
+from .features.timeout import AgentJobLeaseSnapshot, job_009
 from .features.idempotency import job_010
 from .features.priority import job_011
 

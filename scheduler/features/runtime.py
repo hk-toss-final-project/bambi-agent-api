@@ -32,6 +32,7 @@ from infrastructure.persistence.api import (
     claim_runnable_agent_jobs,
     complete_agent_job,
     fail_agent_job,
+    reap_stalled_agent_jobs,
     set_system_job_scope,
 )
 from .collection import (
@@ -85,6 +86,10 @@ MANUAL_COLLECTION_JOB_TYPE = "global_collection_run"
 
 # 수동 실행 Job 처리 단계를 결과 목록에서 가리키는 이름.
 MANUAL_RUN_STEP = "manual-collection-run"
+
+# 시도를 다 쓴 채 Lease가 만료된 running Job 회수(JOB-009) 단계를 결과
+# 목록에서 가리키는 이름.
+STALLED_JOB_REAP_STEP = "stalled-job-reap"
 
 
 def _summarize_manual_run(
@@ -157,6 +162,9 @@ class CollectionScheduler:
     maintenance_rebuild_stale_hours: float = 168.0
     # 새 유지보수 Job에 접수 시점 고정할 실행 버전.
     maintenance_pipeline_version: str = "legacy_v1"
+    # tick마다 강제 회수할, 시도를 다 쓴 채 Lease가 만료된 running Job 수.
+    # 0이면 회수 단계를 건너뛴다.
+    stalled_job_reap_limit: int = 0
 
     async def run_once(
         self, *, now: datetime | None = None, force: bool = False
@@ -177,6 +185,7 @@ class CollectionScheduler:
         moment = now or datetime.now(UTC)
         results: list[CollectionScheduleResult] = []
         results.extend(await self.drain_manual_collection_runs(now=moment))
+        results.extend(await self.reap_stalled_jobs())
         connection: AsyncConnection[DictRow] = await AsyncConnection.connect(
             self.database_url,
             row_factory=dict_row,
@@ -212,6 +221,53 @@ class CollectionScheduler:
         results.extend(await self.enqueue_maintenance_rebuilds(now=moment))
         results.extend(await self.fetch_pending_content())
         return results
+
+    async def reap_stalled_jobs(self) -> list[CollectionScheduleResult]:
+        """시도를 다 쓴 채 Lease가 만료된 running Job을 강제로 failed 처리한다(JOB-009).
+
+        claim_runnable_agent_jobs는 attempt_count < max_attempts인 Job만
+        다시 집으므로, 마지막 시도의 Worker가 죽거나 Heartbeat 연장에
+        실패하면 그 Job은 아무도 회수하지 못하고 running으로 영구히 남는다
+        — 화면에는 "생성 중"이 멈춰 보인다. 이 단계의 실패는 다음 tick에서
+        다시 시도하며 수집 tick을 멈추지 않는다.
+
+        Returns:
+            회수한 Job이 있으면 결과 한 건, 없으면 빈 목록
+        """
+        if self.stalled_job_reap_limit <= 0:
+            return []
+        connection: AsyncConnection[DictRow] = await AsyncConnection.connect(
+            self.database_url,
+            row_factory=dict_row,
+        )
+        try:
+            async with connection.transaction():
+                await set_system_job_scope(connection)
+                reaped = await reap_stalled_agent_jobs(
+                    connection,
+                    limit=self.stalled_job_reap_limit,
+                )
+        except Exception as error:  # noqa: BLE001 - 다음 tick에서 다시 시도한다
+            return [
+                CollectionScheduleResult(
+                    provider=STALLED_JOB_REAP_STEP,
+                    source_key=None,
+                    status="skipped",
+                    reason=f"Job 회수 실패: {error}",
+                )
+            ]
+        finally:
+            await connection.close()
+        if not reaped:
+            return []
+        return [
+            CollectionScheduleResult(
+                provider=STALLED_JOB_REAP_STEP,
+                source_key=None,
+                status="completed",
+                results=[{"job_id": job_id} for job_id in reaped],
+            )
+        ]
 
     async def enqueue_maintenance_rebuilds(
         self, *, now: datetime | None = None
@@ -549,6 +605,7 @@ def build_scheduler(settings: Settings | None = None) -> CollectionScheduler:
         maintenance_rebuild_limit=resolved.maintenance_rebuild_limit,
         maintenance_rebuild_stale_hours=resolved.maintenance_rebuild_stale_hours,
         maintenance_pipeline_version=resolved.wiki_maintenance_pipeline_version,
+        stalled_job_reap_limit=resolved.stalled_job_reap_limit,
     )
 
 

@@ -32,6 +32,7 @@ from .features.wiki import (
 from .features.runtime import (
     CONTENT_FETCH_STEP,
     PROVIDER_SCHEDULES,
+    STALLED_JOB_REAP_STEP,
     CollectionScheduler,
     build_collection_credentials,
     build_scheduler,
@@ -57,6 +58,7 @@ __all__ = [
     "CONTENT_FETCH_STEP",
     "PROVIDER_SCHEDULES",
     "SCHEDULED_PROVIDERS",
+    "STALLED_JOB_REAP_STEP",
     "CollectionCredentials",
     "CollectionQuery",
     "CollectionScheduleResult",

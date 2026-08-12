@@ -612,6 +612,88 @@ def test_run_once_enqueues_maintenance_rebuilds(
     assert step.results[0]["job_id"] == "job-1"
 
 
+def _patch_reap_stalled_jobs(
+    monkeypatch: pytest.MonkeyPatch, result: list[str] | Exception
+) -> list[dict[str, Any]]:
+    """JOB-009 회수 호출 인자를 기록하고 고정 결과를 돌려주도록 교체한다."""
+    calls: list[dict[str, Any]] = []
+
+    async def _fake_reap(_connection: Any, **kwargs: Any) -> list[str]:
+        """회수 호출 인자를 기록하고 고정 결과를 돌려준다."""
+        calls.append(kwargs)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(runtime, "reap_stalled_agent_jobs", _fake_reap)
+    return calls
+
+
+def test_run_once_reaps_stalled_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """tick이 시도를 다 쓴 채 Lease가 만료된 running Job을 회수하는지 검증한다(JOB-009).
+
+    claim_runnable_agent_jobs는 attempt_count < max_attempts인 Job만 다시
+    집으므로, 이 단계가 없으면 그런 Job이 화면에 "생성 중"으로 영구히 멈춰
+    보인다.
+    """
+    connection = _FakeConnection()
+    _patch_connection(monkeypatch, connection)
+    _patch_content_fetch(monkeypatch)
+    calls = _patch_reap_stalled_jobs(monkeypatch, ["job-1"])
+    monkeypatch.setattr(runtime, "PROVIDER_SCHEDULES", {"naver": _completed("naver")})
+
+    settings = _settings(stalled_job_reap_limit=15)
+    results = asyncio.run(build_scheduler(settings).run_once(now=_NOW))
+
+    assert calls == [{"limit": 15}]
+    step = next(
+        item for item in results if item.provider == runtime.STALLED_JOB_REAP_STEP
+    )
+    assert step.status == "completed"
+    assert step.results[0]["job_id"] == "job-1"
+
+
+def test_run_once_skips_stalled_job_reap_when_limit_is_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """limit이 0이면 회수 단계를 아예 건너뛰는지 검증한다."""
+    connection = _FakeConnection()
+    _patch_connection(monkeypatch, connection)
+    _patch_content_fetch(monkeypatch)
+    calls = _patch_reap_stalled_jobs(monkeypatch, [])
+    monkeypatch.setattr(runtime, "PROVIDER_SCHEDULES", {"naver": _completed("naver")})
+
+    settings = _settings(stalled_job_reap_limit=0)
+    results = asyncio.run(build_scheduler(settings).run_once(now=_NOW))
+
+    assert calls == []
+    assert not any(
+        item.provider == runtime.STALLED_JOB_REAP_STEP for item in results
+    )
+
+
+def test_run_once_isolates_stalled_job_reap_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """회수 실패가 다른 tick 단계를 막지 않는지 검증한다."""
+    connection = _FakeConnection()
+    _patch_connection(monkeypatch, connection)
+    _patch_content_fetch(monkeypatch)
+    _patch_reap_stalled_jobs(monkeypatch, RuntimeError("Job 회수 DB 장애"))
+    monkeypatch.setattr(runtime, "PROVIDER_SCHEDULES", {"naver": _completed("naver")})
+
+    settings = _settings(stalled_job_reap_limit=15)
+    results = asyncio.run(build_scheduler(settings).run_once(now=_NOW))
+
+    naver = next(item for item in results if item.provider == "naver")
+    assert naver.status == "completed"
+    step = next(
+        item for item in results if item.provider == runtime.STALLED_JOB_REAP_STEP
+    )
+    assert step.status == "skipped"
+    assert "Job 회수 DB 장애" in (step.reason or "")
+
+
 def test_run_once_skips_maintenance_rebuild_when_limit_is_zero(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

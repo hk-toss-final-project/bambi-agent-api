@@ -13,8 +13,16 @@ from uuid import uuid4
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
-from domain.jobs.api import job_001, job_006, job_010
+from domain.jobs.api import AgentJobLeaseSnapshot, job_001, job_006, job_009, job_010
 from domain.personal_wiki.source_events.api import wse_013
+
+# JOB-009 회수가 남기는 실패 사유. Worker 쪽 실패(fail_agent_job)와 구분해
+# "누가 실패시켰는지"를 감사 추적에서 바로 알 수 있게 한다.
+LEASE_TIMEOUT_ERROR_CODE = "lease_timeout_attempts_exhausted"
+LEASE_TIMEOUT_ERROR_MESSAGE = (
+    "Lease가 만료됐지만 시도를 다 써서 아무도 다시 집지 못한 채 running으로 "
+    "남아 있었습니다. Scheduler가 JOB-009로 회수해 failed로 마감했습니다."
+)
 
 type DictRow = dict[str, Any]
 
@@ -277,6 +285,108 @@ async def claim_runnable_agent_jobs(
             (job.job_id,),
         )
     return jobs
+
+
+async def reap_stalled_agent_jobs(
+    connection: AsyncConnection[DictRow],
+    *,
+    limit: int,
+) -> list[str]:
+    """[JOB-009] 시도를 다 쓴 채 Lease가 만료된 running Job을 failed로 회수한다.
+
+    claim_runnable_agent_jobs는 attempt_count < max_attempts인 Job만 다시
+    집으므로, 마지막 시도의 Worker가 죽거나 Heartbeat 연장에 실패해 Lease가
+    끊긴 Job은 이 조건 밖으로 밀려나 아무도 회수하지 못하고 running으로
+    영구히 남는다 — 화면에는 "생성 중"이 멈춰 보인다. Scheduler tick이 이
+    함수를 주기 호출해 그런 Job을 찾아 마감한다.
+
+    후보는 SKIP LOCKED로 잠가 다른 Scheduler·Worker와 겹치지 않게 하고,
+    job_009 판정으로 최종 확정한 뒤 Job·Attempt·연결된 wiki_source_events를
+    함께 실패로 정리한다. Worker Lease 소유권(locked_by)이 이미 사라진
+    Job이라 fail_agent_job과 달리 소유권 확인 없이 status로만 조건을 건다.
+
+    Args:
+        connection: 시스템 Scope가 설정된 DB 연결
+        limit: 한 번에 회수할 최대 Job 수
+
+    Returns:
+        회수해 failed로 마감한 Job ID 목록
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("JOB-009 회수 limit은 1에서 100 사이여야 합니다.")
+    cursor = await connection.execute(
+        """
+        SELECT id, attempt_count, max_attempts, lease_expires_at
+        FROM agent.agent_jobs
+        WHERE status = 'running'
+          AND lease_expires_at IS NOT NULL
+          AND lease_expires_at < clock_timestamp()
+          AND attempt_count >= max_attempts
+        ORDER BY lease_expires_at
+        FOR UPDATE SKIP LOCKED
+        LIMIT %s
+        """,
+        (limit,),
+    )
+    candidates = await cursor.fetchall()
+    now = datetime.now(UTC)
+    reaped_ids: list[str] = []
+    for row in candidates:
+        snapshot = AgentJobLeaseSnapshot(
+            status="running",
+            attempt_count=int(row["attempt_count"]),
+            max_attempts=int(row["max_attempts"]),
+            lease_expires_at=row["lease_expires_at"],
+        )
+        if not await job_009(snapshot, now=now):
+            continue
+        job_id = str(row["id"])
+        fail_cursor = await connection.execute(
+            """
+            UPDATE agent.agent_jobs
+            SET
+                status = 'failed',
+                error_code = %s,
+                error_message = %s,
+                retryable = false,
+                completed_at = clock_timestamp(),
+                updated_at = clock_timestamp(),
+                locked_at = NULL,
+                locked_by = NULL,
+                lease_expires_at = NULL
+            WHERE id = %s AND status = 'running'
+            RETURNING id
+            """,
+            (LEASE_TIMEOUT_ERROR_CODE, LEASE_TIMEOUT_ERROR_MESSAGE, job_id),
+        )
+        if await fail_cursor.fetchone() is None:
+            continue
+        await connection.execute(
+            """
+            UPDATE agent.agent_job_attempts
+            SET
+                status = 'failed',
+                error_code = %s,
+                error_message = %s,
+                completed_at = clock_timestamp()
+            WHERE job_id = %s AND status = 'running'
+            """,
+            (LEASE_TIMEOUT_ERROR_CODE, LEASE_TIMEOUT_ERROR_MESSAGE, job_id),
+        )
+        await connection.execute(
+            """
+            UPDATE agent.wiki_source_events
+            SET
+                status = 'failed',
+                error_code = %s,
+                error_message = %s,
+                processed_at = clock_timestamp()
+            WHERE job_id = %s
+            """,
+            (LEASE_TIMEOUT_ERROR_CODE, LEASE_TIMEOUT_ERROR_MESSAGE, job_id),
+        )
+        reaped_ids.append(job_id)
+    return reaped_ids
 
 
 async def claim_personal_wiki_jobs(
