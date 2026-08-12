@@ -493,11 +493,19 @@ async def load_navigation_snapshot_packet(
         for raw in raw_pages
         if isinstance(raw, Mapping)
     }
-    hops = {
-        str(raw.get("document_version_id") or ""): int(raw.get("hops") or 0)
-        for raw in raw_pages
-        if isinstance(raw, Mapping)
-    }
+    hops: dict[str, int] = {}
+    for raw in raw_pages:
+        if not isinstance(raw, Mapping):
+            continue
+        version_id = str(raw.get("document_version_id") or "")
+        raw_hops = raw.get("hops")
+        # 2-hop 도입 전 Snapshot에는 role만 있다. 당시 traversed Page는 모두
+        # 1-hop이었으므로 0으로 두지 말고 그 의미를 그대로 복원한다.
+        hops[version_id] = (
+            int(raw_hops)
+            if raw_hops is not None
+            else (0 if str(raw.get("role") or "") == "seed" else 1)
+        )
     raw_budget = snapshot.get("budget")
     budget_mapping = raw_budget if isinstance(raw_budget, Mapping) else None
     policy = resolve_wiki_navigation_policy(None, pinned_budget=budget_mapping)

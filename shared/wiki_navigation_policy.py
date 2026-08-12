@@ -50,17 +50,28 @@ class WikiNavigationBudget:
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> "WikiNavigationBudget":
-        """Job에 고정된 JSON 예산을 검증된 값 객체로 복원한다."""
-        raw_hop_limits = payload.get("hop_page_limits")
-        if not isinstance(raw_hop_limits, (list, tuple)):
-            raise ValueError("Wiki 탐색 예산에 hop_page_limits가 필요합니다.")
+        """Job에 고정된 JSON 예산을 검증된 값 객체로 복원한다.
+
+        2-hop 프로필 도입 전 Snapshot은 ``max_seed_pages``와
+        ``hop_page_limits`` 없이 깊이·전체 Page·Chunk만 저장했다. 진행 중이던
+        Job 재시도가 배포 뒤에도 같은 1-hop 범위로 복원되도록 그 형식도 받는다.
+        """
         try:
+            max_depth = int(payload["max_depth"])
+            max_pages = int(payload["max_pages"])
+            raw_hop_limits = payload.get("hop_page_limits")
+            if raw_hop_limits is None:
+                hop_page_limits = tuple(max_pages for _ in range(max_depth))
+            elif isinstance(raw_hop_limits, (list, tuple)):
+                hop_page_limits = tuple(int(value) for value in raw_hop_limits)
+            else:
+                raise TypeError("hop_page_limits must be a sequence")
             return cls(
-                max_depth=int(payload["max_depth"]),
-                max_seed_pages=int(payload["max_seed_pages"]),
-                max_pages=int(payload["max_pages"]),
+                max_depth=max_depth,
+                max_seed_pages=int(payload.get("max_seed_pages", max_pages)),
+                max_pages=max_pages,
                 max_chunks=int(payload["max_chunks"]),
-                hop_page_limits=tuple(int(value) for value in raw_hop_limits),
+                hop_page_limits=hop_page_limits,
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("Wiki 탐색 예산 형식이 잘못됐습니다.") from error
