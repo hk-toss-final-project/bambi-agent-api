@@ -6,11 +6,13 @@ import pytest
 
 from agent.wiki_builder.features.semantic_audit import (
     WikiSemanticIssueCode,
+    WikiSemanticLintReport,
     audit_wiki_semantics,
     build_wiki_semantic_lint_prompt,
     parse_wiki_semantic_lint_response,
 )
 from agent.wiki_builder.features.semantic_lint import (
+    WikiSemanticLintContext,
     WikiSemanticSourceDocument,
     build_wiki_semantic_lint_context,
 )
@@ -42,46 +44,56 @@ def _entry(
     )
 
 
-def _context():
+def _context_entries() -> list[ExistingWikiEntry]:
+    """공통 의미 감사 테스트에 사용할 두 Wiki Page를 만든다."""
+    return [
+        _entry(
+            "concept",
+            "agent",
+            "AI 에이전트",
+            "도구를 사용해 작업을 수행하는 시스템",
+            sources=["[[sources/one|첫 글]]"],
+            related_concepts=["검색 증강 생성"],
+        ),
+        _entry(
+            "concept",
+            "rag",
+            "RAG",
+            "외부 지식을 검색해 생성을 보강하는 방법",
+            aliases=["검색 증강 생성"],
+            sources=["[[sources/two|둘째 글]]"],
+        ),
+    ]
+
+
+def _context_sources() -> list[WikiSemanticSourceDocument]:
+    """공통 의미 감사 테스트에 사용할 두 활성 Source를 만든다."""
+    return [
+        WikiSemanticSourceDocument(
+            source_document_version_id="source-v1",
+            title="기존 설명",
+            raw_content=(
+                "2025년 제품은 단일 에이전트만 지원한다. "
+                "Agentic RAG는 AI 에이전트가 RAG를 사용해 지식을 찾는 방식이다."
+            ),
+        ),
+        WikiSemanticSourceDocument(
+            source_document_version_id="source-v2",
+            title="새 설명",
+            raw_content=(
+                "2026년 업데이트부터 제품은 멀티 에이전트를 지원한다. "
+                "평가 루프는 여러 문서에서 반복되는 핵심 방법이다."
+            ),
+        ),
+    ]
+
+
+def _context() -> WikiSemanticLintContext:
     """두 Page·두 Source·누락 관계 후보가 있는 공통 테스트 입력을 만든다."""
     return build_wiki_semantic_lint_context(
-        [
-            _entry(
-                "concept",
-                "agent",
-                "AI 에이전트",
-                "도구를 사용해 작업을 수행하는 시스템",
-                sources=["[[sources/one|첫 글]]"],
-                related_concepts=["검색 증강 생성"],
-            ),
-            _entry(
-                "concept",
-                "rag",
-                "RAG",
-                "외부 지식을 검색해 생성을 보강하는 방법",
-                aliases=["검색 증강 생성"],
-                sources=["[[sources/two|둘째 글]]"],
-            ),
-        ],
+        _context_entries(),
         [],
-        [
-            WikiSemanticSourceDocument(
-                source_document_version_id="source-v1",
-                title="기존 설명",
-                raw_content=(
-                    "2025년 제품은 단일 에이전트만 지원한다. "
-                    "Agentic RAG는 AI 에이전트가 RAG를 사용해 지식을 찾는 방식이다."
-                ),
-            ),
-            WikiSemanticSourceDocument(
-                source_document_version_id="source-v2",
-                title="새 설명",
-                raw_content=(
-                    "2026년 업데이트부터 제품은 멀티 에이전트를 지원한다. "
-                    "평가 루프는 여러 문서에서 반복되는 핵심 방법이다."
-                ),
-            ),
-        ],
+        _context_sources(),
     )
 
 
@@ -119,7 +131,7 @@ def _issue(**overrides: object) -> dict[str, object]:
     return value
 
 
-def _parse(issue: dict[str, object]):
+def _parse(issue: dict[str, object]) -> WikiSemanticLintReport:
     """문제 한 건을 공통 Context에서 의미 감사 보고서로 파싱한다."""
     return parse_wiki_semantic_lint_response(
         json.dumps({"issues": [issue]}, ensure_ascii=False),
@@ -138,6 +150,116 @@ def test_valid_missing_relation_is_accepted_with_stable_issue_id() -> None:
     assert first.issues[0].relation is not None
     assert first.issues[0].issue_id == second.issues[0].issue_id
     assert first.metrics["missing_relation_count"] == 1
+
+
+def test_issue_id_survives_page_and_source_reference_reordering() -> None:
+    """앞쪽 Page·Source가 추가돼 P·S 순번이 바뀌어도 같은 문제 ID를 유지한다."""
+    original_issue = _issue(
+        code="stale_claim",
+        title="단일 에이전트 지원 설명이 오래됨",
+        rationale="2026년 업데이트가 과거 제한을 명시적으로 바꿨다.",
+        confidence=0.94,
+        page_refs=["P1"],
+        source_refs=["S1", "S2"],
+        evidence=[
+            {
+                "source_ref": "S1",
+                "quote": "2025년 제품은 단일 에이전트만 지원한다.",
+            },
+            {
+                "source_ref": "S2",
+                "quote": "2026년 업데이트부터 제품은 멀티 에이전트를 지원한다.",
+            },
+        ],
+        candidate_ref=None,
+        relation=None,
+    )
+    original = _parse(original_issue)
+    reordered_context = build_wiki_semantic_lint_context(
+        [
+            _entry("concept", "aaa", "선행 Page", "참조 순번 변경용 Page"),
+            *_context_entries(),
+        ],
+        [],
+        [
+            WikiSemanticSourceDocument(
+                source_document_version_id="source-v0",
+                title="선행 Source",
+                raw_content="참조 순번 변경용 원본이다.",
+            ),
+            *_context_sources(),
+        ],
+    )
+    reordered_issue = dict(original_issue)
+    reordered_issue.update(
+        {
+            "page_refs": ["P2"],
+            "source_refs": ["S2", "S3"],
+            "evidence": [
+                {
+                    "source_ref": "S2",
+                    "quote": "2025년 제품은 단일 에이전트만 지원한다.",
+                },
+                {
+                    "source_ref": "S3",
+                    "quote": "2026년 업데이트부터 제품은 멀티 에이전트를 지원한다.",
+                },
+            ],
+        }
+    )
+    reordered = parse_wiki_semantic_lint_response(
+        json.dumps({"issues": [reordered_issue]}, ensure_ascii=False),
+        context=reordered_context,
+        model="test-model",
+    )
+
+    assert original.issues[0].issue_id == reordered.issues[0].issue_id
+
+
+def test_distinct_claim_evidence_gets_distinct_issue_ids() -> None:
+    """같은 Page·Source 범위라도 서로 다른 주장 근거는 별도 문제로 식별한다."""
+    first = _parse(
+        _issue(
+            code="stale_claim",
+            confidence=0.94,
+            page_refs=["P1"],
+            source_refs=["S1", "S2"],
+            evidence=[
+                {
+                    "source_ref": "S1",
+                    "quote": "2025년 제품은 단일 에이전트만 지원한다.",
+                },
+                {
+                    "source_ref": "S2",
+                    "quote": "2026년 업데이트부터 제품은 멀티 에이전트를 지원한다.",
+                },
+            ],
+            candidate_ref=None,
+            relation=None,
+        )
+    )
+    second = _parse(
+        _issue(
+            code="stale_claim",
+            confidence=0.94,
+            page_refs=["P1"],
+            source_refs=["S1", "S2"],
+            evidence=[
+                {
+                    "source_ref": "S1",
+                    "quote": "단일 에이전트만 지원한다.",
+                },
+                {
+                    "source_ref": "S2",
+                    "quote": "멀티 에이전트를 지원한다.",
+                },
+            ],
+            candidate_ref=None,
+            relation=None,
+        )
+    )
+
+    assert first.issues[0].issue_id != second.issues[0].issue_id
 
 
 def test_missing_relation_outside_candidate_scope_is_rejected() -> None:

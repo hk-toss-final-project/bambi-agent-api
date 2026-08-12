@@ -311,24 +311,89 @@ def _parse_relation(
 def _issue_id(
     *,
     code: WikiSemanticIssueCode,
+    context: WikiSemanticLintContext,
     page_references: Sequence[str],
     source_references: Sequence[str],
-    candidate_reference: str | None,
+    evidence: Sequence[WikiSemanticEvidence],
     topic: WikiMissingTopicProposal | None,
+    relation: WikiMissingRelationProposal | None,
     research_query: str | None,
 ) -> str:
-    """재실행에서도 같은 문제에 같은 멱등 식별자를 부여한다."""
+    """순번 참조가 바뀌어도 같은 의미 문제에 같은 멱등 식별자를 부여한다."""
+    pages = page_by_reference(context)
+    sources = source_by_reference(context)
+    canonical_pages = {
+        reference: (
+            pages[reference].document_kind,
+            pages[reference].document_key,
+        )
+        for reference in page_references
+    }
+    if relation is not None:
+        canonical_pages = {
+            reference: (
+                pages[reference].document_kind,
+                pages[reference].document_key,
+            )
+            for reference in (
+                relation.source_page_reference,
+                relation.target_page_reference,
+            )
+        }
+
+    canonical_sources = {
+        reference: sources[reference].source_document_version_id
+        for reference in source_references
+    }
+    if evidence:
+        canonical_sources = {
+            item.source_reference: sources[
+                item.source_reference
+            ].source_document_version_id
+            for item in evidence
+        }
+    elif relation is not None:
+        canonical_sources = {
+            relation.evidence_source_reference: sources[
+                relation.evidence_source_reference
+            ].source_document_version_id
+        }
+
+    discriminator: object = None
+    if code in {
+        WikiSemanticIssueCode.CONTRADICTION,
+        WikiSemanticIssueCode.STALE_CLAIM,
+    }:
+        discriminator = sorted(
+            (
+                sources[item.source_reference].source_document_version_id,
+                normalize_wiki_surface(item.quote),
+            )
+            for item in evidence
+        )
+    elif topic is not None:
+        discriminator = [
+            topic.document_kind,
+            normalize_wiki_surface(topic.title),
+        ]
+    elif relation is not None:
+        source_page = pages[relation.source_page_reference]
+        target_page = pages[relation.target_page_reference]
+        discriminator = [
+            source_page.document_kind,
+            source_page.document_key,
+            target_page.document_kind,
+            target_page.document_key,
+            relation.relation_type,
+        ]
+    elif research_query is not None:
+        discriminator = normalize_wiki_surface(research_query)
+
     payload = {
         "code": code.value,
-        "pages": sorted(page_references),
-        "sources": sorted(source_references),
-        "candidate": candidate_reference,
-        "topic": (
-            [topic.document_kind, normalize_wiki_surface(topic.title)]
-            if topic is not None
-            else None
-        ),
-        "query": normalize_wiki_surface(research_query or ""),
+        "pages": sorted(canonical_pages.values()),
+        "sources": sorted(canonical_sources.values()),
+        "discriminator": discriminator,
     }
     digest = hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -409,10 +474,12 @@ def _parse_issue(
         WikiSemanticIssue(
             issue_id=_issue_id(
                 code=code,
+                context=context,
                 page_references=page_references,
                 source_references=source_references,
-                candidate_reference=candidate_reference,
+                evidence=evidence,
                 topic=topic,
+                relation=relation,
                 research_query=research_query,
             ),
             code=code,
