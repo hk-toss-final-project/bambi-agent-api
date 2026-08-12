@@ -28,6 +28,7 @@ def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
         "personal-wiki",
         "wiki-maintenance-v2",
         "wiki-full-rebuild-v3",
+        "wiki-maintenance-v3",
         "wiki-read-v2",
         "report-generation",
         "assistant",
@@ -87,6 +88,23 @@ def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
         "finalize",
     ):
         assert node in diagrams["wiki-full-rebuild-v3"].mermaid
+    for node in (
+        "operational_audit",
+        "plan_operational",
+        "full_rebuild",
+        "load_snapshot",
+        "structural_lint",
+        "structural_failure",
+        "generate_candidates",
+        "semantic_lint",
+        "plan_repairs",
+        "apply_internal_repairs",
+        "research_knowledge_gaps",
+        "repair_derivatives",
+        "persist_summary",
+        "finalize",
+    ):
+        assert node in diagrams["wiki-maintenance-v3"].mermaid
     # 토글이 켜졌을 때 generate를 대체하는 분기가 그래프에 실제로 있어야 한다.
     assert "change_history" in diagrams["report-generation"].mermaid
     assert "reformulate" in diagrams["assistant"].mermaid
@@ -167,8 +185,8 @@ def test_graphs_page_renders_all_diagrams() -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     body = response.text
-    assert body.count('<pre class="mermaid">') == 7
-    assert body.count('class="node-panel"') == 7
+    assert body.count('<pre class="mermaid">') == 8
+    assert body.count('class="node-panel"') == 8
     assert body.count('class="node-detail"') == sum(
         len(diagram.nodes) for diagram in list_graph_diagrams()
     )
@@ -176,6 +194,7 @@ def test_graphs_page_renders_all_diagrams() -> None:
     assert "Wiki Read Loop V2" in body
     assert "Wiki Maintenance Loop V2" in body
     assert "Wiki Full Rebuild V3" in body
+    assert "Wiki Maintenance Loop V3" in body
     assert "키워드 비서 리서치 에이전트" in body
     assert "변경점(Delta) 추적" in body
     assert 'data-node-id="load_source"' in body

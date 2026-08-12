@@ -83,6 +83,7 @@ from .features.onboarding_contexts import (
 )
 from .features.maintenance import (
     LANGGRAPH_MAINTENANCE_PIPELINE_VERSION,
+    LANGGRAPH_MAINTENANCE_PIPELINE_V3_VERSION,
     LEGACY_MAINTENANCE_PIPELINE_VERSION,
     MAINTENANCE_PIPELINE_VERSIONS,
     WikiMaintenanceAction,
@@ -92,6 +93,15 @@ from .features.maintenance import (
     plan_wiki_maintenance,
     run_wiki_maintenance_for_version,
     run_wiki_maintenance_graph_v2,
+)
+from .features.maintenance_v3 import (
+    WikiMaintenanceV3RuntimeContext,
+    WikiMaintenanceV3State,
+    WikiSemanticSnapshot,
+    build_wiki_maintenance_graph_v3,
+    load_wiki_semantic_snapshot,
+    plan_wiki_maintenance_v3,
+    run_wiki_maintenance_graph_v3,
 )
 from .features.semantic_audit import (
     SEMANTIC_LINT_PROMPT_VERSION,
@@ -205,6 +215,7 @@ __all__ = [
     "ONBOARDING_CONTEXT_MODEL",
     "resolve_onboarding_contexts",
     "LANGGRAPH_MAINTENANCE_PIPELINE_VERSION",
+    "LANGGRAPH_MAINTENANCE_PIPELINE_V3_VERSION",
     "LEGACY_MAINTENANCE_PIPELINE_VERSION",
     "MAINTENANCE_PIPELINE_VERSIONS",
     "WikiMaintenanceAction",
@@ -214,6 +225,13 @@ __all__ = [
     "plan_wiki_maintenance",
     "run_wiki_maintenance_for_version",
     "run_wiki_maintenance_graph_v2",
+    "WikiMaintenanceV3RuntimeContext",
+    "WikiMaintenanceV3State",
+    "WikiSemanticSnapshot",
+    "build_wiki_maintenance_graph_v3",
+    "load_wiki_semantic_snapshot",
+    "plan_wiki_maintenance_v3",
+    "run_wiki_maintenance_graph_v3",
     "SEMANTIC_LINT_PROMPT_VERSION",
     "WikiMissingRelationProposal",
     "WikiMissingTopicProposal",

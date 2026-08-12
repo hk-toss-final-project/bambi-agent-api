@@ -26,8 +26,13 @@ type WikiRebuildRunner = Callable[..., Awaitable[dict[str, object]]]
 
 LEGACY_MAINTENANCE_PIPELINE_VERSION = "legacy_v1"
 LANGGRAPH_MAINTENANCE_PIPELINE_VERSION = "langgraph_v2"
+LANGGRAPH_MAINTENANCE_PIPELINE_V3_VERSION = "langgraph_v3"
 MAINTENANCE_PIPELINE_VERSIONS = frozenset(
-    {LEGACY_MAINTENANCE_PIPELINE_VERSION, LANGGRAPH_MAINTENANCE_PIPELINE_VERSION}
+    {
+        LEGACY_MAINTENANCE_PIPELINE_VERSION,
+        LANGGRAPH_MAINTENANCE_PIPELINE_VERSION,
+        LANGGRAPH_MAINTENANCE_PIPELINE_V3_VERSION,
+    }
 )
 
 _STRUCTURAL_QUALITY_KEYS = (
@@ -418,7 +423,7 @@ async def run_wiki_maintenance_for_version(
     embedding_model: str = "text-embedding-3-small",
     embedding_batch_threshold: int = 0,
 ) -> dict[str, object]:
-    """Job에 고정된 버전에 따라 V1 원자 재구성 또는 LangGraph V2를 실행한다."""
+    """Job에 고정된 버전에 따라 V1·V2·V3 유지 루프를 실행한다."""
     if pipeline_version == LEGACY_MAINTENANCE_PIPELINE_VERSION:
         result = await rebuild_runner(
             connection,
@@ -435,6 +440,18 @@ async def run_wiki_maintenance_for_version(
             job_id=job_id,
             trigger=trigger,
             rebuild_runner=rebuild_runner,
+            model=model,
+            embedding_model=embedding_model,
+            embedding_batch_threshold=embedding_batch_threshold,
+        )
+    if pipeline_version == LANGGRAPH_MAINTENANCE_PIPELINE_V3_VERSION:
+        from .maintenance_v3 import run_wiki_maintenance_graph_v3
+
+        return await run_wiki_maintenance_graph_v3(
+            connection,
+            user_id=user_id,
+            job_id=job_id,
+            trigger=trigger,
             model=model,
             embedding_model=embedding_model,
             embedding_batch_threshold=embedding_batch_threshold,
