@@ -96,6 +96,12 @@ GLOBAL_SOURCE_IMAGE_MIGRATION_PATH = (
 BRIEFING_SNAPSHOT_MIGRATION_PATH = (
     PROJECT_ROOT / "database" / "migrations" / "0028_briefing_topic_snapshots.sql"
 )
+COLLECTION_TARGET_POLICY_MIGRATION_PATH = (
+    PROJECT_ROOT
+    / "database"
+    / "migrations"
+    / "0029_collection_target_budget_policy.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
@@ -115,6 +121,7 @@ MIGRATION_PATHS = (
     WAITING_PROVIDER_MIGRATION_PATH,
     GLOBAL_SOURCE_IMAGE_MIGRATION_PATH,
     BRIEFING_SNAPSHOT_MIGRATION_PATH,
+    COLLECTION_TARGET_POLICY_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
@@ -272,6 +279,17 @@ def test_interest_taxonomy_migration_adds_snapshots_targets_and_subscriptions() 
     assert "CREATE TABLE agent.global_source_document_topics" in migration
     assert "'interest-taxonomy-google-news'" in migration
     assert "VALUES (11," in migration
+
+
+def test_collection_target_policy_migration_reconciles_existing_targets() -> None:
+    """기존 수집 대상도 구독 수·주기·하루 처리량 정책으로 한 번에 정리한다."""
+    migration = _read(COLLECTION_TARGET_POLICY_MIGRATION_PATH)
+
+    assert "WHEN policy.subscriber_count = 0 THEN 'paused'" in migration
+    assert "WHEN counts.subscriber_count >= 10 THEN 360" in migration
+    assert "WHEN counts.subscriber_count >= 5 THEN 720" in migration
+    assert "/ 250.0" in migration
+    assert "VALUES (29," in migration
 
 
 def test_onboarding_context_migration_seeds_all_topics_and_custom_cache() -> None:
