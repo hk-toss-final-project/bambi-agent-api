@@ -158,6 +158,7 @@ def test_run_url_collection_batch_claims_only_url_jobs(
             database_url="postgresql://test",
             worker_id="url-worker-1",
             limit=5,
+            concurrency=3,
             lease_seconds=120,
         )
     )
@@ -166,6 +167,7 @@ def test_run_url_collection_batch_claims_only_url_jobs(
     assert recorded["job_type"] == "personal_wiki_url"
     assert recorded["error_code_prefix"] == "URL_COLLECTION"
     assert recorded["limit"] == 5
+    assert recorded["concurrency"] == 3
 
 
 def test_blocked_page_is_not_saved_as_wiki_source() -> None:

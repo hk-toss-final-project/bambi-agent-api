@@ -459,6 +459,9 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 
 ### MVP Batch 처리 계약
 
+- 사용자 Wiki·URL 수집 상주 Worker는 환경변수가 없어도 각각 Batch 10건·동시성
+  4개·빈 Queue 재조회 5초를 기본으로 사용한다. 같은 사용자의 Wiki Build는 기존
+  Advisory Lock으로 직렬화하고 서로 다른 사용자 Job만 병렬 처리한다.
 - 콘텐츠 생성 트리거는 service 계층 스케줄러가 담당한다(2026-07-20 결정). 사용자 지정 생성 시간의 원천 데이터가 service-db에 있으므로, service 스케줄러가 `schedule window + user_id + content_type` 규칙의 `idempotency_key`로 `POST /generations`를 호출하고, 미리 등록할 때는 `scheduled_at`으로 실행 시각을 예약한다. Agent는 별도의 생성 Scheduler를 두지 않는다(구 SCH-011 제거).
 - Agent Worker는 한 트랜잭션에서 실행 가능한 Job 여러 건을 `FOR UPDATE SKIP LOCKED`로 Claim하고, DB Transaction 밖에서 제한된 동시성으로 각 Job을 독립 실행한다.
 - Batch Claim 크기와 실제 LLM 호출 동시성은 별도 설정으로 관리한다. 한 Batch를 하나의 LLM 요청으로 합치지 않는다.

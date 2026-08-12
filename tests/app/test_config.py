@@ -30,6 +30,8 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("WIKI_EMBEDDING_BATCH_THRESHOLD", "80")
     monkeypatch.setenv("PERSONAL_WIKI_WORKER_BATCH_SIZE", "3")
     monkeypatch.setenv("PERSONAL_WIKI_JOB_CONCURRENCY", "2")
+    monkeypatch.setenv("URL_COLLECTION_WORKER_BATCH_SIZE", "6")
+    monkeypatch.setenv("URL_COLLECTION_JOB_CONCURRENCY", "3")
     monkeypatch.setenv("REPORT_WORKER_BATCH_SIZE", "7")
     monkeypatch.setenv("REPORT_JOB_CONCURRENCY", "4")
     monkeypatch.setenv("OPENAI_DEFAULT_RPM", "120")
@@ -73,6 +75,8 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     assert settings.wiki_embedding_batch_threshold == 80
     assert settings.personal_wiki_worker_batch_size == 3
     assert settings.personal_wiki_job_concurrency == 2
+    assert settings.url_collection_worker_batch_size == 6
+    assert settings.url_collection_job_concurrency == 3
     assert settings.report_job_concurrency == 4
     assert settings.openai_default_rpm == 120
     assert settings.openai_default_tpm == 90_000
@@ -107,6 +111,17 @@ def test_wiki_pipeline_versions_default_to_langgraph_v2() -> None:
 
     assert settings.wiki_read_pipeline_version == "langgraph_v2"
     assert settings.wiki_maintenance_pipeline_version == "langgraph_v2"
+
+
+def test_interactive_worker_defaults_prioritize_short_queue_delay() -> None:
+    """환경변수가 없어도 Wiki·URL Worker가 짧은 대기와 병렬 처리를 기본으로 쓴다."""
+    settings = Settings()
+
+    assert settings.personal_wiki_worker_batch_size == 10
+    assert settings.personal_wiki_job_concurrency == 4
+    assert settings.url_collection_worker_batch_size == 10
+    assert settings.url_collection_job_concurrency == 4
+    assert settings.wiki_build_quiet_minutes == 0
 
 
 def test_report_batch_size_falls_back_to_personal_wiki_batch_size(

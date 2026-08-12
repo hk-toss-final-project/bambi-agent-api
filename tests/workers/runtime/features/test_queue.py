@@ -152,6 +152,7 @@ def test_consume_url_collection_jobs_passes_no_llm_model() -> None:
             database_url="postgresql://test",
             worker_id="url-worker-1",
             limit=4,
+            concurrency=3,
             lease_seconds=120,
             interval_seconds=0,
             max_batches=1,
@@ -164,6 +165,7 @@ def test_consume_url_collection_jobs_passes_no_llm_model() -> None:
         "database_url": "postgresql://test",
         "worker_id": "url-worker-1",
         "limit": 4,
+        "concurrency": 3,
         "lease_seconds": 120,
     }
 
@@ -186,6 +188,7 @@ def test_wc_001_routes_url_job_type_to_collection_consumer(
             database_url="postgresql://test",
             worker_id="url-worker-1",
             limit=3,
+            concurrency=2,
             lease_seconds=120,
             model="",
             interval_seconds=5,
@@ -197,6 +200,7 @@ def test_wc_001_routes_url_job_type_to_collection_consumer(
     assert results[0]["job_id"] == "url-job-1"
     assert recorded["interval_seconds"] == 5
     assert recorded["max_batches"] == 1
+    assert recorded["concurrency"] == 2
 
 
 def test_consume_returns_empty_when_no_jobs_are_claimable() -> None:

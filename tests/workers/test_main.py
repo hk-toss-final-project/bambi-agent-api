@@ -79,11 +79,13 @@ def test_run_batch_once_dispatches_url_collection_worker(
     args = Namespace(
         worker="url-collection",
         limit=7,
+        concurrency=None,
         lease_seconds=180,
     )
     settings = Settings(
         agent_database_url="postgresql://test",
-        personal_wiki_worker_batch_size=1,
+        url_collection_worker_batch_size=10,
+        url_collection_job_concurrency=4,
         personal_wiki_job_lease_seconds=600,
     )
 
@@ -96,8 +98,32 @@ def test_run_batch_once_dispatches_url_collection_worker(
         "database_url": "postgresql://test",
         "worker_id": "url-worker-1",
         "limit": 7,
+        "concurrency": 4,
         "lease_seconds": 180,
     }
+
+
+def test_parse_args_defaults_resident_poll_interval_to_five_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """별도 옵션이 없으면 상주 Worker가 빈 Queue를 5초마다 다시 확인한다."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["workers.main", "--worker", "personal-wiki"],
+    )
+
+    args = worker_main._parse_args()
+
+    assert args.interval_seconds is None
+    assert worker_main._worker_interval_seconds(args) == 5
+
+
+def test_noninteractive_worker_keeps_sixty_second_poll_interval() -> None:
+    """Report 등 비대화형 Worker는 기존 60초 기본 재조회 간격을 유지한다."""
+    args = Namespace(worker="report-generation", interval_seconds=None)
+
+    assert worker_main._worker_interval_seconds(args) == 60
 
 
 def test_run_batch_once_dispatches_openai_batch_worker(
@@ -216,6 +242,7 @@ def test_run_loop_dispatches_resident_url_collection_worker(
         worker="url-collection",
         worker_id="url-worker-1",
         limit=4,
+        concurrency=None,
         lease_seconds=120,
         loop=True,
         interval_seconds=5,
@@ -237,6 +264,7 @@ def test_run_loop_dispatches_resident_url_collection_worker(
     assert recorded["interval_seconds"] == 5
     assert recorded["max_batches"] is None
     assert recorded["worker_id"] == "url-worker-1"
+    assert recorded["concurrency"] == 4
 
 
 def test_worker_entrypoint_configures_logging(monkeypatch: pytest.MonkeyPatch) -> None:
