@@ -20,7 +20,7 @@ from psycopg.types.json import Jsonb
 from agent.images.api import select_report_cover_image
 from domain.interests.api import ActiveInterestRequiredError, int_012, int_013
 from infrastructure.sources.connectors.api import (
-    is_probable_content_image_url,
+    is_secure_content_image_url,
     resolve_article_image,
 )
 from infrastructure.persistence.features.interest_bundles import (
@@ -39,7 +39,7 @@ def _context_image_url(row: Mapping[str, Any]) -> str | None:
     """조회 Context의 대표 이미지를 본문 기준으로 재검증해 반환한다.
 
     Global 캐시는 저장된 Markdown에서 기사 이미지를 다시 계산하고, 다른
-    Namespace는 배너·아이콘이 아닌 기존 HTTP(S) 이미지만 유지한다.
+    Namespace는 배너·아이콘이 아닌 기존 HTTPS 이미지만 유지한다.
     """
     cached_url = str(row.get("image_url") or "").strip() or None
     if str(row.get("namespace_key") or "") == "global":
@@ -48,7 +48,7 @@ def _context_image_url(row: Mapping[str, Any]) -> str | None:
             title=str(row.get("title") or ""),
             cached_url=cached_url,
         )
-    if cached_url and is_probable_content_image_url(cached_url):
+    if cached_url and is_secure_content_image_url(cached_url):
         return cached_url
     return None
 

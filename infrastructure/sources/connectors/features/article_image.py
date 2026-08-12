@@ -15,7 +15,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
 
@@ -24,6 +24,7 @@ from .url import is_probable_content_image_url
 _DEFAULT_TIMEOUT_SECONDS = 8.0
 _DEFAULT_MAX_HTML_BYTES = 1_500_000
 _MAX_REDIRECTS = 4
+_MAX_HTTP_UPGRADE_PROBES = 3
 _REDIRECT_STATUS_CODES = {301, 302, 303, 307, 308}
 _VOID_TAGS = {
     "area",
@@ -86,6 +87,7 @@ class ArticleImageMetadata:
     width: int | None = None
     height: int | None = None
     alt: str | None = None
+    upgraded_from_http: bool = False
 
 
 def _dimension(value: object) -> int | None:
@@ -263,10 +265,14 @@ class _ArticleImageParser(HTMLParser):
 def _normalized_candidate(
     candidate: ArticleImageMetadata, *, page_url: str
 ) -> ArticleImageMetadata | None:
-    """후보 URL을 절대 경로로 만들고 UI 자산·작은 이미지를 제외한다."""
+    """후보 URL을 HTTPS 절대 경로로 만들고 UI 자산·작은 이미지를 제외한다."""
     url = urljoin(page_url, candidate.url.strip())
     if not is_probable_content_image_url(url):
         return None
+    parsed = urlsplit(url)
+    upgraded_from_http = parsed.scheme == "http"
+    if upgraded_from_http:
+        url = urlunsplit(("https", parsed.netloc, parsed.path, parsed.query, parsed.fragment))
     semantic_text = " ".join((url, candidate.alt or "")).lower()
     if any(marker in semantic_text for marker in _UI_IMAGE_MARKERS):
         return None
@@ -284,6 +290,7 @@ def _normalized_candidate(
         width=candidate.width,
         height=candidate.height,
         alt=candidate.alt,
+        upgraded_from_http=upgraded_from_http,
     )
 
 
@@ -292,13 +299,13 @@ def _first_metadata_value(parser: _ArticleImageParser, key: str) -> str:
     return next((value for value in parser.metadata.get(key, []) if value), "")
 
 
-def extract_article_image_metadata(
+def extract_article_image_candidates(
     html_text: str,
     *,
     page_url: str,
     provider_image_url: str | None = None,
-) -> ArticleImageMetadata | None:
-    """원본 HTML에서 우선순위에 따라 기사 대표 이미지를 고른다.
+) -> list[ArticleImageMetadata]:
+    """원본 HTML에서 우선순위에 따라 HTTPS 대표 이미지 후보를 만든다.
 
     Args:
         html_text: 원문 페이지 HTML
@@ -306,7 +313,7 @@ def extract_article_image_metadata(
         provider_image_url: NewsAPI 등 Provider가 이미 제공한 이미지 URL
 
     Returns:
-        선택된 이미지와 출처·크기. 적합한 후보가 없으면 ``None``.
+        중복을 제거한 이미지 후보 목록. HTTP 후보는 HTTPS로 승격 표시한다.
     """
     parser = _ArticleImageParser()
     parser.feed(html_text)
@@ -373,11 +380,39 @@ def extract_article_image_metadata(
         key=lambda item: (item.width or 0) * (item.height or 0), reverse=True
     )
 
-    for candidate in [*candidates, *normalized_article]:
+    normalized_candidates: list[ArticleImageMetadata] = []
+    seen_urls: set[str] = set()
+    for candidate in candidates:
         normalized = _normalized_candidate(candidate, page_url=page_url)
-        if normalized is not None:
-            return normalized
-    return None
+        if normalized is None or normalized.url in seen_urls:
+            continue
+        seen_urls.add(normalized.url)
+        normalized_candidates.append(normalized)
+    for normalized in normalized_article:
+        if normalized.url in seen_urls:
+            continue
+        seen_urls.add(normalized.url)
+        normalized_candidates.append(normalized)
+    return normalized_candidates
+
+
+def extract_article_image_metadata(
+    html_text: str,
+    *,
+    page_url: str,
+    provider_image_url: str | None = None,
+) -> ArticleImageMetadata | None:
+    """원본 HTML의 우선순위가 가장 높은 HTTPS 대표 이미지 후보를 반환한다."""
+    return next(
+        iter(
+            extract_article_image_candidates(
+                html_text,
+                page_url=page_url,
+                provider_image_url=provider_image_url,
+            )
+        ),
+        None,
+    )
 
 
 def _default_host_resolver(host: str) -> list[str]:
@@ -412,6 +447,63 @@ def _ensure_public_http_url(url: str, *, host_resolver: HostResolver) -> None:
         )
 
 
+def _probe_upgraded_image(
+    client: httpx.Client,
+    candidate: ArticleImageMetadata,
+    *,
+    host_resolver: HostResolver,
+) -> bool:
+    """HTTP에서 승격한 HTTPS 후보가 실제 이미지로 응답하는지 제한적으로 확인한다."""
+    current_url = candidate.url
+    headers = {
+        "Accept": "image/avif,image/webp,image/*,*/*;q=0.8",
+        "User-Agent": "AlphaCatcher/1.0",
+    }
+    try:
+        for redirect_count in range(_MAX_REDIRECTS + 1):
+            if urlsplit(current_url).scheme != "https":
+                return False
+            _ensure_public_http_url(current_url, host_resolver=host_resolver)
+            with client.stream("GET", current_url, headers=headers) as response:
+                if response.status_code in _REDIRECT_STATUS_CODES:
+                    location = response.headers.get("location")
+                    if not location or redirect_count >= _MAX_REDIRECTS:
+                        return False
+                    current_url = urljoin(current_url, location)
+                    continue
+                if response.status_code >= 400:
+                    return False
+                return response.headers.get("content-type", "").lower().startswith(
+                    "image/"
+                )
+    except (ArticleImageFetchError, httpx.HTTPError):
+        return False
+    return False
+
+
+def _first_usable_candidate(
+    client: httpx.Client,
+    candidates: Sequence[ArticleImageMetadata],
+    *,
+    host_resolver: HostResolver,
+) -> ArticleImageMetadata | None:
+    """HTTPS 후보를 순회하며 HTTP 승격 후보만 실제 응답을 검증해 선택한다."""
+    upgrade_probes = 0
+    for candidate in candidates:
+        if not candidate.upgraded_from_http:
+            return candidate
+        if upgrade_probes >= _MAX_HTTP_UPGRADE_PROBES:
+            continue
+        upgrade_probes += 1
+        if _probe_upgraded_image(
+            client,
+            candidate,
+            host_resolver=host_resolver,
+        ):
+            return candidate
+    return None
+
+
 def fetch_article_image_metadata(
     url: str,
     *,
@@ -423,8 +515,9 @@ def fetch_article_image_metadata(
 ) -> ArticleImageMetadata | None:
     """원본 URL의 HTML을 제한적으로 읽어 대표 이미지 메타데이터를 추출한다.
 
-    Provider 이미지가 있으면 네트워크 요청 없이 즉시 검증해 반환한다. 직접 HTML을
-    가져올 때는 매 리다이렉트의 공개 IP 여부, 응답 타입과 최대 크기를 확인한다.
+    HTTPS Provider 이미지는 즉시 반환하고, HTTP 이미지는 HTTPS 승격이 실제 이미지
+    응답인지 확인한다. 승격이나 후보가 실패하면 원문 HTML의 다음 후보를 계속
+    탐색한다. 직접 요청할 때는 매 리다이렉트의 공개 IP 여부를 확인한다.
 
     Args:
         url: 기사 원문 URL
@@ -440,13 +533,6 @@ def fetch_article_image_metadata(
     Raises:
         ArticleImageFetchError: URL·DNS·HTTP·응답 크기 검증에 실패한 경우
     """
-    if provider_image_url:
-        provider = extract_article_image_metadata(
-            "", page_url=url, provider_image_url=provider_image_url
-        )
-        if provider is not None:
-            return provider
-
     resolver = host_resolver or _default_host_resolver
     current_url = url
     headers = {
@@ -457,6 +543,17 @@ def fetch_article_image_metadata(
         with httpx.Client(
             timeout=timeout, transport=transport, follow_redirects=False
         ) as client:
+            provider_candidates = extract_article_image_candidates(
+                "", page_url=url, provider_image_url=provider_image_url
+            )
+            provider = _first_usable_candidate(
+                client,
+                provider_candidates,
+                host_resolver=resolver,
+            )
+            if provider is not None:
+                return provider
+
             for redirect_count in range(_MAX_REDIRECTS + 1):
                 _ensure_public_http_url(current_url, host_resolver=resolver)
                 with client.stream("GET", current_url, headers=headers) as response:
@@ -485,8 +582,14 @@ def fetch_article_image_metadata(
                             )
                     encoding = response.encoding or "utf-8"
                     html_text = bytes(body).decode(encoding, errors="replace")
-                    return extract_article_image_metadata(
-                        html_text, page_url=current_url
+                    candidates = extract_article_image_candidates(
+                        html_text,
+                        page_url=current_url,
+                    )
+                    return _first_usable_candidate(
+                        client,
+                        candidates,
+                        host_resolver=resolver,
                     )
     except ArticleImageFetchError:
         raise

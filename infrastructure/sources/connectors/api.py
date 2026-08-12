@@ -22,6 +22,7 @@ from .features.url import (
     fetch_url_raw_via_jina,
     fetch_url_via_jina,
     is_probable_content_image_url,
+    is_secure_content_image_url,
     parse_jina_reader_response,
     resolve_article_image,
 )
@@ -65,6 +66,7 @@ __all__ = [
     "fetch_url_via_jina",
     "fetch_article_image_metadata",
     "is_probable_content_image_url",
+    "is_secure_content_image_url",
     "parse_jina_reader_response",
     "resolve_article_image",
     "thumbnail_url",

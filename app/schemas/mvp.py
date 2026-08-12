@@ -600,7 +600,7 @@ class CitationSchema(ImmutableSchema):
 class ReportCoverImageSchema(ImmutableSchema):
     """리포트 상단 대표 이미지와 원문 출처."""
 
-    url: str = Field(description="원문에서 수집한 대표 이미지 HTTP(S) URL")
+    url: str = Field(description="원문에서 수집·검증한 대표 이미지 HTTPS URL")
     source_url: str = Field(description="이미지가 연결된 실제 인용 출처 URL")
     source_title: str = Field(description="화면 출처 표시에 사용할 원문 제목")
     reference: str = Field(description="대표 이미지가 연결된 Citation 참조(P/G/L)")

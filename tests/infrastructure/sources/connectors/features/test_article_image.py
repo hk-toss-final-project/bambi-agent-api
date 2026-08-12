@@ -144,6 +144,112 @@ def test_provider_image_has_highest_priority() -> None:
     assert result.source == "provider"
 
 
+def test_http_provider_image_is_upgraded_after_https_probe() -> None:
+    """Provider HTTP 이미지는 HTTPS에서 실제 이미지로 응답할 때만 사용한다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """승격된 이미지 URL의 MIME 응답을 반환한다."""
+        assert str(request.url) == "https://cdn.example/provider.jpg"
+        return httpx.Response(206, headers={"Content-Type": "image/jpeg"})
+
+    result = fetch_article_image_metadata(
+        "https://news.example/article",
+        provider_image_url="http://cdn.example/provider.jpg",
+        transport=httpx.MockTransport(handler),
+        host_resolver=lambda host: ["8.8.8.8"],
+    )
+
+    assert result is not None
+    assert result.url == "https://cdn.example/provider.jpg"
+    assert result.upgraded_from_http is True
+
+
+def test_failed_http_provider_falls_back_to_secure_open_graph() -> None:
+    """Provider HTTPS 승격이 실패하면 같은 원문의 다음 보안 후보를 사용한다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """승격 후보는 실패시키고 기사 HTML에는 보안 Open Graph를 제공한다."""
+        if request.url.host == "cdn.example":
+            return httpx.Response(404)
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/html"},
+            text=(
+                '<meta property="og:image:secure_url" '
+                'content="https://images.example/secure.jpg">'
+            ),
+        )
+
+    result = fetch_article_image_metadata(
+        "https://news.example/article",
+        provider_image_url="http://cdn.example/provider.jpg",
+        transport=httpx.MockTransport(handler),
+        host_resolver=lambda host: ["8.8.8.8"],
+    )
+
+    assert result is not None
+    assert result.url == "https://images.example/secure.jpg"
+    assert result.source == "open_graph"
+
+
+def test_failed_http_open_graph_falls_back_to_twitter_image() -> None:
+    """HTTP Open Graph 승격이 실패하면 같은 원문의 Twitter 이미지를 선택한다."""
+    html = (
+        '<meta property="og:image" content="http://legacy.example/cover.jpg">'
+        '<meta name="twitter:image" content="https://cdn.example/twitter.jpg">'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """기사 HTML과 실패하는 승격 이미지 응답을 구분해 반환한다."""
+        if request.url.host == "news.example":
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/html"},
+                text=html,
+            )
+        return httpx.Response(404)
+
+    result = fetch_article_image_metadata(
+        "https://news.example/article",
+        transport=httpx.MockTransport(handler),
+        host_resolver=lambda host: ["8.8.8.8"],
+    )
+
+    assert result is not None
+    assert result.url == "https://cdn.example/twitter.jpg"
+    assert result.source == "twitter_card"
+
+
+def test_failed_http_body_image_falls_back_to_next_secure_body_image() -> None:
+    """본문 HTTP 이미지 승격 실패도 다음 HTTPS 본문 이미지 선택을 막지 않는다."""
+    html = """
+    <article>
+      <img src="http://legacy.example/large.jpg" width="1200" height="800">
+      <img src="https://cdn.example/next.jpg" width="1000" height="700">
+    </article>
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """기사 HTML을 제공하고 승격 이미지 요청은 실패시킨다."""
+        if request.url.host == "news.example":
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/html"},
+                text=html,
+            )
+        return httpx.Response(404)
+
+    result = fetch_article_image_metadata(
+        "https://news.example/article",
+        transport=httpx.MockTransport(handler),
+        host_resolver=lambda host: ["8.8.8.8"],
+    )
+
+    assert result is not None
+    assert result.url == "https://cdn.example/next.jpg"
+    assert result.source == "article_dom"
+
+
 def test_fetch_article_image_reads_only_html_metadata() -> None:
     """직접 HTML 요청으로 대표 이미지를 추출하고 요청 헤더를 제한한다."""
 

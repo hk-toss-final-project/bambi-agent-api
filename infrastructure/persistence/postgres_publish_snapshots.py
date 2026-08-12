@@ -4,6 +4,7 @@ Worker가 저장한 Snapshot을 Service Worker API에 제공하고,
 발행 ACK를 Snapshot 상태 및 시도 이력과 같은 트랜잭션으로 기록한다.
 """
 
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -36,8 +37,16 @@ from app.services.publish_snapshots import (
     build_batch_ack_response,
     publish_retry_delay,
 )
+from infrastructure.sources.connectors.api import is_secure_content_image_url
 
 type DictRow = dict[str, Any]
+
+
+def _secure_cover_image(value: object) -> Mapping[str, object] | None:
+    """기존 Snapshot의 HTTP 이미지를 Service 응답 직전에 제거한다."""
+    if not isinstance(value, Mapping):
+        return None
+    return value if is_secure_content_image_url(value.get("url")) else None
 
 
 class PostgresPublishSnapshotRepository:
@@ -80,7 +89,7 @@ class PostgresPublishSnapshotRepository:
                 "summary": payload["summary"],
                 "body": payload["body"],
                 "citations": payload.get("citations", []),
-                "cover_image": payload.get("cover_image"),
+                "cover_image": _secure_cover_image(payload.get("cover_image")),
                 # 아래 필드들은 나중에 추가돼, 그 전에 저장된 Snapshot에는 없다.
                 # 쓰는 쪽(generation_runtime.persist_report_generation)에 필드를
                 # 추가할 때 이 매핑도 함께 고쳐야 한다 — 여기서 키를 명시적으로
