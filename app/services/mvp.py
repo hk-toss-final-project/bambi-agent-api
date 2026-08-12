@@ -265,11 +265,6 @@ class AgentApiMvpService:
                     topic=payload.topic,
                     topics=payload.topics,
                     generation_scope=payload.generation_scope.value,
-                    navigation_profile=(
-                        payload.navigation_profile.value
-                        if payload.navigation_profile is not None
-                        else None
-                    ),
                     interest_id=(
                         str(payload.interest_id)
                         if payload.interest_id is not None

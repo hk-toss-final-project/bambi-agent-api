@@ -374,36 +374,6 @@ def test_enqueue_captures_active_wiki_build_for_navigation() -> None:
     assert job_params[2].obj["wiki_version_id"] == "wiki-build-9"
 
 
-def test_enqueue_pins_on_demand_navigation_profile_and_budget() -> None:
-    """온디맨드 2-hop 이름과 실제 예산을 Job Payload에 함께 고정한다."""
-    connection = _connection_with_context()
-
-    asyncio.run(
-        enqueue_report_generation_job(
-            connection,  # type: ignore[arg-type]
-            user_id="user-1",
-            idempotency_key="generation-on-demand-2hop",
-            topic="AI 에이전트",
-            navigation_profile="ON_DEMAND_2HOP",
-            content_type="interest_news_card",
-            language="ko",
-            request_id="request-1",
-        )
-    )
-
-    _, job_params = connection.executed[2]
-    assert job_params is not None
-    payload = job_params[2].obj
-    assert payload["navigation_profile"] == "ON_DEMAND_2HOP"
-    assert payload["navigation_budget"] == {
-        "max_depth": 2,
-        "max_seed_pages": 2,
-        "max_pages": 6,
-        "max_chunks": 12,
-        "hop_page_limits": [2, 2],
-    }
-
-
 def test_navigation_snapshot_persists_selected_versions_and_saved_at() -> None:
     """첫 Reader Packet의 Page·Source 시각을 Topic별 Job Payload에 저장한다."""
     now = datetime(2026, 8, 10, 9, 30, tzinfo=UTC)
@@ -467,13 +437,9 @@ def test_navigation_snapshot_persists_selected_versions_and_saved_at() -> None:
     assert snapshot["sources"][0]["saved_at"] == now.isoformat()
     assert snapshot["budget"] == {
         "max_depth": 1,
-        "max_seed_pages": 6,
         "max_pages": 6,
         "max_chunks": 12,
-        "hop_page_limits": [6],
     }
-    assert snapshot["pages"][0]["hops"] == 0
-    assert snapshot["hop_page_counts"] == {"0": 1}
 
 
 def test_enqueue_stores_report_type_for_the_publish_snapshot() -> None:

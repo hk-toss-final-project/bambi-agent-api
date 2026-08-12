@@ -50,11 +50,6 @@ from shared.wiki_navigation_models import (
     WikiNavigationRelationSupport,
     WikiNavigationSource,
 )
-from shared.wiki_navigation_policy import (
-    DEFAULT_WIKI_NAVIGATION_POLICY,
-    WikiNavigationPolicy,
-    resolve_wiki_navigation_policy,
-)
 
 from .live_sources import collect_live_context
 from .pool_context import (
@@ -102,8 +97,7 @@ SYSTEM_PROMPT = (
     "원칙:\n"
     "1. 주제어로 wiki_search를 먼저 호출하고 최대 30개 후보에서 질문에 직접 "
     "필요한 Page만 고른다. 연결 수나 후보 순위만 보고 고르지 마라.\n"
-    "2. 고른 document_version_id를 최대 {max_seed_pages}개까지 한 번의 "
-    "wiki_read로 읽는다. "
+    "2. 고른 document_version_id를 최대 6개까지 한 번의 wiki_read로 읽는다. "
     "wiki_search 결과를 읽은 것으로 간주하지 마라.\n"
     "3. 최신 외부 사실이 필요하면 search_pool을 호출한다. 첫 결과에 주제와 "
     "밀접한 용어가 보이면 그 용어로 한두 번 더 자료를 넓힌다.\n"
@@ -120,13 +114,6 @@ FIXED_WIKI_SYSTEM_PROMPT = (
     "search_pool로 Global 저장 자료를 찾는다.\n"
     "같은 검색을 비슷한 말로 반복하지 말고, 더 필요한 방향이 없으면 요약한다."
 )
-
-
-def _research_system_prompt(navigation_policy: WikiNavigationPolicy) -> str:
-    """도구의 실제 Seed 상한과 일치하는 조사원 지침을 만든다."""
-    return SYSTEM_PROMPT.format(
-        max_seed_pages=navigation_policy.budget.max_seed_pages
-    )
 
 
 def research_agent_enabled() -> bool:
@@ -395,7 +382,7 @@ def navigation_packet_documents(
                 context_role=(
                     "wiki_navigator_seed"
                     if page.role == "seed"
-                    else f"wiki_navigator_hop_{page.hops}"
+                    else "wiki_navigator_traversed"
                 ),
                 source_updated_at=page.updated_at.isoformat(),
             )
@@ -501,22 +488,6 @@ async def load_navigation_snapshot_packet(
         for raw in raw_pages
         if isinstance(raw, Mapping)
     }
-    hops: dict[str, int] = {}
-    for raw in raw_pages:
-        if not isinstance(raw, Mapping):
-            continue
-        version_id = str(raw.get("document_version_id") or "")
-        raw_hops = raw.get("hops")
-        # 2-hop 도입 전 Snapshot에는 role만 있다. 당시 traversed Page는 모두
-        # 1-hop이었으므로 0으로 두지 말고 그 의미를 그대로 복원한다.
-        hops[version_id] = (
-            int(raw_hops)
-            if raw_hops is not None
-            else (0 if str(raw.get("role") or "") == "seed" else 1)
-        )
-    raw_budget = snapshot.get("budget")
-    budget_mapping = raw_budget if isinstance(raw_budget, Mapping) else None
-    policy = resolve_wiki_navigation_policy(None, pinned_budget=budget_mapping)
     wiki_version_id = str(snapshot.get("wiki_version_id") or "").strip() or None
     pages = await wnav_002(
         connection,
@@ -526,11 +497,7 @@ async def load_navigation_snapshot_packet(
         max_chunks_per_page=2,
     )
     restored_pages = [
-        replace(
-            page,
-            role=roles.get(page.document_version_id, page.role),
-            hops=hops.get(page.document_version_id, 0),
-        )
+        replace(page, role=roles.get(page.document_version_id, page.role))
         for page in pages
     ]
     return await wnav_005(
@@ -541,12 +508,6 @@ async def load_navigation_snapshot_packet(
         relations=_snapshot_relations(snapshot.get("relations")),
         sources=_snapshot_sources(snapshot.get("sources")),
         truncated=bool(snapshot.get("truncated") or False),
-        fallback_reason=(
-            str(snapshot.get("fallback_reason"))
-            if snapshot.get("fallback_reason")
-            else None
-        ),
-        budget=policy.budget,
     )
 
 
@@ -690,7 +651,6 @@ def build_research_tools(
     navigation_session: WikiNavigationSession | None = None,
     wiki_version_id: str | None = None,
     allow_wiki_navigation: bool = True,
-    navigation_policy: WikiNavigationPolicy = DEFAULT_WIKI_NAVIGATION_POLICY,
 ) -> list[ToolSpec]:
     """조사원이 사용할 도구 목록을 만든다.
 
@@ -706,7 +666,6 @@ def build_research_tools(
         navigation_session: Locate 후보와 실제 읽은 Packet을 보존할 세션
         wiki_version_id: 읽기를 고정할 Wiki Build UUID
         allow_wiki_navigation: 재시도 Snapshot이 없을 때만 Wiki 도구를 노출할지
-        navigation_policy: Job 접수 시 고정한 Wiki 탐색 깊이와 Page·Chunk 예산
 
     Returns:
         LLM에 노출할 ToolSpec 목록
@@ -758,20 +717,16 @@ def build_research_tools(
         )
         if not selected:
             return "읽을 document_version_id가 비어 있다."
-        seed_limit = navigation_policy.budget.max_seed_pages
-        if len(selected) > seed_limit:
-            return f"한 번에 읽을 Wiki Seed Page는 최대 {seed_limit}개다."
+        if len(selected) > 6:
+            return "한 번에 읽을 Wiki Page는 최대 6개다."
         already_selected = {
             page.document_version_id
             for packet in session.packets
             for page in packet.pages
             if page.role == "seed"
         }
-        if len(already_selected | set(selected)) > seed_limit:
-            return (
-                "한 Reader 실행에서 선택할 Wiki Seed Page는 최대 "
-                f"{seed_limit}개다."
-            )
+        if len(already_selected | set(selected)) > 6:
+            return "한 Reader 실행에서 선택할 Wiki Seed Page는 최대 6개다."
         unknown = [
             version_id for version_id in selected if version_id not in session.candidates
         ]
@@ -787,11 +742,9 @@ def build_research_tools(
             selected_document_version_ids=selected,
             candidates=tuple(session.candidates.values()),
             wiki_version_id=wiki_version_id,
-            max_depth=navigation_policy.budget.max_depth,
-            max_seed_pages=navigation_policy.budget.max_seed_pages,
-            max_pages=navigation_policy.budget.max_pages,
-            max_chunks=navigation_policy.budget.max_chunks,
-            hop_page_limits=navigation_policy.budget.hop_page_limits,
+            max_depth=1,
+            max_pages=6,
+            max_chunks=12,
         )
         session.remember_packet(packet)
         added = collector.add(
@@ -827,8 +780,7 @@ def build_research_tools(
             name="wiki_read",
             description=(
                 "wiki_search 후보 중 질문에 필요한 Page Version을 선택해 본문·검증 "
-                "관계·원본 저장 시각을 읽는다. 최대 "
-                f"{navigation_policy.budget.max_seed_pages}개 ID를 전달한다."
+                "관계·원본 저장 시각을 읽는다. 최대 6개 ID를 전달한다."
             ),
             parameters={
                 "type": "object",
@@ -837,7 +789,7 @@ def build_research_tools(
                         "type": "array",
                         "items": {"type": "string"},
                         "minItems": 1,
-                        "maxItems": navigation_policy.budget.max_seed_pages,
+                        "maxItems": 6,
                         "description": "wiki_search가 반환한 document_version_id 목록",
                     }
                 },
@@ -882,7 +834,6 @@ async def research_context(
     wiki_version_id: str | None = None,
     job_id: str | None = None,
     navigation_snapshot: Mapping[str, object] | None = None,
-    navigation_policy: WikiNavigationPolicy = DEFAULT_WIKI_NAVIGATION_POLICY,
 ) -> ResearchOutcome:
     """조사원이 저장된 자료를 훑고, 부족하면 실시간 수집으로 보강한다.
 
@@ -909,7 +860,6 @@ async def research_context(
         wiki_version_id: 읽기를 고정할 Wiki Build UUID
         job_id: 첫 Reader Packet을 재시도 Payload에 저장할 Report Job UUID
         navigation_snapshot: 같은 Job의 첫 실행에서 고정한 Topic별 Packet Metadata
-        navigation_policy: Job 접수 시 고정한 Wiki 탐색 프로필과 실행 예산
 
     Returns:
         모인 근거 문서와 도구 호출 기록
@@ -940,7 +890,7 @@ async def research_context(
             for version_id in planned_wiki_version_ids
             if str(version_id).strip()
         )
-    )[: navigation_policy.budget.max_seed_pages]
+    )[:6]
     if navigation_snapshot:
         packet = await load_navigation_snapshot_packet(
             connection,
@@ -957,11 +907,9 @@ async def research_context(
             query=topic,
             selected_document_version_ids=selected_planned_versions,
             wiki_version_id=wiki_version_id,
-            max_depth=navigation_policy.budget.max_depth,
-            max_seed_pages=navigation_policy.budget.max_seed_pages,
-            max_pages=navigation_policy.budget.max_pages,
-            max_chunks=navigation_policy.budget.max_chunks,
-            hop_page_limits=navigation_policy.budget.hop_page_limits,
+            max_depth=1,
+            max_pages=6,
+            max_chunks=12,
         )
         navigation_session.remember_packet(packet)
         collector.add(navigation_packet_documents(packet, user_id=user_id))
@@ -974,7 +922,6 @@ async def research_context(
         navigation_session=navigation_session,
         wiki_version_id=wiki_version_id,
         allow_wiki_navigation=not wiki_selection_fixed,
-        navigation_policy=navigation_policy,
     )
     # 도구별 호출 횟수와 소요 시간을 잰다. 3주제 리포트 336초 중 320초가 이
     # 노드였는데 안이 안 보여 어디를 줄일지 판단할 수 없었다(2026-08-11 실측,
@@ -991,11 +938,7 @@ async def research_context(
         else ""
     )
     result = await run_tool_loop(
-        (
-            FIXED_WIKI_SYSTEM_PROMPT
-            if wiki_selection_fixed
-            else _research_system_prompt(navigation_policy)
-        ),
+        FIXED_WIKI_SYSTEM_PROMPT if wiki_selection_fixed else SYSTEM_PROMPT,
         f"리포트 주제: {topic}\n이 주제로 리포트를 쓸 근거 자료를 모아라.{planned_note}",
         tools,
         model=model,

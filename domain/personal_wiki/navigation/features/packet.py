@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from dataclasses import replace
 from hashlib import sha256
 from typing import Any
 
@@ -18,10 +17,6 @@ from shared.wiki_navigation_models import (
     WikiNavigationSource,
     WikiNavigationTraceStep,
     WikiNavigationTraversal,
-)
-from shared.wiki_navigation_policy import (
-    DEFAULT_WIKI_NAVIGATION_POLICY,
-    WikiNavigationBudget,
 )
 
 from .read import wnav_002, wnav_004
@@ -43,7 +38,6 @@ async def wnav_005(
     sources: Sequence[WikiNavigationSource],
     truncated: bool = False,
     fallback_reason: str | None = None,
-    budget: WikiNavigationBudget = DEFAULT_WIKI_NAVIGATION_POLICY.budget,
 ) -> WikiNavigationPacket:
     """[WNAV-005] 읽은 Page·관계·Source를 답변 없는 Context Packet으로 조립한다."""
     if not query.strip():
@@ -81,7 +75,6 @@ async def wnav_005(
         trace=trace,
         truncated=truncated,
         fallback_reason=fallback_reason,
-        budget=budget,
     )
 
 
@@ -97,21 +90,10 @@ async def wnav_006(
     max_depth: int = 1,
     max_pages: int = 6,
     max_chunks: int = 12,
-    max_seed_pages: int | None = None,
-    hop_page_limits: Sequence[int] | None = None,
 ) -> WikiNavigationPacket:
     """[WNAV-006] Consumer가 선택한 Seed를 읽고 제한적으로 탐색한다."""
-    budget = WikiNavigationBudget(
-        max_depth=max_depth,
-        max_seed_pages=max_seed_pages if max_seed_pages is not None else max_pages,
-        max_pages=max_pages,
-        max_chunks=max_chunks,
-        hop_page_limits=(
-            tuple(int(limit) for limit in hop_page_limits)
-            if hop_page_limits is not None
-            else tuple(max_pages for _ in range(max_depth))
-        ),
-    )
+    if not 1 <= max_chunks <= 12:
+        raise ValueError("WNAV-006 Chunk 수는 1에서 12 사이여야 합니다.")
     if not selected_document_version_ids:
         return await wnav_005(
             query=query,
@@ -120,21 +102,11 @@ async def wnav_006(
             pages=(),
             relations=(),
             sources=(),
-            budget=budget,
         )
-    selected_seed_versions = list(
-        dict.fromkeys(
-            str(version_id).strip()
-            for version_id in selected_document_version_ids
-            if str(version_id).strip()
-        )
-    )
-    seed_truncated = len(selected_seed_versions) > budget.max_seed_pages
-    selected_seed_versions = selected_seed_versions[: budget.max_seed_pages]
     seed_pages = await wnav_002(
         connection,
         user_id=user_id,
-        document_version_ids=selected_seed_versions,
+        document_version_ids=selected_document_version_ids,
         wiki_version_id=wiki_version_id,
         max_chunks_per_page=max(1, max_chunks // max_pages),
     )
@@ -147,8 +119,6 @@ async def wnav_006(
             seed_document_ids=seed_document_ids,
             max_depth=max_depth,
             max_pages=max_pages,
-            seed_page_limit=budget.max_seed_pages,
-            hop_page_limits=budget.hop_page_limits,
         )
     except Exception as error:  # noqa: BLE001 - Page Read 보존 폴백
         logger.warning(
@@ -164,27 +134,16 @@ async def wnav_006(
             type(error).__name__,
             error,
         )
-        traversal = WikiNavigationTraversal(
-            tuple(seed_document_ids),
-            (),
-            document_hops=tuple((item, 0) for item in seed_document_ids),
-        )
+        traversal = WikiNavigationTraversal(tuple(seed_document_ids), ())
         fallback_reason = "relation_traversal_failed"
     pages = await wnav_002(
         connection,
         user_id=user_id,
-        document_version_ids=selected_seed_versions,
+        document_version_ids=selected_document_version_ids,
         document_ids=traversal.document_ids,
         wiki_version_id=wiki_version_id,
         max_chunks_per_page=max(1, max_chunks // max_pages),
     )
-    hop_by_document = dict(traversal.document_hops)
-    pages = [
-        replace(page, hops=hop_by_document.get(page.document_id, 0))
-        if isinstance(page, WikiNavigationPage)
-        else page
-        for page in pages
-    ]
     sources = await wnav_004(
         connection,
         user_id=user_id,
@@ -197,7 +156,6 @@ async def wnav_006(
         pages=pages,
         relations=traversal.relations,
         sources=sources,
-        truncated=seed_truncated or traversal.truncated,
+        truncated=traversal.truncated,
         fallback_reason=fallback_reason,
-        budget=budget,
     )
