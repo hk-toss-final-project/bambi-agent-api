@@ -53,6 +53,8 @@ type DictRow = dict[str, Any]
 
 logger = logging.getLogger(__name__)
 
+INTERACTIVE_WIKI_BUILD_QUIET_MINUTES = 0
+
 
 class PostgresAgentJobRepository:
     """PostgreSQL에서 사용자 원본과 Agent Job 수명주기를 관리한다."""
@@ -158,7 +160,7 @@ class PostgresAgentJobRepository:
         memo: str | None,
         request_id: str,
     ) -> SubmittedSourceJob:
-        """클리핑 원본과 Wiki Build Job을 저장하고 조회 가능한 결과를 반환한다."""
+        """클리핑 원본과 즉시 실행 가능한 Wiki Build Job을 저장한다."""
         async with self._pool.connection() as connection:
             async with connection.transaction():
                 await set_personal_wiki_scope(connection, user_id=user_id)
@@ -177,7 +179,7 @@ class PostgresAgentJobRepository:
                     occurred_at=occurred_at,
                     memo=memo,
                     request_id=request_id,
-                    quiet_minutes=self._wiki_build_quiet_minutes,
+                    quiet_minutes=INTERACTIVE_WIKI_BUILD_QUIET_MINUTES,
                     max_wait_minutes=self._wiki_build_max_wait_minutes,
                 )
                 stored = await get_agent_job(connection, job_id=saved.job_id)
@@ -269,7 +271,7 @@ class PostgresAgentJobRepository:
         memo: str | None,
         request_id: str,
     ) -> SubmittedSourceJob:
-        """북마크한 리포트 원본과 Wiki Build Job을 저장하고 조회 가능한 결과를 반환한다.
+        """북마크한 리포트 원본과 즉시 실행 가능한 Wiki Build Job을 저장한다.
 
         대상 리포트는 작성자와 무관하게 조회해야 하므로(내 것/피드의 남의 것 모두
         같은 경로) 이 트랜잭션은 system scope로 실행한다. RLS의 사용자 격리를
@@ -288,7 +290,7 @@ class PostgresAgentJobRepository:
                     occurred_at=occurred_at,
                     memo=memo,
                     request_id=request_id,
-                    quiet_minutes=self._wiki_build_quiet_minutes,
+                    quiet_minutes=INTERACTIVE_WIKI_BUILD_QUIET_MINUTES,
                     max_wait_minutes=self._wiki_build_max_wait_minutes,
                 )
                 stored = await get_agent_job(connection, job_id=saved.job_id)
@@ -587,7 +589,7 @@ class PostgresAgentJobRepository:
         published_at: datetime | None,
         image_url: str | None = None,
     ) -> dict[str, object]:
-        """Jina 결과를 원본 Version으로 저장하고 후속 Wiki Job을 등록한다."""
+        """Jina 결과를 저장하고 즉시 실행 가능한 후속 Wiki Job을 등록한다."""
         source_document_id = str(job.payload.get("source_document_id") or "")
         source_event_id = str(job.payload.get("source_event_id") or "")
         source_event_row_id = str(job.payload.get("source_event_row_id") or "")
@@ -607,7 +609,7 @@ class PostgresAgentJobRepository:
                     resolved_url=resolved_url,
                     image_url=image_url,
                     published_at=published_at,
-                    quiet_minutes=self._wiki_build_quiet_minutes,
+                    quiet_minutes=INTERACTIVE_WIKI_BUILD_QUIET_MINUTES,
                     max_wait_minutes=self._wiki_build_max_wait_minutes,
                 )
 

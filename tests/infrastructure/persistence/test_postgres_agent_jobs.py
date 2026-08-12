@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
+from app.services.agent_jobs import ClaimedJobRecord
 from infrastructure.persistence import postgres_agent_jobs
 from infrastructure.persistence.postgres_agent_jobs import PostgresAgentJobRepository
 
@@ -173,10 +174,10 @@ def test_repository_stores_configured_quiet_window() -> None:
     assert repository._wiki_maintenance_pipeline_version == "langgraph_v2"
 
 
-def test_submit_web_clipping_forwards_configured_quiet_window(
+def test_submit_web_clipping_ignores_quiet_window_for_immediate_build(
     monkeypatch: Any,
 ) -> None:
-    """클리핑 저장이 저장소에 설정된 조용 시간을 db_002에 그대로 전달하는지 검증한다."""
+    """클리핑은 저장소 조용 시간과 관계없이 즉시 실행으로 등록되는지 검증한다."""
     captured: dict[str, Any] = {}
 
     async def fake_db_002(_connection: object, **kwargs: Any) -> Any:
@@ -231,5 +232,111 @@ def test_submit_web_clipping_forwards_configured_quiet_window(
         )
     )
 
-    assert captured["quiet_minutes"] == 7
+    assert captured["quiet_minutes"] == 0
+    assert captured["max_wait_minutes"] == 21
+
+
+def test_submit_content_mark_ignores_quiet_window_for_immediate_build(
+    monkeypatch: Any,
+) -> None:
+    """콘텐츠 북마크도 저장소 조용 시간과 관계없이 즉시 실행으로 등록한다."""
+    captured: dict[str, Any] = {}
+
+    async def fake_save(_connection: object, **kwargs: Any) -> Any:
+        """전달받은 북마크 저장 인자를 기록한다."""
+        captured.update(kwargs)
+
+        class _Saved:
+            job_id = "job-1"
+            source_document_id = "doc-1"
+            source_document_version_id = "version-1"
+
+        return _Saved()
+
+    async def fake_get_agent_job(_connection: object, *, job_id: str) -> Any:
+        """저장 결과 조회를 최소 레코드로 대체한다."""
+        return object()
+
+    async def fake_scope(_connection: object) -> None:
+        """시스템 Scope 설정을 건너뛴다."""
+        return None
+
+    monkeypatch.setattr(
+        postgres_agent_jobs, "save_content_mark_and_enqueue", fake_save
+    )
+    monkeypatch.setattr(postgres_agent_jobs, "get_agent_job", fake_get_agent_job)
+    monkeypatch.setattr(postgres_agent_jobs, "set_system_job_scope", fake_scope)
+    monkeypatch.setattr(
+        PostgresAgentJobRepository,
+        "_to_job_record",
+        lambda self, stored: stored,
+    )
+
+    repository = _repository(
+        _TransactionalConnection(),
+        wiki_build_quiet_minutes=7,
+        wiki_build_max_wait_minutes=21,
+    )
+    asyncio.run(
+        repository.submit_content_mark(
+            user_id="user-1",
+            source_event_id="mark-1",
+            content_id="content-1",
+            occurred_at=None,
+            memo=None,
+            request_id="request-1",
+        )
+    )
+
+    assert captured["quiet_minutes"] == 0
+    assert captured["max_wait_minutes"] == 21
+
+
+def test_save_fetched_url_ignores_quiet_window_for_immediate_build(
+    monkeypatch: Any,
+) -> None:
+    """URL 본문 수집 후 Wiki Job도 조용 시간 없이 즉시 실행으로 등록한다."""
+    captured: dict[str, Any] = {}
+
+    async def fake_save(_connection: object, **kwargs: Any) -> dict[str, object]:
+        """전달받은 URL 후속 저장 인자를 기록한다."""
+        captured.update(kwargs)
+        return {"wiki_build_job_id": "wiki-job-1"}
+
+    async def fake_scope(_connection: object, *, user_id: str) -> None:
+        """사용자 Scope 인자를 검증한다."""
+        assert user_id == "user-1"
+
+    monkeypatch.setattr(postgres_agent_jobs, "save_fetched_url_and_enqueue", fake_save)
+    monkeypatch.setattr(postgres_agent_jobs, "set_personal_wiki_scope", fake_scope)
+
+    repository = _repository(
+        _TransactionalConnection(),
+        wiki_build_quiet_minutes=7,
+        wiki_build_max_wait_minutes=21,
+    )
+    result = asyncio.run(
+        repository.save_fetched_url(
+            job=ClaimedJobRecord(
+                job_id="url-job-1",
+                user_id="user-1",
+                feature_id="SVC-003",
+                job_type="personal_wiki_url",
+                attempt_number=1,
+                max_attempts=3,
+                payload={
+                    "source_document_id": "doc-1",
+                    "source_event_id": "url-1",
+                    "source_event_row_id": "event-row-1",
+                },
+            ),
+            title="제목",
+            markdown="# 본문",
+            resolved_url="https://example.com/final",
+            published_at=None,
+        )
+    )
+
+    assert result["wiki_build_job_id"] == "wiki-job-1"
+    assert captured["quiet_minutes"] == 0
     assert captured["max_wait_minutes"] == 21

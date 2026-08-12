@@ -112,7 +112,7 @@
 - [x] `SCH-001` RSS 수집 스케줄 — Google News RSS(`google_news`, COL-001) 정기 수집. 2026-07-28 범위 추가: 영문 키워드에서 가장 정확한 Provider인데(실측 'Cloudflare' 수집 시 Naver 10건 중 관련 3건, google_news 5건 전부 관련) 스케줄에서 빠져 있었다. **명세의 "RSS Source"는 임의 피드 주소를 뜻하지만 이 구현은 키워드 검색이다** — 임의 피드 수집이 필요해지면 별도 Provider로 추가한다. 원본 URL 디코딩 때문에 키워드당 12초쯤 더 걸린다
 - [x] `SCH-002` Naver API 수집 스케줄 — 독립 Scheduler 프로세스(`scheduler/main.py`)가 tick마다 `agent.global_sources`의 `schedule_cron`·`keywords`를 읽어 실행 차례가 된 Source만 수집 Worker(WORKER-001)로 넘긴다. 판정 순서는 ① Cron 도달 ② 키워드 존재 ③ `quota_policy.daily_max_runs`
 - [x] `SCH-003` GDELT 수집 스케줄 — SCH-002와 동일한 판정·실행 규칙
-- [x] `SCH-004` NewsAPI 수집 스케줄 — 수집 Worker에 `newsapi` Provider(COL-004) 연결 포함. 무료 플랜 호출 한도(일 100회)가 낮아 기본 Provider 목록에서는 제외하고 `quota_policy.daily_max_runs`와 함께 쓴다. (참고: MVP 목록 외 `SCH-009` Wiki Build 조용 시간 트리거는 `enqueue_personal_wiki_build_job` 등록 직후 자동 적용됨 — 웹 클리핑·온보딩 시드·북마크·URL 수집 후속 저장이 모두 이 함수를 거친다. 기본값은 `WIKI_BUILD_QUIET_MINUTES=0`(즉시 반영, 시연·개발 기본값)이라 평소에는 저장 즉시 Wiki Build가 돈다. 저장이 몰리는 운영 환경에서는 이 값을 10 등으로 늘리면, 짧은 시간에 여러 건을 저장해도 대기 Job이 매번 따로 돌지 않고 `WIKI_BUILD_MAX_WAIT_MINUTES` 상한 안에서 한 번에 묶인다)
+- [x] `SCH-004` NewsAPI 수집 스케줄 — 수집 Worker에 `newsapi` Provider(COL-004) 연결 포함. 무료 플랜 호출 한도(일 100회)가 낮아 기본 Provider 목록에서는 제외하고 `quota_policy.daily_max_runs`와 함께 쓴다. (참고: MVP 목록 외 `SCH-009` Wiki Build 조용 시간 트리거는 `enqueue_personal_wiki_build_job` 등록 직후 적용된다. 사용자 대화형 경로인 웹 클리핑·콘텐츠 북마크·URL 수집 후속 저장은 설정과 관계없이 0분으로 즉시 실행하고, 온보딩 시드와 운영 Batch 입력만 `WIKI_BUILD_QUIET_MINUTES`·`WIKI_BUILD_MAX_WAIT_MINUTES` 정책을 선택적으로 사용한다)
 - [x] `SCH-010` 사용자 관심사 재계산 — Scheduler tick마다 활성 Wiki가 있고 관심사 Profile이 `INTEREST_RECALCULATION_STALE_HOURS`(기본 24시간)보다 오래된 사용자를 오래된 순서로 최대 `INTEREST_RECALCULATION_LIMIT`(기본 20)명 골라 INT-011을 다시 돌리고, 상위 관심사를 창고 수집 대상으로 갱신한다. 관심사 점수(INT-005)는 계산 시각 기준으로 최신성을 감쇠시키므로 이 단계가 없으면 저장이 멈춘 사용자의 점수가 마지막 Build 시점에 고정된다. 대상 선정이 `calculated_at` 기준이라 별도 처리 이력 없이 같은 주기 중복 실행을 막는다. 재계산은 LLM을 호출하지 않으며, 사용자 한 명의 실패는 나머지와 수집 tick을 막지 않는다
 - [x] `SCH-017` 스케줄 등록 — `POST /internal/v1/collection-schedules` (멱등 Upsert, Cron·키워드 검증)
 - [x] `SCH-018` 스케줄 수정 — `PATCH /internal/v1/collection-schedules/{source_key}` (부분 수정, 다음 tick부터 반영)
@@ -459,6 +459,9 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 
 ### MVP Batch 처리 계약
 
+- 사용자 Wiki·URL 수집 상주 Worker는 환경변수가 없어도 각각 Batch 10건·동시성
+  4개·빈 Queue 재조회 5초를 기본으로 사용한다. 같은 사용자의 Wiki Build는 기존
+  Advisory Lock으로 직렬화하고 서로 다른 사용자 Job만 병렬 처리한다.
 - 콘텐츠 생성 트리거는 service 계층 스케줄러가 담당한다(2026-07-20 결정). 사용자 지정 생성 시간의 원천 데이터가 service-db에 있으므로, service 스케줄러가 `schedule window + user_id + content_type` 규칙의 `idempotency_key`로 `POST /generations`를 호출하고, 미리 등록할 때는 `scheduled_at`으로 실행 시각을 예약한다. Agent는 별도의 생성 Scheduler를 두지 않는다(구 SCH-011 제거).
 - Agent Worker는 한 트랜잭션에서 실행 가능한 Job 여러 건을 `FOR UPDATE SKIP LOCKED`로 Claim하고, DB Transaction 밖에서 제한된 동시성으로 각 Job을 독립 실행한다.
 - Batch Claim 크기와 실제 LLM 호출 동시성은 별도 설정으로 관리한다. 한 Batch를 하나의 LLM 요청으로 합치지 않는다.

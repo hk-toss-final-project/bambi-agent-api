@@ -119,13 +119,22 @@ class Settings(BaseModel):
         description="이 Chunk 수 이상인 Wiki Embedding을 OpenAI Batch로 전환",
     )
     personal_wiki_worker_batch_size: int = Field(
-        default=1, ge=1, le=100, description="Personal Wiki Worker Job Claim 개수"
+        default=10, ge=1, le=100, description="Personal Wiki Worker Job Claim 개수"
     )
     personal_wiki_job_concurrency: int = Field(
-        default=1,
+        default=4,
         ge=1,
         le=50,
         description="Personal Wiki Worker의 실제 동시 Job 실행 수",
+    )
+    url_collection_worker_batch_size: int = Field(
+        default=10, ge=1, le=100, description="URL 수집 Worker Job Claim 개수"
+    )
+    url_collection_job_concurrency: int = Field(
+        default=4,
+        ge=1,
+        le=20,
+        description="URL 수집 Worker의 실제 동시 Job 실행 수",
     )
     report_worker_batch_size: int = Field(
         default=1,
@@ -372,10 +381,16 @@ def load_settings() -> Settings:
             "WIKI_EMBEDDING_BATCH_THRESHOLD", 100
         ),
         personal_wiki_worker_batch_size=_integer_env(
-            "PERSONAL_WIKI_WORKER_BATCH_SIZE", 1
+            "PERSONAL_WIKI_WORKER_BATCH_SIZE", 10
         ),
         personal_wiki_job_concurrency=_integer_env(
-            "PERSONAL_WIKI_JOB_CONCURRENCY", 1
+            "PERSONAL_WIKI_JOB_CONCURRENCY", 4
+        ),
+        url_collection_worker_batch_size=_integer_env(
+            "URL_COLLECTION_WORKER_BATCH_SIZE", 10
+        ),
+        url_collection_job_concurrency=_integer_env(
+            "URL_COLLECTION_JOB_CONCURRENCY", 4
         ),
         report_worker_batch_size=_integer_env(
             "REPORT_WORKER_BATCH_SIZE",

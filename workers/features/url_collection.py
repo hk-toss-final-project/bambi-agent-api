@@ -102,6 +102,7 @@ async def _process_job(
             resolved_url=fetched.resolved_url,
             image_url=image.url if image is not None else None,
             published_at=_parse_published_at(fetched.published_time),
+            quiet_minutes=0,
         )
 
     linked_result = await job_007(result)
@@ -123,11 +124,12 @@ async def run_url_collection_batch(
     database_url: str,
     worker_id: str,
     limit: int = 1,
+    concurrency: int = 4,
     lease_seconds: int = 600,
     url_fetcher: UrlFetcher = fetch_url_via_jina,
     image_fetcher: ImageFetcher | None = None,
 ) -> list[dict[str, object]]:
-    """대기 중인 사용자 URL 수집 Job Batch를 점유해 순차적으로 처리한다."""
+    """대기 중인 사용자 URL 수집 Job을 제한된 동시성으로 처리한다."""
     if not database_url:
         raise ValueError("URL 수집 Worker에 database_url이 필요합니다.")
     if not worker_id:
@@ -151,7 +153,7 @@ async def run_url_collection_batch(
         worker_id=worker_id,
         limit=limit,
         lease_seconds=lease_seconds,
-        concurrency=1,
+        concurrency=concurrency,
         error_code_prefix="URL_COLLECTION",
         process=process,
     )
