@@ -181,6 +181,62 @@ def test_google_news_rss_provider_drops_undecodable_items() -> None:
     assert [article.title for article in articles] == ["디코딩 성공"]
 
 
+def test_google_news_rate_limit_stops_before_decoding_remaining_items() -> None:
+    """Google 차단을 감지하면 남은 기사 URL 디코딩을 즉시 중단한다."""
+    items = "".join(
+        "<item>"
+        f"<title>기사{i}</title>"
+        f"<link>https://news.google.com/rss/articles/{i}</link>"
+        "</item>"
+        for i in range(100)
+    )
+    calls: list[str] = []
+
+    def blocked_decoder(url: str) -> str:
+        """첫 디코딩에서 Google의 봇 차단을 재현한다."""
+        calls.append(url)
+        raise LatestProviderError(
+            "google_news", "rate_limited", "Google News 디코딩이 차단됐습니다."
+        )
+
+    provider = GoogleNewsRssProvider(
+        transport=_rss_transport(f"<rss><channel>{items}</channel></rss>"),
+        url_decoder=blocked_decoder,
+    )
+
+    with pytest.raises(LatestProviderError) as caught:
+        asyncio.run(provider.search(query="트럼프", limit=15, language="ko"))
+
+    assert caught.value.error_code == "rate_limited"
+    assert len(calls) == 1
+
+
+def test_google_news_decoder_opens_cooldown_on_sorry_page(monkeypatch) -> None:
+    """Google sorry 페이지를 받으면 프로세스 쿨다운 동안 재호출하지 않는다."""
+    calls: list[str] = []
+
+    def blocked_decoder(url: str) -> dict[str, object]:
+        """429 봇 차단 응답을 반환하고 실제 호출 횟수를 기록한다."""
+        calls.append(url)
+        return {
+            "status": False,
+            "message": (
+                "429 Client Error: Too Many Requests for url: "
+                "https://www.google.com/sorry/index"
+            ),
+        }
+
+    monkeypatch.setattr("googlenewsdecoder.gnewsdecoder", blocked_decoder)
+    url = "https://news.google.com/rss/articles/blocked"
+
+    for _ in range(2):
+        with pytest.raises(LatestProviderError) as caught:
+            latest.decode_google_news_url(url)
+        assert caught.value.error_code == "rate_limited"
+
+    assert len(calls) == 1
+
+
 def test_google_news_rss_provider_applies_limit_and_rejects_bad_feed() -> None:
     """limit을 초과한 항목은 잘리고, XML이 아니면 invalid_feed 오류를 낸다."""
     items = "".join(
@@ -283,15 +339,17 @@ def test_naver_provider_propagates_failure() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _reset_gdelt_state():
-    """테스트마다 GDELT 간격·쿨다운 상태를 초기화한다.
+def _reset_provider_rate_limit_state():
+    """테스트마다 뉴스 Provider의 프로세스 전역 제한 상태를 초기화한다.
 
     상태가 프로세스 전역이라 초기화하지 않으면 앞선 테스트가 남긴 다음 호출
     시각 때문에 뒤 테스트가 실제로 5초를 잔다.
     """
     latest.reset_gdelt_rate_limit_state()
+    latest.reset_google_news_rate_limit_state()
     yield
     latest.reset_gdelt_rate_limit_state()
+    latest.reset_google_news_rate_limit_state()
 
 
 def _counting_transport(

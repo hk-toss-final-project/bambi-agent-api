@@ -84,6 +84,9 @@ class ReportGenerationState(TypedDict):
     # 조사원이 실시간 수집을 이미 시도했는지. 고정 경로가 같은 수집을 한 번 더
     # 돌리지 않게 하는 표식이다(성공 여부가 아니라 시도 여부).
     research_collected_live: NotRequired[bool]
+    # 조사 시간 초과를 포함해 실시간 수집을 시작한 주제 목록. 여러 주제에서는
+    # 일부만 시도할 수 있어 전역 bool과 별도로 보존한다.
+    research_live_attempted_topics: NotRequired[list[str]]
     topic_intent: NotRequired[str]
     # 주제별 성격 판정과 주제별 조사 결과. 여러 주제를 묶을 때 load_context가
     # 주제마다 근거 몫을 배정하려면 어느 문서가 어느 주제 것인지 알아야 한다.

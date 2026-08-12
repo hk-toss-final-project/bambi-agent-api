@@ -23,6 +23,10 @@ LEASE_TIMEOUT_ERROR_MESSAGE = (
     "Lease가 만료됐지만 시도를 다 써서 아무도 다시 집지 못한 채 running으로 "
     "남아 있었습니다. Scheduler가 JOB-009로 회수해 failed로 마감했습니다."
 )
+STALE_ATTEMPT_ERROR_CODE = "lease_expired"
+STALE_ATTEMPT_ERROR_MESSAGE = (
+    "Worker Lease가 만료되어 새 Attempt가 Job을 다시 점유했습니다."
+)
 
 type DictRow = dict[str, Any]
 
@@ -160,6 +164,52 @@ async def set_system_job_scope(connection: AsyncConnection[DictRow]) -> None:
     await connection.execute("SET LOCAL app.access_scope = 'system'")
 
 
+async def _record_claimed_attempt(
+    connection: AsyncConnection[DictRow],
+    *,
+    job: ClaimedAgentJob,
+    worker_id: str,
+) -> None:
+    """이전 running Attempt를 timed_out으로 닫고 새 Claim Attempt를 기록한다.
+
+    Job 재점유와 같은 Transaction에서 실행되므로, Lease가 만료된 이전 Worker의
+    Attempt가 running으로 남은 채 새 Attempt가 추가되는 좀비 상태를 막는다.
+    """
+    await connection.execute(
+        """
+        WITH timed_out AS (
+            UPDATE agent.agent_job_attempts
+            SET
+                status = 'timed_out',
+                error_code = %s,
+                error_message = %s,
+                completed_at = clock_timestamp()
+            WHERE job_id = %s
+              AND status = 'running'
+              AND attempt_number < %s
+        )
+        INSERT INTO agent.agent_job_attempts (
+            job_id,
+            user_id,
+            attempt_number,
+            worker_id,
+            status
+        ) VALUES (%s, %s, %s, %s, 'running')
+        ON CONFLICT (job_id, attempt_number) DO NOTHING
+        """,
+        (
+            STALE_ATTEMPT_ERROR_CODE,
+            STALE_ATTEMPT_ERROR_MESSAGE,
+            job.job_id,
+            job.attempt_number,
+            job.job_id,
+            job.user_id,
+            job.attempt_number,
+            worker_id,
+        ),
+    )
+
+
 async def claim_runnable_agent_jobs(
     connection: AsyncConnection[DictRow],
     *,
@@ -263,18 +313,10 @@ async def claim_runnable_agent_jobs(
             payload=dict(row["payload"] or {}),
         )
         jobs.append(job)
-        await connection.execute(
-            """
-            INSERT INTO agent.agent_job_attempts (
-                job_id,
-                user_id,
-                attempt_number,
-                worker_id,
-                status
-            ) VALUES (%s, %s, %s, %s, 'running')
-            ON CONFLICT (job_id, attempt_number) DO NOTHING
-            """,
-            (job.job_id, job.user_id, job.attempt_number, worker_id),
+        await _record_claimed_attempt(
+            connection,
+            job=job,
+            worker_id=worker_id,
         )
         await connection.execute(
             """
@@ -365,7 +407,7 @@ async def reap_stalled_agent_jobs(
             """
             UPDATE agent.agent_job_attempts
             SET
-                status = 'failed',
+                status = 'timed_out',
                 error_code = %s,
                 error_message = %s,
                 completed_at = clock_timestamp()
@@ -643,18 +685,10 @@ async def claim_agent_job_by_id(
         max_attempts=int(row["max_attempts"]),
         payload=dict(row["payload"] or {}),
     )
-    await connection.execute(
-        """
-        INSERT INTO agent.agent_job_attempts (
-            job_id,
-            user_id,
-            attempt_number,
-            worker_id,
-            status
-        ) VALUES (%s, %s, %s, %s, 'running')
-        ON CONFLICT (job_id, attempt_number) DO NOTHING
-        """,
-        (job.job_id, job.user_id, job.attempt_number, worker_id),
+    await _record_claimed_attempt(
+        connection,
+        job=job,
+        worker_id=worker_id,
     )
     await connection.execute(
         """

@@ -222,7 +222,7 @@ COMMIT;
 ### Job과 Event 멱등성
 
 - `agent_jobs`: `feature_id + user_id + idempotency_key` Unique Index로 중복 Job을 차단합니다.
-- `agent_job_attempts`: 재시도마다 불변 실행 이력을 추가합니다.
+- `agent_job_attempts`: 재시도마다 실행 이력을 추가합니다. Lease가 만료된 Job을 새 Worker가 다시 Claim할 때 이전 `running` Attempt를 같은 Transaction에서 `timed_out`으로 마감한 뒤 새 Attempt를 기록합니다. 마지막 시도까지 소진한 Job은 JOB-009가 Job을 `failed`, 남은 Attempt를 `timed_out`으로 정리합니다.
 - `event_outbox`: Agent DB 변경과 Event 생성을 같은 Transaction에서 Commit합니다.
 - `event_inbox`: Consumer별 `event_id` Unique 제약으로 중복 처리를 차단합니다.
 - 반복 실패는 `dead_letter` 상태로 분리하고 원본 Payload와 오류를 보존합니다.
