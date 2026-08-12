@@ -116,7 +116,30 @@ flowchart LR
 - Jina 수집 실패는 Job과 Source Event에 기록되고 재시도 정책을 따르며, URL 저장
   요청 자체의 202 응답을 되돌리지 않습니다.
 
-### 3.4 콘텐츠 생성 요청 + 사용자 지정 시간 스케줄러
+### 3.4 아침 브리핑 준비 + 콘텐츠 생성 요청
+
+아침 브리핑은 생성 시각보다 먼저 날짜별 준비 Job을 등록합니다.
+
+`POST /internal/v1/users/{user_id}/briefing-preparations`
+
+```json
+{
+  "briefing_date": "2026-08-12",
+  "idempotency_key": "briefing:2026-08-12:user-1",
+  "limit": 3
+}
+```
+
+- Service 스케줄러는 준비 시각(예: 03:00)에 GET이 아니라 이 POST를 호출합니다.
+- Agent 배포에는 `python -m workers.main --worker briefing-preparation --loop`를
+  Report Worker와 별도 프로세스로 상주시켜야 합니다. 이 Worker가 없으면 202로
+  접수된 Job도 `queued`에 남습니다.
+- 생성 시각(예: 07:00)에
+  `GET /internal/v1/users/{user_id}/briefing-topics?briefing_date=YYYY-MM-DD&limit=3`로
+  준비 결과를 읽고, 같은 `topics[]`와 `briefing_date`를 아래 생성 요청에 넣습니다.
+- 같은 `idempotency_key` 재등록은 기존 Job을 반환하므로 스케줄러 재시도에 안전합니다.
+
+콘텐츠 생성 요청:
 
 `POST /internal/v1/users/{user_id}/generations`
 
