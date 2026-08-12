@@ -179,6 +179,11 @@ def test_batch_call_retries_with_async_backoff(
         "_retry_delay_for_error",
         lambda error, attempt: 2.5,
     )
+    monkeypatch.setattr(
+        batch_client,
+        "is_retryable_openai_error",
+        lambda error: True,
+    )
     monkeypatch.setattr(batch_client.asyncio, "sleep", fake_sleep)
 
     result = asyncio.run(_call_with_retry(operation))
@@ -204,6 +209,11 @@ def test_batch_call_does_not_retry_quota_error(
         batch_client,
         "_transient_error_types",
         lambda: (_QuotaError,),
+    )
+    monkeypatch.setattr(
+        batch_client,
+        "is_retryable_openai_error",
+        lambda error: False,
     )
 
     with pytest.raises(_QuotaError):

@@ -19,6 +19,7 @@ from psycopg_pool import AsyncConnectionPool
 from agent.llm.api import (
     LlmCallObservation,
     capture_llm_calls,
+    is_openai_action_required_error,
     is_retryable_openai_error,
     response_headers_from_value,
     retry_after_seconds_from_error,
@@ -228,19 +229,27 @@ async def record_job_failure(
     """Job 실패를 기록하고, 기록조차 못 해도 Batch 실행을 계속하게 한다.
 
     JobInputError만 입력 오류(_INPUT_INVALID, 재시도 불가)로 보고, 모델 출력
-    파싱 오류 같은 일반 ValueError를 포함한 실행 오류에는 재시도 정책을 적용한다.
+    파싱 오류 같은 일반 ValueError와 일시적인 OpenAI 오류에는 재시도 정책을 적용한다.
+    그 밖의 실행 오류는 반복 실행해도 회복되지 않는 실패로 기록한다.
     Lease가 이미 만료돼 실패 기록의 소유권 검증에 걸리면(RuntimeError) Worker
     프로세스를 죽이는 대신 lease_lost 결과로 보고한다. 해당 Job은 Lease 만료 후
     다른 Claim이 다시 처리한다.
     """
     input_invalid = isinstance(error, JobInputError)
-    retryable = not input_invalid and is_retryable_openai_error(error)
+    provider_action_required = (
+        not input_invalid and is_openai_action_required_error(error)
+    )
+    retryable = not input_invalid and (
+        isinstance(error, ValueError) or is_retryable_openai_error(error)
+    )
     if input_invalid:
         error_code = f"{error_code_prefix}_INPUT_INVALID"
     elif retryable:
         error_code = f"{error_code_prefix}_RETRYABLE"
-    else:
+    elif provider_action_required:
         error_code = f"{error_code_prefix}_PROVIDER_ACTION_REQUIRED"
+    else:
+        error_code = f"{error_code_prefix}_EXECUTION_FAILED"
     retry_delay_seconds = (
         await wc_007(
             job.attempt_number,

@@ -347,8 +347,9 @@ def test_run_job_batch_processes_each_job_and_isolates_failures(
         return [claim_queue.pop(0)] if claim_queue else []
 
     async def fake_fail(conn: Any, **kwargs: Any) -> str:
-        """Job 실패 후 재시도 대기 상태를 반환한다."""
-        return "queued"
+        """일반 실행 오류가 재시도 불가로 전달됐는지 검증한다."""
+        assert kwargs["retryable"] is False
+        return "failed"
 
     async def process(conn: Any, job: ClaimedAgentJob) -> dict[str, object]:
         """job-2만 실패시키는 처리 함수."""
@@ -380,8 +381,8 @@ def test_run_job_batch_processes_each_job_and_isolates_failures(
         "status": "completed",
         "content_id": "content-1",
     }
-    assert results[1]["status"] == "queued"
-    assert results[1]["error_code"] == "REPORT_GENERATION_RETRYABLE"
+    assert results[1]["status"] == "failed"
+    assert results[1]["error_code"] == "REPORT_GENERATION_EXECUTION_FAILED"
     assert connection.closed is True
 
 

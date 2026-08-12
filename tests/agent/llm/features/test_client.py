@@ -192,3 +192,8 @@ def test_complete_does_not_retry_quota_error(
         llm_client.complete_with_usage("system", "user", max_attempts=3)
 
     assert fake.calls == 1
+
+
+def test_generic_runtime_error_is_not_retryable_provider_error() -> None:
+    """일반 실행 오류를 일시적인 OpenAI 장애로 분류하지 않는다."""
+    assert llm_client.is_retryable_openai_error(RuntimeError("실행 오류")) is False
