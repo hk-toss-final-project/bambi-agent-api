@@ -329,10 +329,11 @@ def test_get_topics_reads_prepared_snapshot_without_selecting(
 
     assert response.topics == ["반도체", "프로야구"]
     assert response.reason == "미리 선정함"
+    assert response.preparation_status.value == "READY"
 
 
-def test_get_topics_returns_empty_when_preparation_is_missing() -> None:
-    """준비 Snapshot이 없으면 07시 조회가 외부 호출 없이 빈 목록을 반환한다."""
+def test_get_topics_returns_not_prepared_when_snapshot_is_missing() -> None:
+    """준비 Snapshot이 없으면 빈 완료와 구분되는 미준비 상태를 반환한다."""
     response = asyncio.run(
         BriefingTopicsService(_FakeRepository([])).get_topics(
             "user-1",
@@ -342,6 +343,7 @@ def test_get_topics_returns_empty_when_preparation_is_missing() -> None:
 
     assert response.topics == []
     assert response.candidate_count == 0
+    assert response.preparation_status.value == "NOT_PREPARED"
 
 
 def test_enqueue_preparation_returns_accepted_job() -> None:

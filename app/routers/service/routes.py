@@ -417,8 +417,9 @@ async def select_morning_briefing_topics(
 
     Service는 이 결과를 아침 생성 요청의 `topics[]`에 넣는다. 연결 수 상위 3개를
     그대로 쓰면 도구·출처가 주제가 되므로(실측: `DBeaver Community` 1.00),
-    후보를 넓게 받아 맥락을 읽고 고른다. 준비 Snapshot이 없으면 빈 목록을
-    반환해 Service가 등록 관심사 폴백을 사용하게 한다.
+    후보를 넓게 받아 맥락을 읽고 고른다. 준비 Snapshot이 없으면
+    `preparation_status=NOT_PREPARED`, 준비가 끝났으면 주제가 비어 있어도
+    `READY`를 반환한다.
     """
     resolved_date = briefing_date or datetime.now(KST).date()
     return await service.get_topics(

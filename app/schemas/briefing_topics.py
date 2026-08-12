@@ -7,8 +7,16 @@ Service가 아침 생성 요청의 `topics[]`에 넣을 주제를 조회할 때 
 from __future__ import annotations
 
 from datetime import date
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class BriefingPreparationStatus(StrEnum):
+    """사용자·날짜별 브리핑 준비 Snapshot 상태."""
+
+    NOT_PREPARED = "NOT_PREPARED"
+    READY = "READY"
 
 
 class BriefingPreparationRequest(BaseModel):
@@ -31,6 +39,13 @@ class BriefingTopicsResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     user_id: str = Field(description="조회 대상 사용자 ID")
+    preparation_status: BriefingPreparationStatus = Field(
+        default=BriefingPreparationStatus.READY,
+        description=(
+            "NOT_PREPARED는 날짜별 Snapshot이 아직 없다는 뜻이고, READY는 "
+            "topics가 비어 있어도 준비가 끝났다는 뜻이다"
+        ),
+    )
     topics: list[str] = Field(
         default_factory=list,
         description=(
