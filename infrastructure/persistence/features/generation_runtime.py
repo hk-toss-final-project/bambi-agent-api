@@ -635,6 +635,13 @@ async def enqueue_report_generation_job(
         interest_bundle = bundle.to_payload()
         resolved_topic = bundle.root_keyword
         resolved_topics = []
+    elif generation_scope == "WIKI_BRIEFING":
+        if briefing_date is None:
+            raise ValueError("WIKI_BRIEFING 생성에는 briefing_date가 필요합니다.")
+        if interest_id is not None:
+            raise ValueError("WIKI_BRIEFING 생성에는 interest_id를 사용할 수 없습니다.")
+        if resolved_topics:
+            raise ValueError("WIKI_BRIEFING 생성에는 topics를 미리 지정할 수 없습니다.")
     elif generation_scope != "SINGLE_TOPIC":
         raise ValueError(f"지원하지 않는 generation_scope입니다: {generation_scope}")
     else:

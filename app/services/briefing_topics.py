@@ -23,6 +23,7 @@ from agent.report_builder.api import (
     select_briefing_topics,
 )
 from app.schemas.briefing_topics import (
+    BriefingPreparationStatus,
     BriefingPreparationRequest,
     BriefingTopicsResponse,
 )
@@ -107,23 +108,27 @@ class BriefingTopicsService:
     ) -> BriefingTopicsResponse:
         """준비 Worker가 저장한 날짜별 주제를 LLM 호출 없이 조회한다.
 
-        **빈 목록을 정상 응답으로 돌려준다.** Wiki가 없는 신규 사용자가 여기에
-        해당하며, 계약상 Service는 `topics`가 비면 아침 요청을 보내지 않고
-        등록 관심사 폴백으로 넘어간다.
+        Snapshot 유무를 `preparation_status`로 구분한다. `READY`이면서 빈 목록이면
+        Wiki가 없거나 선정할 주제가 없는 정상 완료 상태이고, `NOT_PREPARED`이면
+        호출자가 준비 Job을 연결해야 한다.
 
         Args:
             user_id: 조회 대상 사용자 ID
             limit: 고를 주제 수
         Returns:
-            준비된 주제와 사유. Snapshot이 없으면 빈 목록
+            준비된 주제와 사유. Snapshot이 없으면 NOT_PREPARED
         """
         snapshot = await self._repository.load_briefing_topic_snapshot(
             user_id, briefing_date=briefing_date
         )
         if snapshot is None:
-            return BriefingTopicsResponse(user_id=user_id)
+            return BriefingTopicsResponse(
+                user_id=user_id,
+                preparation_status=BriefingPreparationStatus.NOT_PREPARED,
+            )
         return BriefingTopicsResponse(
             user_id=user_id,
+            preparation_status=BriefingPreparationStatus.READY,
             topics=list(snapshot.topics[:limit]),
             reason=snapshot.reason,
             candidate_count=snapshot.candidate_count,

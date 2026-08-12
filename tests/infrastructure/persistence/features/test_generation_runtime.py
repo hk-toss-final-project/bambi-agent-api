@@ -217,6 +217,40 @@ def test_enqueue_defaults_change_history_toggle_to_off() -> None:
     assert insert_params[2].obj["change_history_enabled"] is False
 
 
+def test_enqueue_wiki_briefing_does_not_read_registered_interests() -> None:
+    """Wiki 브리핑 접수는 사용자 관심사 매칭 없이 준비 날짜만 Job에 고정한다."""
+    connection = _FakeConnection(
+        [
+            [{"id": "context-1", "plan": "free", "preferred_language": "ko"}],
+            [{"id": "job-1"}],
+            [{"id": "request-1"}],
+        ]
+    )
+
+    asyncio.run(
+        enqueue_report_generation_job(
+            connection,  # type: ignore[arg-type]
+            user_id="user-1",
+            idempotency_key="generation-wiki-briefing",
+            topic="오늘의 관심사 브리핑",
+            generation_scope="WIKI_BRIEFING",
+            content_type="interest_news_card",
+            briefing_date=date(2026, 8, 12),
+            language="ko",
+            request_id="request-1",
+        )
+    )
+
+    assert len(connection.executed) == 3
+    assert all("user_interests" not in query for query, _ in connection.executed)
+    _, job_params = connection.executed[1]
+    assert job_params is not None
+    payload = job_params[2].obj
+    assert payload["generation_scope"] == "WIKI_BRIEFING"
+    assert payload["topics"] == []
+    assert payload["briefing_date"] == "2026-08-12"
+
+
 def test_enqueue_pins_read_pipeline_version_in_job_payload() -> None:
     """Report Job은 접수 시점의 읽기 루프 버전을 Payload에 고정한다."""
     connection = _connection_with_context()

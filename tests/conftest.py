@@ -355,6 +355,8 @@ class InMemoryAgentJobRepository:
         self.last_briefing_date = briefing_date
         self.last_generation_scope = generation_scope
         self.last_interest_id = interest_id
+        self.last_generation_topic = topic
+        self.last_generation_topics = list(topics or [])
         self.last_execution_mode = execution_mode
         record, _created = self._submit_job(
             feature_id="SVC-008",

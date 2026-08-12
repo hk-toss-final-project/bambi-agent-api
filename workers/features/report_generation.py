@@ -5,6 +5,7 @@ Lease로 점유한 report_generation Job을 LangGraph 오케스트레이션
 저장한다. 개발 API(`/dev/.../report-generations`)와 같은 그래프를 사용한다.
 """
 
+import asyncio
 import logging
 from datetime import date
 from typing import Any
@@ -12,6 +13,7 @@ from typing import Any
 from psycopg import AsyncConnection
 
 from agent.report_builder.api import (
+    DEFAULT_BRIEFING_TOPIC_COUNT,
     LEGACY_READ_PIPELINE_VERSION,
     READ_PIPELINE_VERSIONS,
     report_001,
@@ -19,6 +21,7 @@ from agent.report_builder.api import (
     stage_report_generation_batch,
 )
 from agent.graph import run_report_generation
+from app.services.briefing_topics import BriefingTopicsService
 from domain.jobs.api import job_007
 from infrastructure.persistence.api import (
     ClaimedAgentJob,
@@ -29,13 +32,64 @@ from infrastructure.persistence.api import (
     set_personal_wiki_scope,
     set_system_job_scope,
 )
+from infrastructure.persistence.postgres_wiki_graph import PostgresWikiGraphRepository
 from shared.contracts import FeatureRequest
 from workers.features.batch_runner import run_job_batch
+from workers.features.briefing_preparation import (
+    briefing_serialization_key,
+    prepare_briefing_snapshot,
+)
 from workers.runtime.api import JobInputError, ProviderRateLimitPolicy
 
 type DictRow = dict[str, Any]
 
 logger = logging.getLogger("workers.report_generation")
+
+_WIKI_BRIEFING_SCOPE = "WIKI_BRIEFING"
+
+
+def _report_serialization_key(job: ClaimedAgentJob) -> str | None:
+    """Wiki 브리핑 준비만 REPORT-022와 같은 사용자·날짜 키로 직렬화한다."""
+    generation_scope = str(job.payload.get("generation_scope") or "SINGLE_TOPIC")
+    if generation_scope != _WIKI_BRIEFING_SCOPE:
+        return None
+    return briefing_serialization_key(job)
+
+
+def _briefing_date(job: ClaimedAgentJob) -> date:
+    """Wiki 브리핑 Job의 KST 기준 날짜를 검증해 반환한다."""
+    raw_date = str(job.payload.get("briefing_date") or "").strip()
+    try:
+        return date.fromisoformat(raw_date)
+    except ValueError as error:
+        raise JobInputError(
+            "WIKI_BRIEFING Report Job의 briefing_date가 잘못됐습니다."
+        ) from error
+
+
+async def _prepare_wiki_briefing_topics(
+    connection: AsyncConnection[DictRow],
+    *,
+    job: ClaimedAgentJob,
+    model: str,
+    service: BriefingTopicsService | None,
+) -> list[str]:
+    """미준비 Wiki 브리핑 Snapshot을 만들고 실제 생성 주제를 반환한다."""
+    if service is None:
+        raise RuntimeError("WIKI_BRIEFING Worker에 브리핑 서비스가 구성되지 않았습니다.")
+    snapshot = await prepare_briefing_snapshot(
+        connection,
+        user_id=job.user_id,
+        briefing_date=_briefing_date(job),
+        limit=DEFAULT_BRIEFING_TOPIC_COUNT,
+        prepared_by_job_id=job.job_id,
+        model=model,
+        service=service,
+    )
+    topics = [str(topic).strip() for topic in snapshot.topics if str(topic).strip()]
+    if not topics:
+        raise JobInputError("개인 Wiki에서 생성할 아침 브리핑 주제를 찾지 못했습니다.")
+    return topics
 
 
 async def _load_prewarmed_contexts(
@@ -98,6 +152,7 @@ async def _process_job(
     job: ClaimedAgentJob,
     worker_id: str,
     model: str,
+    briefing_service: BriefingTopicsService | None = None,
 ) -> dict[str, object]:
     """점유한 Report Builder Job 하나를 그래프로 생성·저장하고 완료 상태로 바꾼다."""
     topic = str(job.payload.get("topic") or "").strip()
@@ -112,11 +167,19 @@ async def _process_job(
         raise JobInputError(
             "Report Builder Job Payload에 topic과 content_type이 필요합니다."
         )
+    generation_scope = str(job.payload.get("generation_scope") or "SINGLE_TOPIC")
+    if generation_scope == _WIKI_BRIEFING_SCOPE:
+        topics = await _prepare_wiki_briefing_topics(
+            connection,
+            job=job,
+            model=model,
+            service=briefing_service,
+        )
+
     # 변경점 추적 토글. 개발 API(AgentWorkflowService)와 같은 키를 읽어야 요청이
     # 어느 경로로 실행되든 결과가 같다. 이 키가 없는 기존 Job(플래그 도입 이전
     # 등록분)은 지금까지와 같은 생성 경로로 실행된다.
     change_history_enabled = bool(job.payload.get("change_history_enabled") or False)
-    generation_scope = str(job.payload.get("generation_scope") or "SINGLE_TOPIC")
     raw_interest_bundle = job.payload.get("interest_bundle")
     interest_bundle = (
         dict(raw_interest_bundle) if isinstance(raw_interest_bundle, dict) else None
@@ -126,6 +189,8 @@ async def _process_job(
             "INTEREST_BUNDLE Job Payload에 interest_bundle이 필요합니다."
         )
     if str(job.payload.get("execution_mode") or "sync") == "batch":
+        if generation_scope == _WIKI_BRIEFING_SCOPE:
+            raise JobInputError("WIKI_BRIEFING은 Batch 실행을 지원하지 않습니다.")
         if change_history_enabled:
             raise JobInputError(
                 "변경점 추적 Report는 OpenAI Batch 실행을 지원하지 않습니다."
@@ -264,6 +329,26 @@ async def run_report_generation_batch(
 ) -> list[dict[str, object]]:
     """Report Builder Job을 점유해 설정된 동시성으로 처리한다."""
 
+    briefing_repository = PostgresWikiGraphRepository(database_url)
+    briefing_service = BriefingTopicsService(briefing_repository)
+    briefing_repository_started = False
+    briefing_repository_lock = asyncio.Lock()
+
+    async def get_briefing_service(
+        job: ClaimedAgentJob,
+    ) -> BriefingTopicsService | None:
+        """Wiki 브리핑 Job에서만 준비 Repository를 지연 초기화한다."""
+        nonlocal briefing_repository_started
+        generation_scope = str(job.payload.get("generation_scope") or "SINGLE_TOPIC")
+        if generation_scope != _WIKI_BRIEFING_SCOPE:
+            return None
+        if not briefing_repository_started:
+            async with briefing_repository_lock:
+                if not briefing_repository_started:
+                    await briefing_repository.startup()
+                    briefing_repository_started = True
+        return briefing_service
+
     async def process(
         connection: AsyncConnection[DictRow], job: ClaimedAgentJob
     ) -> dict[str, object]:
@@ -273,19 +358,25 @@ async def run_report_generation_batch(
             job=job,
             worker_id=worker_id,
             model=model,
+            briefing_service=await get_briefing_service(job),
         )
 
-    return await run_job_batch(
-        database_url=database_url,
-        job_type="report_generation",
-        worker_id=worker_id,
-        limit=limit,
-        lease_seconds=lease_seconds,
-        concurrency=concurrency,
-        rate_limit_policy=rate_limit_policy,
-        error_code_prefix="REPORT_GENERATION",
-        process=process,
-    )
+    try:
+        return await run_job_batch(
+            database_url=database_url,
+            job_type="report_generation",
+            worker_id=worker_id,
+            limit=limit,
+            lease_seconds=lease_seconds,
+            concurrency=concurrency,
+            rate_limit_policy=rate_limit_policy,
+            serialization_key=_report_serialization_key,
+            error_code_prefix="REPORT_GENERATION",
+            process=process,
+        )
+    finally:
+        if briefing_repository_started:
+            await briefing_repository.shutdown()
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.

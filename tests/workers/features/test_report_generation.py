@@ -70,7 +70,10 @@ def _claimed_job(payload: dict[str, Any]) -> Any:
 
 
 def _run_worker_job(
-    monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, Any],
+    *,
+    briefing_service: Any = None,
 ) -> dict[str, Any]:
     """운영 Worker의 Job 처리 경로를 돌리고 러너에 넘어간 인자를 돌려준다."""
     captured: dict[str, Any] = {}
@@ -96,6 +99,7 @@ def _run_worker_job(
             job=_claimed_job(payload),
             worker_id="worker-1",
             model="report-model",
+            briefing_service=briefing_service,
         )
     )
     return captured
@@ -207,6 +211,103 @@ def test_worker_loads_matching_briefing_snapshot_for_the_graph(
     contexts = captured["prewarmed_contexts_by_topic"]
     assert set(contexts) == {"반도체"}
     assert contexts["반도체"][0].document_version_id == "version-semiconductor"
+
+
+def test_worker_prepares_missing_wiki_briefing_before_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """즉시 Wiki 브리핑 Job은 같은 날짜 Snapshot을 준비한 뒤 실제 주제로 생성한다."""
+    snapshot = StoredBriefingTopicSnapshot(
+        user_id="user-1",
+        briefing_date=date(2026, 8, 12),
+        topics=("반도체", "프로야구"),
+        reason="개인 Wiki 맥락",
+        candidate_count=8,
+        contexts_by_topic={"반도체": [], "프로야구": []},
+        prepared_by_job_id="report-job-1",
+        prepared_at=datetime(2026, 8, 12, tzinfo=UTC),
+    )
+    prepared: dict[str, Any] = {}
+
+    async def fake_prepare(connection: Any, **kwargs: Any) -> Any:
+        """준비 호출 인자를 기록하고 Wiki Snapshot을 반환한다."""
+        prepared.update(kwargs)
+        return snapshot
+
+    async def fake_load_contexts(connection: Any, **kwargs: Any) -> dict[str, list[Any]]:
+        """준비된 주제 목록이 근거 복원에 전달되는지 확인한다."""
+        assert kwargs["topics"] == ["반도체", "프로야구"]
+        return {"반도체": []}
+
+    monkeypatch.setattr(report_generation, "prepare_briefing_snapshot", fake_prepare)
+    monkeypatch.setattr(report_generation, "_load_prewarmed_contexts", fake_load_contexts)
+
+    captured = _run_worker_job(
+        monkeypatch,
+        {
+            "topic": "오늘의 관심사 브리핑",
+            "topics": [],
+            "generation_scope": "WIKI_BRIEFING",
+            "briefing_date": "2026-08-12",
+            "content_type": "interest_news_card",
+            "language": "ko",
+        },
+        briefing_service=SimpleNamespace(),
+    )
+
+    assert prepared["limit"] == 3
+    assert prepared["prepared_by_job_id"] == "report-job-1"
+    assert captured["topics"] == ["반도체", "프로야구"]
+    assert captured["generation_scope"] == "WIKI_BRIEFING"
+    assert captured["prewarmed_contexts_by_topic"] == {"반도체": []}
+
+
+def test_worker_rejects_wiki_briefing_when_wiki_has_no_topics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """준비가 끝났지만 Wiki 주제가 없으면 제목 문구로 검색하지 않고 명시적으로 실패한다."""
+    snapshot = StoredBriefingTopicSnapshot(
+        user_id="user-1",
+        briefing_date=date(2026, 8, 12),
+        topics=(),
+        reason="후보 없음",
+        candidate_count=0,
+        contexts_by_topic={},
+        prepared_by_job_id="report-job-1",
+        prepared_at=datetime(2026, 8, 12, tzinfo=UTC),
+    )
+
+    async def fake_prepare(connection: Any, **kwargs: Any) -> Any:
+        """주제가 없는 준비 완료 Snapshot을 반환한다."""
+        return snapshot
+
+    monkeypatch.setattr(report_generation, "prepare_briefing_snapshot", fake_prepare)
+
+    with pytest.raises(ValueError, match="개인 Wiki"):
+        _run_worker_job(
+            monkeypatch,
+            {
+                "topic": "오늘의 관심사 브리핑",
+                "generation_scope": "WIKI_BRIEFING",
+                "briefing_date": "2026-08-12",
+                "content_type": "interest_news_card",
+            },
+            briefing_service=SimpleNamespace(),
+        )
+
+
+def test_wiki_briefing_uses_same_serialization_key_as_preparation() -> None:
+    """준비 Worker와 즉시 생성 Worker가 같은 사용자·날짜 Snapshot을 동시에 만들지 않는다."""
+    job = _claimed_job(
+        {
+            "generation_scope": "WIKI_BRIEFING",
+            "briefing_date": "2026-08-12",
+        }
+    )
+
+    assert report_generation._report_serialization_key(job) == (
+        "briefing_preparation:user-1:2026-08-12"
+    )
 
 
 def test_worker_ignores_briefing_snapshot_when_topics_changed(

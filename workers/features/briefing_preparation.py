@@ -20,6 +20,7 @@ from domain.jobs.api import job_007
 from infrastructure.persistence.api import (
     ClaimedAgentJob,
     CompleteAgentJobCommand,
+    StoredBriefingTopicSnapshot,
     db_026,
     set_system_job_scope,
 )
@@ -33,7 +34,7 @@ type DictRow = dict[str, Any]
 _MAX_PREWARM_LIVE_TOPICS = 3
 
 
-def _briefing_serialization_key(job: ClaimedAgentJob) -> str:
+def briefing_serialization_key(job: ClaimedAgentJob) -> str:
     """같은 사용자의 같은 날짜 준비 Job을 Worker 프로세스 간 직렬화한다."""
     return (
         f"briefing_preparation:{job.user_id}:"
@@ -89,6 +90,40 @@ async def _collect_prepared_contexts(
     return contexts_by_topic
 
 
+async def prepare_briefing_snapshot(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    briefing_date: date,
+    limit: int,
+    prepared_by_job_id: str,
+    model: str,
+    service: BriefingTopicsService,
+) -> StoredBriefingTopicSnapshot:
+    """기존 Snapshot을 재사용하거나 Wiki 주제·근거를 준비해 저장한다."""
+    existing = await service.get_preparation_snapshot(
+        user_id,
+        briefing_date=briefing_date,
+    )
+    if existing is not None:
+        return existing
+
+    selection = await service.select_topics(user_id, limit=limit)
+    contexts_by_topic = await _collect_prepared_contexts(
+        connection,
+        user_id=user_id,
+        topics=selection.topics,
+        model=model,
+    )
+    return await service.save_preparation(
+        user_id,
+        briefing_date=briefing_date,
+        selection=selection,
+        contexts_by_topic=contexts_by_topic,
+        prepared_by_job_id=prepared_by_job_id,
+    )
+
+
 async def _process_job(
     connection: AsyncConnection[DictRow],
     *,
@@ -107,27 +142,15 @@ async def _process_job(
     if not 1 <= limit <= 5:
         raise JobInputError("브리핑 준비 Job의 limit은 1에서 5 사이여야 합니다.")
 
-    existing = await service.get_preparation_snapshot(
-        job.user_id,
+    snapshot = await prepare_briefing_snapshot(
+        connection,
+        user_id=job.user_id,
         briefing_date=briefing_date,
+        limit=limit,
+        prepared_by_job_id=job.job_id,
+        model=model,
+        service=service,
     )
-    if existing is None:
-        selection = await service.select_topics(job.user_id, limit=limit)
-        contexts_by_topic = await _collect_prepared_contexts(
-            connection,
-            user_id=job.user_id,
-            topics=selection.topics,
-            model=model,
-        )
-        snapshot = await service.save_preparation(
-            job.user_id,
-            briefing_date=briefing_date,
-            selection=selection,
-            contexts_by_topic=contexts_by_topic,
-            prepared_by_job_id=job.job_id,
-        )
-    else:
-        snapshot = existing
 
     preparation_result = {
         "briefing_date": snapshot.briefing_date.isoformat(),
@@ -196,7 +219,7 @@ async def run_briefing_preparation_batch(
             lease_seconds=lease_seconds,
             concurrency=concurrency,
             rate_limit_policy=rate_limit_policy,
-            serialization_key=_briefing_serialization_key,
+            serialization_key=briefing_serialization_key,
             error_code_prefix="BRIEFING_PREPARATION",
             process=process,
         )

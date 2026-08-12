@@ -142,6 +142,11 @@ Navigation Trace에는 Consumer, Job, Query Hash, Wiki Version, 후보·선택·
 Vector 폴백, 소요 시간과 중단 사유를 기록한다. 원문 전체나 Secret은 로그에 남기지
 않는다.
 
+관계 조회 장애로 Seed Page만 사용하는 경우에는
+`event=wiki_navigation_relation_traversal_failed` 경고를 남긴다. 이 이벤트는 원문
+Query 대신 Query Hash, Wiki Version, Seed 수, 탐색 예산과 오류 유형을 포함하므로
+로그 수집기에서 폴백 발생 횟수와 사용자 영향 범위를 집계할 수 있어야 한다.
+
 ## 9. 검증
 
 결정적 테스트는 Connection 재사용, RLS Scope, async 계약, 후보 30개, degree 비사용,

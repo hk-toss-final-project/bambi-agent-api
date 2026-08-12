@@ -478,6 +478,46 @@ def test_generation_request_rejects_topics_mixed_with_bundle(client: TestClient)
     assert rejected.json()["code"] == "REQUEST_VALIDATION_ERROR"
 
 
+def test_generation_request_forwards_wiki_briefing_scope(
+    client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
+) -> None:
+    """Wiki 브리핑은 관심사 ID·선행 topics 없이 날짜와 카드 제목만 전달한다."""
+    _put_context(client, "user-wiki-briefing")
+
+    accepted = client.post(
+        "/internal/v1/users/user-wiki-briefing/generations",
+        json={
+            "idempotency_key": "generation-wiki-briefing",
+            "generation_scope": "WIKI_BRIEFING",
+            "topic": "오늘의 관심사 브리핑",
+            "briefing_date": "2026-08-12",
+        },
+    )
+
+    assert accepted.status_code == 202
+    assert agent_jobs_fake.last_generation_scope == "WIKI_BRIEFING"
+    assert agent_jobs_fake.last_briefing_date == date(2026, 8, 12)
+    assert agent_jobs_fake.last_interest_id is None
+    assert agent_jobs_fake.last_generation_topics == []
+
+
+def test_generation_request_requires_date_for_wiki_briefing(
+    client: TestClient,
+) -> None:
+    """날짜 없는 Wiki 브리핑은 준비 Snapshot 키를 만들 수 없어 거부한다."""
+    rejected = client.post(
+        "/internal/v1/users/user-wiki-briefing/generations",
+        json={
+            "idempotency_key": "generation-wiki-briefing-no-date",
+            "generation_scope": "WIKI_BRIEFING",
+            "topic": "오늘의 관심사 브리핑",
+        },
+    )
+
+    assert rejected.status_code == 422
+    assert rejected.json()["code"] == "REQUEST_VALIDATION_ERROR"
+
+
 def test_content_mark_enqueues_wiki_build_job(
     client: TestClient, agent_jobs_fake: InMemoryAgentJobRepository
 ) -> None:

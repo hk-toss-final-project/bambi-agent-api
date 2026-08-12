@@ -136,7 +136,14 @@ flowchart LR
   접수된 Job도 `queued`에 남습니다.
 - 생성 시각(예: 07:00)에
   `GET /internal/v1/users/{user_id}/briefing-topics?briefing_date=YYYY-MM-DD&limit=3`로
-  준비 결과를 읽고, 같은 `topics[]`와 `briefing_date`를 아래 생성 요청에 넣습니다.
+  준비 결과를 읽습니다. `preparation_status=READY`이면 같은 `topics[]`와
+  `briefing_date`를 아래 생성 요청에 넣고, READY인데 topics가 비면 정상적으로
+  생성을 건너뜁니다. `NOT_PREPARED`는 준비 완료와 다른 상태입니다.
+- 정기 생성은 `NOT_PREPARED`를 재시도합니다. 즉시 생성은
+  `generation_scope=WIKI_BRIEFING`으로 접수하면 Report Worker가 같은 준비 절차를
+  실행한 뒤 한 Job 안에서 생성을 이어갑니다.
+- 아침 브리핑 주제는 개인 LLM Wiki에서만 고르며 Service 등록 관심사로 폴백하지
+  않습니다. 주제별 Wiki 읽기는 기존 V2 정책(1홉, 최대 6페이지·12청크)을 유지합니다.
 - 같은 `idempotency_key` 재등록은 기존 Job을 반환하므로 스케줄러 재시도에 안전합니다.
 
 콘텐츠 생성 요청:
@@ -146,10 +153,10 @@ flowchart LR
 | 필드 | 필수 | 설명 |
 |---|---|---|
 | `idempotency_key` | O | **`{schedule window}-{user_id}-{content_type}` 규칙 권장** (예: `2026-07-21-user-1-interest_news_card`). 스케줄러 재시도·중복 실행에도 Job이 한 번만 생김. **완성 카드의 `request_idempotency_key`로 그대로 되돌아오므로**, Pending 행과 잇는 키로도 쓸 수 있음 |
-| `generation_scope` | X | 기본 `SINGLE_TOPIC`. 특정 활성 LLM Wiki 관심사와 연결 노드를 묶을 때 `INTEREST_BUNDLE` |
-| `topic` | 조건부 | `SINGLE_TOPIC`에서 필수(1~500자). `INTEREST_BUNDLE`에서는 생략하며 Agent가 활성 관심사 루트로 확정 |
+| `generation_scope` | X | 기본 `SINGLE_TOPIC`. 특정 활성 LLM Wiki 관심사 묶음은 `INTEREST_BUNDLE`, 미준비 아침 브리핑을 Job 안에서 준비할 때 `WIKI_BRIEFING` |
+| `topic` | 조건부 | `SINGLE_TOPIC`에서 실제 검색어. `INTEREST_BUNDLE`에서는 생략. `WIKI_BRIEFING`에서는 카드 제목용 문구 |
 | `interest_id` | 조건부 | `INTEREST_BUNDLE`에서 필수. **온보딩 taxonomy ID가 아니라 현재 활성 `user_interests.id` UUID** |
-| `topics` | X | 서로 독립된 여러 주제를 한 장에 묶는 기존 아침요약 입력. `INTEREST_BUNDLE`과 함께 사용 불가 |
+| `topics` | X | 서로 독립된 여러 주제를 한 장에 묶는 입력. `INTEREST_BUNDLE`·`WIKI_BRIEFING`과 함께 사용 불가 |
 | `content_type` | X | 기본 `interest_news_card` |
 | `report_type` | X | Service 소유 생성 맥락. Agent가 해석하지 않고 Snapshot에 반환 |
 | `briefing_date` | X | REPORT-022 준비 Snapshot을 재사용할 KST 날짜(`YYYY-MM-DD`). 아침 브리핑에서만 명시하며, 같은 사용자·주제 목록이 일치할 때만 재사용 |
@@ -181,7 +188,22 @@ flowchart LR
 }
 ```
 
-Agent는 접수 시 관심사가 현재 활성 Profile에 속하고 차단되지 않았는지 검증한 뒤,
+즉시 생성 시 Snapshot이 아직 없으면 주제를 미리 채우지 않고 아래처럼 접수합니다.
+Report Worker가 개인 Wiki에서 최대 3개 주제를 선정·예열한 뒤 같은 생성 흐름을
+실행합니다.
+
+```json
+{
+  "idempotency_key": "dev-morning:user-1:2026-08-12T09:30",
+  "generation_scope": "WIKI_BRIEFING",
+  "topic": "오늘의 관심사 브리핑",
+  "content_type": "interest_news_card",
+  "report_type": "MORNING_BRIEFING",
+  "briefing_date": "2026-08-12"
+}
+```
+
+`INTEREST_BUNDLE`에서 Agent는 접수 시 관심사가 현재 활성 Profile에 속하고 차단되지 않았는지 검증한 뒤,
 루트와 최대 2개의 Wiki 1홉 노드를 Job에 고정합니다. 비활성·차단 관심사는
 `409 ACTIVE_INTEREST_REQUIRED`입니다.
 
@@ -337,7 +359,7 @@ user_id, version, snapshot_hash, title, summary, body, citations, tags,
 
 **범주 생성 추적 필드(2026-08-07 추가)**
 
-- `generation_scope`: `SINGLE_TOPIC` 또는 `INTEREST_BUNDLE`
+- `generation_scope`: `SINGLE_TOPIC`, `INTEREST_BUNDLE`, 또는 `WIKI_BRIEFING`
 - `source_interest_id`: 범주 생성의 원천 활성 관심사 UUID. 단일 주제는 `""`
 - `interest_profile_id`: 묶음을 확정한 활성 Profile UUID. 단일 주제는 `""`
 - `bundle_keywords`: 루트부터 시작하는 실제 검색 키워드 스냅샷. 단일 주제는 `[]`

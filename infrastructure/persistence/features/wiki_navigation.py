@@ -432,7 +432,10 @@ async def load_wiki_navigation_relations(
           AND target.status = 'active'
           AND source.deleted_at IS NULL
           AND target.deleted_at IS NULL
-        GROUP BY relation.id
+        GROUP BY
+            relation.source_document_id,
+            relation.target_document_id,
+            relation.relation_type
         ORDER BY
             relation.confidence DESC,
             relation.relation_type,
