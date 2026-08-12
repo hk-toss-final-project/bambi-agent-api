@@ -219,8 +219,8 @@ async def _run_batch_once(
         return await run_briefing_preparation_batch(
             database_url=settings.agent_database_url,
             worker_id=worker_id,
-            limit=args.limit or settings.report_worker_batch_size,
-            concurrency=args.concurrency or settings.report_job_concurrency,
+            limit=args.limit or settings.briefing_worker_batch_size,
+            concurrency=args.concurrency or settings.briefing_job_concurrency,
             lease_seconds=(
                 args.lease_seconds or settings.personal_wiki_job_lease_seconds
             ),
@@ -333,8 +333,8 @@ async def _run() -> None:
         await wc_001(
             database_url=settings.agent_database_url,
             worker_id=worker_id,
-            limit=args.limit or settings.report_worker_batch_size,
-            concurrency=args.concurrency or settings.report_job_concurrency,
+            limit=args.limit or settings.briefing_worker_batch_size,
+            concurrency=args.concurrency or settings.briefing_job_concurrency,
             lease_seconds=(
                 args.lease_seconds or settings.personal_wiki_job_lease_seconds
             ),
