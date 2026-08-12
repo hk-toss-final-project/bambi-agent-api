@@ -131,6 +131,11 @@ from .features.full_rebuild_graph import (
     build_wiki_full_rebuild_graph_v3,
     run_wiki_full_rebuild_graph_v3,
 )
+from .features.knowledge_gap_research import (
+    WikiKnowledgeGapResearchLimits,
+    WikiKnowledgeGapResearchResult,
+    research_wiki_knowledge_gaps,
+)
 
 __all__ = [
     "wba_001",
@@ -239,4 +244,7 @@ __all__ = [
     "WikiFullRebuildState",
     "build_wiki_full_rebuild_graph_v3",
     "run_wiki_full_rebuild_graph_v3",
+    "WikiKnowledgeGapResearchLimits",
+    "WikiKnowledgeGapResearchResult",
+    "research_wiki_knowledge_gaps",
 ]
