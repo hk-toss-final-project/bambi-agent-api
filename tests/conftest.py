@@ -337,6 +337,7 @@ class InMemoryAgentJobRepository:
         topic: str | None,
         topics: list[str] | None = None,
         generation_scope: str = "SINGLE_TOPIC",
+        navigation_profile: str | None = None,
         interest_id: str | None = None,
         content_type: str,
         report_type: str = "",
@@ -354,6 +355,7 @@ class InMemoryAgentJobRepository:
         self.last_report_type = report_type
         self.last_briefing_date = briefing_date
         self.last_generation_scope = generation_scope
+        self.last_navigation_profile = navigation_profile
         self.last_interest_id = interest_id
         self.last_generation_topic = topic
         self.last_generation_topics = list(topics or [])

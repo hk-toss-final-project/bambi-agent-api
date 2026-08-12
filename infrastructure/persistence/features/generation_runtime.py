@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 from infrastructure.persistence.features.personal_wiki import set_personal_wiki_scope
 from shared.report_models import ReportContextDocument, GeneratedReportContent
 from shared.wiki_navigation_models import WikiNavigationPacket
+from shared.wiki_navigation_policy import resolve_wiki_navigation_policy
 
 type DictRow = dict[str, Any]
 
@@ -549,6 +550,7 @@ async def enqueue_report_generation_job(
     topic: str | None,
     topics: list[str] | None = None,
     generation_scope: str = "SINGLE_TOPIC",
+    navigation_profile: str | None = None,
     interest_id: str | None = None,
     content_type: str,
     report_type: str = "",
@@ -662,6 +664,7 @@ async def enqueue_report_generation_job(
         raise ValueError(
             f"지원하지 않는 Wiki 읽기 파이프라인 버전입니다: {read_pipeline_version}"
         )
+    navigation_policy = resolve_wiki_navigation_policy(navigation_profile)
     batch_contexts: list[dict[str, object]] = []
     if execution_mode == "batch":
         fixed_contexts = await load_report_context(
@@ -678,6 +681,10 @@ async def enqueue_report_generation_job(
         # 여러 주제를 한 장에 묶는 요약 리포트용. 비어 있으면 topic 하나만 다룬다.
         "topics": resolved_topics,
         "generation_scope": generation_scope,
+        # 프로필 이름뿐 아니라 실제 예산도 접수 시 고정한다. 이후 배포에서 기본
+        # 정책이 바뀌어도 같은 Job의 재시도는 같은 Wiki 범위를 읽는다.
+        "navigation_profile": navigation_policy.profile,
+        "navigation_budget": navigation_policy.budget.to_payload(),
         "interest_id": interest_id,
         "interest_bundle": interest_bundle,
         # INT-013으로 활성 관심사와 매칭된 주제만 담는다. 없으면 빈 dict.
