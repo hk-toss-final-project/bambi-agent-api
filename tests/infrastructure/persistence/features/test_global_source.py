@@ -461,6 +461,23 @@ def test_load_collection_schedules_reads_source_settings() -> None:
     assert schedule.runs_today == 2
 
 
+def test_load_collection_schedules_counts_daily_quota_by_kst_midnight() -> None:
+    """일일 한도 집계를 KST 자정 기준으로 끊는지 검증한다.
+
+    서버 세션 TimeZone이 UTC라 그냥 date_trunc하면 UTC 자정(=KST 09:00)에
+    리셋된다. 그러면 아침 브리핑에 쓸 새벽 수집이 전날 예산의 꼬리에 걸려
+    통째로 건너뛰어진다(2026-08-12 실측: KST 03:00·06:00 tick 미실행).
+    """
+    connection = _FakeConnection([[]])
+
+    asyncio.run(load_collection_schedules(connection))  # type: ignore[arg-type]
+
+    query, _ = connection.executed[0]
+    assert "clock_timestamp() AT TIME ZONE 'Asia/Seoul'" in query
+    # UTC 자정으로 끊는 옛 표현이 남아 있으면 안 된다.
+    assert "date_trunc('day', clock_timestamp())" not in query
+
+
 def test_load_collection_schedules_falls_back_to_defaults() -> None:
     """설정이 비어 있거나 값이 잘못되면 기본 수집 수와 무제한 쿼터로 읽는지 검증한다."""
     connection = _FakeConnection(

@@ -218,11 +218,25 @@ _SCHEDULE_SELECT = """
             -- 함께 세면 수동 실행 한 번이 그날 정기 수집 예산을 먹는다
             -- (2026-08-10 실측: 한도 200인 Source의 runs_today가 수동 실행 두 번에
             -- 414가 되어 그날 남은 정기 회차가 전부 건너뛰어졌다).
+            --
+            -- 한도 집계 구간은 **KST 자정**을 기준으로 끊는다. 서버 세션
+            -- TimeZone이 UTC라 그냥 date_trunc하면 UTC 자정(=KST 09:00)에
+            -- 리셋되는데, 그러면 아침 브리핑에 쓸 새벽 수집이 전날 예산의
+            -- 꼬리에 걸려 통째로 건너뛰어진다(2026-08-12 실측: KST 03:00·06:00
+            -- tick이 둘 다 실행되지 않았고, 마지막 수집은 전날 22:02였다.
+            -- 그날 UTC 예산 300건은 낮·저녁에 이미 소진돼 있었다).
+            --
+            -- KST 00:00~03:00 사이에는 tick이 없으므로, 이 기준이면 새벽
+            -- 수집이 그날 예산을 가장 먼저 가져간다. 대신 저녁 21:00 tick이
+            -- 남은 예산을 쓰게 되는데, 아침 브리핑은 03:00 수집분을 쓰므로
+            -- 그쪽이 굶는 편이 낫다.
             SELECT count(*) AS run_count
             FROM agent.global_collection_runs AS run
             WHERE run.source_id = source.id
               AND run.trigger_source = 'schedule'
-              AND run.started_at >= date_trunc('day', clock_timestamp())
+              AND run.started_at >= date_trunc(
+                    'day', clock_timestamp() AT TIME ZONE 'Asia/Seoul'
+                  ) AT TIME ZONE 'Asia/Seoul'
         ) AS today ON true
         LEFT JOIN LATERAL (
             SELECT jsonb_agg(
