@@ -13,12 +13,13 @@
 환경설정이 아니라 Job Payload의 버전을 실행하므로 배포 중 기본값이 바뀌어도 이미
 접수된 Job의 의미와 재시도 결과가 달라지지 않는다.
 
-버전 값은 두 루프에서 공통으로 다음 문자열을 사용한다.
+읽기 루프는 V1·V2를 사용하고, 유지 루프는 호환 V3를 추가로 허용한다.
 
 | 값 | 의미 |
 |---|---|
 | `legacy_v1` | 기존 Python/Researcher 실행 경로 |
 | `langgraph_v2` | 명시적인 LangGraph 상태·노드 실행 경로 |
+| `langgraph_v3` | 유지 전용 의미 감사·수리·외부 수집·내부 재구성 그래프 |
 
 버전 필드가 없는 과거 Job은 반드시 `legacy_v1`로 해석한다. 운영 롤백은 환경변수의
 기본값을 `legacy_v1`로 되돌려 새 Job부터 V1로 접수하는 방식이며, 실행 중인 Job의
@@ -69,6 +70,11 @@ langgraph_v2
     ├─ repair_derivatives → 누락 Embedding 복구
     └─ full_rebuild → 검증된 V1 원자 교체 실행기 재사용
   → Finalize
+
+langgraph_v3
+  운영 감사 → 현재 구조 Lint → 전역 후보·LLM 의미 감사
+  → 누락 Page·관계 원자 수리 → 외부 공백 URL 수집 Job 등록
+  → Embedding·관심사 후처리 → 감사 지표 저장
 ```
 
 V2는 이미 검증된 Full Rebuild 저장 알고리즘을 복제하지 않는다. 구조 재구성이
@@ -76,6 +82,10 @@ V2는 이미 검증된 Full Rebuild 저장 알고리즘을 복제하지 않는�
 Transaction 교체를 그대로 보존한다. 건강한 Wiki는 `noop`, 구조는 건강하지만
 Embedding만 빠진 Wiki는 `repair_derivatives`로 끝내 불필요한 전체 LLM 재분류를
 줄인다.
+
+V3의 상세 문제 코드·비용 상한·외부 쓰기 경계·롤백 계약은
+`docs/wiki-maintenance-v3.md`를 따른다. 초기 기본값은 V2를 유지하고 명시적으로
+선택한 V3 Job만 canary 실행한다.
 
 ## 4. 공통 신뢰성 계약
 

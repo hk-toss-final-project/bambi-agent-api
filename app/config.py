@@ -104,7 +104,7 @@ class Settings(BaseModel):
         description="새 Report Job에 고정할 Wiki 읽기 루프 버전",
     )
     wiki_maintenance_pipeline_version: Literal[
-        "legacy_v1", "langgraph_v2"
+        "legacy_v1", "langgraph_v2", "langgraph_v3"
     ] = Field(
         default="langgraph_v2",
         description="새 Wiki 유지보수 Job에 고정할 실행 루프 버전",

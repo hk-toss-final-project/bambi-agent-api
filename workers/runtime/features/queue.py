@@ -78,6 +78,7 @@ async def consume_personal_wiki_jobs(
     rate_limit_policy: ProviderRateLimitPolicy | None = None,
     lease_seconds: int,
     model: str,
+    embedding_model: str = "text-embedding-3-small",
     embedding_batch_threshold: int = 0,
     interval_seconds: int = 60,
     max_batches: int | None = None,
@@ -94,6 +95,7 @@ async def consume_personal_wiki_jobs(
         rate_limit_policy: Job별 OpenAI 예상 요청·Token 예약 정책
         lease_seconds: Job Lease 유지 시간(초)
         model: Personal Wiki 분류 LLM 모델
+        embedding_model: Wiki Page Chunk Embedding 모델
         embedding_batch_threshold: 이 Chunk 수 이상이면 Embedding Batch로 전환
         interval_seconds: 처리할 Job이 없을 때 다음 확인까지 대기 초
         max_batches: 가져올 Batch 횟수 상한. None이면 무제한 상주
@@ -118,6 +120,7 @@ async def consume_personal_wiki_jobs(
             "rate_limit_policy": rate_limit_policy,
             "lease_seconds": lease_seconds,
             "model": model,
+            "embedding_model": embedding_model,
             "embedding_batch_threshold": embedding_batch_threshold,
         },
         interval_seconds=interval_seconds,
@@ -261,6 +264,7 @@ async def wc_001(
     rate_limit_policy: ProviderRateLimitPolicy | None = None,
     lease_seconds: int = 600,
     model: str = "gpt-4.1-mini",
+    embedding_model: str = "text-embedding-3-small",
     embedding_batch_threshold: int = 0,
     interval_seconds: int = 0,
     max_batches: int | None = 1,
@@ -314,6 +318,7 @@ async def wc_001(
         return await consume_briefing_preparation_jobs(**common_kwargs)
     return await consume_personal_wiki_jobs(
         **common_kwargs,
+        embedding_model=embedding_model,
         embedding_batch_threshold=embedding_batch_threshold,
     )
 

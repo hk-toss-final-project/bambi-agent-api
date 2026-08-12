@@ -88,6 +88,18 @@ _ALLOWED_CONTRADICTION_SEVERITIES = frozenset({"warning", "conflict", "error"})
 _SEVERITY_ORDER = {"error": 0, "warning": 1}
 
 
+def is_wiki_relation_kind_pair_allowed(
+    relation_type: str,
+    source_kind: str,
+    target_kind: str,
+) -> bool:
+    """관계 유형이 지정한 source·target 문서 종류 조합을 허용하는지 반환한다."""
+    return (source_kind, target_kind) in _RELATION_KIND_PAIRS.get(
+        relation_type,
+        frozenset(),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class WikiQualityIssue:
     """Wiki 품질 검증에서 발견한 한 가지 문제."""
@@ -432,10 +444,11 @@ def validate_wiki_quality(
                 relation_signature=signature,
             )
             valid = False
-        elif (
+        elif not is_wiki_relation_kind_pair_allowed(
+            relation.relation_type,
             relation.source_document_kind,
             relation.target_document_kind,
-        ) not in _RELATION_KIND_PAIRS[relation.relation_type]:
+        ):
             relation_issue_counts["invalid_relation_kind_pair"] += 1
             _add_issue(
                 issues,

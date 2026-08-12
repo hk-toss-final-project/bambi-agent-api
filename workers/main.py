@@ -248,6 +248,7 @@ async def _run_batch_once(
             estimated_requests=settings.wiki_openai_requests_per_job,
             estimated_tokens=settings.wiki_openai_tokens_per_job,
         ),
+        embedding_model=settings.wiki_embedding_model,
         embedding_batch_threshold=settings.wiki_embedding_batch_threshold,
     )
 

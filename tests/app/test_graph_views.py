@@ -27,6 +27,8 @@ def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
     assert set(diagrams) == {
         "personal-wiki",
         "wiki-maintenance-v2",
+        "wiki-full-rebuild-v3",
+        "wiki-maintenance-v3",
         "wiki-read-v2",
         "report-generation",
         "assistant",
@@ -67,6 +69,43 @@ def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
         "finalize",
     ):
         assert node in diagrams["wiki-maintenance-v2"].mermaid
+    for node in (
+        "load_manifest",
+        "select_source",
+        "resolve_onboarding_context",
+        "classify_source",
+        "prepare_identity",
+        "resolve_identity",
+        "validate_identity",
+        "recall_relations",
+        "link_relations",
+        "plan_source",
+        "accumulate_source",
+        "validate_snapshot",
+        "atomic_persist",
+        "embed",
+        "retire_without_sources",
+        "finalize",
+    ):
+        assert node in diagrams["wiki-full-rebuild-v3"].mermaid
+    for node in (
+        "operational_audit",
+        "plan_operational",
+        "full_rebuild",
+        "load_snapshot",
+        "structural_lint",
+        "structural_failure",
+        "generate_candidates",
+        "semantic_lint",
+        "plan_repairs",
+        "apply_internal_repairs",
+        "research_knowledge_gaps",
+        "repair_derivatives",
+        "refresh_interest_profile",
+        "persist_summary",
+        "finalize",
+    ):
+        assert node in diagrams["wiki-maintenance-v3"].mermaid
     # 토글이 켜졌을 때 generate를 대체하는 분기가 그래프에 실제로 있어야 한다.
     assert "change_history" in diagrams["report-generation"].mermaid
     assert "reformulate" in diagrams["assistant"].mermaid
@@ -147,14 +186,16 @@ def test_graphs_page_renders_all_diagrams() -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     body = response.text
-    assert body.count('<pre class="mermaid">') == 6
-    assert body.count('class="node-panel"') == 6
+    assert body.count('<pre class="mermaid">') == 8
+    assert body.count('class="node-panel"') == 8
     assert body.count('class="node-detail"') == sum(
         len(diagram.nodes) for diagram in list_graph_diagrams()
     )
     assert "Personal Wiki Build" in body
     assert "Wiki Read Loop V2" in body
     assert "Wiki Maintenance Loop V2" in body
+    assert "Wiki Full Rebuild V3" in body
+    assert "Wiki Maintenance Loop V3" in body
     assert "키워드 비서 리서치 에이전트" in body
     assert "변경점(Delta) 추적" in body
     assert 'data-node-id="load_source"' in body

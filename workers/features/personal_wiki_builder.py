@@ -41,6 +41,7 @@ async def _process_job(
     worker_id: str,
     model: str,
     embedding_batch_threshold: int,
+    embedding_model: str = "text-embedding-3-small",
 ) -> dict[str, object]:
     """점유한 Personal Wiki Job 하나를 그래프로 Build하고 완료 상태로 바꾼다."""
     if job.payload.get("mode") == "full_rebuild":
@@ -61,6 +62,7 @@ async def _process_job(
             trigger=str(job.payload.get("trigger") or "legacy_full_rebuild"),
             rebuild_runner=run_personal_wiki_rebuild,
             model=model,
+            embedding_model=embedding_model,
             embedding_batch_threshold=embedding_batch_threshold,
         )
     else:
@@ -101,6 +103,7 @@ async def run_personal_wiki_batch(
     rate_limit_policy: ProviderRateLimitPolicy | None = None,
     lease_seconds: int = 600,
     model: str = "gpt-4.1-mini",
+    embedding_model: str = "text-embedding-3-small",
     embedding_batch_threshold: int = 0,
 ) -> list[dict[str, object]]:
     """Personal Wiki Job을 점유해 설정된 동시성으로 처리한다."""
@@ -114,6 +117,7 @@ async def run_personal_wiki_batch(
             job=job,
             worker_id=worker_id,
             model=model,
+            embedding_model=embedding_model,
             embedding_batch_threshold=embedding_batch_threshold,
         )
 
@@ -141,6 +145,7 @@ async def worker_002(
     rate_limit_policy: ProviderRateLimitPolicy | None = None,
     lease_seconds: int = 600,
     model: str = "gpt-4.1-mini",
+    embedding_model: str = "text-embedding-3-small",
     embedding_batch_threshold: int = 0,
 ) -> list[dict[str, object]]:
     """[WORKER-002] 저장된 클리핑 Job을 개인 Wiki로 구성한다."""
@@ -158,5 +163,6 @@ async def worker_002(
         rate_limit_policy=rate_limit_policy,
         lease_seconds=lease_seconds,
         model=model,
+        embedding_model=embedding_model,
         embedding_batch_threshold=embedding_batch_threshold,
     )

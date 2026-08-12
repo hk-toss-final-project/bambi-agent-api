@@ -7,6 +7,9 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
+
+from app.services import agent_workflows
 from app.config import Settings
 from app.services.agent_jobs import AgentJobRecord, ClaimedJobRecord
 from app.services.agent_workflows import AgentWorkflowService
@@ -197,6 +200,63 @@ def test_run_full_rebuild_job_uses_rebuild_runner_without_source_version() -> No
     assert response.stages[0].name == "wiki_rebuild"
     assert runner.calls[0]["user_id"] == "user-1"
     assert "source_document_version_id" not in runner.calls[0]
+
+
+def test_full_rebuild_dispatch_passes_v3_and_embedding_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """개발 실행기도 Job 고정 V3와 현재 Embedding 모델·임계값을 유지 라우터에 넘긴다."""
+    captured: dict[str, Any] = {}
+
+    class _V3Repository(_FullRebuildRepository):
+        """유지 V3가 고정된 Full Rebuild Job을 반환한다."""
+
+        async def claim_job(
+            self, *, job_id: str, worker_id: str, lease_seconds: int
+        ) -> ClaimedJobRecord | None:
+            """V3 Payload가 포함된 점유 결과를 반환한다."""
+            return ClaimedJobRecord(
+                job_id=job_id,
+                user_id="user-1",
+                feature_id="WBA-002",
+                job_type="personal_wiki_build",
+                attempt_number=1,
+                max_attempts=3,
+                payload={
+                    "mode": "full_rebuild",
+                    "trigger": "maintenance",
+                    "maintenance_pipeline_version": "langgraph_v3",
+                },
+            )
+
+    async def fake_maintenance(
+        connection: Any,
+        **kwargs: Any,
+    ) -> dict[str, object]:
+        """유지 라우터 인자를 기록하고 완료 결과를 반환한다."""
+        captured.update(kwargs)
+        return {"maintenance_pipeline_version": "langgraph_v3"}
+
+    monkeypatch.setattr(
+        agent_workflows,
+        "run_wiki_maintenance_for_version",
+        fake_maintenance,
+    )
+    service = AgentWorkflowService(
+        _V3Repository(),  # type: ignore[arg-type]
+        Settings(
+            environment="test",
+            wiki_embedding_model="embedding-custom",
+            wiki_embedding_batch_threshold=77,
+        ),
+    )
+
+    response = asyncio.run(service.run_job("job-1"))
+
+    assert response.status == "completed"
+    assert captured["pipeline_version"] == "langgraph_v3"
+    assert captured["embedding_model"] == "embedding-custom"
+    assert captured["embedding_batch_threshold"] == 77
 
 
 def test_run_report_job_invokes_generation_graph_runner() -> None:

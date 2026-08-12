@@ -117,6 +117,14 @@ def test_wiki_pipeline_versions_default_to_langgraph_v2() -> None:
     assert settings.wiki_maintenance_pipeline_version == "langgraph_v2"
 
 
+def test_wiki_maintenance_pipeline_accepts_langgraph_v3_canary() -> None:
+    """유지 V3를 명시하면 허용하되 읽기·유지 기본값은 바꾸지 않는다."""
+    settings = Settings(wiki_maintenance_pipeline_version="langgraph_v3")
+
+    assert settings.wiki_read_pipeline_version == "langgraph_v2"
+    assert settings.wiki_maintenance_pipeline_version == "langgraph_v3"
+
+
 def test_interactive_worker_defaults_prioritize_short_queue_delay() -> None:
     """환경변수가 없어도 Wiki·URL Worker가 짧은 대기와 병렬 처리를 기본으로 쓴다."""
     settings = Settings()

@@ -516,6 +516,41 @@ async def update_full_wiki_rebuild_summary(
     )
 
 
+async def update_wiki_maintenance_summary(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+    wiki_version_id: str,
+    maintenance_pipeline_version: str,
+    maintenance_action: str,
+    quality_metrics: Mapping[str, int | float],
+    semantic_metrics: Mapping[str, int | float],
+) -> None:
+    """활성 Wiki Version에 V3 구조·의미 감사 결과를 병합해 기록한다."""
+    summary = {
+        "maintenance_pipeline_version": maintenance_pipeline_version,
+        "maintenance_action": maintenance_action,
+        "quality_metrics": dict(quality_metrics),
+        "semantic_metrics": dict(semantic_metrics),
+    }
+    await connection.execute(
+        """
+        UPDATE agent.wiki_versions
+        SET change_summary = COALESCE(change_summary, '{}'::jsonb) || %s
+        WHERE id = %s
+          AND user_id = %s
+          AND namespace_key = %s
+          AND status = 'active'
+        """,
+        (
+            Jsonb(summary),
+            wiki_version_id,
+            user_id,
+            f"user/{user_id}",
+        ),
+    )
+
+
 async def set_personal_wiki_scope(
     connection: AsyncConnection[DictRow], *, user_id: str
 ) -> None:
@@ -1517,6 +1552,7 @@ async def sync_wiki_relation_supports(
     job_id: str,
     relations: Sequence[WikiRelationPlan],
     observed_relations: Sequence[WikiRelationPlan] | None = None,
+    replace_existing_supports: bool = True,
 ) -> RelationSupportSyncResult:
     """관계 Head와 현재 원본 Version의 근거 이력을 원자적으로 동기화한다.
 
@@ -1536,6 +1572,9 @@ async def sync_wiki_relation_supports(
             모두 Upsert하지만 현재 원본의 근거로 자동 귀속하지 않는다.
         observed_relations: 이번 원본에서 실제 관측한 관계. 생략하면 relations
             전체를 관측 관계로 간주한다.
+        replace_existing_supports: True면 일반 증분 Build처럼 같은 논리 원본의
+            과거 support를 교체한다. False면 의미 감사 수리처럼 기존 support를
+            보존하고 이번에 관측한 관계만 멱등 추가한다.
 
     Returns:
         저장·supersede한 관계 support와 Head 집계
@@ -1545,33 +1584,35 @@ async def sync_wiki_relation_supports(
     for relation in observed:
         all_by_signature.setdefault(_relation_signature(relation), relation)
 
-    stale_cursor = await connection.execute(
-        """
-        UPDATE agent.wiki_relation_supports AS support
-        SET
-            status = 'superseded',
-            superseded_at = clock_timestamp()
-        WHERE support.namespace_key = %s
-          AND (
-                support.source_document_version_id = %s
-                OR EXISTS (
-                    SELECT 1
-                    FROM agent.user_source_document_versions AS source_version
-                    WHERE source_version.id = support.source_document_version_id
-                      AND source_version.namespace_key = support.namespace_key
-                      AND source_version.source_document_id = %s
-                )
-          )
-          AND support.status = 'active'
-        RETURNING support.relation_id
-        """,
-        (
-            namespace_key,
-            source_document_version_id,
-            source_document_id,
-        ),
-    )
-    stale_rows = await stale_cursor.fetchall()
+    stale_rows: list[DictRow] = []
+    if replace_existing_supports:
+        stale_cursor = await connection.execute(
+            """
+            UPDATE agent.wiki_relation_supports AS support
+            SET
+                status = 'superseded',
+                superseded_at = clock_timestamp()
+            WHERE support.namespace_key = %s
+              AND (
+                    support.source_document_version_id = %s
+                    OR EXISTS (
+                        SELECT 1
+                        FROM agent.user_source_document_versions AS source_version
+                        WHERE source_version.id = support.source_document_version_id
+                          AND source_version.namespace_key = support.namespace_key
+                          AND source_version.source_document_id = %s
+                    )
+              )
+              AND support.status = 'active'
+            RETURNING support.relation_id
+            """,
+            (
+                namespace_key,
+                source_document_version_id,
+                source_document_id,
+            ),
+        )
+        stale_rows = await stale_cursor.fetchall()
     touched_relation_ids = {row["relation_id"] for row in stale_rows}
 
     document_cursor = await connection.execute(
@@ -1831,8 +1872,14 @@ async def persist_wiki_build(
     source: UserSourceDocumentForAgent,
     plan: WikiBuildPlan,
     job_id: str,
+    replace_source_relation_supports: bool = True,
 ) -> PersistedWikiBuild:
-    """Wiki Build 계획을 문서·출처·관계·Chunk·Snapshot으로 영속화한다."""
+    """Wiki Build 계획을 문서·출처·관계·Chunk·Snapshot으로 영속화한다.
+
+    ``replace_source_relation_supports``를 False로 두면 기존 원본 관계 근거를
+    지우지 않고 계획이 새로 관측한 관계만 추가한다. 기본값은 기존 증분 Build의
+    교체 의미를 그대로 유지한다.
+    """
     await connection.execute(
         "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
         (source.namespace_key,),
@@ -1857,6 +1904,7 @@ async def persist_wiki_build(
         job_id=job_id,
         relations=plan.relations,
         observed_relations=_observed_relations_for_build(plan),
+        replace_existing_supports=replace_source_relation_supports,
     )
 
     existing_build_cursor = await connection.execute(
