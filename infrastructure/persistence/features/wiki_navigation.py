@@ -432,7 +432,15 @@ async def load_wiki_navigation_relations(
           AND target.status = 'active'
           AND source.deleted_at IS NULL
           AND target.deleted_at IS NULL
-        GROUP BY relation.id
+        -- 기본키로 묶는다. PostgreSQL은 **기본키로만** 함수 종속을 인정하므로,
+        -- id가 (id, namespace_key) UNIQUE라도 `GROUP BY relation.id`로는
+        -- 나머지 relation.* 컬럼을 선택할 수 없다
+        -- (2026-08-12 실측: 이 쿼리가 항상 GroupingError로 실패해 Navigator
+        -- 관계 탐색이 통째로 건너뛰어지고 Seed Page만 쓰이고 있었다).
+        GROUP BY
+            relation.source_document_id,
+            relation.target_document_id,
+            relation.relation_type
         ORDER BY
             relation.confidence DESC,
             relation.relation_type,
