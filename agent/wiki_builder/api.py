@@ -124,6 +124,13 @@ from .features.semantic_repairs import (
     plan_wiki_semantic_repairs,
     stage_wiki_semantic_repairs,
 )
+from .features.full_rebuild_graph import (
+    LANGGRAPH_FULL_REBUILD_VERSION,
+    WikiFullRebuildRuntimeContext,
+    WikiFullRebuildState,
+    build_wiki_full_rebuild_graph_v3,
+    run_wiki_full_rebuild_graph_v3,
+)
 
 __all__ = [
     "wba_001",
@@ -227,4 +234,9 @@ __all__ = [
     "apply_wiki_semantic_repairs",
     "plan_wiki_semantic_repairs",
     "stage_wiki_semantic_repairs",
+    "LANGGRAPH_FULL_REBUILD_VERSION",
+    "WikiFullRebuildRuntimeContext",
+    "WikiFullRebuildState",
+    "build_wiki_full_rebuild_graph_v3",
+    "run_wiki_full_rebuild_graph_v3",
 ]

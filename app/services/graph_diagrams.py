@@ -15,7 +15,10 @@ from agent.assistant.api import build_assistant_graph
 from agent.change_history.api import build_change_history_graph
 from agent.graph import build_personal_wiki_graph, build_report_generation_graph
 from agent.report_builder.api import build_wiki_read_graph_v2
-from agent.wiki_builder.api import build_wiki_maintenance_graph_v2
+from agent.wiki_builder.api import (
+    build_wiki_full_rebuild_graph_v3,
+    build_wiki_maintenance_graph_v2,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +268,147 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                     description=(
                         "실행 결과에 V2 버전, 선택 action과 이유, 원문 없는 감사 요약을 "
                         "더해 Job 결과로 저장할 Payload를 만듭니다."
+                    ),
+                ),
+            ),
+        ),
+        _diagram(
+            slug="wiki-full-rebuild-v3",
+            title="Wiki Full Rebuild V3",
+            description=(
+                "활성 원본 고정(load_manifest) → 원본별 선택·온보딩 해석·분류·"
+                "identity·관계·계획을 LangGraph loop로 순차 누적 → 전체 Snapshot "
+                "품질 검사 → 단일 Transaction 원자 교체 → Embedding → 결과 확정. "
+                "활성 원본이 없으면 LLM 없이 retire 경로로 파생물을 내린다."
+            ),
+            compiled=build_wiki_full_rebuild_graph_v3(),
+            nodes=(
+                GraphNodeDescription(
+                    node_id="load_manifest",
+                    title="활성 원본 Manifest 고정",
+                    description=(
+                        "현재 활성 Source Version과 온보딩 taxonomy·캐시 의존성을 "
+                        "짧은 조회 Transaction에서 한 번에 고정합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="select_source",
+                    title="다음 원본 선택",
+                    description=(
+                        "고정 Manifest를 순서대로 한 건씩 선택하고 원본별 임시 "
+                        "identity·관계 상태를 초기화합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="resolve_onboarding_context",
+                    title="온보딩 Context 해석",
+                    description=(
+                        "온보딩 원본만 taxonomy·캐시·기존 Page·LLM 순서로 Topic을 "
+                        "해석하고 이후 원자 저장할 캐시 후보를 누적합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="classify_source",
+                    title="원본 지식 분류",
+                    description=(
+                        "현재 원본에서 새 Entity·Concept 후보를 추출하고 원본 순서를 "
+                        "보존해 다음 단계로 넘깁니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="prepare_identity",
+                    title="Identity 후보 정규화",
+                    description=(
+                        "표면형으로 확정할 수 있는 중복을 먼저 병합하고 의미 판정이 "
+                        "필요한 충돌만 분리합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="resolve_identity",
+                    title="Identity 의미 판정",
+                    description=(
+                        "모호한 충돌이 있을 때만 LLM으로 기존 canonical Page와의 "
+                        "병합 여부를 판정합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="validate_identity",
+                    title="Identity 품질 검증",
+                    description=(
+                        "canonical 중복·잘못된 기존 Key·자기 관계를 검사해 현재 "
+                        "원본의 분류를 확정합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="recall_relations",
+                    title="관계 후보 Recall",
+                    description=(
+                        "현재 분류 노드별 기존 Page와 온보딩 anchor 후보를 제한해 "
+                        "관계 판정 입력을 구성합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="link_relations",
+                    title="근거 관계 판정",
+                    description=(
+                        "후보 전체를 검토해 원문 근거·provenance·confidence가 있는 "
+                        "관계만 확정합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="plan_source",
+                    title="원본별 Build 계획",
+                    description=(
+                        "현재 분류를 문서·관계·Schema·Artifact 계획으로 변환하되 "
+                        "아직 DB에는 쓰지 않습니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="accumulate_source",
+                    title="메모리 Snapshot 누적",
+                    description=(
+                        "원본별 계획을 메모리 Snapshot에 반영하고 남은 원본이 있으면 "
+                        "select_source로 되돌아갑니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="validate_snapshot",
+                    title="전역 Snapshot 품질 Gate",
+                    description=(
+                        "모든 원본 계획을 합친 문서·관계의 중복·근거·신뢰도·Hub를 "
+                        "검사해 오류가 있으면 저장을 중단합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="atomic_persist",
+                    title="단일 Transaction 원자 교체",
+                    description=(
+                        "품질을 통과한 전체 계획만 기존 Wiki와 교체하고 문서·관계·"
+                        "Chunk·Snapshot·요약을 함께 Commit합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="embed",
+                    title="변경 Page Embedding",
+                    description=(
+                        "교체된 Entity·Concept의 변경 Chunk만 현재 모델로 즉시 처리하거나 "
+                        "OpenAI Batch Item으로 등록합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="retire_without_sources",
+                    title="무원본 Wiki Retire",
+                    description=(
+                        "활성 원본이 없으면 LLM을 호출하지 않고 문서·관계·검색 Chunk와 "
+                        "관심사 파생물을 비활성화합니다."
+                    ),
+                ),
+                GraphNodeDescription(
+                    node_id="finalize",
+                    title="재구성 결과 확정",
+                    description=(
+                        "원자 교체 또는 retire 결과를 같은 Job Payload 계약으로 조립하고 "
+                        "V3 실행 버전과 품질 지표를 남깁니다."
                     ),
                 ),
             ),
