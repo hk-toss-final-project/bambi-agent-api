@@ -83,34 +83,15 @@ def _supports(row: Mapping[str, object]) -> tuple[WikiNavigationRelationSupport,
 
 def _peer_and_direction(
     row: Mapping[str, object], frontier: set[str]
-) -> tuple[str, str, str] | None:
-    """현재 Frontier 기준 상대 Page·원래 방향·출발 Page를 반환한다."""
+) -> tuple[str, str] | None:
+    """현재 Frontier 기준 상대 Page와 원래 관계 방향을 반환한다."""
     source = str(row["source_document_id"])
     target = str(row["target_document_id"])
     if source in frontier:
-        return target, "outgoing", source
+        return target, "outgoing"
     if target in frontier:
-        return source, "incoming", target
+        return source, "incoming"
     return None
-
-
-def _relation_model(
-    row: Mapping[str, object], *, direction: str, depth: int
-) -> WikiNavigationRelation:
-    """검증된 저장소 Row를 공개 Navigator 관계 모델로 변환한다."""
-    return WikiNavigationRelation(
-        relation_id=str(row["relation_id"]),
-        source_document_id=str(row["source_document_id"]),
-        target_document_id=str(row["target_document_id"]),
-        relation_type=str(row["relation_type"]),
-        confidence=float(row["confidence"]),
-        provenance_kind=str(row["provenance_kind"]),
-        review_status=str(row["review_status"]),
-        rationale=str(row.get("rationale") or ""),
-        traversal_direction=direction,
-        hops=depth,
-        supports=_supports(row),
-    )
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
@@ -121,40 +102,23 @@ async def wnav_003(
     seed_document_ids: Sequence[str],
     max_depth: int = 1,
     max_pages: int = 6,
-    seed_page_limit: int | None = None,
-    hop_page_limits: Sequence[int] | None = None,
 ) -> WikiNavigationTraversal:
-    """[WNAV-003] 선택 Seed에서 신뢰도 우선·깊이별 예산으로 순회한다."""
+    """[WNAV-003] 선택 Seed에서 검증된 관계를 제한적으로 순회한다."""
     if not user_id.strip():
         raise ValueError("WNAV-003에 user_id가 필요합니다.")
     if not 1 <= max_depth <= 2:
         raise ValueError("WNAV-003 탐색 깊이는 1 또는 2여야 합니다.")
     if not 1 <= max_pages <= 12:
         raise ValueError("WNAV-003 Page 수는 1에서 12 사이여야 합니다.")
-    resolved_seed_limit = seed_page_limit if seed_page_limit is not None else max_pages
-    if not 1 <= resolved_seed_limit <= max_pages:
-        raise ValueError("WNAV-003 Seed Page 수는 전체 Page 상한 안이어야 합니다.")
-    resolved_hop_limits = (
-        tuple(int(limit) for limit in hop_page_limits)
-        if hop_page_limits is not None
-        else tuple(max_pages for _ in range(max_depth))
-    )
-    if len(resolved_hop_limits) != max_depth or any(
-        limit < 0 for limit in resolved_hop_limits
-    ):
-        raise ValueError("WNAV-003 깊이별 Page 할당이 탐색 깊이와 맞지 않습니다.")
     ordered_seeds = list(dict.fromkeys(str(item) for item in seed_document_ids if item))
     if not ordered_seeds:
         return WikiNavigationTraversal((), ())
-    visited = ordered_seeds[:resolved_seed_limit]
+    visited = ordered_seeds[:max_pages]
     visited_set = set(visited)
     frontier = set(visited)
-    document_hops = {document_id: 0 for document_id in visited}
-    path_scores = {document_id: 1.0 for document_id in visited}
     relations: list[WikiNavigationRelation] = []
     seen_relations: set[str] = set()
-    truncated = len(ordered_seeds) > resolved_seed_limit
-    carry = max(0, resolved_seed_limit - len(visited))
+    truncated = len(ordered_seeds) > max_pages
     async with connection.transaction():
         await set_personal_wiki_scope(connection, user_id=user_id)
         for depth in range(1, max_depth + 1):
@@ -165,10 +129,7 @@ async def wnav_003(
                 user_id=user_id,
                 document_ids=sorted(frontier),
             )
-            verified_rows: list[tuple[Mapping[str, object], str, str, str, float]] = []
-            best_by_peer: dict[
-                str, tuple[Mapping[str, object], str, str, str, float]
-            ] = {}
+            next_frontier: set[str] = set()
             for row in rows:
                 relation_id = str(row["relation_id"])
                 if relation_id in seen_relations or not _verified_relation(row):
@@ -176,63 +137,33 @@ async def wnav_003(
                 peer_and_direction = _peer_and_direction(row, frontier)
                 if peer_and_direction is None:
                     continue
-                peer, direction, anchor = peer_and_direction
-                path_score = path_scores.get(anchor, 1.0) * float(row["confidence"])
-                entry = (row, peer, direction, anchor, path_score)
-                verified_rows.append(entry)
+                peer, direction = peer_and_direction
                 if peer not in visited_set:
-                    existing = best_by_peer.get(peer)
-                    rank = (-path_score, peer, relation_id, anchor)
-                    if existing is None or rank < (
-                        -existing[4],
-                        existing[1],
-                        str(existing[0]["relation_id"]),
-                        existing[3],
-                    ):
-                        best_by_peer[peer] = entry
-            allowance = min(
-                max_pages - len(visited),
-                resolved_hop_limits[depth - 1] + carry,
-            )
-            ordered_candidates = sorted(
-                best_by_peer.values(),
-                key=lambda item: (
-                    -item[4],
-                    item[1],
-                    str(item[0]["relation_id"]),
-                    item[3],
-                ),
-            )
-            accepted = ordered_candidates[: max(0, allowance)]
-            if len(ordered_candidates) > len(accepted):
-                truncated = True
-            next_frontier = {entry[1] for entry in accepted}
-            for row, peer, _direction, _anchor, path_score in accepted:
-                visited.append(peer)
-                visited_set.add(peer)
-                document_hops[peer] = depth
-                path_scores[peer] = path_score
-            carry = max(
-                0,
-                resolved_hop_limits[depth - 1] + carry - len(accepted),
-            )
-            for row, _peer, direction, _anchor, _path_score in verified_rows:
-                relation_id = str(row["relation_id"])
-                if relation_id in seen_relations:
-                    continue
-                if not {
-                    str(row["source_document_id"]),
-                    str(row["target_document_id"]),
-                }.issubset(visited_set):
-                    continue
+                    if len(visited) >= max_pages:
+                        truncated = True
+                        continue
+                    visited.append(peer)
+                    visited_set.add(peer)
+                    next_frontier.add(peer)
                 seen_relations.add(relation_id)
                 relations.append(
-                    _relation_model(row, direction=direction, depth=depth)
+                    WikiNavigationRelation(
+                        relation_id=relation_id,
+                        source_document_id=str(row["source_document_id"]),
+                        target_document_id=str(row["target_document_id"]),
+                        relation_type=str(row["relation_type"]),
+                        confidence=float(row["confidence"]),
+                        provenance_kind=str(row["provenance_kind"]),
+                        review_status=str(row["review_status"]),
+                        rationale=str(row.get("rationale") or ""),
+                        traversal_direction=direction,
+                        hops=depth,
+                        supports=_supports(row),
+                    )
                 )
             frontier = next_frontier
     return WikiNavigationTraversal(
         document_ids=tuple(visited),
         relations=tuple(relations),
         truncated=truncated,
-        document_hops=tuple((item, document_hops[item]) for item in visited),
     )

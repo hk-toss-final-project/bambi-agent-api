@@ -11,7 +11,6 @@ import re
 from asyncio import to_thread
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from hashlib import sha256
 from time import monotonic
 from typing import Any, NotRequired, TypedDict
 
@@ -25,10 +24,6 @@ from shared.report_models import ReportContextDocument
 from shared.wiki_navigation_models import (
     WikiNavigationCandidate,
     WikiNavigationPacket,
-)
-from shared.wiki_navigation_policy import (
-    DEFAULT_WIKI_NAVIGATION_POLICY,
-    WikiNavigationPolicy,
 )
 
 from .live_sources import collect_live_context
@@ -108,7 +103,6 @@ class WikiReadLoopState(TypedDict):
     job_id: str | None
     navigation_snapshot: Mapping[str, object] | None
     defer_live: bool
-    navigation_policy: WikiNavigationPolicy
     normalized_queries: NotRequired[list[str]]
     candidates: NotRequired[list[WikiNavigationCandidate]]
     selected_version_ids: NotRequired[list[str]]
@@ -234,7 +228,7 @@ def build_wiki_read_graph_v2() -> Any:
                 for version_id in state["planned_wiki_version_ids"]
                 if version_id.strip()
             )
-        )[: state["navigation_policy"].budget.max_seed_pages]
+        )[:6]
         packet: WikiNavigationPacket | None = None
         candidates: list[WikiNavigationCandidate] = []
         if state["navigation_snapshot"]:
@@ -251,13 +245,9 @@ def build_wiki_read_graph_v2() -> Any:
                 query=state["topic"],
                 selected_document_version_ids=selected_versions,
                 wiki_version_id=state["wiki_version_id"],
-                max_depth=state["navigation_policy"].budget.max_depth,
-                max_seed_pages=state["navigation_policy"].budget.max_seed_pages,
-                max_pages=state["navigation_policy"].budget.max_pages,
-                max_chunks=state["navigation_policy"].budget.max_chunks,
-                hop_page_limits=(
-                    state["navigation_policy"].budget.hop_page_limits
-                ),
+                max_depth=1,
+                max_pages=6,
+                max_chunks=12,
             )
         else:
             query_embedding: Sequence[float] | None = None
@@ -292,12 +282,7 @@ def build_wiki_read_graph_v2() -> Any:
             selected = [
                 candidate.document_version_id
                 for candidate in select_wiki_seed_candidates(
-                    state["topic"],
-                    state.get("candidates") or [],
-                    limit=min(
-                        _SEED_LIMIT,
-                        state["navigation_policy"].budget.max_seed_pages,
-                    ),
+                    state["topic"], state.get("candidates") or []
                 )
             ]
         return {
@@ -321,13 +306,9 @@ def build_wiki_read_graph_v2() -> Any:
                 selected_document_version_ids=selected,
                 candidates=tuple(state.get("candidates") or ()),
                 wiki_version_id=state["wiki_version_id"],
-                max_depth=state["navigation_policy"].budget.max_depth,
-                max_seed_pages=state["navigation_policy"].budget.max_seed_pages,
-                max_pages=state["navigation_policy"].budget.max_pages,
-                max_chunks=state["navigation_policy"].budget.max_chunks,
-                hop_page_limits=(
-                    state["navigation_policy"].budget.hop_page_limits
-                ),
+                max_depth=1,
+                max_pages=6,
+                max_chunks=12,
             )
         return {
             "packet": packet,
@@ -434,23 +415,6 @@ def build_wiki_read_graph_v2() -> Any:
             state.get("global_documents") or [],
             state.get("live_documents") or [],
         )
-        if packet is not None:
-            hop_counts: dict[int, int] = {}
-            for page in packet.pages:
-                hop_counts[page.hops] = hop_counts.get(page.hops, 0) + 1
-            logger.info(
-                "event=wiki_navigation_completed user_id=%s query_hash=%s "
-                "profile=%s hop_page_counts=%s relation_count=%d truncated=%s "
-                "fallback_reason=%s context_document_count=%d",
-                state["user_id"],
-                sha256(state["topic"].strip().encode("utf-8")).hexdigest()[:16],
-                state["navigation_policy"].profile,
-                hop_counts,
-                len(packet.relations),
-                packet.truncated,
-                packet.fallback_reason or "-",
-                len(wiki_documents),
-            )
         if (
             state["job_id"]
             and packet is not None
@@ -521,7 +485,6 @@ async def run_wiki_read_graph_v2(
     job_id: str | None = None,
     navigation_snapshot: Mapping[str, object] | None = None,
     defer_live: bool = False,
-    navigation_policy: WikiNavigationPolicy = DEFAULT_WIKI_NAVIGATION_POLICY,
 ) -> ResearchOutcome:
     """Wiki 읽기 V2를 실행하고 선택적으로 Live 보강을 상위 병렬 단계로 미룬다."""
     graph = build_wiki_read_graph_v2()
@@ -537,7 +500,6 @@ async def run_wiki_read_graph_v2(
             "job_id": job_id,
             "navigation_snapshot": navigation_snapshot,
             "defer_live": defer_live,
-            "navigation_policy": navigation_policy,
         },
         context=WikiReadRuntimeContext(connection=connection),
     )
@@ -562,7 +524,6 @@ async def research_context_for_version(
     job_id: str | None = None,
     navigation_snapshot: Mapping[str, object] | None = None,
     defer_live: bool = False,
-    navigation_policy: WikiNavigationPolicy = DEFAULT_WIKI_NAVIGATION_POLICY,
 ) -> ResearchOutcome:
     """Job에 고정된 버전에 따라 V1 Researcher 또는 LangGraph V2를 실행한다."""
     if pipeline_version == LEGACY_READ_PIPELINE_VERSION:
@@ -578,7 +539,6 @@ async def research_context_for_version(
             wiki_version_id=wiki_version_id,
             job_id=job_id,
             navigation_snapshot=navigation_snapshot,
-            navigation_policy=navigation_policy,
         )
     if pipeline_version == LANGGRAPH_READ_PIPELINE_VERSION:
         return await run_wiki_read_graph_v2(
@@ -593,6 +553,5 @@ async def research_context_for_version(
             job_id=job_id,
             navigation_snapshot=navigation_snapshot,
             defer_live=defer_live,
-            navigation_policy=navigation_policy,
         )
     raise ValueError(f"지원하지 않는 Wiki 읽기 파이프라인 버전입니다: {pipeline_version}")

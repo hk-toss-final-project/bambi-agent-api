@@ -12,11 +12,7 @@ from typing import Any
 import pytest
 
 from domain.personal_wiki.navigation.features import locate, packet, read, traversal
-from shared.wiki_navigation_models import (
-    WikiNavigationCandidate,
-    WikiNavigationPage,
-    WikiNavigationTraversal,
-)
+from shared.wiki_navigation_models import WikiNavigationCandidate
 
 
 class _Connection:
@@ -332,97 +328,6 @@ def test_traverse_applies_confidence_gate_and_stops_cycles(monkeypatch) -> None:
     assert calls == [("A",), ("B",)]
 
 
-def test_traverse_applies_depth_quotas_and_carries_unused_seed_slot(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """빈 Seed 몫을 1홉으로 넘기고 2홉까지 전체 6 Page 상한을 지킨다."""
-    connection = _Connection()
-    calls: list[tuple[str, ...]] = []
-    common = {
-        "review_status": "accepted",
-        "provenance_kind": "source_explicit",
-        "rationale": "근거 있음",
-        "supports": [
-            {
-                "source_document_version_id": "source-version-1",
-                "provenance_kind": "source_explicit",
-                "confidence": 0.95,
-                "review_status": "accepted",
-                "evidence": "원문 근거",
-                "rationale": "명시 관계",
-            }
-        ],
-    }
-
-    def relation(source: str, target: str, confidence: float) -> dict[str, object]:
-        """신뢰도 순위 검증용 관계 Row를 만든다."""
-        return {
-            **common,
-            "relation_id": f"r-{source.lower()}{target.lower()}",
-            "source_document_id": source,
-            "target_document_id": target,
-            "relation_type": "associated_with",
-            "confidence": confidence,
-        }
-
-    async def fake_scope(*args: Any, **kwargs: Any) -> None:
-        """RLS Scope 설정을 대체한다."""
-
-    async def fake_relations(
-        conn: object, *, document_ids: list[str], **kwargs: Any
-    ) -> list[dict[str, object]]:
-        """각 깊이에 Page 예산보다 하나 많은 후보를 반환한다."""
-        calls.append(tuple(document_ids))
-        if document_ids == ["A"]:
-            return [
-                relation("A", "B", 0.95),
-                relation("A", "C", 0.94),
-                relation("A", "D", 0.93),
-                relation("A", "X", 0.92),
-            ]
-        return [
-            relation("B", "E", 0.95),
-            relation("C", "F", 0.94),
-            relation("D", "G", 0.93),
-        ]
-
-    monkeypatch.setattr(traversal, "set_personal_wiki_scope", fake_scope)
-    monkeypatch.setattr(
-        traversal, "load_wiki_navigation_relations", fake_relations
-    )
-
-    result = asyncio.run(
-        traversal.wnav_003(
-            connection,  # type: ignore[arg-type]
-            user_id="user-1",
-            seed_document_ids=["A"],
-            max_depth=2,
-            max_pages=6,
-            seed_page_limit=2,
-            hop_page_limits=(2, 2),
-        )
-    )
-
-    assert result.document_ids == ("A", "B", "C", "D", "E", "F")
-    assert result.document_hops == (
-        ("A", 0),
-        ("B", 1),
-        ("C", 1),
-        ("D", 1),
-        ("E", 2),
-        ("F", 2),
-    )
-    assert [item.relation_id for item in result.relations] == [
-        "r-ab",
-        "r-ac",
-        "r-ad",
-        "r-be",
-        "r-cf",
-    ]
-    assert result.truncated is True
-    assert calls == [("A",), ("B", "C", "D")]
-
-
 def test_packet_contains_context_without_answer_field() -> None:
     """Context Packet이 후보·Trace를 담되 최종 답변 필드를 만들지 않는다."""
     candidate = WikiNavigationCandidate(
@@ -451,94 +356,6 @@ def test_packet_contains_context_without_answer_field() -> None:
     assert result.candidates == (candidate,)
     assert result.trace[0].step == "locate"
     assert not hasattr(result, "answer")
-
-
-def test_packet_pins_budget_limits_seeds_and_records_page_hops(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """2-hop Packet이 Seed 2개 상한과 Page별 실제 깊이를 보존한다."""
-    now = datetime(2026, 8, 12, tzinfo=UTC)
-
-    def page_model(
-        document_id: str, version_id: str, *, role: str
-    ) -> WikiNavigationPage:
-        """Packet 조립 검증용 최소 Wiki Page를 만든다."""
-        return WikiNavigationPage(
-            document_id=document_id,
-            document_version_id=version_id,
-            document_kind="concept",
-            document_key=document_id,
-            file_path=f"concepts/{document_id}.md",
-            title=document_id,
-            aliases=(),
-            summary=f"{document_id} 요약",
-            markdown=f"{document_id} 본문",
-            version=1,
-            updated_at=now,
-            role=role,
-        )
-
-    seed_pages = [
-        page_model("doc-a", "version-a", role="seed"),
-        page_model("doc-b", "version-b", role="seed"),
-    ]
-    traversed_page = page_model("doc-c", "version-c", role="traversed")
-    read_calls: list[list[str]] = []
-
-    async def fake_pages(*args: Any, **kwargs: Any) -> list[WikiNavigationPage]:
-        """초기 Seed와 순회 완료 Page 읽기를 순서대로 반환한다."""
-        read_calls.append(list(kwargs["document_version_ids"]))
-        return seed_pages if len(read_calls) == 1 else [*seed_pages, traversed_page]
-
-    async def fake_traversal(*args: Any, **kwargs: Any) -> WikiNavigationTraversal:
-        """Seed에서 1홉 Page 하나를 찾은 결과를 반환한다."""
-        assert kwargs["seed_page_limit"] == 2
-        assert kwargs["hop_page_limits"] == (2, 2)
-        return WikiNavigationTraversal(
-            document_ids=("doc-a", "doc-b", "doc-c"),
-            relations=(),
-            document_hops=(("doc-a", 0), ("doc-b", 0), ("doc-c", 1)),
-        )
-
-    async def fake_sources(*args: Any, **kwargs: Any) -> list[Any]:
-        """Source 조회를 비운다."""
-        return []
-
-    monkeypatch.setattr(packet, "wnav_002", fake_pages)
-    monkeypatch.setattr(packet, "wnav_003", fake_traversal)
-    monkeypatch.setattr(packet, "wnav_004", fake_sources)
-
-    result = asyncio.run(
-        packet.wnav_006(
-            _Connection(),  # type: ignore[arg-type]
-            user_id="user-1",
-            query="AI 에이전트",
-            selected_document_version_ids=[
-                "version-a",
-                "version-b",
-                "version-dropped",
-            ],
-            max_depth=2,
-            max_seed_pages=2,
-            max_pages=6,
-            max_chunks=12,
-            hop_page_limits=(2, 2),
-        )
-    )
-
-    assert read_calls == [
-        ["version-a", "version-b"],
-        ["version-a", "version-b"],
-    ]
-    assert [page.hops for page in result.pages] == [0, 0, 1]
-    assert result.budget.to_payload() == {
-        "max_depth": 2,
-        "max_seed_pages": 2,
-        "max_pages": 6,
-        "max_chunks": 12,
-        "hop_page_limits": [2, 2],
-    }
-    assert result.truncated is True
 
 
 def test_navigation_relation_failure_emits_countable_log(

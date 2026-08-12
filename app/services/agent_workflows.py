@@ -6,7 +6,7 @@ Swagger용 단계 결과를 반환한다.
 """
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from time import monotonic
 from uuid import uuid4
@@ -40,7 +40,6 @@ from infrastructure.sources.connectors.api import (
     fetch_url_via_jina,
 )
 from shared.contracts import FeatureRequest
-from shared.wiki_navigation_policy import resolve_wiki_navigation_policy
 
 type UrlFetcher = Callable[[str], JinaReadResult]
 type WikiRunner = Callable[..., Awaitable[dict[str, object]]]
@@ -176,15 +175,6 @@ class AgentWorkflowService:
                 job.payload.get("read_pipeline_version")
                 or LEGACY_READ_PIPELINE_VERSION
             )
-            raw_navigation_budget = job.payload.get("navigation_budget")
-            if raw_navigation_budget is not None and not isinstance(
-                raw_navigation_budget, Mapping
-            ):
-                raise ValueError("Wiki 탐색 예산은 객체여야 합니다.")
-            navigation_policy = resolve_wiki_navigation_policy(
-                str(job.payload.get("navigation_profile") or "") or None,
-                pinned_budget=raw_navigation_budget,
-            )
             raw_navigation_snapshots = job.payload.get("wiki_navigation_snapshots")
             wiki_navigation_snapshots = (
                 {
@@ -219,10 +209,6 @@ class AgentWorkflowService:
                                 wiki_version_id=wiki_version_id,
                                 wiki_navigation_snapshots=wiki_navigation_snapshots,
                                 read_pipeline_version=read_pipeline_version,
-                                navigation_profile=navigation_policy.profile,
-                                navigation_budget=(
-                                    navigation_policy.budget.to_payload()
-                                ),
                             )
                         },
                     )

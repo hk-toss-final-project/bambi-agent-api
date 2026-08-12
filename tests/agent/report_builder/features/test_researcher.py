@@ -31,7 +31,6 @@ from shared.wiki_navigation_models import (
     WikiNavigationPage,
     WikiNavigationSource,
 )
-from shared.wiki_navigation_policy import resolve_wiki_navigation_policy
 
 
 def _document(
@@ -349,21 +348,7 @@ def test_retry_restores_exact_page_and_source_snapshot(
                 version=2,
                 updated_at=now,
                 role="seed",
-            ),
-            WikiNavigationPage(
-                document_id="doc-hbm",
-                document_version_id="version-hbm",
-                document_kind="concept",
-                document_key="HBM",
-                file_path="concepts/HBM.md",
-                title="HBM",
-                aliases=(),
-                summary="고대역폭 메모리",
-                markdown="# HBM",
-                version=1,
-                updated_at=now,
-                role="seed",
-            ),
+            )
         ]
 
     monkeypatch.setattr(researcher, "wnav_002", fake_wnav_002)
@@ -371,8 +356,7 @@ def test_retry_restores_exact_page_and_source_snapshot(
         "query": "최근 삼성전자 관심",
         "wiki_version_id": "wiki-build-9",
         "pages": [
-            {"document_version_id": "version-samsung", "role": "seed"},
-            {"document_version_id": "version-hbm", "role": "traversed"},
+            {"document_version_id": "version-samsung", "role": "seed"}
         ],
         "relations": [],
         "sources": [
@@ -391,8 +375,6 @@ def test_retry_restores_exact_page_and_source_snapshot(
                 "clipped_on": None,
             }
         ],
-        # 배포 전 Snapshot 형식에는 Seed·Hop별 상한이 없었다.
-        "budget": {"max_depth": 1, "max_pages": 6, "max_chunks": 12},
         "truncated": False,
     }
 
@@ -406,19 +388,9 @@ def test_retry_restores_exact_page_and_source_snapshot(
     )
 
     assert calls == [
-        (connection, ("version-samsung", "version-hbm"), "wiki-build-9")
+        (connection, ("version-samsung",), "wiki-build-9")
     ]
     assert packet.pages[0].document_version_id == "version-samsung"
-    assert packet.pages[0].hops == 0
-    assert packet.pages[1].role == "traversed"
-    assert packet.pages[1].hops == 1
-    assert packet.budget.to_payload() == {
-        "max_depth": 1,
-        "max_seed_pages": 6,
-        "max_pages": 6,
-        "max_chunks": 12,
-        "hop_page_limits": [6],
-    }
     assert packet.sources[0].saved_at == now
     assert packet.wiki_version_id == "wiki-build-9"
 
@@ -696,16 +668,6 @@ def test_research_prompt_focuses_on_search_only() -> None:
     assert "wiki_search" in researcher.SYSTEM_PROMPT
     assert "wiki_read" in researcher.SYSTEM_PROMPT
     assert "collect_live" not in researcher.SYSTEM_PROMPT
-
-
-def test_on_demand_prompt_uses_two_seed_budget() -> None:
-    """온디맨드 조사원에게 도구가 거절할 3~6개 Seed를 고르라고 안내하지 않는다."""
-    prompt = researcher._research_system_prompt(  # noqa: SLF001 - 지침 계약 검증
-        resolve_wiki_navigation_policy("ON_DEMAND_2HOP")
-    )
-
-    assert "최대 2개" in prompt
-    assert "최대 6개" not in prompt
 
 
 def test_personal_wiki_documents_do_not_count_toward_sufficiency(

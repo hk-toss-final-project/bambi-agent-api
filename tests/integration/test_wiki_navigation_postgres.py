@@ -27,16 +27,14 @@ async def _insert_navigation_fixture(
     connection: AsyncConnection[dict[str, object]],
     *,
     user_id: str,
-) -> tuple[UUID, UUID, UUID]:
-    """두 관계로 이어진 2-hop 개인 Wiki Fixture와 다중 support를 저장한다."""
+) -> tuple[UUID, UUID]:
+    """한 관계를 두 원본 support가 지지하는 개인 Wiki Fixture를 저장한다."""
     namespace_key = f"user/{user_id}"
     source_document_id = uuid4()
     target_document_id = uuid4()
-    second_hop_document_id = uuid4()
     source_record_id = uuid4()
     source_version_id = uuid4()
     relation_id = uuid4()
-    second_relation_id = uuid4()
     job_ids = (uuid4(), uuid4())
 
     for index, job_id in enumerate(job_ids, start=1):
@@ -52,7 +50,6 @@ async def _insert_navigation_fixture(
     for document_id, key, title_marker in (
         (source_document_id, "seed", "a"),
         (target_document_id, "neighbor", "b"),
-        (second_hop_document_id, "second-hop", "e"),
     ):
         await connection.execute(
             """
@@ -152,57 +149,7 @@ async def _insert_navigation_fixture(
             ),
         )
 
-    await connection.execute(
-        """
-        INSERT INTO agent.wiki_document_relations (
-            id,
-            source_document_id,
-            target_document_id,
-            namespace_key,
-            relation_type,
-            provenance_kind,
-            confidence,
-            review_status,
-            metadata
-        ) VALUES (
-            %s, %s, %s, %s, 'part_of',
-            'source_explicit', 0.91, 'accepted',
-            '{"rationale": "2-hop 문서가 이웃에서 이어짐"}'::jsonb
-        )
-        """,
-        (
-            second_relation_id,
-            target_document_id,
-            second_hop_document_id,
-            namespace_key,
-        ),
-    )
-    await connection.execute(
-        """
-        INSERT INTO agent.wiki_relation_supports (
-            relation_id,
-            namespace_key,
-            source_document_version_id,
-            build_job_id,
-            provenance_kind,
-            confidence,
-            review_status,
-            evidence,
-            metadata
-        ) VALUES (
-            %s, %s, %s, %s, 'source_explicit', 0.89, 'accepted',
-            '2-hop 근거', '{"rationale": "통합 테스트 2-hop support"}'::jsonb
-        )
-        """,
-        (
-            second_relation_id,
-            namespace_key,
-            source_version_id,
-            job_ids[0],
-        ),
-    )
-
-    return source_document_id, target_document_id, second_hop_document_id
+    return source_document_id, target_document_id
 
 
 async def _run_navigation_integration() -> None:
@@ -214,11 +161,10 @@ async def _run_navigation_integration() -> None:
     try:
         async with connection.transaction(force_rollback=True):
             user_id = f"navigator-integration-{uuid4().hex}"
-            (
-                source_document_id,
-                target_document_id,
-                _second_hop_document_id,
-            ) = await _insert_navigation_fixture(connection, user_id=user_id)
+            source_document_id, target_document_id = await _insert_navigation_fixture(
+                connection,
+                user_id=user_id,
+            )
 
             traversal = await wnav_003(
                 connection,
@@ -251,48 +197,3 @@ async def _run_navigation_integration() -> None:
 def test_wiki_navigation_expands_one_hop_with_multiple_supports() -> None:
     """실제 PostgreSQL에서 복합 PK 관계와 여러 support 집계를 검증한다."""
     asyncio.run(_run_navigation_integration())
-
-
-async def _run_two_hop_navigation_integration() -> None:
-    """실제 관계 저장소에서 2-hop 문서와 깊이 표식을 함께 검증한다."""
-    connection = await AsyncConnection.connect(
-        _test_database_url(),
-        row_factory=dict_row,
-    )
-    try:
-        async with connection.transaction(force_rollback=True):
-            user_id = f"navigator-2hop-integration-{uuid4().hex}"
-            (
-                source_document_id,
-                target_document_id,
-                second_hop_document_id,
-            ) = await _insert_navigation_fixture(connection, user_id=user_id)
-
-            traversal = await wnav_003(
-                connection,
-                user_id=user_id,
-                seed_document_ids=[str(source_document_id)],
-                max_depth=2,
-                max_pages=6,
-                seed_page_limit=2,
-                hop_page_limits=(2, 2),
-            )
-
-            assert traversal.document_ids == (
-                str(source_document_id),
-                str(target_document_id),
-                str(second_hop_document_id),
-            )
-            assert traversal.document_hops == (
-                (str(source_document_id), 0),
-                (str(target_document_id), 1),
-                (str(second_hop_document_id), 2),
-            )
-            assert [relation.hops for relation in traversal.relations] == [1, 2]
-    finally:
-        await connection.close()
-
-
-def test_wiki_navigation_expands_two_hops_with_fixed_budget() -> None:
-    """실제 PostgreSQL에서 온디맨드 전용 깊이별 순회를 검증한다."""
-    asyncio.run(_run_two_hop_navigation_integration())
