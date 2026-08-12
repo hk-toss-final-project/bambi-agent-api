@@ -93,6 +93,23 @@ def test_fetch_provider_entries_defaults_published_ts_to_zero() -> None:
     assert entries[0]["published"] == ""
 
 
+def test_fetch_provider_entries_raises_when_all_providers_fail() -> None:
+    """모든 Provider가 차단되면 빈 성공처럼 숨기지 않고 수집 실패를 알린다."""
+    from infrastructure.sources.connectors.api import LatestProviderError
+
+    class _BlockedProvider:
+        name = "google_news"
+
+        async def search(self, *, query, limit, language):
+            """Google의 일시 차단을 재현한다."""
+            raise LatestProviderError(
+                self.name, "rate_limited", "Google News 디코딩이 차단됐습니다."
+            )
+
+    with pytest.raises(feeds.NewsProviderCollectionError, match="google_news"):
+        feeds.fetch_provider_entries("트럼프", providers=[_BlockedProvider()])
+
+
 def test_canonical_url_strips_query_and_fragment() -> None:
     """query와 fragment를 제거하고 host를 소문자화한다."""
     assert feeds.canonical_url("https://A.com/news/1?utm=x#top") == "https://a.com/news/1"

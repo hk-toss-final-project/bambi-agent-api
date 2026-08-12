@@ -102,6 +102,9 @@ COLLECTION_TARGET_POLICY_MIGRATION_PATH = (
     / "migrations"
     / "0029_collection_target_budget_policy.sql"
 )
+STALE_JOB_ATTEMPTS_MIGRATION_PATH = (
+    PROJECT_ROOT / "database" / "migrations" / "0030_timeout_stale_job_attempts.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
@@ -122,6 +125,7 @@ MIGRATION_PATHS = (
     GLOBAL_SOURCE_IMAGE_MIGRATION_PATH,
     BRIEFING_SNAPSHOT_MIGRATION_PATH,
     COLLECTION_TARGET_POLICY_MIGRATION_PATH,
+    STALE_JOB_ATTEMPTS_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
@@ -607,6 +611,17 @@ def test_every_migration_records_its_own_version() -> None:
     assert missing == [], f"schema_migrations 기록이 없습니다: {missing}"
     assert mismatched == [], f"파일 이름과 기록된 version이 다릅니다: {mismatched}"
     assert not_transactional == [], f"트랜잭션이 없습니다: {not_transactional}"
+
+
+def test_stale_job_attempts_migration_closes_zombie_attempts() -> None:
+    """과거 running Attempt가 Lease·Job 상태를 기준으로 timed_out 정리되는지 검증한다."""
+    migration = _read(STALE_JOB_ATTEMPTS_MIGRATION_PATH)
+
+    assert "UPDATE agent.agent_job_attempts AS attempt" in migration
+    assert "status = 'timed_out'" in migration
+    assert "attempt.attempt_number < job.attempt_count" in migration
+    assert "job.status <> 'running'" in migration
+    assert "job.lease_expires_at < clock_timestamp()" in migration
 
 
 def test_personal_wiki_reset_migration_blocks_cancelled_build_writes() -> None:
