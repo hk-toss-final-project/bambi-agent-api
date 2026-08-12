@@ -38,6 +38,27 @@ class _FakeCursor:
         return self._row if isinstance(self._row, list) else [self._row]
 
 
+class _FakeBatchCursor:
+    """psycopg AsyncCursor의 Batch 실행 표면을 흉내 내는 Test Double."""
+
+    def __init__(self, connection: "_FakeConnection") -> None:
+        """Batch 실행 내역을 기록할 Connection을 보관한다."""
+        self._connection = connection
+
+    async def __aenter__(self) -> "_FakeBatchCursor":
+        """Cursor Context 진입 시 자신을 반환한다."""
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        """Cursor Context를 종료한다."""
+
+    async def executemany(
+        self, query: str, params: list[tuple[int, str, int, str]]
+    ) -> None:
+        """Batch SQL과 Parameter 목록을 Connection 실행 기록에 남긴다."""
+        self._connection.executed_many.append((query, params))
+
+
 class _FakeConnection:
     """SQL 실행 내역을 기록하고 실행 순서별 Row를 반환하는 Connection Test Double."""
 
@@ -61,11 +82,9 @@ class _FakeConnection:
         self.executed.append((query, params))
         return _FakeCursor(self._rows.pop(0) if self._rows else None)
 
-    async def executemany(
-        self, query: str, params: list[tuple[int, str, int, str]]
-    ) -> None:
-        """Batch SQL과 Parameter 목록을 기록한다."""
-        self.executed_many.append((query, params))
+    def cursor(self) -> _FakeBatchCursor:
+        """실제 psycopg처럼 Batch 실행을 담당할 Cursor를 반환한다."""
+        return _FakeBatchCursor(self)
 
 
 def _connection(*, existing_targets: list[dict[str, Any]] | None = None) -> _FakeConnection:
