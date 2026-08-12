@@ -9,6 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 
+from shared.wiki_navigation_policy import (
+    DEFAULT_WIKI_NAVIGATION_POLICY,
+    WikiNavigationBudget,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class WikiNavigationCandidate:
@@ -59,6 +64,7 @@ class WikiNavigationPage:
     updated_at: datetime
     role: str
     excerpts: tuple[WikiNavigationExcerpt, ...] = ()
+    hops: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +131,7 @@ class WikiNavigationTraversal:
     document_ids: tuple[str, ...]
     relations: tuple[WikiNavigationRelation, ...]
     truncated: bool = False
+    document_hops: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,3 +147,4 @@ class WikiNavigationPacket:
     trace: tuple[WikiNavigationTraceStep, ...]
     truncated: bool = False
     fallback_reason: str | None = None
+    budget: WikiNavigationBudget = DEFAULT_WIKI_NAVIGATION_POLICY.budget
