@@ -92,6 +92,27 @@ from .features.maintenance import (
     run_wiki_maintenance_for_version,
     run_wiki_maintenance_graph_v2,
 )
+from .features.semantic_audit import (
+    SEMANTIC_LINT_PROMPT_VERSION,
+    WikiMissingRelationProposal,
+    WikiMissingTopicProposal,
+    WikiSemanticEvidence,
+    WikiSemanticIssue,
+    WikiSemanticIssueCode,
+    WikiSemanticLintReport,
+    audit_wiki_semantics,
+    build_wiki_semantic_lint_prompt,
+    parse_wiki_semantic_lint_response,
+)
+from .features.semantic_lint import (
+    WikiGlobalRelationCandidate,
+    WikiSemanticLintContext,
+    WikiSemanticLintLimits,
+    WikiSemanticPage,
+    WikiSemanticSource,
+    WikiSemanticSourceDocument,
+    build_wiki_semantic_lint_context,
+)
 
 __all__ = [
     "wba_001",
@@ -169,4 +190,21 @@ __all__ = [
     "plan_wiki_maintenance",
     "run_wiki_maintenance_for_version",
     "run_wiki_maintenance_graph_v2",
+    "SEMANTIC_LINT_PROMPT_VERSION",
+    "WikiMissingRelationProposal",
+    "WikiMissingTopicProposal",
+    "WikiSemanticEvidence",
+    "WikiSemanticIssue",
+    "WikiSemanticIssueCode",
+    "WikiSemanticLintReport",
+    "audit_wiki_semantics",
+    "build_wiki_semantic_lint_prompt",
+    "parse_wiki_semantic_lint_response",
+    "WikiGlobalRelationCandidate",
+    "WikiSemanticLintContext",
+    "WikiSemanticLintLimits",
+    "WikiSemanticPage",
+    "WikiSemanticSource",
+    "WikiSemanticSourceDocument",
+    "build_wiki_semantic_lint_context",
 ]
