@@ -256,8 +256,13 @@ def test_citations_are_limited_to_available_references() -> None:
     assert collect_allowed_citations(body, CONTEXTS) == ("G1", "P1")
 
 
-def test_first_run_notice_is_stated_in_the_body() -> None:
-    """최초 실행이면 비교 대상이 없다는 사실을 본문에 밝힌다."""
+def test_first_run_does_not_add_a_meta_notice_to_the_body() -> None:
+    """조립 결과에 "비교 대상이 없다" 같은 메타 코멘트가 없다.
+
+    2026-08-12 사용자 피드백: 이런 문구가 불친절하게 읽힌다. is_first_run
+    여부는 store 단계에서 DB 저장·집계용 상태로만 쓰이고, 조립(assembly)은
+    그 값을 아예 받지 않는다 — 첫 실행이든 아니든 같은 형태로 조립된다.
+    """
     content = assemble_delta_report(
         topic="반도체",
         reference_date=REFERENCE_DATE,
@@ -265,10 +270,10 @@ def test_first_run_notice_is_stated_in_the_body() -> None:
         compose=_compose(),
         impact=_impact(),
         contexts=CONTEXTS,
-        is_first_run=True,
     )
 
-    assert "최초 실행" in content.body
+    assert "최초 실행" not in content.body
+    assert "비교 대상" not in content.body
 
 
 def test_no_highlight_facts_still_produces_a_full_summary_report() -> None:

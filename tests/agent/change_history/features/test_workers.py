@@ -186,6 +186,19 @@ def test_diff_worker_gets_the_search_tool_when_base_exists() -> None:
     assert "topic" not in tools[0].parameters["properties"]
 
 
+def test_diff_prompts_ask_for_friendly_today_statement() -> None:
+    """두 Diff 프롬프트(과거 대조 있음·첫 실행) 모두 today_statement 톤을 지정한다.
+
+    2026-08-12 사용자 피드백: "~보여준다", "~자리매김하고 있다" 같은 문장이
+    "변경사항" 섹션 불릿에 그대로 노출되는데 불친절하게 읽힌다. 이 문장은
+    Compose가 아니라 Diff worker가 만들므로, Compose·Impact 톤 규칙만으로는
+    안 고쳐진다 — Diff 프롬프트에도 별도로 넣어야 한다.
+    """
+    for prompt in (diff_module.SYSTEM_PROMPT, diff_module.FIRST_RUN_SYSTEM_PROMPT):
+        assert "존댓말" in prompt
+        assert "보여준다" in prompt  # 피해야 할 어투 예시로 명시돼 있다
+
+
 def test_diff_worker_returns_empty_when_llm_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -225,6 +238,38 @@ def test_impact_prompt_requires_citation_markers() -> None:
     """Impact 프롬프트도 같은 인용 마커 규칙을 요구한다."""
     assert "[G2]" in impact_module.SYSTEM_PROMPT
     assert "참조 ID" in impact_module.SYSTEM_PROMPT
+
+
+def test_compose_prompt_asks_for_friendlier_and_fuller_writing() -> None:
+    """Compose 프롬프트가 존댓말과 팩트당 풀어쓰기를 명시적으로 요구한다.
+
+    2026-08-12: 사용자가 보고서 내용이 짧고 딱딱하다고 피드백했다. 새 자료를
+    더 주는 대신, 이미 가진 팩트 정보(오늘 값·이전 값·시점)를 더 풀어 쓰게
+    지시하는 선에서만 대응한다.
+    """
+    assert "존댓말" in compose_module.SYSTEM_PROMPT
+    assert "최소 두 문장" in compose_module.SYSTEM_PROMPT
+    # 재료를 부풀리라는 게 아니라 있는 정보만 쓰라는 제약이 함께 있어야 한다.
+    assert "새로 짓지 마라" in compose_module.SYSTEM_PROMPT
+
+
+def test_impact_prompt_asks_for_friendlier_and_fuller_writing() -> None:
+    """Impact 프롬프트도 같은 방향(존댓말·근거 있는 풀어쓰기)을 요구한다."""
+    assert "존댓말" in impact_module.SYSTEM_PROMPT
+    assert "이유를 한두 문장" in impact_module.SYSTEM_PROMPT
+
+
+def test_compose_and_impact_prompts_ask_for_connected_paragraphs() -> None:
+    """두 프롬프트 모두 문장마다 줄바꿈하지 말고 이어 쓰라고 지시한다.
+
+    2026-08-12 사용자 피드백: "괌은 ~습니다. [빈 줄] 이러한 ~습니다. [빈 줄] ..."
+    처럼 문장 하나가 문단 하나가 돼 뚝뚝 끊겨 읽혔다. 원인은 "각 문장이
+    마침표로 끝날 때마다 줄바꿈을 넣어라"는 예전 지시였다 — 그 문구가 아직
+    남아 있으면 안 된다.
+    """
+    for prompt in (compose_module.SYSTEM_PROMPT, impact_module.SYSTEM_PROMPT):
+        assert "문장마다 줄을 바꾸지 마라" in prompt
+        assert "마침표(.)로 끝날 때마다 줄바꿈" not in prompt
 
 
 def test_compose_output_keeps_citation_markers(

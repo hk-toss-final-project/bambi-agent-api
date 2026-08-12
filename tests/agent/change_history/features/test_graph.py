@@ -208,7 +208,9 @@ def test_first_run_skips_base_lookup_but_still_stores_facts(
     assert stored[0]["is_first_run"] is True
     assert len(stored[0]["facts"]) == 1  # 첫 실행에도 팩트가 저장된다
     assert result["stored_fact_count"] == 1
-    assert "최초 실행" in result["generated"].body
+    # is_first_run은 저장·집계용 상태일 뿐, 본문에 "최초 실행" 같은 메타
+    # 코멘트를 넣지 않는다 — 독자에게는 그냥 오늘의 보고서다(2026-08-12).
+    assert "최초 실행" not in result["generated"].body
 
 
 def test_compose_gets_every_fact_impact_gets_highlights_only(

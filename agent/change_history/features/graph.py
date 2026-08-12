@@ -422,7 +422,6 @@ def build_change_history_graph(
                 else ImpactOutcome()
             ),
             contexts=contexts,
-            is_first_run=bool(state.get("is_first_run")),
         )
         quality_outcome = evaluate_report(
             generated, context_count=len(contexts)

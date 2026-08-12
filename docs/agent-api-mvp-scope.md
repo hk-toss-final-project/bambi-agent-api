@@ -19,7 +19,7 @@
 > 동작하는지 기준으로 판정했다. 표기: `[x]` 구현 완료, `[x] ⚠️` 핵심 동작은 되지만 제약 있음,
 > `[ ] ❌` 미구현, `[ ] ➖` Agent API 범위 아님(service-worker 책임).
 >
-> **집계: 완료 108 · 부분 6 · 미구현 4 · 범위 외 3 (총 121)**
+> **집계: 완료 109 · 부분 6 · 미구현 4 · 범위 외 3 (총 122)**
 
 ### 내부 API 인증
 
@@ -170,6 +170,7 @@
 - [x] `JOB-002` Agent Job 조회
 - [x] `JOB-006` Agent Job 진행률 관리 — ⚠️ progress 값만 갱신(0→5→100), 단계별(정규화·Chunking·Embedding) 기록 없음
 - [x] `JOB-007` Agent Job 결과 연결 — wiki_version_id·affected_documents·chunk_count
+- [x] `JOB-009` Agent Job Timeout — 시도를 다 쓴 채 Lease가 만료된 running Job을 Scheduler tick이 주기적으로 회수해 failed로 마감한다 (2026-08-12, 온디맨드 리포트 적체 인시던트 후속. claim_runnable_agent_jobs는 attempt_count < max_attempts인 Job만 다시 집으므로, 그 조건 밖으로 밀려난 Job은 그전까지 아무도 회수하지 못했다)
 - [x] `JOB-010` Agent Job Idempotency
 - [x] `WC-001` Queue Job Consume — 상주 소비 루프
 - [x] `WC-002` Job Claim — `FOR UPDATE SKIP LOCKED` + Lease
@@ -435,6 +436,7 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 | JOB-002 | Agent Job 조회 | API와 Worker가 클리핑 Job 상태와 진행률을 조회한다. |
 | JOB-006 | Agent Job 진행률 관리 | 정규화, Chunking, Embedding, 관심사 갱신 단계를 기록한다. |
 | JOB-007 | Agent Job 결과 연결 | 입력에는 원본 ID를, 완료 결과에는 생성·갱신된 문서/Version ID 목록과 wiki_version_id를 연결한다. |
+| JOB-009 | Agent Job Timeout | 시도를 다 쓴 채 Lease가 만료된 running Job을 주기적으로 회수해 failed로 마감한다. |
 | JOB-010 | Agent Job Idempotency | 동일 클리핑 요청이 Worker Job을 중복 생성하지 않도록 한다. |
 | WC-001 | Queue Job Consume | Worker가 실행 가능한 Personal Wiki Job Batch를 가져온다. |
 | WC-002 | Job Claim | FOR UPDATE SKIP LOCKED와 Lease로 Job Batch를 점유한다. |

@@ -48,7 +48,6 @@ TIMELINE_HEADING = "## 타임라인"
 CHANGED_SUBHEADING = "### 달라진 사실"
 NEW_SUBHEADING = "### 새로 확인된 사실"
 
-FIRST_RUN_NOTICE = "이 주제의 최초 실행이라 비교 대상이 없습니다. 오늘 확인된 내용을 전부 정리했습니다."
 NO_CHANGE_NOTICE = "직전 보고서 이후 새로 확인되거나 달라진 내용이 없습니다."
 NO_WATCH_ITEMS_NOTICE = "이번에 특별히 주목할 사항은 없습니다."
 
@@ -102,7 +101,6 @@ def build_delta_markdown(
     highlight_facts: Sequence[ValidatedFact],
     compose: ComposeOutcome,
     impact: ImpactOutcome,
-    is_first_run: bool = False,
 ) -> str:
     """섹션 헤더를 붙여 네 섹션을 하나의 markdown 문자열로 잇는다.
 
@@ -115,13 +113,16 @@ def build_delta_markdown(
     `.summary` 필드가 이미 그 값을 나른다. 본문에 다시 박으면 카드 헤더와
     본문 양쪽에 같은 제목이 중복 노출되는 소비 측 문제가 생긴다.
 
+    최초 실행인지 여부는 여기서 다루지 않는다 — "비교 대상이 없다" 같은 메타
+    코멘트는 독자에게 불친절하게 읽혀 뺐다(2026-08-12). is_first_run은
+    store 단계에서 DB 저장·집계용으로만 쓰인다.
+
     Args:
         highlight_facts: 이번에 달라진 팩트(신규·갱신)만. 유지(중복)는 이미
             제외된 상태로 들어온다 — 비어 있으면 "달라진 점이 없다"는 뜻이다.
         compose: 핵심 요약·타임라인 생성 결과
         impact: 파급효과·확인 사항 추론 결과 (달라진 점이 없으면 실행되지
             않아 비어 있을 수 있다)
-        is_first_run: 비교 대상이 없던 최초 실행인지
 
     Returns:
         이번에 달라진 점·핵심 요약·주목할 점·타임라인을 담은 markdown 본문
@@ -130,8 +131,6 @@ def build_delta_markdown(
     no_change = not highlight_facts
 
     blocks: list[str] = [UPDATES_HEADING]
-    if is_first_run:
-        blocks.append(FIRST_RUN_NOTICE)
     if no_change:
         blocks.append(NO_CHANGE_NOTICE)
     else:
@@ -192,7 +191,6 @@ def assemble_delta_report(
     compose: ComposeOutcome,
     impact: ImpactOutcome,
     contexts: Sequence[ReportContextDocument],
-    is_first_run: bool = False,
 ) -> GeneratedReportContent:
     """조립한 markdown을 기존 생성 결과와 같은 형태로 감싸 돌려준다.
 
@@ -207,7 +205,6 @@ def assemble_delta_report(
         compose: 핵심 요약·타임라인 생성 결과 (제목·한 줄 결론도 여기서 온다)
         impact: 파급효과·확인 사항 추론 결과
         contexts: 오늘 수집한 근거 문서 (Citation 참조 검증용)
-        is_first_run: 비교 대상이 없던 최초 실행인지
 
     Returns:
         review(Critic)와 persist가 그대로 소비할 수 있는 생성 콘텐츠
@@ -223,7 +220,6 @@ def assemble_delta_report(
         highlight_facts=highlight_facts,
         compose=compose,
         impact=impact,
-        is_first_run=is_first_run,
     )
     return GeneratedReportContent(
         title=title,
@@ -317,7 +313,6 @@ async def chg_006(
     compose: ComposeOutcome,
     impact: ImpactOutcome,
     contexts: Sequence[ReportContextDocument],
-    is_first_run: bool = False,
 ) -> GeneratedReportContent:
     """[CHG-006] 정보요약보고서 조립.
 
@@ -332,5 +327,4 @@ async def chg_006(
         compose=compose,
         impact=impact,
         contexts=contexts,
-        is_first_run=is_first_run,
     )
