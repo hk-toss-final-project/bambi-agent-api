@@ -145,13 +145,15 @@ SERVICE_NOT_READY`로 응답합니다). 분해 전 구조와 설계 배경은
 
 ### 6. Worker 실행
 
-등록된 Agent Job(Wiki 빌드, Report Builder 생성)과 외부 수집을 처리하는 CLI입니다.
-Wiki 빌드와 Report Builder 생성은 OpenAI를 실제 호출하므로 비용이 발생합니다.
+등록된 Agent Job(Wiki 빌드, 아침 브리핑 준비, Report Builder 생성)과 외부 수집을
+처리하는 CLI입니다. Wiki 빌드와 브리핑 준비, Report Builder 생성은 OpenAI를 실제
+호출하므로 비용이 발생합니다.
 
 | Worker | 용도 | 모드 |
 |---|---|---|
 | `url-collection` | 사용자 URL을 Jina Reader로 읽어 Markdown 원문 Version 저장 | 단발 / `--loop` 상주 |
 | `personal-wiki` | 클리핑·URL 원본을 LLM Wiki로 빌드하고 변경 Chunk를 best-effort 재임베딩 | 단발 / `--loop` 상주 |
+| `briefing-preparation` | 날짜별 아침 주제와 Wiki·Global·Live 근거를 Snapshot으로 준비 | 단발 / `--loop` 상주 |
 | `report-generation` | 생성 Job을 처리해 콘텐츠·발행 Snapshot 저장 | 단발 / `--loop` 상주 |
 | `global-collector` | 키워드로 외부 기사 수집 (`--keywords` 필수, Provider 기본 `gdelt,naver,google_news`) | 단발 |
 | `global-content` | 수집된 기사의 본문 확보 (**Scheduler가 tick마다 자동 실행**, 이 CLI는 수동 점검·backlog 소진용) | 단발 |
@@ -160,11 +162,13 @@ Wiki 빌드와 Report Builder 생성은 OpenAI를 실제 호출하므로 비용�
 # 단발: 대기 Job 한 Batch를 처리하고 종료
 uv run python -m workers.main --worker url-collection
 uv run python -m workers.main --worker personal-wiki
+uv run python -m workers.main --worker briefing-preparation
 uv run python -m workers.main --worker report-generation
 
 # 상주: Job이 생기면 자동 처리 (없으면 60초 간격으로 확인)
 uv run python -m workers.main --worker url-collection --loop --interval-seconds 5
 uv run python -m workers.main --worker personal-wiki --loop
+uv run python -m workers.main --worker briefing-preparation --loop
 uv run python -m workers.main --worker report-generation --loop
 
 # 외부 기사 수집 → 본문 확보
@@ -172,9 +176,17 @@ uv run python -m workers.main --worker global-collector --keywords "AI 에이전
 uv run python -m workers.main --worker global-content
 ```
 
-`--limit`, `--lease-seconds`, `--model`, `--interval-seconds`(상주 모드) 옵션으로
-Batch 크기와 실행을 조정합니다. 상주 Worker는 `scheduled_at`이 도래한 Job만
-Claim하므로 예약 생성 요청은 지정 시각에 처리됩니다.
+`--limit`, `--concurrency`, `--lease-seconds`, `--model`,
+`--interval-seconds`(상주 모드) 옵션으로 Batch 크기와 실행을 조정합니다. 상주
+Worker는 `scheduled_at`이 도래한 Job만 Claim하므로 예약 생성 요청은 지정 시각에
+처리됩니다.
+
+운영 환경에서는 `briefing-preparation`을 `report-generation`과 **별도 프로세스나
+컨테이너로 상시 실행**해야 합니다. Service 스케줄러가 준비 시각에 POST로 등록한
+`briefing_preparation` Job은 이 Worker만 처리합니다. 준비 Worker가 없으면 Job은
+`queued`에 남고 생성 시각의 주제 GET은 빈 응답을 반환합니다. 준비 처리량은
+`BRIEFING_WORKER_BATCH_SIZE`와 `BRIEFING_JOB_CONCURRENCY`로 독립 조정하며, 즉시
+Report Worker의 설정과 생성 경로는 바뀌지 않습니다.
 
 URL 등록 API는 URL Head와 `personal_wiki_url` Job을 먼저 Commit하고 202를
 반환합니다. `url-collection` 상주 Worker가 Job을 감지하면 Jina Reader로 본문을

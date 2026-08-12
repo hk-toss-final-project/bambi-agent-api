@@ -34,6 +34,8 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("URL_COLLECTION_JOB_CONCURRENCY", "3")
     monkeypatch.setenv("REPORT_WORKER_BATCH_SIZE", "7")
     monkeypatch.setenv("REPORT_JOB_CONCURRENCY", "4")
+    monkeypatch.setenv("BRIEFING_WORKER_BATCH_SIZE", "11")
+    monkeypatch.setenv("BRIEFING_JOB_CONCURRENCY", "3")
     monkeypatch.setenv("OPENAI_DEFAULT_RPM", "120")
     monkeypatch.setenv("OPENAI_DEFAULT_TPM", "90000")
     monkeypatch.setenv("WIKI_OPENAI_REQUESTS_PER_JOB", "6")
@@ -78,6 +80,8 @@ def test_load_settings_reads_environment(monkeypatch: MonkeyPatch) -> None:
     assert settings.url_collection_worker_batch_size == 6
     assert settings.url_collection_job_concurrency == 3
     assert settings.report_job_concurrency == 4
+    assert settings.briefing_worker_batch_size == 11
+    assert settings.briefing_job_concurrency == 3
     assert settings.openai_default_rpm == 120
     assert settings.openai_default_tpm == 90_000
     assert settings.wiki_openai_requests_per_job == 6
@@ -134,6 +138,21 @@ def test_report_batch_size_falls_back_to_personal_wiki_batch_size(
     settings = load_settings()
 
     assert settings.report_worker_batch_size == 9
+
+
+def test_briefing_worker_settings_fall_back_to_report_worker_settings(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """전용 설정이 없는 기존 배포는 종전 Report Worker 처리량을 유지한다."""
+    monkeypatch.setenv("REPORT_WORKER_BATCH_SIZE", "9")
+    monkeypatch.setenv("REPORT_JOB_CONCURRENCY", "3")
+    monkeypatch.delenv("BRIEFING_WORKER_BATCH_SIZE", raising=False)
+    monkeypatch.delenv("BRIEFING_JOB_CONCURRENCY", raising=False)
+
+    settings = load_settings()
+
+    assert settings.briefing_worker_batch_size == 9
+    assert settings.briefing_job_concurrency == 3
 
 
 def test_create_container_uses_postgres_for_publish_snapshots() -> None:

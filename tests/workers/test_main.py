@@ -219,8 +219,10 @@ def test_run_batch_once_dispatches_briefing_preparation_worker(
     )
     settings = Settings(
         agent_database_url="postgresql://test",
-        report_worker_batch_size=8,
-        report_job_concurrency=2,
+        report_worker_batch_size=2,
+        report_job_concurrency=1,
+        briefing_worker_batch_size=8,
+        briefing_job_concurrency=3,
         briefing_openai_requests_per_job=7,
         briefing_openai_tokens_per_job=28_000,
     )
@@ -228,9 +230,50 @@ def test_run_batch_once_dispatches_briefing_preparation_worker(
     asyncio.run(worker_main._run_batch_once(args, settings, "briefing-worker-1"))
 
     assert recorded["limit"] == 8
-    assert recorded["concurrency"] == 2
+    assert recorded["concurrency"] == 3
     assert recorded["rate_limit_policy"].estimated_requests == 7
     assert recorded["rate_limit_policy"].estimated_tokens == 28_000
+
+
+def test_run_loop_uses_dedicated_briefing_worker_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """브리핑 준비 상주 Worker가 즉시 Report와 분리된 처리량으로 Queue를 소비한다."""
+    recorded: dict[str, Any] = {}
+    args = Namespace(
+        worker="briefing-preparation",
+        worker_id="briefing-worker-1",
+        model=None,
+        limit=None,
+        concurrency=None,
+        lease_seconds=None,
+        loop=True,
+        interval_seconds=30,
+    )
+    settings = Settings(
+        agent_database_url="postgresql://test",
+        report_worker_batch_size=2,
+        report_job_concurrency=1,
+        briefing_worker_batch_size=12,
+        briefing_job_concurrency=4,
+    )
+
+    async def fake_consume(**kwargs: Any) -> list[dict[str, object]]:
+        """브리핑 준비 Queue 소비 인자를 기록하고 즉시 종료한다."""
+        recorded.update(kwargs)
+        return []
+
+    monkeypatch.setattr(worker_main, "_parse_args", lambda: args)
+    monkeypatch.setattr(worker_main, "load_settings", lambda: settings)
+    monkeypatch.setattr(worker_main, "wc_001", fake_consume)
+
+    asyncio.run(worker_main._run())
+
+    assert recorded["job_type"] == "briefing_preparation"
+    assert recorded["limit"] == 12
+    assert recorded["concurrency"] == 4
+    assert recorded["interval_seconds"] == 30
+    assert recorded["max_batches"] is None
 
 
 def test_run_loop_dispatches_resident_url_collection_worker(
