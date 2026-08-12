@@ -101,6 +101,7 @@ from .features.maintenance_v3 import (
     build_wiki_maintenance_graph_v3,
     load_wiki_semantic_snapshot,
     plan_wiki_maintenance_v3,
+    refresh_wiki_interest_profile,
     run_wiki_maintenance_graph_v3,
 )
 from .features.semantic_audit import (
@@ -231,6 +232,7 @@ __all__ = [
     "build_wiki_maintenance_graph_v3",
     "load_wiki_semantic_snapshot",
     "plan_wiki_maintenance_v3",
+    "refresh_wiki_interest_profile",
     "run_wiki_maintenance_graph_v3",
     "SEMANTIC_LINT_PROMPT_VERSION",
     "WikiMissingRelationProposal",

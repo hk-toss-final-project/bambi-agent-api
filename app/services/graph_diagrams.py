@@ -522,6 +522,14 @@ def list_graph_diagrams() -> tuple[GraphDiagram, ...]:
                     ),
                 ),
                 GraphNodeDescription(
+                    node_id="refresh_interest_profile",
+                    title="관심사 Profile 후처리",
+                    description=(
+                        "전체 재구성이나 내부 의미 수리로 Wiki가 바뀐 경우 관심사 "
+                        "Profile과 후속 Global 수집 대상을 갱신합니다."
+                    ),
+                ),
+                GraphNodeDescription(
                     node_id="persist_summary",
                     title="감사 지표 저장",
                     description=(

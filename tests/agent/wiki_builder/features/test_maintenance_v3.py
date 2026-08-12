@@ -145,6 +145,7 @@ def test_maintenance_v3_graph_exposes_semantic_and_repair_nodes() -> None:
         "apply_internal_repairs",
         "research_knowledge_gaps",
         "repair_derivatives",
+        "refresh_interest_profile",
         "persist_summary",
         "finalize",
         "__end__",
@@ -318,6 +319,15 @@ def test_v3_applies_internal_repairs_and_enqueues_external_gap(
         """최종 의미 감사 요약을 기록한다."""
         summaries.append(kwargs)
 
+    async def fake_interest_refresh(*args: Any, **kwargs: Any) -> dict[str, object]:
+        """Wiki 변경 뒤 관심사 Profile 갱신 결과를 반환한다."""
+        return {
+            "refreshed": True,
+            "version": 2,
+            "subscribed_target_count": 1,
+            "warning": None,
+        }
+
     async def unexpected_rebuild(*args: Any, **kwargs: Any) -> dict[str, object]:
         """건강한 Snapshot에서 재구성이 호출되면 실패한다."""
         raise AssertionError("건강한 Wiki를 재구성하면 안 됩니다.")
@@ -329,6 +339,11 @@ def test_v3_applies_internal_repairs_and_enqueues_external_gap(
     monkeypatch.setattr(maintenance_v3, "research_wiki_knowledge_gaps", fake_research)
     monkeypatch.setattr(maintenance_v3, "set_personal_wiki_scope", fake_scope)
     monkeypatch.setattr(maintenance_v3, "update_wiki_maintenance_summary", fake_summary)
+    monkeypatch.setattr(
+        maintenance_v3,
+        "refresh_wiki_interest_profile",
+        fake_interest_refresh,
+    )
 
     result = asyncio.run(
         run_wiki_maintenance_graph_v3(
@@ -346,6 +361,7 @@ def test_v3_applies_internal_repairs_and_enqueues_external_gap(
     assert result["maintenance_action"] == "semantic_repair"
     assert result["semantic_repair"]["repaired_issue_count"] == 1
     assert result["knowledge_gap_research"]["queued_source_count"] == 1
+    assert result["interest_profile_refresh"]["refreshed"] is True
 
 
 def test_v3_fresh_structural_error_runs_full_rebuild_once(

@@ -101,6 +101,7 @@ def test_list_graph_diagrams_extracts_all_agents_without_connection() -> None:
         "apply_internal_repairs",
         "research_knowledge_gaps",
         "repair_derivatives",
+        "refresh_interest_profile",
         "persist_summary",
         "finalize",
     ):

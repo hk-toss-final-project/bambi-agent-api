@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import logging
 from asyncio import to_thread
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -19,13 +20,16 @@ from psycopg import AsyncConnection
 
 from agent.llm.api import complete
 from agent.report_builder.api import collect_live_context
+from domain.interests.api import int_011
 from infrastructure.persistence.api import (
+    ConnectionInterestProfileRepository,
     UserSourceDocumentForAgent,
     list_existing_wiki_entries,
     list_existing_wiki_relations,
     list_user_source_versions_for_rebuild,
     register_url_and_enqueue,
     set_personal_wiki_scope,
+    sync_wiki_interest_collection_targets,
     update_wiki_maintenance_summary,
 )
 from shared.report_models import ReportContextDocument
@@ -77,6 +81,8 @@ _STRUCTURAL_QUALITY_KEYS_V3 = (
     "source_less_relation_count",
 )
 
+logger = logging.getLogger("agent.wiki_builder")
+
 
 @dataclass(frozen=True, slots=True)
 class WikiSemanticSnapshot:
@@ -120,6 +126,7 @@ class WikiMaintenanceV3State(TypedDict):
     research_result: NotRequired[WikiKnowledgeGapResearchResult]
     derivative_embedding_count: NotRequired[int]
     derivative_warning: NotRequired[str | None]
+    interest_refresh: NotRequired[dict[str, object]]
     semantic_metrics: NotRequired[dict[str, int | float]]
     maintenance_action: NotRequired[str]
     result: NotRequired[dict[str, object]]
@@ -284,6 +291,38 @@ def _summary_wiki_version_id(state: WikiMaintenanceV3State) -> str | None:
     if rebuilt_id:
         return str(rebuilt_id)
     return state["audit"].active_wiki_version_id
+
+
+async def refresh_wiki_interest_profile(
+    connection: AsyncConnection[DictRow],
+    *,
+    user_id: str,
+) -> dict[str, object]:
+    """Wiki 변경 뒤 관심사 Profile과 수집 대상을 갱신하고 실패는 경고로 격리한다."""
+    try:
+        profile = await int_011(
+            ConnectionInterestProfileRepository(connection),
+            user_id,
+        )
+        subscribed = await sync_wiki_interest_collection_targets(
+            connection,
+            user_id=user_id,
+            interests=profile.get("interests") or [],
+        )
+        return {
+            "refreshed": True,
+            "version": profile.get("version"),
+            "subscribed_target_count": len(subscribed),
+            "warning": None,
+        }
+    except Exception as error:  # noqa: BLE001 - Wiki 변경 성공을 뒤집지 않는 파생 처리
+        logger.warning("V3 유지 관심사 Profile 갱신 실패: %s", error)
+        return {
+            "refreshed": False,
+            "version": None,
+            "subscribed_target_count": 0,
+            "warning": type(error).__name__,
+        }
 
 
 def build_wiki_maintenance_graph_v3() -> Any:
@@ -472,6 +511,30 @@ def build_wiki_maintenance_graph_v3() -> Any:
                 "derivative_warning": type(error).__name__,
             }
 
+    async def refresh_interest_profile(
+        state: WikiMaintenanceV3State,
+        runtime: Runtime[WikiMaintenanceV3RuntimeContext],
+    ) -> dict[str, object]:
+        """Wiki 문서가 바뀐 경우에만 관심사 Profile과 수집 대상을 후처리한다."""
+        if (
+            not state["rebuild_performed"]
+            and not state["repair_result"].repaired_issue_ids
+        ):
+            return {
+                "interest_refresh": {
+                    "refreshed": False,
+                    "version": None,
+                    "subscribed_target_count": 0,
+                    "warning": None,
+                }
+            }
+        return {
+            "interest_refresh": await refresh_wiki_interest_profile(
+                runtime.context.connection,
+                user_id=state["user_id"],
+            )
+        }
+
     async def persist_summary(
         state: WikiMaintenanceV3State,
         runtime: Runtime[WikiMaintenanceV3RuntimeContext],
@@ -555,6 +618,7 @@ def build_wiki_maintenance_graph_v3() -> Any:
                     0,
                 ),
                 "derivative_warning": state.get("derivative_warning"),
+                "interest_profile_refresh": dict(state["interest_refresh"]),
             }
         )
         if state["repair_result"].wiki_version_id is not None:
@@ -577,6 +641,7 @@ def build_wiki_maintenance_graph_v3() -> Any:
     graph.add_node("apply_internal_repairs", apply_internal_repairs)
     graph.add_node("research_knowledge_gaps", research_knowledge_gaps)
     graph.add_node("repair_derivatives", repair_derivatives)
+    graph.add_node("refresh_interest_profile", refresh_interest_profile)
     graph.add_node("persist_summary", persist_summary)
     graph.add_node("finalize", finalize)
     graph.set_entry_point("operational_audit")
@@ -603,7 +668,8 @@ def build_wiki_maintenance_graph_v3() -> Any:
     graph.add_edge("plan_repairs", "apply_internal_repairs")
     graph.add_edge("apply_internal_repairs", "research_knowledge_gaps")
     graph.add_edge("research_knowledge_gaps", "repair_derivatives")
-    graph.add_edge("repair_derivatives", "persist_summary")
+    graph.add_edge("repair_derivatives", "refresh_interest_profile")
+    graph.add_edge("refresh_interest_profile", "persist_summary")
     graph.add_edge("persist_summary", "finalize")
     graph.add_edge("finalize", END)
     return graph.compile()
@@ -657,5 +723,6 @@ __all__ = [
     "build_wiki_maintenance_graph_v3",
     "load_wiki_semantic_snapshot",
     "plan_wiki_maintenance_v3",
+    "refresh_wiki_interest_profile",
     "run_wiki_maintenance_graph_v3",
 ]
