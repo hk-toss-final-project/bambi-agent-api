@@ -379,6 +379,8 @@ def test_save_fetched_content_fills_cache_document() -> None:
     assert update_params[2]
     assert update_params[4] == "https://example.com/final"
     assert update_params[5] == "https://cdn.example/cover.jpg"
+    assert "image_url = %s" in update_sql
+    assert "COALESCE(%s, image_url)" not in update_sql
 
 
 def test_save_fetched_content_raises_for_missing_document() -> None:

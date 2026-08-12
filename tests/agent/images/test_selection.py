@@ -59,6 +59,22 @@ def test_select_report_cover_image_rejects_unsafe_url() -> None:
     assert selected is None
 
 
+def test_select_report_cover_image_skips_http_source_for_next_citation() -> None:
+    """첫 인용 출처가 HTTP 이미지만 가지면 다음 인용 출처의 HTTPS 이미지를 쓴다."""
+    selected = select_report_cover_image(
+        assets=[
+            _asset("G1", image_url="http://legacy.example/cover.jpg"),
+            _asset("G2", image_url="https://cdn.example/next-cover.jpg"),
+        ],
+        citation_references=["G1", "G2"],
+        body="첫 출처 [G1]와 다음 출처 [G2]를 함께 인용한다.",
+    )
+
+    assert selected is not None
+    assert selected.reference == "G2"
+    assert selected.url == "https://cdn.example/next-cover.jpg"
+
+
 def test_select_report_cover_image_rejects_page_chrome_asset() -> None:
     """배너·아이콘 같은 사이트 UI 자산은 최종 발행 후보에서도 제외한다."""
     selected = select_report_cover_image(

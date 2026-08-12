@@ -878,7 +878,7 @@ async def save_fetched_article_content(
             search_body = %s,
             content_hash = %s,
             resolved_url = %s,
-            image_url = COALESCE(%s, image_url),
+            image_url = %s,
             published_at = COALESCE(%s, published_at),
             content_status = 'fetched',
             fetched_at = clock_timestamp()

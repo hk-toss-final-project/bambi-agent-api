@@ -149,6 +149,50 @@ def test_collect_live_context_fetches_missing_selected_article_image(monkeypatch
     assert documents[0].image_url == "https://cdn.example/danang.jpg"
 
 
+def test_collect_live_context_tries_next_source_after_http_image(monkeypatch) -> None:
+    """첫 출처가 HTTP 이미지만 가지면 다음 뉴스 원문의 HTTPS 이미지를 찾는다."""
+    requested_urls: list[str] = []
+    sources = [
+        {
+            "source_type": "news",
+            "title": "HTTP 이미지만 있는 기사",
+            "url": "https://news.example/first",
+            "image_url": "http://legacy.example/cover.jpg",
+        },
+        {
+            "source_type": "news",
+            "title": "다음 기사",
+            "url": "https://news.example/second",
+            "image_url": None,
+        },
+    ]
+    monkeypatch.setattr(
+        live_sources,
+        "assist_daily_agent",
+        lambda topic, user_id, model="gpt-4.1-mini", **kwargs: {
+            "items": [{"title": "시장 소식", "summary": "요약", "sources": sources}]
+        },
+    )
+
+    def fake_fetch(url: str) -> str | None:
+        """첫 출처는 실패시키고 다음 출처에서 보안 이미지를 반환한다."""
+        requested_urls.append(url)
+        if url.endswith("/second"):
+            return "https://cdn.example/second.jpg"
+        return None
+
+    monkeypatch.setattr(live_sources, "fetch_article_image", fake_fetch)
+
+    documents = live_sources.collect_live_context("시장", "minji")
+
+    assert requested_urls == [
+        "https://news.example/first",
+        "https://news.example/second",
+    ]
+    assert documents[0].url == "https://news.example/second"
+    assert documents[0].image_url == "https://cdn.example/second.jpg"
+
+
 def test_collect_live_context_does_not_pollute_history_or_write_report(monkeypatch) -> None:
     """리포트 근거 수집은 이력을 기록하지 않고 브리핑도 생성하지 않는다.
 

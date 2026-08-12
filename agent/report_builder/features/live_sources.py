@@ -31,6 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from agent.assistant.api import assist_daily_agent, fetch_article_image
 from domain.interests.api import expand_topic_queries
+from infrastructure.sources.connectors.api import is_secure_content_image_url
 from shared.report_models import ReportContextDocument
 
 logger = logging.getLogger("agent.report_builder.live_sources")
@@ -90,24 +91,29 @@ _DEFAULT_MAX_DOCUMENTS = 12
 # 실시간 자료의 namespace_key. 개인 Wiki 문서와 출처를 구분하는 데 쓴다.
 _LIVE_NAMESPACE = "live-source"
 
+# 한 아이템에서 이미지 폴백으로 확인할 뉴스 원문 수. 첫 출처가 HTTP 이미지거나
+# 이미지가 없을 때 다음 출처까지 보되 외부 요청이 무제한으로 늘지는 않게 한다.
+_MAX_IMAGE_FALLBACK_SOURCES = 3
 
-def _missing_image_source(item: dict[str, object]) -> dict[str, object] | None:
-    """이미지가 없는 아이템에서 폴백 조회할 첫 뉴스 원문을 고른다."""
+
+def _missing_image_sources(item: dict[str, object]) -> list[dict[str, object]]:
+    """안전한 이미지가 없는 아이템에서 폴백 조회할 뉴스 원문들을 고른다."""
     sources = [
         source
         for source in (item.get("sources") or [])
         if isinstance(source, dict)
     ]
-    if any(source.get("url") and source.get("image_url") for source in sources):
-        return None
-    return next(
-        (
-            source
-            for source in sources
-            if source.get("source_type") == "news" and source.get("url")
-        ),
-        None,
-    )
+    if any(
+        source.get("url")
+        and is_secure_content_image_url(source.get("image_url"))
+        for source in sources
+    ):
+        return []
+    return [
+        source
+        for source in sources
+        if source.get("source_type") == "news" and source.get("url")
+    ][:_MAX_IMAGE_FALLBACK_SOURCES]
 
 
 def _fill_missing_source_images(items: Sequence[dict[str, object]]) -> None:
@@ -115,7 +121,7 @@ def _fill_missing_source_images(items: Sequence[dict[str, object]]) -> None:
     targets = [
         (source, str(source.get("url") or ""))
         for item in items
-        if (source := _missing_image_source(item)) is not None
+        for source in _missing_image_sources(item)
     ]
     if not targets:
         return
@@ -135,7 +141,7 @@ def _fill_missing_source_images(items: Sequence[dict[str, object]]) -> None:
                     error,
                 )
                 continue
-            if image_url:
+            if is_secure_content_image_url(image_url):
                 source["image_url"] = image_url
 
 
@@ -163,16 +169,15 @@ def _to_context_document(item: dict[str, object], number: int) -> ReportContextD
         (
             source
             for source in sources
-            if source.get("url") and source.get("image_url")
+            if source.get("url")
+            and is_secure_content_image_url(source.get("image_url"))
         ),
         None,
     ) or next((source for source in sources if source.get("url")), None)
     primary_url = str(primary_source.get("url") or "") if primary_source else ""
-    primary_image_url = (
-        str(primary_source.get("image_url") or "").strip() or None
-        if primary_source
-        else None
-    )
+    primary_image_url = None
+    if primary_source and is_secure_content_image_url(primary_source.get("image_url")):
+        primary_image_url = str(primary_source.get("image_url") or "").strip()
     # 실시간 자료는 Wiki 문서 Version이 없어서 Citation 저장 시 URL이 유일한 출처
     # 증빙이다(agent.citations는 document_version_id 또는 url을 요구한다).
     if not primary_url:

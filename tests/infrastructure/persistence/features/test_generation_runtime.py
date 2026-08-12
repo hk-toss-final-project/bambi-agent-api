@@ -1084,6 +1084,18 @@ def test_context_image_rejects_ui_asset_outside_global_cache() -> None:
     assert generation_runtime._context_image_url(row) is None
 
 
+def test_context_image_rejects_http_asset_outside_global_cache() -> None:
+    """개인·실시간 Context의 HTTP 이미지는 대표 이미지 후보에서 제외한다."""
+    row = {
+        "namespace_key": "live-source",
+        "title": "실시간 기사",
+        "content": "본문",
+        "image_url": "http://legacy.example/cover.jpg",
+    }
+
+    assert generation_runtime._context_image_url(row) is None
+
+
 def test_publish_payload_derives_taxonomy_topics_from_cited_sources() -> None:
     """인용한 Global 수집 문서의 수집 대상에서 taxonomy Topic을 파생한다(①).
 
@@ -1664,6 +1676,36 @@ def test_snapshot_row_mapping_tolerates_snapshots_saved_before_new_fields() -> N
     assert snapshot.source_interest_id == ""
     assert snapshot.interest_profile_id == ""
     assert snapshot.bundle_keywords == []
+    assert snapshot.cover_image is None
+
+
+def test_snapshot_row_mapping_drops_legacy_http_cover_image() -> None:
+    """이미 저장된 HTTP 커버는 Service Worker 응답에서 제거한다."""
+    from infrastructure.persistence.postgres_publish_snapshots import (
+        PostgresPublishSnapshotRepository,
+    )
+
+    row = {
+        "content_id": "content-1",
+        "user_id": "user-1",
+        "version": 1,
+        "snapshot_hash": "h" * 64,
+        "created_at": datetime(2026, 8, 5, tzinfo=UTC),
+        "payload": {
+            "title": "제목",
+            "summary": "요약",
+            "body": "본문",
+            "cover_image": {
+                "url": "http://legacy.example/cover.jpg",
+                "source_url": "https://news.example/article",
+                "source_title": "기사",
+                "reference": "G1",
+            },
+        },
+    }
+
+    snapshot = PostgresPublishSnapshotRepository._snapshot_from_row(row)
+
     assert snapshot.cover_image is None
 
 

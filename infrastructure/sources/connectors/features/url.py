@@ -98,8 +98,15 @@ def is_probable_content_image_url(value: str) -> bool:
     return not any(marker in lowered for marker in _PAGE_CHROME_IMAGE_MARKERS)
 
 
+def is_secure_content_image_url(value: object) -> bool:
+    """URL이 HTTPS 기반의 안전한 본문 이미지 후보인지 판정한다."""
+    url = html.unescape(str(value or "")).strip().strip("<>\"'")
+    parsed = urlsplit(url)
+    return parsed.scheme == "https" and is_probable_content_image_url(url)
+
+
 def extract_jina_image(text: str, *, title: str = "") -> str | None:
-    """Jina 응답에서 대표 이미지로 쓸 수 있는 HTTP(S) URL을 하나 고른다.
+    """Jina 응답에서 대표 이미지로 쓸 수 있는 HTTPS URL을 하나 고른다.
 
     Jina 헤더의 기사 제목을 본문에서 찾은 뒤 그 이후 Markdown 이미지만 확인한다.
     제목을 찾지 못하면 메뉴·배너를 본문으로 오인하지 않도록 ``None``을 반환한다.
@@ -110,7 +117,7 @@ def extract_jina_image(text: str, *, title: str = "") -> str | None:
         title: 이미 파싱한 기사 제목. 비면 Jina 헤더에서 읽는다.
 
     Returns:
-        대표 이미지 HTTP(S) URL. 적합한 후보가 없으면 ``None``
+        대표 이미지 HTTPS URL. 적합한 후보가 없으면 ``None``
     """
     marker = "Markdown Content:"
     if marker in text:
@@ -142,7 +149,7 @@ def extract_jina_image(text: str, *, title: str = "") -> str | None:
         if url in seen:
             continue
         seen.add(url)
-        if not is_probable_content_image_url(url):
+        if not is_secure_content_image_url(url):
             continue
         lowered = url.lower()
         if re.search(r"\.(?:avif|gif|jpe?g|png|webp)(?:[?#]|$)", lowered):
@@ -169,7 +176,7 @@ def resolve_article_image(
     Returns:
         다시 계산한 본문 이미지 또는 안전한 기존 캐시. 둘 다 없으면 ``None``.
     """
-    if cached_url and is_probable_content_image_url(cached_url):
+    if cached_url and is_secure_content_image_url(cached_url):
         return html.unescape(cached_url).strip().strip("<>\"'")
     return extract_jina_image(markdown, title=title)
 

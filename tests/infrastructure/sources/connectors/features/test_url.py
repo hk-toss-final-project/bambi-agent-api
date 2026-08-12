@@ -214,6 +214,12 @@ def test_probable_content_image_rejects_page_chrome_assets() -> None:
     assert url_connector.is_probable_content_image_url(
         "https://cdn.example/2026/danang-hero.jpg?rnd=1"
     )
+    assert not url_connector.is_secure_content_image_url(
+        "http://cdn.example/2026/danang-hero.jpg"
+    )
+    assert url_connector.is_secure_content_image_url(
+        "https://cdn.example/2026/danang-hero.jpg"
+    )
 
 
 def test_resolve_article_image_replaces_cached_banner_with_body_image() -> None:
@@ -239,6 +245,21 @@ def test_resolve_article_image_keeps_safe_cache_without_body_image() -> None:
         title="이미지 없는 긴 기사 제목입니다",
         cached_url="https://cdn.example/2026/previous-cover.jpg",
     ) == "https://cdn.example/2026/previous-cover.jpg"
+
+
+def test_resolve_article_image_skips_http_cache_for_secure_body_image() -> None:
+    """기존 HTTP 캐시는 버리고 저장된 본문의 다음 HTTPS 이미지를 사용한다."""
+    markdown = (
+        "# 안전한 대표 이미지를 찾는 긴 기사 제목\n"
+        "![구 캐시](http://legacy.example/cover.jpg)\n"
+        "![보안 이미지](https://cdn.example/secure-cover.jpg)"
+    )
+
+    assert url_connector.resolve_article_image(
+        markdown=markdown,
+        title="안전한 대표 이미지를 찾는 긴 기사 제목",
+        cached_url="http://legacy.example/cover.jpg",
+    ) == "https://cdn.example/secure-cover.jpg"
 
 
 def test_resolve_article_image_prefers_metadata_cache_over_jina_body_image() -> None:
