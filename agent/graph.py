@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from asyncio import to_thread
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from time import monotonic
@@ -19,6 +20,7 @@ from typing import Any
 from langgraph.graph import END, StateGraph
 from psycopg import AsyncConnection
 
+from agent.assistant.api import resolve_topic_intent
 from agent.report_builder.api import (
     report_004,
     report_005,
@@ -103,10 +105,14 @@ from infrastructure.persistence.api import (
     save_custom_topic_contexts,
     sync_wiki_interest_collection_targets,
 )
-from agent.assistant.api import resolve_topic_intent
 from shared.contracts import FeatureRequest
 from shared.report_models import ReportContextDocument
 from shared.wiki_models import ExistingWikiEntry
+from shared.wiki_navigation_policy import (
+    ON_DEMAND_2HOP_PROFILE,
+    WikiNavigationPolicy,
+    resolve_wiki_navigation_policy,
+)
 
 logger = logging.getLogger("agent.graph")
 
@@ -1153,6 +1159,81 @@ def _bundle_wiki_version_ids(bundle: dict[str, object] | None) -> list[str]:
     return version_ids[:6]
 
 
+def _bundle_root_wiki_version_ids(bundle: dict[str, object] | None) -> list[str]:
+    """관심사 Bundle의 루트 Wiki Page Version만 순서대로 꺼낸다."""
+    if not bundle:
+        return []
+    root = bundle.get("root")
+    root_documents = root.get("documents") if isinstance(root, dict) else ()
+    version_ids: list[str] = []
+    seen: set[str] = set()
+    for raw in root_documents or ():
+        if not isinstance(raw, dict):
+            continue
+        version_id = str(raw.get("document_version_id") or "").strip()
+        if not version_id or version_id in seen:
+            continue
+        seen.add(version_id)
+        version_ids.append(version_id)
+    return version_ids
+
+
+def _navigation_policy(state: ReportGenerationState) -> WikiNavigationPolicy:
+    """Report Job에 고정된 탐색 프로필과 예산을 상태에서 복원한다."""
+    raw_budget = state.get("navigation_budget")
+    return resolve_wiki_navigation_policy(
+        state.get("navigation_profile"),
+        pinned_budget=raw_budget if isinstance(raw_budget, Mapping) else None,
+    )
+
+
+def _bundle_navigation_seed_ids(
+    bundle: dict[str, object] | None, *, policy: WikiNavigationPolicy
+) -> list[str]:
+    """프로필에 맞춰 Bundle에서 Navigator가 시작할 Wiki Version을 고른다."""
+    version_ids = (
+        _bundle_root_wiki_version_ids(bundle)
+        if policy.profile == ON_DEMAND_2HOP_PROFILE
+        else _bundle_wiki_version_ids(bundle)
+    )
+    return version_ids[: policy.budget.max_seed_pages]
+
+
+def _navigation_observation(
+    outcome: Any, *, policy: WikiNavigationPolicy
+) -> dict[str, object]:
+    """조사 결과에서 깊이별 Wiki 채택량과 절단·폴백 상태를 요약한다."""
+    page_counts: dict[str, int] = {}
+    relation_counts: dict[str, int] = {}
+    fallback_reasons: list[str] = []
+    packets = tuple(getattr(outcome, "wiki_packets", ()) or ())
+    for packet in packets:
+        for page in packet.pages:
+            hop = str(page.hops)
+            page_counts[hop] = page_counts.get(hop, 0) + 1
+        for relation in packet.relations:
+            hop = str(relation.hops)
+            relation_counts[hop] = relation_counts.get(hop, 0) + 1
+        if packet.fallback_reason:
+            fallback_reasons.append(packet.fallback_reason)
+    context_document_count = sum(
+        1
+        for document in getattr(outcome, "documents", ())
+        if str(getattr(document, "context_role", "")).startswith(
+            "wiki_navigator_"
+        )
+    )
+    return {
+        "profile": policy.profile,
+        "budget": policy.budget.to_payload(),
+        "page_counts_by_hop": page_counts,
+        "relation_counts_by_hop": relation_counts,
+        "truncated": any(packet.truncated for packet in packets),
+        "fallback_reasons": fallback_reasons,
+        "context_document_count": context_document_count,
+    }
+
+
 def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
     """리포트 생성기 콘텐츠 생성 노드와 엣지를 조립해 컴파일된 그래프를 반환한다.
 
@@ -1187,6 +1268,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         read_pipeline_version = str(
             state.get("read_pipeline_version") or LEGACY_READ_PIPELINE_VERSION
         )
+        navigation_policy = _navigation_policy(state)
         for topic in topics:
             prewarmed = list(prewarmed_by_topic.get(topic) or [])
             if prewarmed:
@@ -1227,6 +1309,7 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                     "model": state["model"],
                     "wiki_version_id": state.get("wiki_version_id"),
                     "job_id": state["job_id"],
+                    "navigation_policy": navigation_policy,
                 }
                 navigation_snapshot = (
                     state.get("wiki_navigation_snapshots") or {}
@@ -1241,7 +1324,9 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                         for keyword in bundle_keywords
                         if keyword.casefold() != topic.casefold()
                     ]
-                planned_versions = _bundle_wiki_version_ids(topic_bundle)
+                planned_versions = _bundle_navigation_seed_ids(
+                    topic_bundle, policy=navigation_policy
+                )
                 if planned_versions:
                     research_kwargs["planned_wiki_version_ids"] = planned_versions
                 if read_pipeline_version == LEGACY_READ_PIPELINE_VERSION:
@@ -1297,6 +1382,9 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
                 ],
                 "stop_reason": str(getattr(outcome, "stop_reason", "")),
                 "documents": len(outcome.documents),
+                "navigation": _navigation_observation(
+                    outcome, policy=navigation_policy
+                ),
             }
             research_stats.append(topic_stats)
             research_stats_by_topic[topic] = topic_stats
@@ -1492,7 +1580,8 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
         bundle: dict[str, object] | None,
     ) -> list[Any]:
         """관심사 Bundle의 고정 Version을 Navigator Packet으로 읽는다."""
-        version_ids = _bundle_wiki_version_ids(bundle)
+        policy = _navigation_policy(state)
+        version_ids = _bundle_navigation_seed_ids(bundle, policy=policy)
         if not version_ids:
             return []
         packet = await wnav_006(
@@ -1501,9 +1590,11 @@ def build_report_generation_graph(connection: AsyncConnection[DictRow]) -> Any:
             query=topic,
             selected_document_version_ids=version_ids,
             wiki_version_id=state.get("wiki_version_id"),
-            max_depth=1,
-            max_pages=6,
-            max_chunks=12,
+            max_depth=policy.budget.max_depth,
+            max_seed_pages=policy.budget.max_seed_pages,
+            max_pages=policy.budget.max_pages,
+            max_chunks=policy.budget.max_chunks,
+            hop_page_limits=policy.budget.hop_page_limits,
         )
         await persist_report_navigation_snapshot(
             connection,
@@ -2521,6 +2612,8 @@ async def run_report_generation(
     wiki_version_id: str | None = None,
     wiki_navigation_snapshots: dict[str, dict[str, object]] | None = None,
     read_pipeline_version: str = LEGACY_READ_PIPELINE_VERSION,
+    navigation_profile: str | None = None,
+    navigation_budget: Mapping[str, object] | None = None,
     prewarmed_contexts_by_topic: (
         dict[str, list[ReportContextDocument]] | None
     ) = None,
@@ -2537,8 +2630,14 @@ async def run_report_generation(
         wiki_version_id: Job 접수 시 고정한 활성 Wiki Build UUID
         wiki_navigation_snapshots: 첫 Reader 실행이 Topic별로 고정한 Packet Metadata
         read_pipeline_version: Job 접수 시 고정한 읽기 루프 버전. 과거 Job은 V1
+        navigation_profile: 온디맨드 전용 탐색 프로필. 과거 Job은 기본 1-hop
+        navigation_budget: 접수 시 고정한 깊이·Seed·Page·Chunk 실행 예산
         prewarmed_contexts_by_topic: REPORT-022가 날짜·주제별로 준비한 생성 근거
     """
+    navigation_policy = resolve_wiki_navigation_policy(
+        navigation_profile,
+        pinned_budget=navigation_budget,
+    )
     graph = build_report_generation_graph(connection)
     state = await graph.ainvoke(
         {
@@ -2553,6 +2652,8 @@ async def run_report_generation(
             "wiki_version_id": wiki_version_id,
             "wiki_navigation_snapshots": dict(wiki_navigation_snapshots or {}),
             "read_pipeline_version": read_pipeline_version,
+            "navigation_profile": navigation_policy.profile,
+            "navigation_budget": navigation_policy.budget.to_payload(),
             "prewarmed_contexts_by_topic": dict(
                 prewarmed_contexts_by_topic or {}
             ),

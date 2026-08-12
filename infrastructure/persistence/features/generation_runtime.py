@@ -124,6 +124,7 @@ def _navigation_packet_snapshot(
                 {
                     "document_version_id": page.document_version_id,
                     "role": page.role,
+                    "hops": page.hops,
                 }
             )
             if page.role == "seed":
@@ -192,6 +193,10 @@ def _navigation_packet_snapshot(
                 }
             )
     latest = packets[-1]
+    hop_page_counts: dict[str, int] = {}
+    for page in pages:
+        hop = str(page["hops"])
+        hop_page_counts[hop] = hop_page_counts.get(hop, 0) + 1
     return {
         "query": latest.query,
         "wiki_version_id": latest.wiki_version_id,
@@ -199,8 +204,17 @@ def _navigation_packet_snapshot(
         "pages": pages,
         "relations": relations,
         "sources": sources,
-        "budget": {"max_depth": 1, "max_pages": 6, "max_chunks": 12},
+        "budget": latest.budget.to_payload(),
+        "hop_page_counts": hop_page_counts,
         "truncated": any(packet.truncated for packet in packets),
+        "fallback_reason": next(
+            (
+                packet.fallback_reason
+                for packet in reversed(packets)
+                if packet.fallback_reason
+            ),
+            None,
+        ),
     }
 
 

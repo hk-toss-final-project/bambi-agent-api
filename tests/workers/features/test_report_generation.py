@@ -157,6 +157,32 @@ def test_worker_passes_pinned_read_pipeline_version_to_the_graph(
     assert captured["read_pipeline_version"] == "langgraph_v2"
 
 
+def test_worker_passes_pinned_on_demand_navigation_policy_to_the_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Worker가 접수 시 고정한 2-hop 프로필과 예산을 그래프에 전달한다."""
+    budget = {
+        "max_depth": 2,
+        "max_seed_pages": 2,
+        "max_pages": 6,
+        "max_chunks": 12,
+        "hop_page_limits": [2, 2],
+    }
+    captured = _run_worker_job(
+        monkeypatch,
+        {
+            "topic": "반도체",
+            "content_type": "interest_news_card",
+            "language": "ko",
+            "navigation_profile": "ON_DEMAND_2HOP",
+            "navigation_budget": budget,
+        },
+    )
+
+    assert captured["navigation_profile"] == "ON_DEMAND_2HOP"
+    assert captured["navigation_budget"] == budget
+
+
 def test_worker_loads_matching_briefing_snapshot_for_the_graph(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

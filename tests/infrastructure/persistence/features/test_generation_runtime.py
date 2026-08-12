@@ -467,9 +467,13 @@ def test_navigation_snapshot_persists_selected_versions_and_saved_at() -> None:
     assert snapshot["sources"][0]["saved_at"] == now.isoformat()
     assert snapshot["budget"] == {
         "max_depth": 1,
+        "max_seed_pages": 6,
         "max_pages": 6,
         "max_chunks": 12,
+        "hop_page_limits": [6],
     }
+    assert snapshot["pages"][0]["hops"] == 0
+    assert snapshot["hop_page_counts"] == {"0": 1}
 
 
 def test_enqueue_stores_report_type_for_the_publish_snapshot() -> None:

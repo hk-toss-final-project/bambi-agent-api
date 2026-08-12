@@ -7,6 +7,7 @@ Lease로 점유한 report_generation Job을 LangGraph 오케스트레이션
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from datetime import date
 from typing import Any
 
@@ -34,6 +35,7 @@ from infrastructure.persistence.api import (
 )
 from infrastructure.persistence.postgres_wiki_graph import PostgresWikiGraphRepository
 from shared.contracts import FeatureRequest
+from shared.wiki_navigation_policy import resolve_wiki_navigation_policy
 from workers.features.batch_runner import run_job_batch
 from workers.features.briefing_preparation import (
     briefing_serialization_key,
@@ -259,6 +261,18 @@ async def _process_job(
             "지원하지 않는 Wiki 읽기 파이프라인 버전입니다: "
             f"{read_pipeline_version}"
         )
+    raw_navigation_budget = job.payload.get("navigation_budget")
+    if raw_navigation_budget is not None and not isinstance(
+        raw_navigation_budget, Mapping
+    ):
+        raise JobInputError("Wiki 탐색 예산은 객체여야 합니다.")
+    try:
+        navigation_policy = resolve_wiki_navigation_policy(
+            str(job.payload.get("navigation_profile") or "") or None,
+            pinned_budget=raw_navigation_budget,
+        )
+    except ValueError as error:
+        raise JobInputError(f"Wiki 탐색 프로필이 잘못됐습니다: {error}") from error
     raw_navigation_snapshots = job.payload.get("wiki_navigation_snapshots")
     wiki_navigation_snapshots = (
         {
@@ -298,6 +312,8 @@ async def _process_job(
                     wiki_version_id=wiki_version_id,
                     wiki_navigation_snapshots=wiki_navigation_snapshots,
                     read_pipeline_version=read_pipeline_version,
+                    navigation_profile=navigation_policy.profile,
+                    navigation_budget=navigation_policy.budget.to_payload(),
                     prewarmed_contexts_by_topic=prewarmed_contexts_by_topic,
                 )
             },

@@ -21,6 +21,7 @@ from shared.wiki_navigation_models import (
     WikiNavigationCandidate,
     WikiNavigationPacket,
 )
+from shared.wiki_navigation_policy import resolve_wiki_navigation_policy
 
 
 def _candidate(
@@ -212,6 +213,7 @@ def test_v2_locates_navigates_collects_live_and_persists_snapshot(
     async def fake_navigate(*args: Any, **kwargs: Any) -> WikiNavigationPacket:
         """선택된 Version ID를 기록하고 Packet을 반환한다."""
         captured["selected"] = kwargs["selected_document_version_ids"]
+        captured["navigation"] = kwargs
         return packet
 
     async def fake_global(*args: Any, **kwargs: Any) -> list[ReportContextDocument]:
@@ -238,6 +240,7 @@ def test_v2_locates_navigates_collects_live_and_persists_snapshot(
     )
     monkeypatch.setattr(read_loop, "persist_report_navigation_snapshot", fake_persist)
 
+    policy = resolve_wiki_navigation_policy("ON_DEMAND_2HOP")
     outcome = asyncio.run(
         run_wiki_read_graph_v2(
             object(),  # type: ignore[arg-type]
@@ -245,11 +248,15 @@ def test_v2_locates_navigates_collects_live_and_persists_snapshot(
             user_id="user-1",
             wiki_version_id="wiki-1",
             job_id="job-1",
+            navigation_policy=policy,
         )
     )
 
     assert captured["selected"] == ["agents"]
     assert captured["persist"]["job_id"] == "job-1"
+    assert captured["navigation"]["max_depth"] == 2
+    assert captured["navigation"]["max_seed_pages"] == 2
+    assert captured["navigation"]["hop_page_limits"] == (2, 2)
     assert outcome.collected_live is True
     assert len(outcome.documents) == 3
     assert [stat[0] for stat in outcome.tool_stats] == [
