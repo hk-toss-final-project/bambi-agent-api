@@ -117,6 +117,7 @@ def test_process_job_fetches_saves_and_completes(
     assert saved_kwargs["resolved_url"] == "https://example.com/final"
     assert saved_kwargs["image_url"] == "https://cdn.example/personal-cover.jpg"
     assert saved_kwargs["published_at"] == datetime(2026, 8, 4, 9, 30, tzinfo=UTC)
+    assert saved_kwargs["quiet_minutes"] == 0
     assert connection.transactions == 2
     assert completed[0].worker_id == "url-worker-1"
     assert completed[0].result == result

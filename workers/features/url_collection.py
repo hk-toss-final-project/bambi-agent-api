@@ -102,6 +102,7 @@ async def _process_job(
             resolved_url=fetched.resolved_url,
             image_url=image.url if image is not None else None,
             published_at=_parse_published_at(fetched.published_time),
+            quiet_minutes=0,
         )
 
     linked_result = await job_007(result)
