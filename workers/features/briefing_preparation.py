@@ -45,7 +45,6 @@ async def _collect_prepared_contexts(
     connection: AsyncConnection[DictRow],
     *,
     user_id: str,
-    job_id: str,
     topics: list[str],
     model: str,
 ) -> dict[str, list[Any]]:
@@ -58,7 +57,6 @@ async def _collect_prepared_contexts(
             topic=topic,
             user_id=user_id,
             model=model,
-            job_id=job_id,
             defer_live=True,
         )
         outcomes[topic] = outcome
@@ -118,7 +116,6 @@ async def _process_job(
         contexts_by_topic = await _collect_prepared_contexts(
             connection,
             user_id=job.user_id,
-            job_id=job.job_id,
             topics=selection.topics,
             model=model,
         )

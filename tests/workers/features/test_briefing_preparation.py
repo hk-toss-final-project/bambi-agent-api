@@ -55,14 +55,14 @@ def test_collect_prepared_contexts_runs_v2_and_only_missing_live_topics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """모든 Topic은 V2 저장 근거를 읽고 부족한 Topic만 Live로 보강한다."""
-    read_calls: list[tuple[str, bool]] = []
+    read_calls: list[tuple[str, bool, str | None]] = []
     live_calls: list[str] = []
 
     async def fake_read(
         connection: Any, *, topic: str, defer_live: bool, **kwargs: Any
     ) -> Any:
         """Topic별 V2 결과와 Live 필요 여부를 반환한다."""
-        read_calls.append((topic, defer_live))
+        read_calls.append((topic, defer_live, kwargs.get("job_id")))
         return SimpleNamespace(
             documents=(_context("P1", "user/user-1"),),
             requires_live=topic == "반도체",
@@ -80,13 +80,12 @@ def test_collect_prepared_contexts_runs_v2_and_only_missing_live_topics(
         briefing_preparation._collect_prepared_contexts(
             _FakeConnection(),  # type: ignore[arg-type]
             user_id="user-1",
-            job_id="job-1",
             topics=["반도체", "프로야구"],
             model="report-model",
         )
     )
 
-    assert read_calls == [("반도체", True), ("프로야구", True)]
+    assert read_calls == [("반도체", True, None), ("프로야구", True, None)]
     assert live_calls == ["반도체"]
     assert [item.namespace_key for item in contexts["반도체"]] == [
         "user/user-1",
