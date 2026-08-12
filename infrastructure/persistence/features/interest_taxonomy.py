@@ -361,16 +361,17 @@ async def _reconcile_collection_target_policy(
                 (actual_count, desired_status, desired_interval, target_key)
             )
     if updates:
-        await connection.executemany(
-            """
-            UPDATE agent.interest_collection_targets
-            SET subscriber_count = %s,
-                status = %s,
-                refresh_interval_minutes = %s
-            WHERE target_key = %s
-            """,
-            updates,
-        )
+        async with connection.cursor() as cursor:
+            await cursor.executemany(
+                """
+                UPDATE agent.interest_collection_targets
+                SET subscriber_count = %s,
+                    status = %s,
+                    refresh_interval_minutes = %s
+                WHERE target_key = %s
+                """,
+                updates,
+            )
 
 
 async def sync_wiki_interest_collection_targets(
