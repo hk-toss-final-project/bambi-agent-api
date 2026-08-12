@@ -102,7 +102,8 @@ SYSTEM_PROMPT = (
     "원칙:\n"
     "1. 주제어로 wiki_search를 먼저 호출하고 최대 30개 후보에서 질문에 직접 "
     "필요한 Page만 고른다. 연결 수나 후보 순위만 보고 고르지 마라.\n"
-    "2. 고른 document_version_id를 최대 6개까지 한 번의 wiki_read로 읽는다. "
+    "2. 고른 document_version_id를 최대 {max_seed_pages}개까지 한 번의 "
+    "wiki_read로 읽는다. "
     "wiki_search 결과를 읽은 것으로 간주하지 마라.\n"
     "3. 최신 외부 사실이 필요하면 search_pool을 호출한다. 첫 결과에 주제와 "
     "밀접한 용어가 보이면 그 용어로 한두 번 더 자료를 넓힌다.\n"
@@ -119,6 +120,13 @@ FIXED_WIKI_SYSTEM_PROMPT = (
     "search_pool로 Global 저장 자료를 찾는다.\n"
     "같은 검색을 비슷한 말로 반복하지 말고, 더 필요한 방향이 없으면 요약한다."
 )
+
+
+def _research_system_prompt(navigation_policy: WikiNavigationPolicy) -> str:
+    """도구의 실제 Seed 상한과 일치하는 조사원 지침을 만든다."""
+    return SYSTEM_PROMPT.format(
+        max_seed_pages=navigation_policy.budget.max_seed_pages
+    )
 
 
 def research_agent_enabled() -> bool:
@@ -983,7 +991,11 @@ async def research_context(
         else ""
     )
     result = await run_tool_loop(
-        FIXED_WIKI_SYSTEM_PROMPT if wiki_selection_fixed else SYSTEM_PROMPT,
+        (
+            FIXED_WIKI_SYSTEM_PROMPT
+            if wiki_selection_fixed
+            else _research_system_prompt(navigation_policy)
+        ),
         f"리포트 주제: {topic}\n이 주제로 리포트를 쓸 근거 자료를 모아라.{planned_note}",
         tools,
         model=model,
