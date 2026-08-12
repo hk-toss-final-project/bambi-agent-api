@@ -93,6 +93,29 @@ def test_int_001_carries_scoring_signals_into_evidence() -> None:
     assert evidence["structure_weight"] > 1.0
 
 
+def test_int_001_carries_interest_subject_judgment_into_evidence() -> None:
+    """수집 대상 필터가 쓸 Wiki 역할 판정을 관심사 근거에 보존한다."""
+    candidates = asyncio.run(
+        int_001(
+            [
+                _node("doc-1", "PostgreSQL", interest_subject=True),
+                _node("doc-2", "DBeaver", interest_subject=False),
+                _node("doc-3", "기존 노드"),
+            ]
+        )
+    )
+
+    judgments = {
+        candidate.topic: candidate.evidence["interest_subject"]
+        for candidate in candidates
+    }
+    assert judgments == {
+        "DBeaver": False,
+        "PostgreSQL": True,
+        "기존 노드": None,
+    }
+
+
 def test_int_001_merges_nodes_sharing_a_title() -> None:
     """제목이 같은 노드를 하나의 후보로 합치고 근거를 모으는지 검증한다."""
     candidates = asyncio.run(

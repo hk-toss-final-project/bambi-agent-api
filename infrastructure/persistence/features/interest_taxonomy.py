@@ -1,8 +1,10 @@
 """관심사 taxonomy Snapshot과 Topic 수집 구독 영속화."""
 
 import hashlib
+import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
@@ -216,21 +218,7 @@ async def sync_user_interest_subscriptions(
                 category_name,
             ),
         )
-    await connection.execute(
-        """
-        UPDATE agent.interest_collection_targets AS target
-        SET subscriber_count = counts.subscriber_count
-        FROM (
-            SELECT candidate.target_key, count(subscription.id)::integer AS subscriber_count
-            FROM agent.interest_collection_targets AS candidate
-            LEFT JOIN agent.user_interest_subscriptions AS subscription
-              ON subscription.target_key = candidate.target_key AND subscription.active
-            GROUP BY candidate.target_key
-        ) AS counts
-        WHERE counts.target_key = target.target_key
-          AND target.subscriber_count <> counts.subscriber_count
-        """
-    )
+    await _reconcile_collection_target_policy(connection)
 
 
 # 개인 Wiki 관심사에서 자동 등록할 수집 대상 상한. 관심사는 Wiki 노드 제목에서
@@ -240,6 +228,149 @@ _WIKI_INTEREST_TARGET_LIMIT = 5
 # 점수는 최상위를 1.0으로 재정규화한 값이다. 한 번 저장하고 만 주제까지 창고가
 # 따라가지 않도록 하한을 둔다.
 _WIKI_INTEREST_SCORE_FLOOR = 0.3
+
+# 구독자 수가 많을수록 더 자주 갱신하되, 구독이 적은 긴 꼬리가 처리량을
+# 잠식하지 않게 기본 주기를 단계화한다.
+_COLLECTION_MID_SUBSCRIBER_COUNT = 5
+_COLLECTION_HIGH_SUBSCRIBER_COUNT = 10
+_COLLECTION_LOW_REFRESH_MINUTES = 1440
+_COLLECTION_MID_REFRESH_MINUTES = 720
+_COLLECTION_HIGH_REFRESH_MINUTES = 360
+# Provider 한도 300회보다 낮은 실제 처리 능력 250회를 운영 상한으로 삼는다.
+_COLLECTION_DAILY_CAPACITY = 250.0
+_COLLECTION_MAX_REFRESH_MINUTES = 10080
+
+
+def _is_search_worthy_interest(interest: Mapping[str, Any]) -> bool:
+    """Wiki에서 실제 주제로 판정된 관심사만 자동 수집 대상으로 허용한다.
+
+    Wiki Builder는 노드가 원문의 주제인지, 도구·출처·단순 언급인지
+    ``interest_subject``로 누적 기록한다. 명시적으로 주제가 아니라고 판정된
+    노드는 제목을 그대로 뉴스 검색어로 등록하지 않는다. 이전 Build처럼 판정값이
+    없는 관심사는 호환성을 위해 허용한다.
+    """
+    evidence = interest.get("evidence")
+    return not (
+        isinstance(evidence, Mapping)
+        and evidence.get("interest_subject") is False
+    )
+
+
+def _base_collection_refresh_interval(subscriber_count: int) -> int:
+    """구독자 수를 수집 대상의 기본 갱신 주기(분)로 변환한다."""
+    if subscriber_count >= _COLLECTION_HIGH_SUBSCRIBER_COUNT:
+        return _COLLECTION_HIGH_REFRESH_MINUTES
+    if subscriber_count >= _COLLECTION_MID_SUBSCRIBER_COUNT:
+        return _COLLECTION_MID_REFRESH_MINUTES
+    return _COLLECTION_LOW_REFRESH_MINUTES
+
+
+def _scaled_collection_refresh_intervals(
+    subscriber_counts: Sequence[int],
+    *,
+    daily_capacity: float = _COLLECTION_DAILY_CAPACITY,
+) -> list[int]:
+    """전체 예상 수요가 처리 능력을 넘지 않도록 기본 주기를 함께 늘린다.
+
+    Args:
+        subscriber_counts: 활성화할 수집 대상별 양수 구독자 수
+        daily_capacity: 하루에 처리할 수 있는 수집 실행 횟수
+
+    Returns:
+        입력 순서와 같은 대상별 최종 갱신 주기(분)
+    """
+    if daily_capacity <= 0:
+        raise ValueError("수집 일일 처리 능력은 0보다 커야 합니다.")
+    base_intervals = [
+        _base_collection_refresh_interval(count) for count in subscriber_counts
+    ]
+    base_demand = sum(1440.0 / interval for interval in base_intervals)
+    scale = max(1.0, base_demand / daily_capacity)
+    return [
+        min(
+            _COLLECTION_MAX_REFRESH_MINUTES,
+            math.ceil(interval * scale),
+        )
+        for interval in base_intervals
+    ]
+
+
+async def _reconcile_collection_target_policy(
+    connection: AsyncConnection[DictRow],
+    *,
+    daily_capacity: float = _COLLECTION_DAILY_CAPACITY,
+) -> None:
+    """전체 구독 수를 다시 세고 상태·수집 주기를 처리 능력 안에서 맞춘다."""
+    await connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        ("interest-collection-target-policy",),
+    )
+    cursor = await connection.execute(
+        """
+        SELECT
+            target.target_key,
+            target.status,
+            target.subscriber_count,
+            target.refresh_interval_minutes,
+            count(subscription.id)::integer AS actual_subscriber_count
+        FROM agent.interest_collection_targets AS target
+        LEFT JOIN agent.user_interest_subscriptions AS subscription
+          ON subscription.target_key = target.target_key
+         AND subscription.active
+        GROUP BY target.target_key
+        ORDER BY target.target_key
+        """
+    )
+    rows = await cursor.fetchall()
+    active_rows = [
+        row
+        for row in rows
+        if str(row["status"]) != "retired"
+        and int(row["actual_subscriber_count"]) > 0
+    ]
+    intervals = _scaled_collection_refresh_intervals(
+        [int(row["actual_subscriber_count"]) for row in active_rows],
+        daily_capacity=daily_capacity,
+    )
+    intervals_by_key = {
+        str(row["target_key"]): interval
+        for row, interval in zip(active_rows, intervals, strict=True)
+    }
+
+    updates: list[tuple[int, str, int, str]] = []
+    for row in rows:
+        target_key = str(row["target_key"])
+        current_status = str(row["status"])
+        actual_count = int(row["actual_subscriber_count"])
+        current_interval = int(row["refresh_interval_minutes"])
+        if current_status == "retired":
+            desired_status = "retired"
+            desired_interval = current_interval
+        elif actual_count == 0:
+            desired_status = "paused"
+            desired_interval = current_interval
+        else:
+            desired_status = "active"
+            desired_interval = intervals_by_key[target_key]
+        if (
+            int(row["subscriber_count"]) != actual_count
+            or current_status != desired_status
+            or current_interval != desired_interval
+        ):
+            updates.append(
+                (actual_count, desired_status, desired_interval, target_key)
+            )
+    if updates:
+        await connection.executemany(
+            """
+            UPDATE agent.interest_collection_targets
+            SET subscriber_count = %s,
+                status = %s,
+                refresh_interval_minutes = %s
+            WHERE target_key = %s
+            """,
+            updates,
+        )
 
 
 async def sync_wiki_interest_collection_targets(
@@ -282,6 +413,8 @@ async def sync_wiki_interest_collection_targets(
     candidates: list[str] = []
     seen: set[str] = set()
     for interest in interests:
+        if not _is_search_worthy_interest(interest):
+            continue
         topic_name = " ".join(str(interest.get("topic") or "").split())
         if not topic_name:
             continue
@@ -298,9 +431,6 @@ async def sync_wiki_interest_collection_targets(
         candidates.append(topic_name)
         if len(candidates) >= limit:
             break
-    if not candidates:
-        return []
-
     async with connection.transaction():
         await connection.execute("SET LOCAL app.access_scope = 'system'")
         return await _register_wiki_interest_targets(
@@ -318,34 +448,37 @@ async def _register_wiki_interest_targets(
     # 구독 행은 컨텍스트 Snapshot을 참조한다(NOT NULL). 컨텍스트가 아직 없는
     # 사용자는 구독을 만들 수 없으므로 조용히 건너뛴다 — 관심사 재계산 자체를
     # 실패시킬 이유는 없다.
-    context_cursor = await connection.execute(
-        """
-        SELECT id
-        FROM agent.user_context_snapshots
-        WHERE user_id = %s AND deleted_at IS NULL
-        ORDER BY context_version DESC
-        LIMIT 1
-        """,
-        (user_id,),
-    )
-    context = await context_cursor.fetchone()
-    if context is None:
-        return []
+    context: DictRow | None = None
+    reusable: dict[str, str] = {}
+    if candidates:
+        context_cursor = await connection.execute(
+            """
+            SELECT id
+            FROM agent.user_context_snapshots
+            WHERE user_id = %s AND deleted_at IS NULL
+            ORDER BY context_version DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        context = await context_cursor.fetchone()
+        if context is None:
+            return []
 
-    # 같은 검색어로 이미 수집 중인 대상이 있으면 재사용한다.
-    existing_cursor = await connection.execute(
-        """
-        SELECT target_key, lower(btrim(query)) AS normalized_query
-        FROM agent.interest_collection_targets
-        WHERE status = 'active'
-          AND lower(btrim(query)) = ANY(%s)
-        """,
-        ([name.casefold().strip() for name in candidates],),
-    )
-    reusable = {
-        str(row["normalized_query"]): str(row["target_key"])
-        for row in await existing_cursor.fetchall()
-    }
+        # 같은 검색어로 이미 수집 중인 대상이면 재사용한다.
+        existing_cursor = await connection.execute(
+            """
+            SELECT target_key, lower(btrim(query)) AS normalized_query
+            FROM agent.interest_collection_targets
+            WHERE status = 'active'
+              AND lower(btrim(query)) = ANY(%s)
+            """,
+            ([name.casefold().strip() for name in candidates],),
+        )
+        reusable = {
+            str(row["normalized_query"]): str(row["target_key"])
+            for row in await existing_cursor.fetchall()
+        }
 
     desired: list[tuple[str, str]] = []
     for topic_name in candidates:
@@ -373,6 +506,8 @@ async def _register_wiki_interest_targets(
         """,
         (user_id,),
     )
+    if desired:
+        assert context is not None
     for target_key, topic_name in desired:
         # 온보딩에서 이미 구독 중인 대상이면 그대로 둔다((user_id, target_key)에
         # 활성 행이 하나만 있을 수 있고, 어느 쪽이든 수집은 이미 돌고 있다).
@@ -386,19 +521,5 @@ async def _register_wiki_interest_targets(
             """,
             (user_id, target_key, context["id"], topic_name),
         )
-    await connection.execute(
-        """
-        UPDATE agent.interest_collection_targets AS target
-        SET subscriber_count = counts.subscriber_count
-        FROM (
-            SELECT candidate.target_key, count(subscription.id)::integer AS subscriber_count
-            FROM agent.interest_collection_targets AS candidate
-            LEFT JOIN agent.user_interest_subscriptions AS subscription
-              ON subscription.target_key = candidate.target_key AND subscription.active
-            GROUP BY candidate.target_key
-        ) AS counts
-        WHERE counts.target_key = target.target_key
-          AND target.subscriber_count <> counts.subscriber_count
-        """
-    )
+    await _reconcile_collection_target_policy(connection)
     return [topic_name for _, topic_name in desired]

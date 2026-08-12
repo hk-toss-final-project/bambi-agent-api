@@ -12,6 +12,8 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from infrastructure.persistence.features.interest_taxonomy import (
+    _reconcile_collection_target_policy,
+    _scaled_collection_refresh_intervals,
     sync_wiki_interest_collection_targets,
 )
 
@@ -43,6 +45,9 @@ class _FakeConnection:
         """실행 순서별 반환 Row 큐와 실행 기록을 초기화한다."""
         self._rows = list(rows)
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
+        self.executed_many: list[
+            tuple[str, list[tuple[int, str, int, str]]]
+        ] = []
         self.transactions = 0
 
     @asynccontextmanager
@@ -55,6 +60,12 @@ class _FakeConnection:
         """SQL과 Parameter를 기록하고 다음 준비 Row를 반환한다."""
         self.executed.append((query, params))
         return _FakeCursor(self._rows.pop(0) if self._rows else None)
+
+    async def executemany(
+        self, query: str, params: list[tuple[int, str, int, str]]
+    ) -> None:
+        """Batch SQL과 Parameter 목록을 기록한다."""
+        self.executed_many.append((query, params))
 
 
 def _connection(*, existing_targets: list[dict[str, Any]] | None = None) -> _FakeConnection:
@@ -123,6 +134,38 @@ def test_low_scoring_interests_are_not_collected() -> None:
     assert subscribed == ["오스틴딘"]
 
 
+def test_non_subject_wiki_nodes_are_not_collection_targets() -> None:
+    """도구·출처·단순 언급 노드는 점수가 높아도 뉴스 검색어로 등록하지 않는다."""
+    connection = _connection()
+
+    subscribed = _sync(
+        connection,
+        [
+            {
+                "topic": "DBeaver Community",
+                "score": 1.0,
+                "evidence": {"interest_subject": False},
+            },
+            {
+                "topic": "PostgreSQL 인덱스",
+                "score": 0.8,
+                "evidence": {"interest_subject": True},
+            },
+        ],
+    )
+
+    assert subscribed == ["PostgreSQL 인덱스"]
+
+
+def test_legacy_interest_without_role_judgment_remains_collectable() -> None:
+    """역할 판정이 없던 기존 관심사는 재빌드 전에도 수집을 유지한다."""
+    connection = _connection()
+
+    subscribed = _sync(connection, [{"topic": "기존 관심사", "score": 1.0}])
+
+    assert subscribed == ["기존 관심사"]
+
+
 def test_registration_is_capped() -> None:
     """관심사가 많아도 상한까지만 등록한다."""
     connection = _connection()
@@ -187,6 +230,84 @@ def test_previous_wiki_interest_subscriptions_are_deactivated() -> None:
     assert "origin = 'wiki_interest'" in deactivations[0][0]
 
 
+def test_collection_refresh_intervals_follow_subscriber_tiers() -> None:
+    """구독 1~4명은 하루, 5~9명은 12시간, 10명 이상은 6시간마다 수집한다."""
+    assert _scaled_collection_refresh_intervals([1, 4, 5, 9, 10, 20]) == [
+        1440,
+        1440,
+        720,
+        720,
+        360,
+        360,
+    ]
+
+
+def test_collection_refresh_intervals_stay_within_daily_capacity() -> None:
+    """대상이 늘면 모든 주기를 늘려 하루 예상 수요를 250회 이하로 맞춘다."""
+    intervals = _scaled_collection_refresh_intervals([1] * 300)
+
+    assert sum(1440.0 / interval for interval in intervals) <= 250
+    assert set(intervals) == {1728}
+
+
+def test_collection_target_policy_pauses_and_reactivates_by_subscribers() -> None:
+    """0명은 중지하고 구독이 생긴 대상은 구독자 수에 맞는 주기로 되살린다."""
+    connection = _FakeConnection(
+        [
+            None,  # 전역 정책 advisory lock
+            [
+                {
+                    "target_key": "zero",
+                    "status": "active",
+                    "subscriber_count": 3,
+                    "refresh_interval_minutes": 360,
+                    "actual_subscriber_count": 0,
+                },
+                {
+                    "target_key": "one",
+                    "status": "paused",
+                    "subscriber_count": 0,
+                    "refresh_interval_minutes": 360,
+                    "actual_subscriber_count": 1,
+                },
+                {
+                    "target_key": "five",
+                    "status": "active",
+                    "subscriber_count": 5,
+                    "refresh_interval_minutes": 360,
+                    "actual_subscriber_count": 5,
+                },
+                {
+                    "target_key": "ten",
+                    "status": "active",
+                    "subscriber_count": 10,
+                    "refresh_interval_minutes": 360,
+                    "actual_subscriber_count": 10,
+                },
+                {
+                    "target_key": "retired",
+                    "status": "retired",
+                    "subscriber_count": 0,
+                    "refresh_interval_minutes": 360,
+                    "actual_subscriber_count": 1,
+                },
+            ],
+        ]
+    )
+
+    asyncio.run(
+        _reconcile_collection_target_policy(connection)  # type: ignore[arg-type]
+    )
+
+    assert len(connection.executed_many) == 1
+    assert sorted(connection.executed_many[0][1], key=lambda item: item[3]) == [
+        (5, "active", 720, "five"),
+        (1, "active", 1440, "one"),
+        (1, "retired", 360, "retired"),
+        (0, "paused", 360, "zero"),
+    ]
+
+
 def test_sync_runs_in_its_own_system_scope_transaction() -> None:
     """수집 대상 쓰기를 자기 Transaction + system scope 안에서 수행한다.
 
@@ -207,12 +328,14 @@ def test_sync_runs_in_its_own_system_scope_transaction() -> None:
     assert connection.executed[0][0] == scope_statements[0][0]
 
 
-def test_sync_does_not_touch_the_database_without_candidates() -> None:
-    """등록할 관심사가 없으면 Transaction도 열지 않는다."""
+def test_sync_clears_previous_subscriptions_without_candidates() -> None:
+    """등록할 관심사가 없어도 이전 자동 구독을 꺼 수집 대상을 정리한다."""
     connection = _connection()
 
     subscribed = _sync(connection, [{"topic": "스쳐간 주제", "score": 0.01}])
 
     assert subscribed == []
-    assert connection.transactions == 0
-    assert connection.executed == []
+    assert connection.transactions == 1
+    deactivations = _statements(connection, "SET active = false")
+    assert len(deactivations) == 1
+    assert "origin = 'wiki_interest'" in deactivations[0][0]
