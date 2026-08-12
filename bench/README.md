@@ -30,3 +30,22 @@ OpenAI Batch로 전환한 Wiki Embedding과 비긴급 Report 초안은 각각 �
 uv run python bench/wiki_embedding_batch/run.py --estimate-only
 uv run python bench/report_batch_generation/run.py --estimate-only
 ```
+
+개인 Wiki 분류(`classify_source_for_wiki`)와 Report Builder 콘텐츠 생성
+(`generate_report_content`)은 각각 다음처럼 먼저 상한을 확인합니다.
+
+```bash
+uv run python bench/wiki_builder/run.py --estimate-only
+uv run python bench/wiki_builder/run.py \
+  --model gpt-4.1-mini \
+  --input-cost-per-million <현재 단가> \
+  --output-cost-per-million <현재 단가>
+```
+
+```bash
+uv run python bench/report_builder/run.py --estimate-only
+uv run python bench/report_builder/run.py \
+  --model gpt-4.1-mini \
+  --input-cost-per-million <현재 단가> \
+  --output-cost-per-million <현재 단가>
+```

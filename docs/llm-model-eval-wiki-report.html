@@ -1,0 +1,940 @@
+<title>Wiki Builder · Report Builder 모델 비교</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --page:        #f7f7f5;
+    --surface:     #ffffff;
+    --surface-2:   #f2f1ed;
+    --text-primary:   #14181c;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --border:      rgba(11,11,11,0.10);
+    --grid:        #e1e0d9;
+    --baseline:    #c3c2b7;
+    --accent:      #2a78d6;
+    --accent-wash: rgba(42,120,214,0.08);
+    --good:        #0ca30c;
+    --bad:         #d03b3b;
+
+    --m-4o-mini:   #2a78d6; /* slot 1 blue */
+    --m-41-mini:   #eb6834; /* slot 2 orange */
+    --m-41:        #1baf7a; /* slot 3 aqua */
+    --m-5:         #eda100; /* slot 4 yellow */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --page:        #0d0d0d;
+      --surface:     #1a1a19;
+      --surface-2:   #232322;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --border:      rgba(255,255,255,0.10);
+      --grid:        #2c2c2a;
+      --baseline:    #383835;
+      --accent:      #3987e5;
+      --accent-wash: rgba(57,135,229,0.14);
+      --good:        #0ca30c;
+      --bad:         #e66767;
+
+      --m-4o-mini:   #3987e5;
+      --m-41-mini:   #d95926;
+      --m-41:        #199e70;
+      --m-5:         #c98500;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --page:        #0d0d0d;
+    --surface:     #1a1a19;
+    --surface-2:   #232322;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --border:      rgba(255,255,255,0.10);
+    --grid:        #2c2c2a;
+    --baseline:    #383835;
+    --accent:      #3987e5;
+    --accent-wash: rgba(57,135,229,0.14);
+    --good:        #0ca30c;
+    --bad:         #e66767;
+
+    --m-4o-mini:   #3987e5;
+    --m-41-mini:   #d95926;
+    --m-41:        #199e70;
+    --m-5:         #c98500;
+  }
+
+  * { box-sizing: border-box; }
+
+  .viz-root {
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 40px 24px 64px;
+    display: flex;
+    justify-content: center;
+  }
+  .viz-page {
+    width: 100%;
+    max-width: 860px;
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+  }
+
+  .mono {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+  a { color: var(--accent); }
+
+  /* ---------- header ---------- */
+  .header {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .eyebrow {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  h1 {
+    margin: 0;
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+  .subtitle {
+    margin: 0;
+    max-width: 66ch;
+    color: var(--text-secondary);
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  /* ---------- in-page nav ---------- */
+  .toc {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 18px;
+    padding: 10px 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .toc a {
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    text-decoration: none;
+  }
+  .toc a:hover { color: var(--accent); }
+  .toc-num {
+    color: var(--text-muted);
+    margin-right: 4px;
+  }
+
+  /* ---------- stat row ---------- */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .stat {
+    background: var(--surface);
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .stat-label {
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .stat-value {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.15;
+  }
+  .stat-value small {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+  .stat-note {
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  /* ---------- prose sections (배경 · 준비작업 · 결론 · 한계 · 다음단계) ---------- */
+  .doc-section {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    scroll-margin-top: 16px;
+  }
+  .doc-section h2 {
+    margin: 0;
+    font-size: 19px;
+    font-weight: 700;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .doc-section h2 .step {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+  }
+  .doc-section h3 {
+    margin: 6px 0 -4px;
+    font-size: 14.5px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+  .doc-section p {
+    margin: 0;
+    max-width: 68ch;
+    font-size: 14px;
+    line-height: 1.75;
+    color: var(--text-secondary);
+  }
+  .doc-section p strong { color: var(--text-primary); font-weight: 600; }
+  .doc-section ul, .doc-section ol {
+    margin: 0;
+    padding-left: 20px;
+    max-width: 66ch;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .doc-section li {
+    font-size: 14px;
+    line-height: 1.65;
+    color: var(--text-secondary);
+  }
+  .doc-section li strong { color: var(--text-primary); font-weight: 600; }
+  .doc-section li code, p code {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 4px;
+    color: var(--text-primary);
+  }
+
+  .code-block {
+    margin: 0;
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: var(--text-primary);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+
+  .note-box {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    padding: 12px 16px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+  .note-box strong { color: var(--text-primary); }
+
+  .checklist {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .checklist-item {
+    display: flex;
+    gap: 10px;
+    padding: 10px 14px;
+    background: var(--surface);
+    font-size: 13.5px;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border);
+  }
+  .checklist-item:last-child { border-bottom: none; }
+  .checklist-num {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    flex: none;
+    padding-top: 2px;
+  }
+
+  /* ---------- result sections (charts) ---------- */
+  .section {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    scroll-margin-top: 16px;
+  }
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .section-title {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .section-title h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+  }
+  .section-target {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .legend-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex: none;
+  }
+
+  .charts {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .chart-card {
+    background: var(--surface);
+    padding: 16px 14px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .chart-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .chart-caption {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+  .chart-card svg {
+    width: 100%;
+    height: auto;
+    overflow: visible;
+  }
+  .bar-value {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 10.5px;
+    font-weight: 600;
+    fill: var(--text-primary);
+  }
+  .bar-value.best { fill: var(--good); }
+  .axis-label {
+    font-size: 9.5px;
+    fill: var(--text-muted);
+  }
+  .gridline { stroke: var(--grid); stroke-width: 1; }
+  .baseline { stroke: var(--baseline); stroke-width: 1; }
+  rect.bar {
+    stroke: var(--surface);
+    stroke-width: 2;
+    cursor: default;
+  }
+  rect.bar:hover { opacity: 0.85; }
+
+  /* ---------- callout ---------- */
+  .callout {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    background: var(--accent-wash);
+    border-radius: 8px;
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .callout-title {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+  }
+  .callout pre {
+    margin: 0;
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: var(--text-primary);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    overflow-x: auto;
+  }
+  .callout p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.65;
+    color: var(--text-secondary);
+  }
+  .callout ul {
+    margin: 0;
+    padding-left: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .callout li {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+  .callout li strong { color: var(--text-primary); }
+
+  /* ---------- table view (accessibility) ---------- */
+  details.table-view {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  details.table-view summary {
+    cursor: pointer;
+    padding: 12px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    list-style: none;
+  }
+  details.table-view summary::-webkit-details-marker { display: none; }
+  details.table-view summary::before {
+    content: "▸ ";
+    color: var(--text-muted);
+  }
+  details.table-view[open] summary::before {
+    content: "▾ ";
+  }
+  .table-scroll {
+    overflow-x: auto;
+    border-top: 1px solid var(--border);
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+  }
+  th, td {
+    text-align: left;
+    padding: 8px 16px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  th {
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    border-bottom: 1px solid var(--border);
+  }
+  td { border-bottom: 1px solid var(--border); color: var(--text-secondary); }
+  tr:last-child td { border-bottom: none; }
+  td.model-cell { color: var(--text-primary); font-weight: 600; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 7px; }
+
+  /* ---------- footer ---------- */
+  .footnotes {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+  }
+  .footnotes p {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-muted);
+  }
+  .footnotes code {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
+  @media (max-width: 720px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .charts { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="viz-root">
+  <div class="viz-page">
+
+    <div class="header">
+      <div class="eyebrow">LLM 벤치마크 · bambi-agent-api · 2026-08-11 (재검증) · 브랜치 experiment/llm-eval-langsmith</div>
+      <h1>Wiki Builder · Report Builder 모델 비교</h1>
+      <p class="subtitle">
+        <code class="mono">WIKI_LLM_MODEL</code>·<code class="mono">REPORT_LLM_MODEL</code> 기본값(gpt-4o-mini)이
+        최선인지 확인되지 않은 상태였다. 개인 Wiki 분류(<code class="mono">classify_source_for_wiki</code>)와
+        리포트 생성(<code class="mono">generate_report_content</code>) 두 기능을 4개 후보 모델로 각각 실행해
+        정확도·지연시간·비용을 비교하고, LangSmith 트레이싱까지 함께 붙였다. 최초 12·10개 케이스로 1차 실행한 뒤,
+        케이스를 20·18개로 늘려 <strong>재검증까지 마쳤다</strong> — 아래 수치는 재검증판 기준이다.
+      </p>
+    </div>
+
+    <nav class="toc">
+      <a href="#sec-background"><span class="toc-num">01</span>배경</a>
+      <a href="#sec-setup"><span class="toc-num">02</span>준비 작업</a>
+      <a href="#section-wiki"><span class="toc-num">03</span>위키 분류 결과</a>
+      <a href="#section-report"><span class="toc-num">04</span>리포트 생성 결과</a>
+      <a href="#sec-conclusion"><span class="toc-num">05</span>결론 및 권장</a>
+      <a href="#sec-limits"><span class="toc-num">06</span>한계</a>
+      <a href="#sec-next"><span class="toc-num">07</span>다음 단계</a>
+    </nav>
+
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-label">총 실행 비용</div>
+        <div class="stat-value">$1.67</div>
+        <div class="stat-note">재검증 8회 합산 (20+18 케이스 × 4모델)</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">최저 정확도</div>
+        <div class="stat-value">60.0%<small> gpt-4o-mini · 위키</small></div>
+        <div class="stat-note">20개 중 8개 오분류</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">최고 지연시간</div>
+        <div class="stat-value">54.9s<small> gpt-5 · 위키</small></div>
+        <div class="stat-note">gpt-4.1 대비 약 9.5배, 정확도는 동일</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">권장 모델</div>
+        <div class="stat-value" style="font-size:18px;">gpt-4.1<br/><small style="font-size:12px;">위키·리포트 공통</small></div>
+        <div class="stat-note">gpt-5와 정확도 동률·근접, 비용·지연 훨씬 낮음</div>
+      </div>
+    </div>
+
+    <!-- ============ 01 배경 ============ -->
+    <div class="doc-section" id="sec-background">
+      <h2><span class="step">01</span>배경</h2>
+      <p>
+        <code>WIKI_LLM_MODEL</code>, <code>REPORT_LLM_MODEL</code> 기본값(<code>gpt-4o-mini</code>)이 실제로
+        최선의 선택인지 확인이 안 된 상태였다. 모델 후보(gpt-4o-mini / gpt-4.1-mini / gpt-4.1 / gpt-5)를
+        같은 데이터셋으로 돌려 정확도·지연시간·비용을 비교했다.
+      </p>
+    </div>
+
+    <!-- ============ 02 준비 작업 ============ -->
+    <div class="doc-section" id="sec-setup">
+      <h2><span class="step">02</span>준비 작업</h2>
+
+      <h3>LangSmith 트레이싱</h3>
+      <p>
+        <code>bambi-agent-api/.env</code>에 아래 값을 추가해 LangGraph/LangChain 실행이 LangSmith
+        대시보드로 자동 전송되도록 설정했다 (코드 수정 없이 환경변수만으로 동작).
+      </p>
+      <pre class="code-block">LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=&lt;발급받은 키&gt;
+LANGCHAIN_PROJECT=bambi-wiki-report-eval
+LANGCHAIN_ENDPOINT=https://api.smith.langchain.com</pre>
+      <p><code>.env.example</code>에는 값 없이 키 이름만 추가(AGENTS.md 시크릿 규칙 준수).</p>
+      <p>
+        이어서 벤치 스크립트가 LLM을 호출할 때마다 <code>bench:wiki_builder</code>·<code>model:gpt-4.1-mini</code> 같은
+        태그를 LangSmith Run에 자동으로 남기도록 했고, <code>--langsmith-experiment</code> 옵션을 추가해
+        <code>dataset.jsonl</code> 케이스를 LangSmith Dataset으로 동기화하고 모델별 Experiment로 기록하도록 확장했다.
+        LangSmith → <strong>Tracing</strong>에서 모델별 필터링이, <strong>Datasets &amp; Experiments</strong>에서
+        모델 간 나란한 비교가 가능하다.
+      </p>
+      <div class="note-box">
+        <strong>트레이스 분석 결과.</strong> 기록된 Experiment의 Run 수를 LangSmith API로 직접 조회해 확인했다
+        (<code>Client.list_runs</code>). 모든 Experiment에서 <strong>Run 수 = 케이스 수, 에러 0건</strong> —
+        재시도가 한 번도 발생하지 않았다. <code>classify_source_for_wiki</code>·<code>generate_report_content</code>
+        모두 내부에서 <code>complete()</code>를 <strong>정확히 1회</strong>만 호출하는 단일 LLM 호출 구조라, 애초에
+        "노드별 병목"이 존재하지 않는다 — 전체 지연시간이 곧 그 LLM 호출 하나의 지연시간이다. 케이스별 지연시간
+        분포(p50 대비 max)는 최대 2배 정도 벌어져 있어 일부 느린 개별 호출은 있지만, 구조적 병목이 아니라
+        Provider 쪽 응답 변동으로 보인다.
+      </div>
+
+      <h3>벤치 하네스 신설</h3>
+      <p>기존 <code>bench/topic_intent</code> 컨벤션을 따라 두 벤치를 새로 만들었다. 최초 12·10개 케이스로 1차
+        비교를 돌린 뒤, 통계적 신뢰도를 높이기 위해 각각 20·18개로 늘려 재검증했다(도구·개념 경계, 기존 항목
+        매칭, 영어 소스, 관심사 Bundle 다중 이웃, score 기반 근거 우선순위 등 다루지 못했던 경계 케이스 보강).</p>
+      <ul>
+        <li><strong>bench/wiki_builder/</strong> — <code>classify_source_for_wiki</code> (<code>agent/wiki_builder/features/classification.py</code>) 대상, 20개 케이스</li>
+        <li><strong>bench/report_builder/</strong> — <code>generate_report_content</code> (<code>agent/report_builder/features/generation.py</code>) 대상, 18개 케이스</li>
+      </ul>
+      <p>
+        <code>build_incremental_wiki</code>/<code>rebuild_full_wiki</code>, <code>report_001~010</code> 같은 전체
+        오케스트레이션 진입점은 DB 트랜잭션에 깊게 의존해 벤치로 스텁하기 어려워, <strong>실제 LLM 품질을 좌우하는
+        단일 함수</strong>를 직접 호출하는 방식을 택했다.
+      </p>
+      <pre class="code-block">uv run python bench/wiki_builder/run.py --estimate-only
+uv run python bench/wiki_builder/run.py \
+  --model gpt-4.1-mini --input-cost-per-million 0.40 --output-cost-per-million 1.60
+uv run python bench/wiki_builder/run.py --model gpt-4.1-mini --langsmith-experiment
+
+uv run python bench/report_builder/run.py --estimate-only
+uv run python bench/report_builder/run.py \
+  --model gpt-4.1-mini --input-cost-per-million 0.40 --output-cost-per-million 1.60
+uv run python bench/report_builder/run.py --model gpt-4.1-mini --langsmith-experiment</pre>
+      <div class="note-box">
+        <strong>bench/report_generation/과의 중복 — 결론: 통합하지 않고 둘 다 유지.</strong>
+        <code>bench/report_generation/</code>은 main에 이미 커밋돼 있고 <strong>2026-08-11 실측 실패 3건</strong>
+        (personal-only-signal, long-context, citation-boundary)이 들어있는 회귀 방지용 벤치다. 반면
+        <code>bench/report_builder/</code>는 이번 작업에서 만든 <strong>모델 간 비교 전용</strong> 벤치로,
+        <code>ReportContextDocument</code> 스키마(namespace_key·context_role·score 등)를 그대로 반영해 더
+        현실적인 근거 구조를 쓴다. 실측 실패 케이스를 지우거나 두 데이터셋을 합치는 건 이미 커밋된 팀 자산을
+        건드리는 일이라 사용자 승인 없이 진행하지 않았다 — 대신 역할을 분리해서 문서화한다:
+        <strong>report_generation = 회귀 방지</strong>, <strong>report_builder = 모델 비교</strong>.
+      </div>
+    </div>
+
+    <!-- ============ 03 WIKI BUILDER 결과 ============ -->
+    <div class="section" id="section-wiki">
+      <div class="section-head">
+        <div class="section-title">
+          <h3><span class="mono" style="color:var(--text-muted); font-weight:500;">03</span>&nbsp; 위키 분류 결과</h3>
+          <span class="section-target mono">classify_source_for_wiki · 20 cases</span>
+        </div>
+        <div class="legend" id="legend-wiki"></div>
+      </div>
+      <div class="charts" id="charts-wiki"></div>
+      <details class="table-view">
+        <summary>표로 보기</summary>
+        <div class="table-scroll">
+          <table id="table-wiki"></table>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 04 REPORT BUILDER 결과 ============ -->
+    <div class="section" id="section-report">
+      <div class="section-head">
+        <div class="section-title">
+          <h3><span class="mono" style="color:var(--text-muted); font-weight:500;">04</span>&nbsp; 리포트 생성 결과</h3>
+          <span class="section-target mono">generate_report_content · 18 cases</span>
+        </div>
+        <div class="legend" id="legend-report"></div>
+      </div>
+      <div class="charts" id="charts-report"></div>
+      <details class="table-view">
+        <summary>표로 보기</summary>
+        <div class="table-scroll">
+          <table id="table-report"></table>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 05 결론 및 권장 ============ -->
+    <div class="doc-section" id="sec-conclusion">
+      <h2><span class="step">05</span>결론 및 권장</h2>
+      <ul>
+        <li><strong>gpt-4o-mini는 재검증에서도 위키 분류 정확도가 가장 낮았다</strong> (60.00%, 20개 중 8개 오분류) — 1차 결과(66.67%)보다 오히려 더 낮게 나와, 약점이 표본 노이즈가 아니라 실제 경향임을 재확인했다.</li>
+        <li><strong>gpt-4.1이 gpt-5와 정확도가 동률·근접하면서 비용·지연시간은 훨씬 낮다.</strong> 위키 분류에서 둘 다 90.00%로 동률인데 gpt-4.1은 5.76초·$0.155, gpt-5는 54.95초·$0.927 — 지연 9.5배, 비용 6배 차이. 리포트 생성에서도 gpt-4.1(94.44%, 2.87초)이 gpt-5(100.00%, 27.60초)에 근접한 정확도를 훨씬 적은 지연시간으로 낸다.</li>
+        <li><strong>gpt-4.1-mini는 재검증에서 순위가 밀렸다.</strong> 위키 분류 정확도 80.00%로 gpt-4.1(90.00%)에 못 미치고, 지연시간(9.20초)은 오히려 gpt-4.1(5.76초)보다 길었다 — 1차 결과에서의 "균형점" 포지션이 표본이 늘어나며 뒤집혔다.</li>
+        <li><strong>리포트 생성은 gpt-4o-mini·gpt-4.1-mini·gpt-4.1 세 모델이 94.44%로 동률이지만, gpt-4.1이 지연시간이 가장 짧다</strong>(2.87초, 세 모델 중 최저) — 정확도가 같다면 속도로 고르는 게 합리적이다.</li>
+      </ul>
+
+      <div class="callout">
+        <div class="callout-title">권장 변경안 (재검증 후 확정)</div>
+        <pre>WIKI_LLM_MODEL=gpt-4.1      # gpt-5와 정확도 동률(90.00%), 비용 1/6·지연 1/9.5
+REPORT_LLM_MODEL=gpt-4.1    # 동률 정확도(94.44%) 중 최저 지연시간(2.87초)</pre>
+        <p>
+          1차 결과에서는 gpt-4.1-mini를 위키 분류 균형점으로 권했지만, 케이스를 20개로 늘려 재검증하니
+          gpt-4.1이 정확도·지연시간 모두에서 gpt-4.1-mini를 앞섰다 — 표본이 작을 때는 순위가 뒤집힐 수 있다는
+          걸 보여주는 사례이기도 하다. <strong>두 기능 모두 gpt-4.1 하나로 통일</strong>하는 게 가장 단순하고
+          근거가 명확한 선택이다. gpt-5는 정확도 우위가 없거나(위키) 미미한 수준(리포트 +5.56%p)인데 비용·지연이
+          6~10배라 실서비스 기본값으로는 여전히 부적합하다고 판단 — "정확도 최우선" 고품질 온디맨드 경로(P1 이후)가
+          생기면 그때 재검토한다.
+        </p>
+      </div>
+    </div>
+
+    <!-- ============ 06 한계 ============ -->
+    <div class="doc-section" id="sec-limits">
+      <h2><span class="step">06</span>한계</h2>
+      <ul>
+        <li><strong>✅ 케이스 수 — 해결.</strong> 12개·10개 → 20개·18개로 늘려 재검증했다. gpt-4.1-mini의 위키 분류
+          순위가 실제로 뒤집히는 등(1차 2위 → 재검증 3위) 표본 확대가 결론을 바꿀 만큼 유효했다. 다만 20·18개도
+          여전히 통계적으로 크지 않은 표본이라 — <strong>신뢰 구간은 좁아졌지만 완전히 사라지지는 않았다.</strong></li>
+        <li><strong>부분 해결 — 데이터셋은 여전히 새로 작성한 것이다.</strong> 이번 재검증에서도 실사용 저장
+          데이터가 아니라 직접 작성한 케이스를 썼다 — 이건 실제 프로덕션 트래픽 없이는 근본적으로 해결할 수 없는
+          한계라 "해결됨"으로 표시하지 않는다. 실사용 데이터 기반 검증은 여전히 다음 단계로 남아있다.</li>
+        <li><strong>✅ LangSmith 트레이스 분석 — 해결.</strong> 02 준비 작업 섹션에 결과를 담았다: 모든 Experiment에서
+          Run 수 = 케이스 수, 에러 0건이었고, 두 함수 모두 단일 LLM 호출 구조라 애초에 "노드별 병목"이 존재하지
+          않는다는 걸 확인했다.</li>
+      </ul>
+    </div>
+
+    <!-- ============ 07 다음 단계 ============ -->
+    <div class="doc-section" id="sec-next">
+      <h2><span class="step">07</span>다음 단계</h2>
+      <div class="checklist">
+        <div class="checklist-item"><span class="checklist-num">✅1</span><span><strong>완료.</strong> <code>bambi-agent-api/.env</code>·<code>.env.example</code>의 <code>WIKI_LLM_MODEL</code>/<code>REPORT_LLM_MODEL</code>을 재검증 결과에 맞춰 <code>gpt-4.1</code>로 갱신했다. <strong>단, <code>bambi-build</code>(배포용 docker-compose)는 별도 저장소·팀 공용 인프라 자산이라 이 세션에서는 건드리지 않았다</strong> — <code>bambi-build/.env.example</code>과 <code>docker-compose.yml</code>의 기본값(gpt-4o-mini)이 여전히 남아있어, 실제 배포 반영은 별도 PR로 진행해야 한다.</span></div>
+        <div class="checklist-item"><span class="checklist-num">✅2</span><span><strong>완료(통합하지 않기로 결정).</strong> <code>bench/report_builder/</code>와 <code>bench/report_generation/</code>은 역할이 다르다고 판단해 둘 다 유지한다 — 02 준비 작업 섹션 참고.</span></div>
+        <div class="checklist-item"><span class="checklist-num">✅3</span><span><strong>완료.</strong> LangSmith API로 Run 수·에러·지연 분포를 직접 조회해 확인했다 — 02 준비 작업 섹션 참고. 단, 이번에 늘어난 20·18개 케이스는 아직 LangSmith Dataset에 재동기화하지 않았다(기존 12·10개로 생성된 Dataset이 남아있음) — 필요하면 <code>bambi-wiki-builder-classify</code>/<code>bambi-report-builder-generate</code> Dataset을 삭제 후 <code>--langsmith-experiment</code>로 재생성한다.</span></div>
+        <div class="checklist-item"><span class="checklist-num">✅4</span><span><strong>완료.</strong> 케이스를 12·10개 → 20·18개로 늘려 재검증했고, 그 결과 권장 모델이 gpt-4.1-mini에서 gpt-4.1로 바뀌었다.</span></div>
+        <div class="checklist-item"><span class="checklist-num">5</span><span><strong>미완료 — 실사용 데이터 기반 재검증.</strong> 지금까지 두 차례 모두 직접 작성한 합성 케이스였다. 실제 저장 데이터로 만든 케이스가 있어야 이 벤치의 신뢰도를 한 단계 더 높일 수 있다.</span></div>
+      </div>
+    </div>
+
+    <div class="footnotes">
+      <p>
+        원본 실행 결과(재검증판, 20·18 케이스): <code>bench/wiki_builder/results/2026-08-11_*.md</code>,
+        <code>bench/report_builder/results/2026-08-11_*.md</code> ·
+        LangSmith Dataset(12·10 케이스 기준, 재동기화 전): <code>bambi-wiki-builder-classify</code>,
+        <code>bambi-report-builder-generate</code> · 이번 재검증까지 포함한 총 API 비용은 약 $2.63 (1차 $0.93 +
+        LangSmith 태그 검증 재실행 약 $0.03 + 재검증 $1.67)
+      </p>
+    </div>
+
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var MODELS = [
+    { key: "gpt-4o-mini",   label: "gpt-4o-mini",   sub: "현재 기본값", varName: "--m-4o-mini" },
+    { key: "gpt-4.1-mini",  label: "gpt-4.1-mini",  sub: "",           varName: "--m-41-mini" },
+    { key: "gpt-4.1",       label: "gpt-4.1",       sub: "",           varName: "--m-41" },
+    { key: "gpt-5",         label: "gpt-5",         sub: "",           varName: "--m-5" }
+  ];
+
+  var DATA = {
+    wiki: {
+      accuracy: [60.00, 80.00, 90.00, 90.00],    // % (20 cases)
+      latency:  [4.307, 9.200, 5.763, 54.945],   // s
+      cost:     [0.007436, 0.029643, 0.154728, 0.926825] // $
+    },
+    report: {
+      accuracy: [94.44, 94.44, 94.44, 100.00],   // % (18 cases)
+      latency:  [3.417, 5.446, 2.867, 27.596],
+      cost:     [0.005901, 0.018934, 0.088308, 0.438265]
+    }
+  };
+
+  var CHART_DEFS = [
+    { key: "accuracy", title: "정확도", caption: "PASS 비율 (%, 높을수록 좋음)", unit: "%",  decimals: 1, best: "max" },
+    { key: "latency",  title: "평균 지연시간", caption: "케이스당 평균 (초, 낮을수록 좋음)", unit: "s",  decimals: 1, best: "min" },
+    { key: "cost",     title: "예상 비용", caption: "전체 케이스 합산 (달러)", unit: "$",  decimals: 4, best: "min", prefix: true }
+  ];
+
+  var NS = "http://www.w3.org/2000/svg";
+
+  function el(tag, attrs) {
+    var node = document.createElementNS(NS, tag);
+    for (var k in attrs) node.setAttribute(k, attrs[k]);
+    return node;
+  }
+
+  function fmt(value, def) {
+    var s = value.toFixed(def.decimals);
+    return def.prefix ? "$" + s : s + (def.unit === "%" || def.unit === "s" ? def.unit : "");
+  }
+
+  function bestIndex(values, mode) {
+    var idx = 0;
+    for (var i = 1; i < values.length; i++) {
+      if (mode === "max" ? values[i] > values[idx] : values[i] < values[idx]) idx = i;
+    }
+    return idx;
+  }
+
+  function renderLegend(container) {
+    MODELS.forEach(function (m) {
+      var item = document.createElement("div");
+      item.className = "legend-item";
+      var swatch = document.createElement("span");
+      swatch.className = "legend-swatch";
+      swatch.style.background = "var(" + m.varName + ")";
+      item.appendChild(swatch);
+      var text = document.createElement("span");
+      text.textContent = m.label + (m.sub ? " (" + m.sub + ")" : "");
+      item.appendChild(text);
+      container.appendChild(item);
+    });
+  }
+
+  function renderChart(container, def, values) {
+    var card = document.createElement("div");
+    card.className = "chart-card";
+
+    var title = document.createElement("div");
+    title.className = "chart-title";
+    title.textContent = def.title;
+    card.appendChild(title);
+
+    var caption = document.createElement("div");
+    caption.className = "chart-caption";
+    caption.textContent = def.caption;
+    card.appendChild(caption);
+
+    var W = 240, H = 148;
+    var padTop = 16, padBottom = 26, padSide = 6;
+    var plotH = H - padTop - padBottom;
+    var max = Math.max.apply(null, values) * 1.18;
+    var groupW = (W - padSide * 2) / values.length;
+    var barW = Math.min(24, groupW * 0.52);
+
+    var svg = el("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": def.title + " 모델별 비교" });
+
+    for (var g = 1; g <= 3; g++) {
+      var gy = padTop + plotH - (plotH * g / 3);
+      svg.appendChild(el("line", { x1: padSide, x2: W - padSide, y1: gy, y2: gy, class: "gridline" }));
+    }
+    var baseY = padTop + plotH;
+    svg.appendChild(el("line", { x1: padSide, x2: W - padSide, y1: baseY, y2: baseY, class: "baseline" }));
+
+    var best = bestIndex(values, def.best);
+
+    values.forEach(function (v, i) {
+      var cx = padSide + groupW * i + groupW / 2;
+      var barH = Math.max(2, (v / max) * plotH);
+      var x = cx - barW / 2;
+      var y = baseY - barH;
+
+      var rect = el("rect", {
+        class: "bar",
+        x: x, y: y, width: barW, height: barH,
+        rx: 4, ry: 4,
+        fill: "var(" + MODELS[i].varName + ")"
+      });
+      var titleEl = el("title", {});
+      titleEl.textContent = MODELS[i].label + " — " + fmt(v, def);
+      rect.appendChild(titleEl);
+      svg.appendChild(rect);
+
+      var isBest = i === best;
+      var val = el("text", {
+        x: cx, y: Math.max(10, y - 5),
+        "text-anchor": "middle",
+        class: "bar-value" + (isBest ? " best" : "")
+      });
+      val.textContent = fmt(v, def);
+      svg.appendChild(val);
+
+      var axis = el("text", {
+        x: cx, y: H - 8,
+        "text-anchor": "middle",
+        class: "axis-label"
+      });
+      axis.textContent = shortLabel(MODELS[i].key);
+      svg.appendChild(axis);
+    });
+
+    card.appendChild(svg);
+    container.appendChild(card);
+  }
+
+  function shortLabel(key) {
+    return key
+      .replace("gpt-", "")
+      .replace("4o-mini", "4o-m")
+      .replace("4.1-mini", "4.1-m");
+  }
+
+  function renderTable(tableEl, dataset) {
+    var thead = document.createElement("thead");
+    var headRow = document.createElement("tr");
+    ["모델", "정확도", "평균 지연시간", "예상 비용"].forEach(function (h) {
+      var th = document.createElement("th");
+      th.textContent = h;
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    tableEl.appendChild(thead);
+
+    var tbody = document.createElement("tbody");
+    MODELS.forEach(function (m, i) {
+      var row = document.createElement("tr");
+
+      var modelCell = document.createElement("td");
+      modelCell.className = "model-cell";
+      var dot = document.createElement("span");
+      dot.className = "dot";
+      dot.style.background = "var(" + m.varName + ")";
+      modelCell.appendChild(dot);
+      modelCell.appendChild(document.createTextNode(m.label));
+      row.appendChild(modelCell);
+
+      var accCell = document.createElement("td");
+      accCell.textContent = dataset.accuracy[i].toFixed(2) + "%";
+      row.appendChild(accCell);
+
+      var latCell = document.createElement("td");
+      latCell.textContent = dataset.latency[i].toFixed(2) + "s";
+      row.appendChild(latCell);
+
+      var costCell = document.createElement("td");
+      costCell.textContent = "$" + dataset.cost[i].toFixed(4);
+      row.appendChild(costCell);
+
+      tbody.appendChild(row);
+    });
+    tableEl.appendChild(tbody);
+  }
+
+  function renderSection(prefix, dataset) {
+    var legend = document.getElementById("legend-" + prefix);
+    renderLegend(legend);
+
+    var chartsContainer = document.getElementById("charts-" + prefix);
+    CHART_DEFS.forEach(function (def) {
+      renderChart(chartsContainer, def, dataset[def.key]);
+    });
+
+    var table = document.getElementById("table-" + prefix);
+    renderTable(table, dataset);
+  }
+
+  renderSection("wiki", DATA.wiki);
+  renderSection("report", DATA.report);
+})();
+</script>
