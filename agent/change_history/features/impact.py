@@ -111,7 +111,7 @@ def infer_impact(
     *,
     topic: str,
     facts: Sequence[DiffFact],
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
     correction: str = "",
 ) -> ImpactOutcome:
     """정제된 팩트로 시장·트렌드 파급효과와 행동 지침을 추론한다.
@@ -166,7 +166,7 @@ async def chg_004(
     *,
     topic: str,
     facts: Sequence[DiffFact],
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
     correction: str = "",
 ) -> ImpactOutcome:
     """[CHG-004] 파급효과·행동 지침 추론.

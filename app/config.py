@@ -97,7 +97,7 @@ class Settings(BaseModel):
         default="gpt-4.1-mini", description="Personal Wiki 분류 모델"
     )
     report_llm_model: str = Field(
-        default="gpt-4.1-mini", description="Report Builder 콘텐츠 생성 모델"
+        default="gpt-4o-mini", description="Report Builder 콘텐츠 생성 모델"
     )
     wiki_read_pipeline_version: Literal["legacy_v1", "langgraph_v2"] = Field(
         default="langgraph_v2",
@@ -389,7 +389,7 @@ def load_settings() -> Settings:
         news_api_key=_optional_env("NEWS_API_KEY"),
         gdelt_base_url=_optional_env("GDELT_BASE_URL"),
         wiki_llm_model=os.getenv("WIKI_LLM_MODEL", "gpt-4.1-mini"),
-        report_llm_model=os.getenv("REPORT_LLM_MODEL", "gpt-4.1-mini"),
+        report_llm_model=os.getenv("REPORT_LLM_MODEL", "gpt-4o-mini"),
         wiki_read_pipeline_version=os.getenv(
             "WIKI_READ_PIPELINE_VERSION", "langgraph_v2"
         ),

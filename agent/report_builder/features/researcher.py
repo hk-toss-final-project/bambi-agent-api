@@ -827,7 +827,7 @@ async def research_context(
     topic: str,
     user_id: str,
     topic_intent: str = "news",
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
     max_iterations: int = RESEARCH_MAX_ITERATIONS,
     planned_queries: Sequence[str] = (),
     planned_wiki_version_ids: Sequence[str] = (),

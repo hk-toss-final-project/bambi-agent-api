@@ -381,7 +381,7 @@ def main() -> int:
     """비용 확인 후 전체 벤치마크를 실행하고 집계 결과를 출력한다."""
     sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="gpt-4.1-mini")
+    parser.add_argument("--model", default="gpt-4o-mini")
     parser.add_argument("--confirm-cost", action="store_true")
     parser.add_argument("--case", default="", help="특정 케이스 id만 실행")
     args = parser.parse_args()

@@ -45,7 +45,7 @@ class Usage:
 def _args() -> argparse.Namespace:
     """모델·단가와 무료 추정 모드 인자를 파싱한다."""
     parser = argparse.ArgumentParser(description="Report batch generation benchmark")
-    parser.add_argument("--model", default="gpt-4.1-mini")
+    parser.add_argument("--model", default="gpt-4o-mini")
     parser.add_argument("--input-cost-per-million", type=float)
     parser.add_argument("--output-cost-per-million", type=float)
     parser.add_argument("--estimate-only", action="store_true")

@@ -325,7 +325,7 @@ async def run_report_generation_batch(
     concurrency: int = 1,
     rate_limit_policy: ProviderRateLimitPolicy | None = None,
     lease_seconds: int = 600,
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
 ) -> list[dict[str, object]]:
     """Report Builder Job을 점유해 설정된 동시성으로 처리한다."""
 
@@ -388,7 +388,7 @@ async def worker_003(
     concurrency: int = 1,
     rate_limit_policy: ProviderRateLimitPolicy | None = None,
     lease_seconds: int = 600,
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
 ) -> list[dict[str, object]]:
     """[WORKER-003] 생성 Job Batch를 점유하고 제한된 동시성으로 개인화 콘텐츠를 생성한다."""
     if not database_url:

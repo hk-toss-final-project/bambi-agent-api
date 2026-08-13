@@ -2513,7 +2513,7 @@ async def run_report_generation(
     topics: list[str] | None = None,
     content_type: str,
     language: str,
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
     change_history_enabled: bool = False,
     generation_scope: str = "SINGLE_TOPIC",
     interest_bundle: dict[str, object] | None = None,

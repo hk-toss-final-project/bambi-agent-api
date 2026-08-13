@@ -246,7 +246,7 @@ async def review_report(
     user_id: str,
     topic: str,
     topic_intent: str = "news",
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
     max_iterations: int = CRITIC_MAX_ITERATIONS,
 ) -> CriticVerdict:
     """검토자가 도구로 근거를 대조해 초안의 사실관계를 판정한다.

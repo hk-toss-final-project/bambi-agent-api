@@ -191,7 +191,7 @@ async def run_briefing_preparation_batch(
     concurrency: int = 1,
     rate_limit_policy: ProviderRateLimitPolicy | None = None,
     lease_seconds: int = 600,
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
 ) -> list[dict[str, object]]:
     """브리핑 준비 Job을 동적으로 점유해 제한된 동시성으로 실행한다."""
     repository = PostgresWikiGraphRepository(database_url)

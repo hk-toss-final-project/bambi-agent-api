@@ -580,7 +580,7 @@ async def chg_001(
     job_id: str,
     topic: str,
     contexts: list[Any],
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
     reference_date: date | None = None,
     db_lock: Any | None = None,
 ) -> dict[str, Any]:

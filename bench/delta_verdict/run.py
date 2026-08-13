@@ -15,7 +15,7 @@
 비용이 발생하므로 예상 비용을 먼저 표시하고 --confirm-cost를 준 경우에만 실행한다.
 
 실행:
-    uv run python bench/delta_verdict/run.py --confirm-cost --save-as 2026-08-11_gpt-4.1-mini
+    uv run python bench/delta_verdict/run.py --confirm-cost --save-as 2026-08-13_gpt-4o-mini
 """
 
 from __future__ import annotations
@@ -279,7 +279,7 @@ def summarize(results: list[dict[str, Any]], *, model: str, rates: tuple[float, 
 async def main_async() -> int:
     """비용 확인을 거쳐 전체 케이스를 실행하고 결과를 기록한다."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="gpt-4.1-mini")
+    parser.add_argument("--model", default="gpt-4o-mini")
     parser.add_argument("--confirm-cost", action="store_true")
     parser.add_argument("--save-as", type=str, help="results/ 아래 저장할 파일명")
     parser.add_argument("--only", type=str, help="이 id의 케이스만 실행한다")

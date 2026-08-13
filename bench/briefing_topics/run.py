@@ -57,7 +57,7 @@ class Usage:
 def _args() -> argparse.Namespace:
     """모델과 토큰 단가 옵션을 파싱한다."""
     parser = argparse.ArgumentParser(description="Briefing topic selection benchmark")
-    parser.add_argument("--model", default="gpt-4.1-mini")
+    parser.add_argument("--model", default="gpt-4o-mini")
     parser.add_argument("--input-cost-per-million", type=float)
     parser.add_argument("--output-cost-per-million", type=float)
     parser.add_argument("--estimate-only", action="store_true")

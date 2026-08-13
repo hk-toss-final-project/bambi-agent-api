@@ -46,7 +46,7 @@ def generate_topic_facets(
     intent: str = "news",
     context: str = "",
     limit: int = DEFAULT_FACET_LIMIT,
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
 ) -> tuple[str, ...]:
     """주제와 함께 찾아볼 보조 검색어를 만든다.
 

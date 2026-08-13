@@ -233,7 +233,7 @@ def select_briefing_topics(
     context: InterestContext,
     *,
     limit: int = DEFAULT_BRIEFING_TOPIC_COUNT,
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
 ) -> BriefingTopicSelection:
     """맥락을 읽고 아침 브리핑에 쓸 주제를 고른다.
 

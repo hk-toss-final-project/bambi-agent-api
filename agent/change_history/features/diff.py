@@ -344,7 +344,7 @@ async def extract_delta_facts(
     topic: str,
     contexts: Sequence[ReportContextDocument],
     base_available: bool,
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
     max_iterations: int = DIFF_MAX_ITERATIONS,
     correction: str = "",
 ) -> DiffOutcome:
@@ -424,7 +424,7 @@ async def chg_002(
     topic: str,
     contexts: Sequence[ReportContextDocument],
     base_available: bool,
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
     correction: str = "",
 ) -> DiffOutcome:
     """[CHG-002] 팩트 추출·과거 대조.

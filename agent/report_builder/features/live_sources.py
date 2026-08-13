@@ -211,7 +211,7 @@ def collect_live_context(
     topic: str,
     user_id: str,
     *,
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
     related_keywords: Sequence[str] = (),
 ) -> list[ReportContextDocument]:
     """[REPORT-005 구현] 키워드로 실시간 외부 자료를 수집·선별해 근거 문서로 반환한다.

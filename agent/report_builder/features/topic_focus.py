@@ -77,7 +77,7 @@ def focus_documents_on_topic(
     topic: str,
     documents: Sequence[ReportContextDocument],
     *,
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
 ) -> list[ReportContextDocument]:
     """근거 문서 본문을 주제에 해당하는 문장만 남기도록 좁힌다.
 

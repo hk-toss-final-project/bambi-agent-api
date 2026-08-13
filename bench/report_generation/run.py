@@ -49,7 +49,7 @@ def estimate_input_tokens(cases: list[dict[str, object]]) -> int:
 def main() -> int:
     """비용 확인 후 전체 Benchmark를 실행하고 JSON 결과를 출력한다."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="gpt-4.1-mini")
+    parser.add_argument("--model", default="gpt-4o-mini")
     parser.add_argument("--confirm-cost", action="store_true")
     args = parser.parse_args()
     cases = load_cases()

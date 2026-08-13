@@ -109,6 +109,14 @@ def test_settings_uses_dedicated_mcp_port_by_default() -> None:
     assert settings.mcp_server_url == "http://localhost:8100/mcp"
 
 
+def test_settings_uses_workload_specific_llm_models_by_default() -> None:
+    """Wiki 빌드와 리포트 생성이 작업별 기본 모델을 사용하는지 검증한다."""
+    settings = Settings()
+
+    assert settings.wiki_llm_model == "gpt-4.1-mini"
+    assert settings.report_llm_model == "gpt-4o-mini"
+
+
 def test_wiki_pipeline_versions_default_to_langgraph_v2() -> None:
     """새 Job은 Wiki 읽기·유지 LangGraph V2를 기본 실행 경로로 사용한다."""
     settings = Settings()

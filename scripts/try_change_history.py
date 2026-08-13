@@ -212,7 +212,7 @@ def main() -> int:
     parser.add_argument("--reset", action="store_true", help="확인용 데이터 초기화")
     parser.add_argument("--user", default=DEFAULT_USER, help="확인용 사용자 ID")
     parser.add_argument("--topic", default=DEFAULT_TOPIC, help="확인용 주제")
-    parser.add_argument("--model", default="gpt-4.1-mini")
+    parser.add_argument("--model", default="gpt-4o-mini")
     args = parser.parse_args()
 
     return asyncio.run(

@@ -190,7 +190,7 @@ def compose_overview_and_timeline(
     facts: Sequence[DiffFact],
     reference_date: date,
     base_summary: str = "",
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
     correction: str = "",
 ) -> ComposeOutcome:
     """오늘 확인된 팩트 전체로 종합 요약과 타임라인을 한 번의 호출로 생성한다.
@@ -263,7 +263,7 @@ async def chg_003(
     facts: Sequence[DiffFact],
     reference_date: date,
     base_summary: str = "",
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
     correction: str = "",
 ) -> ComposeOutcome:
     """[CHG-003] 종합 요약·타임라인 생성.

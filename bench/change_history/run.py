@@ -145,7 +145,7 @@ async def run_benchmark_case(
 
 async def main_async() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="gpt-4.1-mini")
+    parser.add_argument("--model", default="gpt-4o-mini")
     parser.add_argument("--confirm-cost", action="store_true")
     parser.add_argument("--save-as", type=str, help="결과를 저장할 파일명 (예: baseline)")
     args = parser.parse_args()

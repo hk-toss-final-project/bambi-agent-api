@@ -67,7 +67,7 @@ def _args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Report Builder 생성(generate_report_content) 벤치마크"
     )
-    parser.add_argument("--model", default="gpt-4.1-mini")
+    parser.add_argument("--model", default="gpt-4o-mini")
     parser.add_argument("--input-cost-per-million", type=float, default=None)
     parser.add_argument("--output-cost-per-million", type=float, default=None)
     parser.add_argument(
