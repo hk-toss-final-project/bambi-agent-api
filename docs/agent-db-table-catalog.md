@@ -1,6 +1,6 @@
 # Agent DB 테이블 카탈로그
 
-> 기준: 2026-08-11. 물리 스키마와 데이터 계약의 최종 기준은
+> 기준: 2026-08-13. 물리 스키마와 데이터 계약의 최종 기준은
 > database/migrations/0001_initial.sql,
 > database/migrations/0002_publish_snapshot_batches.sql,
 > database/migrations/0003_web_clipping_markdown.sql,
@@ -11,7 +11,8 @@
 > database/migrations/0017_wiki_relation_lifecycle.sql,
 > database/migrations/0019_onboarding_topic_contexts.sql,
 > database/migrations/0024_openai_batch_jobs.sql,
-> database/migrations/0028_briefing_topic_snapshots.sql입니다.
+> database/migrations/0028_briefing_topic_snapshots.sql,
+> database/migrations/0031_llm_usage_observability.sql입니다.
 
 이 문서는 Agent DB 테이블을 영역과 데이터 성격으로 분류하고, 각 테이블의
 책임, 핵심 관계·제약, RLS 적용 여부와 현재 애플리케이션 연결 상태를 정리합니다.
@@ -254,7 +255,7 @@ superseded입니다. claimed 상태에서는 claim_id, claimed_by, lease_expires
 | event_outbox | Operational/Event | DB 변경과 Integration Event 발행을 같은 Transaction에 기록 | deduplication_key Unique, 재시도·Dead Letter 상태, Pending Index | 없음 | Schema only |
 | event_inbox | History/Event | Consumer별 수신 Event 멱등성과 처리 결과 기록 | consumer_name + event_id Unique, payload_hash 검증 | 없음 | Schema only |
 | api_keys | Master/Security | External API Key의 Hash, Prefix, Scope와 상태 관리 | Key 원문 미저장, key_prefix/key_hash Unique | 없음 | Schema only |
-| usage_logs | History | Provider 호출의 Token, 비용, 지연과 Trace 누적 | 선택적 Job/Generation Run FK, 사용자 조회 Index | 적용 | Schema only |
+| usage_logs | History | Provider 호출 시도별 Token, 가격 Snapshot, 비용, 업무 분류, 지연과 Trace 누적 | 선택적 Job/Generation Run/Model Config FK, 호출 ID 기반 멱등 저장, 업무·모델 조회 Index | 적용 | 가격 계산·Batch 저장 |
 | provider_rate_limits | Operational | Provider·모델별 RPM/TPM 예약과 응답 헤더 상태 공유 | provider + resource_key PK, blocked_until 부분 Index | 없음 | Worker Rate Governor |
 | audit_logs | History | 관리자 변경과 민감 데이터 접근 이력 | Resource·Target User 조회 Index | 없음 | Schema only |
 
@@ -335,5 +336,6 @@ API·Worker 기동 전 one-shot 서비스로 실행합니다.
 - LLM Wiki Vault 구조·관계·Snapshot: ../database/migrations/0005_structure_llm_wiki_documents.sql
 - Report Builder 생성 계약 이전: ../database/migrations/0006_rename_report_builder_contracts.sql
 - 키워드 비서 이력 DB 이전: ../database/migrations/0007_assistant_history.sql
+- LLM 사용량 관측 확장: ../database/migrations/0031_llm_usage_observability.sql
 - 로컬 실행과 Schema 검증: ../database/README.md
 - Service Worker HTTP 계약: fastapi-mvp-api.md

@@ -105,6 +105,9 @@ COLLECTION_TARGET_POLICY_MIGRATION_PATH = (
 STALE_JOB_ATTEMPTS_MIGRATION_PATH = (
     PROJECT_ROOT / "database" / "migrations" / "0030_timeout_stale_job_attempts.sql"
 )
+LLM_USAGE_OBSERVABILITY_MIGRATION_PATH = (
+    PROJECT_ROOT / "database" / "migrations" / "0031_llm_usage_observability.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
@@ -126,6 +129,7 @@ MIGRATION_PATHS = (
     BRIEFING_SNAPSHOT_MIGRATION_PATH,
     COLLECTION_TARGET_POLICY_MIGRATION_PATH,
     STALE_JOB_ATTEMPTS_MIGRATION_PATH,
+    LLM_USAGE_OBSERVABILITY_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
@@ -397,6 +401,23 @@ def test_openai_batch_migration_tracks_custom_id_files_and_domain_lease() -> Non
     assert "domain_apply_claimed_at timestamptz" in migration
     assert "completion_window = '24h'" in migration
     assert "VALUES (24," in migration
+
+
+def test_llm_usage_migration_tracks_workload_attempts_and_versioned_cost() -> None:
+    """LLM 사용량 Migration이 업무 분류·시도·가격 Snapshot을 보존한다."""
+    migration = _read(LLM_USAGE_OBSERVABILITY_MIGRATION_PATH)
+
+    assert "ADD COLUMN workload_type text" in migration
+    assert "ADD COLUMN logical_call_id uuid" in migration
+    assert "ADD COLUMN attempt_number integer" in migration
+    assert "ADD COLUMN provider_request_id text" in migration
+    assert "ADD COLUMN cached_input_tokens integer" in migration
+    assert "ADD COLUMN pricing_snapshot jsonb" in migration
+    assert "ALTER COLUMN estimated_cost DROP NOT NULL" in migration
+    assert "usage.openai.gpt-4.1-mini" in migration
+    assert "usage.openai.gpt-4o-mini" in migration
+    assert "usage.openai.text-embedding-3-small" in migration
+    assert "VALUES (31," in migration
 
 
 def test_waiting_provider_migration_releases_long_running_job_lease() -> None:

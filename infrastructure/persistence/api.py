@@ -100,6 +100,15 @@ from .features.onboarding_contexts import (
     list_onboarding_topic_contexts,
     save_custom_topic_contexts,
 )
+from .features.usage import (
+    ModelPricing,
+    UsageLogRecord,
+    apply_model_pricing,
+    calculate_estimated_cost,
+    insert_usage_logs,
+    load_model_pricing,
+    price_and_insert_usage_logs,
+)
 from .features.provider_rate_limits import (
     ProviderRateLimitDecision,
     observe_provider_rate_limits,
@@ -152,6 +161,13 @@ __all__ = [
     "db_004",
     "db_005",
     "db_026",
+    "ModelPricing",
+    "UsageLogRecord",
+    "apply_model_pricing",
+    "calculate_estimated_cost",
+    "insert_usage_logs",
+    "load_model_pricing",
+    "price_and_insert_usage_logs",
     "ProviderRateLimitDecision",
     "observe_provider_rate_limits",
     "parse_rate_limit_reset",
