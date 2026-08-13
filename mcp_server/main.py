@@ -1,11 +1,15 @@
 """Personal Wiki를 외부 Agent에 제공하는 MCP Streamable HTTP 서버."""
 
 import asyncio
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import urlsplit
 
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
+from mcp.server.auth.routes import (
+    build_resource_metadata_url,
+    create_protected_resource_routes,
+)
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import Context
 from mcp.server.transport_security import TransportSecuritySettings
@@ -35,6 +39,17 @@ from mcp_server.tools.api import (
     mcptool_014,
 )
 
+_MCP_SUPPORTED_SCOPES = ["wiki:read", "wiki:write"]
+
+
+class _BambiMCPServer(MCPServer):
+    """OAuth 광고 Scope와 요청 필수 Scope를 분리하는 Bambi MCP 서버."""
+
+    def streamable_http_app(self, **kwargs: Any) -> Starlette:
+        """SDK 앱의 보호 리소스 메타데이터에 읽기·쓰기 Scope를 모두 광고한다."""
+        app = super().streamable_http_app(**kwargs)
+        return _replace_protected_resource_metadata(app, self.settings.auth)
+
 
 def build_mcp_server(settings: Settings, container: AppContainer) -> MCPServer:
     """API Key 인증과 Personal Wiki `search`·`fetch` 도구를 등록한다."""
@@ -53,7 +68,7 @@ def build_mcp_server(settings: Settings, container: AppContainer) -> MCPServer:
             timeout_seconds=settings.mcp_oauth_timeout_seconds,
         )
     verifier = McpBearerTokenVerifier(api_key_verifier, oauth_verifier)
-    server = MCPServer(
+    server = _BambiMCPServer(
         name="bambi-personal-wiki",
         title="Bambi LLM Wiki",
         description="사용자가 저장한 개인 LLM Wiki를 검색하고 읽습니다.",
@@ -198,6 +213,30 @@ def build_mcp_http_app(server: MCPServer, settings: Settings) -> Starlette:
         host="0.0.0.0",
         transport_security=_transport_security(settings),
     )
+
+
+def _replace_protected_resource_metadata(
+    app: Starlette,
+    auth: AuthSettings | None,
+) -> Starlette:
+    """전역 인증은 읽기로 유지하며 OAuth 클라이언트에는 쓰기 Scope도 광고한다."""
+    if auth is None or auth.resource_server_url is None:
+        return app
+
+    metadata_path = urlsplit(
+        str(build_resource_metadata_url(auth.resource_server_url))
+    ).path
+    metadata_route = create_protected_resource_routes(
+        resource_url=auth.resource_server_url,
+        authorization_servers=[auth.issuer_url],
+        scopes_supported=_MCP_SUPPORTED_SCOPES,
+        resource_name="Bambi LLM Wiki",
+    )[0]
+    for index, route in enumerate(app.router.routes):
+        if getattr(route, "path", None) == metadata_path:
+            app.router.routes[index] = metadata_route
+            return app
+    raise RuntimeError("MCP 보호 리소스 메타데이터 Route를 찾을 수 없습니다.")
 
 
 def _transport_security(settings: Settings) -> TransportSecuritySettings:

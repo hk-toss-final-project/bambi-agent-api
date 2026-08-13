@@ -39,6 +39,7 @@
 - [x] `MCP-003` MCP 인증 — Streamable HTTP 요청의 Bearer API Key를 Agent DB Hash와 검증
 - [x] `MCP-009` MCP Scope 검증 — 호출한 Tool에 필요한 Scope가 없는 Key의 접근을 거부
 - [x] `MCP-011` MCP 사용자 권한 검증 — Tool 입력으로 user_id를 받지 않고 인증 주체로 Namespace 결정
+- [x] MCP OAuth Scope — 보호 리소스 메타데이터에 `wiki:read`·`wiki:write`를 광고하고, 기존 읽기 전용 연결은 유지하면서 쓰기 Tool은 `wiki:write`가 발급된 연결에서만 허용
 - [x] `MCPTOOL-001` Personal Wiki 검색 — 개인 Namespace의 제목·요약·본문 부분 일치, 무관한 최신 문서 fallback 없음
 - [x] `MCPTOOL-002` Personal Wiki 문서 조회 — search가 반환한 ID의 Markdown·출처를 같은 사용자 범위에서 조회
 - [x] `MCPTOOL-003` Personal Wiki Source 추가 — `wiki:write` Scope로 원본을 Build Job 없이 저장만 한다(멱등). Entity·Concept 반영은 별도 저장이나 재빌드 요청이 필요
