@@ -127,6 +127,7 @@ def test_apply_llm_batch_results_joins_by_custom_id_and_requeues_missing() -> No
         [
             [{"id": "item-2"}],
             [{"id": "item-1"}],
+            [],
             [{"status": "queued"}],
         ]
     )
@@ -138,7 +139,11 @@ def test_apply_llm_batch_results_joins_by_custom_id_and_requeues_missing() -> No
                 "request_id": "req-2",
                 "body": {
                     "data": [{"embedding": [0.1, 0.2]}],
-                    "usage": {"prompt_tokens": 7, "total_tokens": 7},
+                    "usage": {
+                        "prompt_tokens": 7,
+                        "total_tokens": 7,
+                        "prompt_tokens_details": {"cached_tokens": 3},
+                    },
                 },
             },
             "error": None,
@@ -162,4 +167,13 @@ def test_apply_llm_batch_results_joins_by_custom_id_and_requeues_missing() -> No
     assert counts == {"completed": 1, "failed": 1, "requeued": 1}
     assert connection.executed[0][1][-1] == "wiki:2"
     assert connection.executed[1][1][-1] == "wiki:1"
-    assert connection.executed[0][1][5:7] == (7, None)
+    assert connection.executed[0][1][5:9] == (7, None, 3, None)
+    usage_query, usage_params = connection.executed[2]
+    assert "INSERT INTO agent.usage_logs" in usage_query
+    assert "item.request_body" not in usage_query
+    assert "item.context" not in usage_query
+    assert "MORNING_BRIEFING" in usage_query
+    assert "report_morning" in usage_query
+    assert "config.input_cost_per_million IS NOT NULL" in usage_query
+    assert "config.output_cost_per_million IS NOT NULL" in usage_query
+    assert usage_params == ("batch-local-1", ["wiki:2", "wiki:1"])

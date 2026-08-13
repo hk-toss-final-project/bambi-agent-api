@@ -111,6 +111,27 @@ class UsageLogRecord:
             raise ValueError("Usage Log 지연 시간은 0 이상이어야 합니다.")
 
 
+@dataclass(frozen=True, slots=True)
+class UsageSummary:
+    """업무·호출 종류·모델별 LLM 사용량 집계."""
+
+    workload_type: str
+    operation: str
+    provider: str
+    model_name: str | None
+    call_count: int
+    succeeded_count: int
+    failed_count: int
+    input_tokens: int
+    output_tokens: int
+    cached_input_tokens: int
+    reasoning_output_tokens: int
+    estimated_cost: Decimal | None
+    unknown_cost_calls: int
+    average_latency_ms: Decimal | None
+    p95_latency_ms: Decimal | None
+
+
 def calculate_estimated_cost(
     pricing: ModelPricing,
     *,
@@ -170,6 +191,8 @@ async def load_model_pricing(
                 AND status = 'active'
                 AND provider = %s
                 AND model_name = %s
+                AND input_cost_per_million IS NOT NULL
+                AND output_cost_per_million IS NOT NULL
                 AND (plan IS NULL OR plan = %s)
             )
         ORDER BY
@@ -194,7 +217,11 @@ async def load_model_pricing(
         ),
     )
     row = await cursor.fetchone()
-    if row is None:
+    if (
+        row is None
+        or row.get("input_cost_per_million") is None
+        or row.get("output_cost_per_million") is None
+    ):
         return None
     parameters = row.get("parameters")
     config = parameters if isinstance(parameters, Mapping) else {}
@@ -203,13 +230,13 @@ async def load_model_pricing(
         provider=str(row["provider"]),
         model_name=str(row["model_name"]),
         version=int(row["version"]),
-        input_cost_per_million=Decimal(str(row["input_cost_per_million"] or 0)),
+        input_cost_per_million=Decimal(str(row["input_cost_per_million"])),
         cached_input_cost_per_million=(
             Decimal(str(row["cached_input_cost_per_million"]))
             if row.get("cached_input_cost_per_million") is not None
             else None
         ),
-        output_cost_per_million=Decimal(str(row["output_cost_per_million"] or 0)),
+        output_cost_per_million=Decimal(str(row["output_cost_per_million"])),
         batch_discount_ratio=Decimal(str(config.get("batch_discount_ratio") or 1)),
         currency=str(config.get("currency") or "USD"),
         source=str(config.get("pricing_source") or "").strip() or None,
@@ -425,6 +452,93 @@ async def price_and_insert_usage_logs(
             )
         priced_records.append(apply_model_pricing(record, pricing_cache[key]))
     return await insert_usage_logs(connection, priced_records)
+
+
+async def summarize_usage_logs(
+    connection: AsyncConnection[DictRow],
+    *,
+    started_at: datetime,
+    ended_at: datetime,
+    workload_type: str | None = None,
+    operation: str | None = None,
+    user_id: str | None = None,
+) -> list[UsageSummary]:
+    """기간과 선택 필터로 업무·호출 종류·모델별 사용량을 집계한다."""
+    if ended_at <= started_at:
+        raise ValueError("사용량 조회 종료 시각은 시작 시각보다 뒤여야 합니다.")
+    cursor = await connection.execute(
+        """
+        SELECT
+            workload_type,
+            operation,
+            provider,
+            model_name,
+            count(*) AS call_count,
+            count(*) FILTER (WHERE status = 'succeeded') AS succeeded_count,
+            count(*) FILTER (WHERE status = 'failed') AS failed_count,
+            COALESCE(sum(input_tokens), 0) AS input_tokens,
+            COALESCE(sum(output_tokens), 0) AS output_tokens,
+            COALESCE(sum(cached_input_tokens), 0) AS cached_input_tokens,
+            COALESCE(sum(reasoning_output_tokens), 0) AS reasoning_output_tokens,
+            sum(estimated_cost) AS estimated_cost,
+            count(*) FILTER (WHERE cost_status = 'unknown') AS unknown_cost_calls,
+            avg(latency_ms) FILTER (WHERE latency_ms IS NOT NULL)
+                AS average_latency_ms,
+            percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms)
+                FILTER (WHERE latency_ms IS NOT NULL) AS p95_latency_ms
+        FROM agent.usage_logs
+        WHERE occurred_at >= %s
+          AND occurred_at < %s
+          AND (%s::text IS NULL OR workload_type = %s)
+          AND (%s::text IS NULL OR operation = %s)
+          AND (%s::text IS NULL OR user_id = %s)
+        GROUP BY workload_type, operation, provider, model_name
+        ORDER BY workload_type, operation, provider, model_name NULLS LAST
+        """,
+        (
+            started_at,
+            ended_at,
+            workload_type,
+            workload_type,
+            operation,
+            operation,
+            user_id,
+            user_id,
+        ),
+    )
+    rows = await cursor.fetchall()
+    return [
+        UsageSummary(
+            workload_type=str(row["workload_type"]),
+            operation=str(row["operation"]),
+            provider=str(row["provider"]),
+            model_name=str(row["model_name"]) if row.get("model_name") else None,
+            call_count=int(row["call_count"]),
+            succeeded_count=int(row["succeeded_count"]),
+            failed_count=int(row["failed_count"]),
+            input_tokens=int(row["input_tokens"]),
+            output_tokens=int(row["output_tokens"]),
+            cached_input_tokens=int(row["cached_input_tokens"]),
+            reasoning_output_tokens=int(row["reasoning_output_tokens"]),
+            estimated_cost=(
+                Decimal(str(row["estimated_cost"]))
+                if row.get("estimated_cost") is not None
+                else None
+            ),
+            unknown_cost_calls=int(row["unknown_cost_calls"]),
+            average_latency_ms=(
+                Decimal(str(row["average_latency_ms"]))
+                if row.get("average_latency_ms") is not None
+                else None
+            ),
+            p95_latency_ms=(
+                Decimal(str(row["p95_latency_ms"]))
+                if row.get("p95_latency_ms") is not None
+                else None
+            ),
+        )
+        for row in rows
+    ]
 
 
 def usage_log_records_from_observations(

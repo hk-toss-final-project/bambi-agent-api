@@ -12,7 +12,8 @@
 > database/migrations/0019_onboarding_topic_contexts.sql,
 > database/migrations/0024_openai_batch_jobs.sql,
 > database/migrations/0028_briefing_topic_snapshots.sql,
-> database/migrations/0031_llm_usage_observability.sql입니다.
+> database/migrations/0031_llm_usage_observability.sql,
+> database/migrations/0032_llm_batch_usage_details.sql입니다.
 
 이 문서는 Agent DB 테이블을 영역과 데이터 성격으로 분류하고, 각 테이블의
 책임, 핵심 관계·제약, RLS 적용 여부와 현재 애플리케이션 연결 상태를 정리합니다.
@@ -337,5 +338,7 @@ API·Worker 기동 전 one-shot 서비스로 실행합니다.
 - Report Builder 생성 계약 이전: ../database/migrations/0006_rename_report_builder_contracts.sql
 - 키워드 비서 이력 DB 이전: ../database/migrations/0007_assistant_history.sql
 - LLM 사용량 관측 확장: ../database/migrations/0031_llm_usage_observability.sql
+- LLM Batch 사용량 상세: ../database/migrations/0032_llm_batch_usage_details.sql
+- LLM 사용량 운영·조회 계약: llm-usage-observability.md
 - 로컬 실행과 Schema 검증: ../database/README.md
 - Service Worker HTTP 계약: fastapi-mvp-api.md

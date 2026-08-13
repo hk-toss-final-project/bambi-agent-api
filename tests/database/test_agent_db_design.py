@@ -108,6 +108,9 @@ STALE_JOB_ATTEMPTS_MIGRATION_PATH = (
 LLM_USAGE_OBSERVABILITY_MIGRATION_PATH = (
     PROJECT_ROOT / "database" / "migrations" / "0031_llm_usage_observability.sql"
 )
+LLM_BATCH_USAGE_DETAILS_MIGRATION_PATH = (
+    PROJECT_ROOT / "database" / "migrations" / "0032_llm_batch_usage_details.sql"
+)
 MIGRATION_PATHS = (
     MIGRATION_PATH,
     BATCH_MIGRATION_PATH,
@@ -130,6 +133,7 @@ MIGRATION_PATHS = (
     COLLECTION_TARGET_POLICY_MIGRATION_PATH,
     STALE_JOB_ATTEMPTS_MIGRATION_PATH,
     LLM_USAGE_OBSERVABILITY_MIGRATION_PATH,
+    LLM_BATCH_USAGE_DETAILS_MIGRATION_PATH,
 )
 SCHEMA_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0001_schema_contract.sql"
 RLS_CHECK_PATH = PROJECT_ROOT / "database" / "checks" / "0002_rls_contract.sql"
@@ -418,6 +422,21 @@ def test_llm_usage_migration_tracks_workload_attempts_and_versioned_cost() -> No
     assert "usage.openai.gpt-4o-mini" in migration
     assert "usage.openai.text-embedding-3-small" in migration
     assert "VALUES (31," in migration
+
+
+def test_llm_batch_usage_migration_tracks_token_details_and_embedding_price() -> None:
+    """Batch Item의 세부 Token과 Embedding Batch 공개 단가 교정을 검증한다."""
+    migration = _read(LLM_BATCH_USAGE_DETAILS_MIGRATION_PATH)
+
+    assert "ADD COLUMN cached_input_tokens bigint" in migration
+    assert "ADD COLUMN reasoning_output_tokens bigint" in migration
+    assert "usage.openai.text-embedding-3-small" in migration
+    assert "'{batch_discount_ratio}', '1'::jsonb" in migration
+    assert "SET status = 'retired'" in migration
+    assert "AND plan IS NULL" in migration
+    assert "next_version" in migration
+    assert "'active'," in migration
+    assert "VALUES (32," in migration
 
 
 def test_waiting_provider_migration_releases_long_running_job_lease() -> None:

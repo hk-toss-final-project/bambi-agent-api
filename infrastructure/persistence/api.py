@@ -103,11 +103,13 @@ from .features.onboarding_contexts import (
 from .features.usage import (
     ModelPricing,
     UsageLogRecord,
+    UsageSummary,
     apply_model_pricing,
     calculate_estimated_cost,
     insert_usage_logs,
     load_model_pricing,
     price_and_insert_usage_logs,
+    summarize_usage_logs,
     usage_log_records_from_observations,
 )
 from .features.provider_rate_limits import (
@@ -164,11 +166,13 @@ __all__ = [
     "db_026",
     "ModelPricing",
     "UsageLogRecord",
+    "UsageSummary",
     "apply_model_pricing",
     "calculate_estimated_cost",
     "insert_usage_logs",
     "load_model_pricing",
     "price_and_insert_usage_logs",
+    "summarize_usage_logs",
     "usage_log_records_from_observations",
     "ProviderRateLimitDecision",
     "observe_provider_rate_limits",

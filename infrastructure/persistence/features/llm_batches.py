@@ -409,16 +409,205 @@ async def update_llm_batch_snapshot(
     )
 
 
-def _result_usage(body: Mapping[str, object]) -> tuple[int | None, int | None]:
-    """Chat·Responses·Embedding 결과 Body에서 입력·출력 Token을 추출한다."""
+def _result_usage(
+    body: Mapping[str, object],
+) -> tuple[int | None, int | None, int | None, int | None]:
+    """Batch 결과에서 입력·출력·캐시·Reasoning Token을 추출한다."""
     usage = body.get("usage")
     if not isinstance(usage, Mapping):
-        return None, None
+        return None, None, None, None
     input_value = usage.get("input_tokens", usage.get("prompt_tokens"))
     output_value = usage.get("output_tokens", usage.get("completion_tokens"))
     input_tokens = int(input_value) if isinstance(input_value, int) else None
     output_tokens = int(output_value) if isinstance(output_value, int) else None
-    return input_tokens, output_tokens
+    input_details = usage.get("input_tokens_details", usage.get("prompt_tokens_details"))
+    output_details = usage.get(
+        "output_tokens_details",
+        usage.get("completion_tokens_details"),
+    )
+    cached_value = (
+        input_details.get("cached_tokens")
+        if isinstance(input_details, Mapping)
+        else None
+    )
+    reasoning_value = (
+        output_details.get("reasoning_tokens")
+        if isinstance(output_details, Mapping)
+        else None
+    )
+    cached_tokens = int(cached_value) if isinstance(cached_value, int) else None
+    reasoning_tokens = (
+        int(reasoning_value) if isinstance(reasoning_value, int) else None
+    )
+    return input_tokens, output_tokens, cached_tokens, reasoning_tokens
+
+
+async def _insert_batch_usage_logs(
+    connection: AsyncConnection[DictRow],
+    *,
+    batch_id: str,
+    custom_ids: Sequence[str],
+) -> None:
+    """반영된 Batch Item 시도를 가격 Snapshot과 함께 멱등 Usage Log로 저장한다."""
+    if not custom_ids:
+        return
+    await connection.execute(
+        """
+        INSERT INTO agent.usage_logs (
+            id,
+            job_id,
+            user_id,
+            feature_id,
+            workload_type,
+            provider,
+            model_name,
+            operation,
+            input_tokens,
+            output_tokens,
+            cached_input_tokens,
+            reasoning_output_tokens,
+            request_count,
+            estimated_cost,
+            status,
+            request_id,
+            trace_id,
+            provider_request_id,
+            logical_call_id,
+            attempt_number,
+            model_config_id,
+            error_code,
+            http_status,
+            cost_status,
+            cost_currency,
+            pricing_snapshot,
+            metadata,
+            occurred_at
+        )
+        SELECT
+            md5(item.id::text || ':' || item.attempt_count::text)::uuid,
+            item.job_id,
+            item.user_id,
+            COALESCE(job.feature_id, 'LLM-015'),
+            CASE
+                WHEN item.workload = 'report_generation'
+                     AND (
+                        COALESCE(job.payload->>'generation_scope', '') = 'WIKI_BRIEFING'
+                        OR COALESCE(job.payload->>'report_type', '') = 'MORNING_BRIEFING'
+                     ) THEN 'report_morning'
+                WHEN item.workload = 'report_generation' THEN 'report_on_demand'
+                WHEN item.workload = 'wiki_embedding'
+                     AND (
+                        job.feature_id = 'WBA-002'
+                        OR COALESCE(job.payload->>'trigger', '') = 'maintenance'
+                     ) THEN 'wiki_maintenance'
+                WHEN item.workload = 'wiki_embedding' THEN 'wiki_build'
+                ELSE 'other'
+            END,
+            item.provider,
+            item.model_name,
+            CASE
+                WHEN item.endpoint = '/v1/embeddings' THEN 'embedding'
+                ELSE 'batch_generation'
+            END,
+            COALESCE(item.input_tokens, 0)::integer,
+            COALESCE(item.output_tokens, 0)::integer,
+            LEAST(
+                COALESCE(item.cached_input_tokens, 0),
+                COALESCE(item.input_tokens, 0)
+            )::integer,
+            LEAST(
+                COALESCE(item.reasoning_output_tokens, 0),
+                COALESCE(item.output_tokens, 0)
+            )::integer,
+            1,
+            CASE
+                WHEN pricing.id IS NULL THEN NULL
+                ELSE round(
+                    (
+                        (
+                            COALESCE(item.input_tokens, 0)
+                            - LEAST(
+                                COALESCE(item.cached_input_tokens, 0),
+                                COALESCE(item.input_tokens, 0)
+                            )
+                        ) * pricing.input_cost_per_million
+                        + LEAST(
+                            COALESCE(item.cached_input_tokens, 0),
+                            COALESCE(item.input_tokens, 0)
+                        ) * COALESCE(
+                            pricing.cached_input_cost_per_million,
+                            pricing.input_cost_per_million
+                        )
+                        + COALESCE(item.output_tokens, 0)
+                            * pricing.output_cost_per_million
+                    ) / 1000000.0
+                    * COALESCE(
+                        (pricing.parameters->>'batch_discount_ratio')::numeric,
+                        1
+                    ),
+                    9
+                )
+            END,
+            CASE WHEN item.status = 'completed' THEN 'succeeded' ELSE 'failed' END,
+            job.request_id,
+            job.trace_id,
+            item.provider_request_id,
+            item.id,
+            GREATEST(item.attempt_count, 1),
+            pricing.id,
+            COALESCE(item.error->>'code', item.error->>'type'),
+            item.response_status_code,
+            CASE WHEN pricing.id IS NULL THEN 'unknown' ELSE 'calculated' END,
+            'USD',
+            CASE
+                WHEN pricing.id IS NULL THEN '{}'::jsonb
+                ELSE jsonb_build_object(
+                    'model_config_id', pricing.id,
+                    'provider', pricing.provider,
+                    'model_name', pricing.model_name,
+                    'version', pricing.version,
+                    'input_cost_per_million', pricing.input_cost_per_million,
+                    'cached_input_cost_per_million',
+                        pricing.cached_input_cost_per_million,
+                    'output_cost_per_million', pricing.output_cost_per_million,
+                    'batch_discount_ratio', COALESCE(
+                        (pricing.parameters->>'batch_discount_ratio')::numeric,
+                        1
+                    ),
+                    'currency', 'USD',
+                    'source', pricing.parameters->>'pricing_source'
+                )
+            END,
+            jsonb_build_object(
+                'batch_id', item.batch_id,
+                'custom_id', item.custom_id,
+                'batch_workload', item.workload,
+                'endpoint', item.endpoint,
+                'execution_mode', 'batch'
+            ),
+            COALESCE(batch.completed_at, item.updated_at)
+        FROM agent.llm_batch_items AS item
+        JOIN agent.llm_batches AS batch ON batch.id = item.batch_id
+        LEFT JOIN agent.agent_jobs AS job ON job.id = item.job_id
+        LEFT JOIN LATERAL (
+            SELECT config.*
+            FROM agent.model_configs AS config
+            WHERE config.status = 'active'
+              AND config.provider = item.provider
+              AND config.model_name = item.model_name
+              AND config.plan IS NULL
+              AND config.input_cost_per_million IS NOT NULL
+              AND config.output_cost_per_million IS NOT NULL
+            ORDER BY config.version DESC
+            LIMIT 1
+        ) AS pricing ON true
+        WHERE item.batch_id = %s::uuid
+          AND item.custom_id = ANY(%s::text[])
+          AND item.status IN ('completed', 'failed')
+        ON CONFLICT (id) DO NOTHING
+        """,
+        (batch_id, list(custom_ids)),
+    )
 
 
 async def apply_llm_batch_result_lines(
@@ -430,6 +619,7 @@ async def apply_llm_batch_result_lines(
 ) -> dict[str, int]:
     """순서가 섞인 output·error 줄을 custom_id로 찾아 Item 결과에 멱등 반영한다."""
     seen: set[str] = set()
+    applied_custom_ids: list[str] = []
     completed = 0
     failed = 0
     for line in lines:
@@ -437,6 +627,7 @@ async def apply_llm_batch_result_lines(
         if not custom_id or custom_id in seen:
             continue
         seen.add(custom_id)
+        applied_custom_ids.append(custom_id)
         response = line.get("response")
         error = line.get("error")
         response_map = response if isinstance(response, Mapping) else {}
@@ -450,7 +641,12 @@ async def apply_llm_batch_result_lines(
             and status_code is not None
             and 200 <= status_code < 300
         )
-        input_tokens, output_tokens = _result_usage(result_body or {})
+        (
+            input_tokens,
+            output_tokens,
+            cached_input_tokens,
+            reasoning_output_tokens,
+        ) = _result_usage(result_body or {})
         cursor = await connection.execute(
             """
             UPDATE agent.llm_batch_items
@@ -460,7 +656,9 @@ async def apply_llm_batch_result_lines(
                 result_body = %s,
                 error = %s,
                 input_tokens = %s,
-                output_tokens = %s
+                output_tokens = %s,
+                cached_input_tokens = %s,
+                reasoning_output_tokens = %s
             WHERE batch_id = %s::uuid
               AND custom_id = %s
               AND status = 'submitted'
@@ -474,6 +672,8 @@ async def apply_llm_batch_result_lines(
                 Jsonb(error) if error is not None else None,
                 input_tokens,
                 output_tokens,
+                cached_input_tokens,
+                reasoning_output_tokens,
                 batch_id,
                 custom_id,
             ),
@@ -486,6 +686,11 @@ async def apply_llm_batch_result_lines(
             completed += 1
         else:
             failed += 1
+    await _insert_batch_usage_logs(
+        connection,
+        batch_id=batch_id,
+        custom_ids=applied_custom_ids,
+    )
     requeue = terminal_status in {"failed", "expired", "cancelled"}
     cursor = await connection.execute(
         """

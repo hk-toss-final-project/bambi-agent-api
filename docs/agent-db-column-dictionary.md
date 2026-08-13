@@ -1076,6 +1076,8 @@ OpenAI Batch 하나의 제출·Poll·결과 파일 상태를 보존합니다.
 | error | jsonb | 선택 | Item별 또는 결과 누락 오류 |
 | input_tokens | bigint | 선택 | 실제 입력 Token 수 |
 | output_tokens | bigint | 선택 | 실제 출력 Token 수 |
+| cached_input_tokens | bigint | 선택 | 입력 중 Provider Prompt Cache가 적용된 Token 수 |
+| reasoning_output_tokens | bigint | 선택 | 출력 중 Provider가 보고한 Reasoning Token 수 |
 | domain_apply_worker_id | text | 선택 | 결과 반영 Lease 소유 Worker |
 | domain_apply_claimed_at | timestamptz | 선택 | 결과 반영 Lease 점유 시각 |
 | domain_apply_error | text | 선택 | 최근 도메인 반영 실패 사유 |
@@ -1176,4 +1178,5 @@ Agent DB에 적용된 Migration Version을 기록합니다.
 - [LLM Wiki Vault 구조 Migration](../database/migrations/0005_structure_llm_wiki_documents.sql): 문서 유형·관계·Build 구성 추가
 - [Report Builder 계약 이전 Migration](../database/migrations/0006_rename_report_builder_contracts.sql): 생성 Job 유형·기능 ID 이전
 - [LLM 사용량 관측 Migration](../database/migrations/0031_llm_usage_observability.sql): 호출 시도·업무 분류·가격 Snapshot 확장
+- [LLM Batch 사용량 상세 Migration](../database/migrations/0032_llm_batch_usage_details.sql): Batch 캐시·Reasoning Token과 Embedding 단가 교정
 - [Database 실행 안내](../database/README.md): Local DB 기동과 Migration 적용 방법
