@@ -19,6 +19,7 @@
 | DB | [Agent DB 설계](agent-db-design.md) | 데이터 경계와 운영 원칙 |
 | DB | [Agent DB 테이블 카탈로그](agent-db-table-catalog.md) | 테이블 책임과 관계 |
 | DB | [Agent DB 컬럼 사전](agent-db-column-dictionary.md) | 물리 컬럼 계약 |
+| 운영 | [LLM 사용량 관측과 조회](llm-usage-observability.md) | 업무별 Token·비용·성공률·지연시간 조회 계약 |
 
 ## 검토·결정 중인 설계
 

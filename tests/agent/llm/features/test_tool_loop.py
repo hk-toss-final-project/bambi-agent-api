@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from agent.llm.features.client import capture_llm_calls
 from agent.llm.features import tool_loop
 from agent.llm.features.tool_loop import ToolLoopResult, ToolSpec, run_tool_loop
 
@@ -104,6 +105,31 @@ def test_loop_runs_tool_then_returns_final_answer(
     assert [call.name for call in result.calls] == ["search_pool"]
     assert result.calls[0].observation == "'코스피' 결과 2건"
     assert result.input_tokens == 20
+
+
+def test_loop_records_each_provider_round_trip_as_tool_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """도구 선택과 최종 답변의 각 LLM 왕복을 별도 사용량 호출로 수집한다."""
+    client = _FakeClient(
+        [
+            _FakeResponse(
+                tool_calls=[
+                    {"name": "search_pool", "args": {"query": "코스피"}, "id": "c1"}
+                ]
+            ),
+            _FakeResponse(content="완료"),
+        ]
+    )
+    _install(monkeypatch, client)
+
+    with capture_llm_calls() as captured:
+        _run("너는 조사원이다.", "조사", [_echo_tool([])])
+
+    assert len(captured) == 2
+    assert all(item.operation == "tool_completion" for item in captured)
+    assert all(item.status == "succeeded" for item in captured)
+    assert len({item.logical_call_id for item in captured}) == 2
 
 
 def test_loop_lets_model_choose_a_follow_up_search(

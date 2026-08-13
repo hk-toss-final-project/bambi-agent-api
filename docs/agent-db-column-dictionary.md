@@ -75,6 +75,7 @@ Prompt 본문과 입출력 Schema의 불변 버전을 보존합니다.
 | parameters | jsonb | 자동, 빈 Object | Temperature, Token 제한 등 호출 Parameter |
 | fallback_order | jsonb | 자동, 빈 Array | 장애·Quota 초과 시 사용할 대체 Model 순서 |
 | input_cost_per_million | numeric(14,6) | 선택 | 입력 100만 Token당 추정 비용 |
+| cached_input_cost_per_million | numeric(14,6) | 선택 | 캐시 입력 100만 Token당 추정 비용 |
 | output_cost_per_million | numeric(14,6) | 선택 | 출력 100만 Token당 추정 비용 |
 | status | text | 자동, draft | 설정 상태: draft, active, retired |
 | created_by | text | 선택 | 설정을 생성한 관리자 또는 시스템 식별자 |
@@ -972,20 +973,33 @@ Provider 호출의 Token, 비용, 지연, 추적 정보를 사용량 단위로 �
 | job_id | uuid | 선택, FK | 호출이 속한 agent_jobs 식별자 |
 | generation_run_id | uuid | 선택, FK | 호출이 속한 generation_runs 식별자 |
 | user_id | text | 선택 | 비용 또는 사용량을 귀속할 사용자 식별자 |
-| feature_id | text | 필수 | 비용을 발생시킨 기능 식별자 |
+| feature_id | text | 필수 | 비용을 발생시킨 명세 기능 식별자 |
+| workload_type | text | 자동, other | wiki_build, wiki_maintenance, report_morning, report_on_demand 등 안정적인 업무 분류 |
 | provider | text | 필수 | OpenAI 등 외부 Provider 이름 |
 | model_name | text | 선택 | 호출한 Model 이름 |
-| operation | text | 필수 | generation, embedding 등 호출 작업 유형 |
+| operation | text | 필수 | chat_completion, tool_completion, embedding, batch_generation 등 호출 종류 |
 | input_tokens | integer | 자동, 0 | 입력 Token 수 |
 | output_tokens | integer | 자동, 0 | 출력 Token 수 |
+| cached_input_tokens | integer | 자동, 0 | 입력 중 Provider Prompt Cache가 적용된 Token 수 |
+| reasoning_output_tokens | integer | 자동, 0 | 출력 중 Provider가 보고한 Reasoning Token 수 |
 | request_count | integer | 자동, 1 | 집계 Row가 나타내는 요청 횟수 |
-| estimated_cost | numeric(14,6) | 자동, 0 | 호출의 추정 비용 |
+| estimated_cost | numeric(18,9) | 선택 | 호출 당시 가격 Snapshot으로 계산한 예상 비용. 가격을 모르면 NULL |
 | latency_ms | integer | 선택 | 호출 지연 시간, Millisecond |
-| status | text | 필수 | succeeded, failed, cached |
-| request_id | text | 선택 | API 요청을 추적하는 식별자 |
+| status | text | 필수 | succeeded, failed, cached, cancelled |
+| request_id | text | 선택 | 내부 API 요청을 추적하는 식별자 |
 | trace_id | text | 선택 | 분산 Trace 식별자 |
-| metadata | jsonb | 자동, 빈 Object | Provider 응답 ID 등 추가 운영 정보 |
-| created_at | timestamptz | 자동 | 사용량 발생 시각 |
+| provider_request_id | text | 선택 | OpenAI x-request-id 등 Provider가 부여한 요청 식별자 |
+| logical_call_id | uuid | 자동 | 재시도 Row들을 하나의 논리 호출로 묶는 식별자 |
+| attempt_number | integer | 자동, 1 | 논리 호출 안에서 Provider 요청 시도 번호 |
+| model_config_id | uuid | 선택, FK | 비용 계산에 적용한 model_configs 버전 식별자 |
+| error_code | text | 선택 | 실패를 분류하는 안정적인 Provider 오류 Code |
+| http_status | smallint | 선택 | Provider HTTP 응답 상태, 100~599 |
+| cost_status | text | 자동, unknown | calculated, unknown, not_applicable |
+| cost_currency | text | 자동, USD | 예상 비용 통화 |
+| pricing_snapshot | jsonb | 자동, 빈 Object | 호출 당시 입력·캐시 입력·출력 단가와 Batch 할인율 |
+| metadata | jsonb | 자동, 빈 Object | Finish Reason·Service Tier 등 비민감 운영 정보 |
+| occurred_at | timestamptz | 자동 | 실제 Provider 호출 시각 |
+| created_at | timestamptz | 자동 | 사용량 Row가 DB에 저장된 시각 |
 
 ### provider_rate_limits
 
@@ -1062,6 +1076,8 @@ OpenAI Batch 하나의 제출·Poll·결과 파일 상태를 보존합니다.
 | error | jsonb | 선택 | Item별 또는 결과 누락 오류 |
 | input_tokens | bigint | 선택 | 실제 입력 Token 수 |
 | output_tokens | bigint | 선택 | 실제 출력 Token 수 |
+| cached_input_tokens | bigint | 선택 | 입력 중 Provider Prompt Cache가 적용된 Token 수 |
+| reasoning_output_tokens | bigint | 선택 | 출력 중 Provider가 보고한 Reasoning Token 수 |
 | domain_apply_worker_id | text | 선택 | 결과 반영 Lease 소유 Worker |
 | domain_apply_claimed_at | timestamptz | 선택 | 결과 반영 Lease 점유 시각 |
 | domain_apply_error | text | 선택 | 최근 도메인 반영 실패 사유 |
@@ -1161,4 +1177,6 @@ Agent DB에 적용된 Migration Version을 기록합니다.
 - [사용자 원본·LLM Wiki 분리 Migration](../database/migrations/0004_separate_user_sources_from_llm_wiki.sql): 원본 테이블과 출처 관계 추가
 - [LLM Wiki Vault 구조 Migration](../database/migrations/0005_structure_llm_wiki_documents.sql): 문서 유형·관계·Build 구성 추가
 - [Report Builder 계약 이전 Migration](../database/migrations/0006_rename_report_builder_contracts.sql): 생성 Job 유형·기능 ID 이전
+- [LLM 사용량 관측 Migration](../database/migrations/0031_llm_usage_observability.sql): 호출 시도·업무 분류·가격 Snapshot 확장
+- [LLM Batch 사용량 상세 Migration](../database/migrations/0032_llm_batch_usage_details.sql): Batch 캐시·Reasoning Token과 Embedding 단가 교정
 - [Database 실행 안내](../database/README.md): Local DB 기동과 Migration 적용 방법

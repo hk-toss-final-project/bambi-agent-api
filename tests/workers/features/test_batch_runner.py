@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from agent.llm.features.client import record_llm_call_observation
 from infrastructure.persistence.api import ClaimedAgentJob, ProviderRateLimitDecision
 from workers.features import batch_runner
 from workers.runtime.api import JobInputError, ProviderRateLimitPolicy
@@ -384,6 +385,110 @@ def test_run_job_batch_processes_each_job_and_isolates_failures(
     assert results[1]["status"] == "failed"
     assert results[1]["error_code"] == "REPORT_GENERATION_EXECUTION_FAILED"
     assert connection.closed is True
+
+
+def test_run_job_batch_flushes_usage_for_success_and_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """성공·실패 Job 모두에서 수집한 Provider 호출을 업무 Context와 저장한다."""
+    connection = _FakeConnection()
+
+    class _FakeAsyncConnectionPool:
+        """모든 대여 요청에 고정 연결을 반환하는 Pool 대역."""
+
+        def __init__(self, **kwargs: Any) -> None:
+            """Pool 생성 인자를 허용한다."""
+
+        async def open(self, *, wait: bool = False) -> None:
+            """실제 DB 연결 없이 Pool을 연다."""
+
+        @asynccontextmanager
+        async def connection(self) -> AsyncIterator[_FakeConnection]:
+            """준비된 연결 대역을 빌려준다."""
+            yield connection
+
+        async def close(self) -> None:
+            """테스트 Pool을 닫는다."""
+
+    jobs = [
+        ClaimedAgentJob(
+            job_id="job-morning",
+            user_id="user-1",
+            feature_id="SVC-008",
+            job_type="report_generation",
+            attempt_number=1,
+            max_attempts=3,
+            request_id="request-1",
+            trace_id="trace-1",
+            payload={"generation_scope": "WIKI_BRIEFING"},
+        ),
+        ClaimedAgentJob(
+            job_id="job-wiki",
+            user_id="user-2",
+            feature_id="WBA-002",
+            job_type="personal_wiki_build",
+            attempt_number=2,
+            max_attempts=3,
+            payload={"trigger": "maintenance", "mode": "full_rebuild"},
+        ),
+    ]
+    flushed: list[tuple[str, list[str]]] = []
+
+    async def fake_scope(conn: Any) -> None:
+        """테스트에서 DB 시스템 Scope 설정을 생략한다."""
+
+    async def fake_claim(conn: Any, **kwargs: Any) -> list[ClaimedAgentJob]:
+        """준비한 Job을 한 건씩 반환한다."""
+        return [jobs.pop(0)] if jobs else []
+
+    async def fake_fail(conn: Any, **kwargs: Any) -> str:
+        """실패 Job을 최종 실패로 반환한다."""
+        return "failed"
+
+    async def fake_flush(pool: Any, *, context: Any, observations: Any) -> int:
+        """저장 대상 업무 분류와 관찰 상태를 기록한다."""
+        flushed.append((context.workload_type, [item.status for item in observations]))
+        return len(observations)
+
+    class _Response:
+        """사용량과 요청 ID가 있는 최소 Provider 응답."""
+
+        usage_metadata = {"input_tokens": 10, "output_tokens": 2}
+        response_metadata = {"headers": {"x-request-id": "provider-1"}}
+
+    async def process(conn: Any, job: ClaimedAgentJob) -> dict[str, object]:
+        """호출 관찰을 하나 만든 뒤 Wiki 유지 Job만 실패시킨다."""
+        record_llm_call_observation(
+            model="gpt-4.1-mini",
+            input_tokens=10,
+            output_tokens=2,
+            value=_Response(),
+        )
+        if job.job_id == "job-wiki":
+            raise RuntimeError("유지 실패")
+        return {}
+
+    monkeypatch.setattr(batch_runner, "AsyncConnectionPool", _FakeAsyncConnectionPool)
+    monkeypatch.setattr(batch_runner, "set_system_job_scope", fake_scope)
+    monkeypatch.setattr(batch_runner, "wc_002", fake_claim)
+    monkeypatch.setattr(batch_runner, "wc_006", fake_fail)
+    monkeypatch.setattr(batch_runner, "flush_job_llm_usage_logs", fake_flush)
+
+    results = asyncio.run(
+        batch_runner.run_job_batch(
+            database_url="postgresql://test",
+            job_type="report_generation",
+            worker_id="worker-1",
+            limit=2,
+            lease_seconds=600,
+            error_code_prefix="TEST",
+            process=process,
+        )
+    )
+
+    assert [item[0] for item in flushed] == ["report_morning", "wiki_maintenance"]
+    assert [item[1] for item in flushed] == [["succeeded"], ["succeeded"]]
+    assert [result["status"] for result in results] == ["completed", "failed"]
 
 
 def test_run_job_batch_claims_only_when_an_execution_slot_is_free(

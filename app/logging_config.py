@@ -3,7 +3,7 @@
 그동안 앱 로거(agent.*, app.*)는 root 핸들러가 없어 콘솔에조차 출력되지
 않았다 — 비서 이력 저장소 폴백 같은 침묵 실패를 알 수 없었다. 이 모듈은
 콘솔(사람이 읽는 형식)과 회전 파일(JSON, 수집기 연동용) 두 핸들러를
-구성하고, RequestTracingMiddleware가 심는 request_id를 모든 LogRecord에
+구성하고, RequestTracingMiddleware가 심는 request_id·trace_id를 모든 LogRecord에
 싣는다.
 
 파일 로그는 로컬 조회 편의용이다. 운영 수집(Cloud Logging, Loki 등)은
@@ -21,6 +21,7 @@ from pathlib import Path
 
 # 요청 처리 중에만 값이 있는 요청 추적 ID. 미들웨어가 설정·해제한다.
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
+trace_id_var: ContextVar[str | None] = ContextVar("trace_id", default=None)
 
 # 파일 핸들러 보존 일수. 자정마다 회전한다.
 _LOG_BACKUP_DAYS = 14
@@ -30,7 +31,7 @@ _CONFIGURED_FLAG = "_bambi_logging_configured"
 
 
 class RequestContextFilter(logging.Filter):
-    """현재 요청의 request_id를 LogRecord에 싣는다. 요청 밖에서는 '-'."""
+    """현재 요청의 request_id·trace_id를 LogRecord에 싣는다."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         """레코드에 request_id 속성을 추가하고 항상 통과시킨다.
@@ -40,6 +41,8 @@ class RequestContextFilter(logging.Filter):
         """
         if not hasattr(record, "request_id"):
             record.request_id = request_id_var.get() or "-"
+        if not hasattr(record, "trace_id"):
+            record.trace_id = trace_id_var.get() or "-"
         return True
 
 
@@ -54,6 +57,7 @@ class JsonLogFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
             "request_id": getattr(record, "request_id", "-"),
+            "trace_id": getattr(record, "trace_id", "-"),
         }
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
@@ -79,7 +83,10 @@ def configure_logging(*, log_level: str = "INFO", log_directory: str = "logs") -
 
     console = logging.StreamHandler()
     console.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s")
+        logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s "
+            "[%(request_id)s %(trace_id)s] %(message)s"
+        )
     )
     console.addFilter(context_filter)
     root.addHandler(console)

@@ -17,6 +17,7 @@ from app.logging_config import (
     RequestContextFilter,
     configure_logging,
     request_id_var,
+    trace_id_var,
 )
 
 
@@ -74,11 +75,13 @@ def test_file_log_is_json_with_request_id(clean_root_logger, tmp_path) -> None:
     log_dir = tmp_path / "logs"
     configure_logging(log_level="INFO", log_directory=str(log_dir))
 
-    token = request_id_var.set("req-123")
+    request_token = request_id_var.set("req-123")
+    trace_token = trace_id_var.set("trace-456")
     try:
         logging.getLogger("agent.test").info("이력 저장소: %s", "PostgreSQL")
     finally:
-        request_id_var.reset(token)
+        trace_id_var.reset(trace_token)
+        request_id_var.reset(request_token)
     for handler in clean_root_logger.handlers:
         handler.flush()
 
@@ -86,6 +89,7 @@ def test_file_log_is_json_with_request_id(clean_root_logger, tmp_path) -> None:
     payload = json.loads(line)
     assert payload["message"] == "이력 저장소: PostgreSQL"
     assert payload["request_id"] == "req-123"
+    assert payload["trace_id"] == "trace-456"
     assert payload["logger"] == "agent.test"
     assert payload["level"] == "INFO"
 
@@ -96,6 +100,7 @@ def test_request_context_filter_defaults_to_dash() -> None:
 
     assert RequestContextFilter().filter(record) is True
     assert record.request_id == "-"
+    assert record.trace_id == "-"
 
 
 def test_request_context_filter_keeps_explicit_request_id() -> None:

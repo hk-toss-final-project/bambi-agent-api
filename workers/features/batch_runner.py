@@ -18,16 +18,22 @@ from psycopg_pool import AsyncConnectionPool
 
 from agent.llm.api import (
     LlmCallObservation,
+    LlmUsageContext,
     capture_llm_calls,
+    classify_llm_workload,
     is_openai_action_required_error,
     is_retryable_openai_error,
+    llm_usage_context,
+    llm_usage_metadata_from_job,
     response_headers_from_value,
     retry_after_seconds_from_error,
 )
 from infrastructure.persistence.api import (
     ClaimedAgentJob,
     observe_provider_rate_limits,
+    price_and_insert_usage_logs,
     set_system_job_scope,
+    usage_log_records_from_observations,
 )
 from workers.runtime.api import (
     JobInputError,
@@ -110,6 +116,60 @@ async def observe_job_provider_limits(
                 )
     except Exception as observation_error:  # noqa: BLE001 - Job 결과를 보존한다
         logger.warning("Provider Rate Limit 응답 관찰 저장 실패: %s", observation_error)
+
+
+def build_job_llm_usage_context(job: ClaimedAgentJob) -> LlmUsageContext:
+    """Claim한 Job의 사용량 귀속과 비민감 조회 Metadata를 고정한다."""
+    metadata = llm_usage_metadata_from_job(
+        job_type=job.job_type,
+        payload=job.payload,
+    )
+    metadata["job_attempt_number"] = job.attempt_number
+    return LlmUsageContext(
+        feature_id=job.feature_id,
+        workload_type=classify_llm_workload(
+            job_type=job.job_type,
+            feature_id=job.feature_id,
+            payload=job.payload,
+        ),
+        user_id=job.user_id,
+        job_id=job.job_id,
+        request_id=job.request_id,
+        trace_id=job.trace_id,
+        metadata=metadata,
+    )
+
+
+async def flush_job_llm_usage_logs(
+    pool: AsyncConnectionPool,
+    *,
+    context: LlmUsageContext,
+    observations: Sequence[LlmCallObservation],
+) -> int:
+    """Job 호출 관찰값을 가격 계산 후 저장하며 저장 장애는 Job과 격리한다."""
+    if not observations:
+        return 0
+    try:
+        async with pool.connection() as connection:
+            async with connection.transaction():
+                await set_system_job_scope(connection)
+                records = usage_log_records_from_observations(
+                    observations,
+                    context=context,
+                )
+                return await price_and_insert_usage_logs(
+                    connection,
+                    records,
+                    plan=context.plan,
+                )
+    except Exception as error:  # noqa: BLE001 - 원래 Job 결과를 보존한다
+        logger.warning(
+            "LLM 사용량 로그 저장 실패 (job=%s, workload=%s): %s",
+            context.job_id,
+            context.workload_type,
+            error,
+        )
+        return 0
 
 
 async def _lock_job_serialization_key(
@@ -366,36 +426,38 @@ async def run_job_batch(
                 )
             )
             observations: list[LlmCallObservation] = []
+            usage_context = build_job_llm_usage_context(job)
             try:
-                with capture_llm_calls() as observations:
-                    async def operation() -> dict[str, object]:
-                        """Provider 대기와 Job DB 연결 사용을 heartbeat 감시 안에서 실행한다."""
-                        if rate_limit_policy is not None:
-                            await wait_for_provider_capacity(
-                                pool,
-                                policy=rate_limit_policy,
-                            )
-                        async with pool.connection() as job_connection:
-                            key = serialization_key(job) if serialization_key else None
-                            if key:
-                                await _lock_job_serialization_key(
-                                    job_connection,
-                                    key=key,
+                with llm_usage_context(usage_context):
+                    with capture_llm_calls() as observations:
+                        async def operation() -> dict[str, object]:
+                            """Provider 대기와 Job DB 연결 사용을 감시 안에서 실행한다."""
+                            if rate_limit_policy is not None:
+                                await wait_for_provider_capacity(
+                                    pool,
+                                    policy=rate_limit_policy,
                                 )
-                            try:
-                                return await process(job_connection, job)
-                            finally:
+                            async with pool.connection() as job_connection:
+                                key = serialization_key(job) if serialization_key else None
                                 if key:
-                                    await _unlock_job_serialization_key(
+                                    await _lock_job_serialization_key(
                                         job_connection,
                                         key=key,
                                     )
+                                try:
+                                    return await process(job_connection, job)
+                                finally:
+                                    if key:
+                                        await _unlock_job_serialization_key(
+                                            job_connection,
+                                            key=key,
+                                        )
 
-                    result = await _run_with_job_heartbeat(
-                        operation=operation,
-                        heartbeat_task=heartbeat_task,
-                        stop_event=stop_event,
-                    )
+                        result = await _run_with_job_heartbeat(
+                            operation=operation,
+                            heartbeat_task=heartbeat_task,
+                            stop_event=stop_event,
+                        )
             except Exception as error:
                 if rate_limit_policy is not None:
                     await observe_job_provider_limits(
@@ -404,6 +466,11 @@ async def run_job_batch(
                         observations=observations,
                         error=error,
                     )
+                await flush_job_llm_usage_logs(
+                    pool,
+                    context=usage_context,
+                    observations=observations,
+                )
                 async with pool.connection() as failure_connection:
                     return await record_job_failure(
                         failure_connection,
@@ -421,6 +488,11 @@ async def run_job_batch(
                     policy=rate_limit_policy,
                     observations=observations,
                 )
+            await flush_job_llm_usage_logs(
+                pool,
+                context=usage_context,
+                observations=observations,
+            )
             return {"job_id": job.job_id, "status": "completed", **result}
 
         async def run_slot() -> None:
