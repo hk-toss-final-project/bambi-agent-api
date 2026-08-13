@@ -20,7 +20,9 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from inspect import isawaitable
+from time import monotonic
 from typing import Any
+from uuid import uuid4
 
 from .client import (
     _DEFAULT_MODEL,
@@ -29,8 +31,12 @@ from .client import (
     _get_client,
     _retry_delay_for_error,
     _transient_error_types,
+    _provider_error_code,
     is_retryable_openai_error,
+    provider_http_status,
     record_llm_call_observation,
+    response_observation_metadata,
+    token_usage_from_value,
 )
 
 logger = logging.getLogger("agent.llm.tool_loop")
@@ -106,15 +112,34 @@ async def _invoke_with_retry(
     client: Any,
     messages: list[Any],
     max_attempts: int,
+    *,
+    model: str,
     max_retry_seconds: float = _DEFAULT_MAX_RETRY_SECONDS,
 ) -> Any:
-    """일시적 Provider 오류에 Retry-After 우선 Backoff를 적용해 호출한다."""
+    """도구 LLM 호출의 모든 시도를 관찰하며 Retry-After Backoff를 적용한다."""
     transient = _transient_error_types()
     waited = 0.0
+    logical_call_id = str(uuid4())
     for attempt in range(1, max_attempts + 1):
+        attempt_started = monotonic()
         try:
-            return await client.ainvoke(messages)
-        except transient as error:
+            response = await client.ainvoke(messages)
+        except Exception as error:
+            record_llm_call_observation(
+                model=model,
+                input_tokens=0,
+                output_tokens=0,
+                value=error,
+                operation="tool_completion",
+                status="failed",
+                latency_ms=max(0, round((monotonic() - attempt_started) * 1000)),
+                logical_call_id=logical_call_id,
+                attempt_number=attempt,
+                error_code=_provider_error_code(error) or None,
+                http_status=provider_http_status(error),
+            )
+            if not isinstance(error, transient):
+                raise
             if attempt >= max_attempts or not is_retryable_openai_error(error):
                 raise
             delay = _retry_delay_for_error(error, attempt)
@@ -122,6 +147,26 @@ async def _invoke_with_retry(
                 raise
             await asyncio.sleep(delay)
             waited += delay
+            continue
+        input_tokens, output_tokens, cached_tokens, reasoning_tokens = (
+            token_usage_from_value(response)
+        )
+        record_llm_call_observation(
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_input_tokens=cached_tokens,
+            reasoning_output_tokens=reasoning_tokens,
+            value=response,
+            operation="tool_completion",
+            status="succeeded",
+            latency_ms=max(0, round((monotonic() - attempt_started) * 1000)),
+            logical_call_id=logical_call_id,
+            attempt_number=attempt,
+            http_status=provider_http_status(response),
+            metadata=response_observation_metadata(response),
+        )
+        return response
     raise RuntimeError("도달할 수 없는 분기입니다.")
 
 
@@ -210,16 +255,15 @@ async def run_tool_loop(
     text = ""
 
     for _ in range(max_iterations):
-        response = await _invoke_with_retry(client, messages, max_attempts)
+        response = await _invoke_with_retry(
+            client,
+            messages,
+            max_attempts,
+            model=model,
+        )
         usage = getattr(response, "usage_metadata", None) or {}
         input_tokens += int(usage.get("input_tokens") or 0)
         output_tokens += int(usage.get("output_tokens") or 0)
-        record_llm_call_observation(
-            model=model,
-            input_tokens=int(usage.get("input_tokens") or 0),
-            output_tokens=int(usage.get("output_tokens") or 0),
-            value=response,
-        )
         messages.append(response)
 
         tool_calls = list(getattr(response, "tool_calls", None) or [])
@@ -251,16 +295,15 @@ async def run_tool_loop(
         # 결과를 통째로 잃는다.
         logger.warning("도구 루프가 %d회 반복 상한에 도달했습니다.", max_iterations)
         if tools:
-            response = await _invoke_with_retry(raw_client, messages, max_attempts)
+            response = await _invoke_with_retry(
+                raw_client,
+                messages,
+                max_attempts,
+                model=model,
+            )
             usage = getattr(response, "usage_metadata", None) or {}
             input_tokens += int(usage.get("input_tokens") or 0)
             output_tokens += int(usage.get("output_tokens") or 0)
-            record_llm_call_observation(
-                model=model,
-                input_tokens=int(usage.get("input_tokens") or 0),
-                output_tokens=int(usage.get("output_tokens") or 0),
-                value=response,
-            )
             text = str(response.content).strip()
             if text:
                 stop_reason = "forced_final"

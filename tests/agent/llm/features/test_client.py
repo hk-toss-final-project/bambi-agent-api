@@ -15,7 +15,7 @@ class _FakeResponse:
     def __init__(
         self,
         content: str,
-        usage: dict[str, int] | None,
+        usage: dict[str, object] | None,
         headers: dict[str, str] | None = None,
     ) -> None:
         self.content = content
@@ -159,6 +159,74 @@ def test_capture_llm_calls_collects_usage_and_headers(
     assert captured[0].output_tokens == 7
     assert captured[0].request_id == "req-capture"
     assert captured[0].headers["x-ratelimit-remaining-tokens"] == "999"
+
+
+def test_capture_llm_calls_records_failed_retry_and_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """재시도 실패와 성공을 같은 논리 호출의 서로 다른 시도로 기록한다."""
+    fake = _FakeClient(
+        failures=1,
+        response=_FakeResponse(
+            "본문",
+            {"input_tokens": 11, "output_tokens": 7},
+            {"X-Request-ID": "req-retry"},
+        ),
+    )
+    _patch_boundary(monkeypatch, fake)
+
+    with llm_client.capture_llm_calls() as captured:
+        llm_client.complete_with_usage("system", "user", model="test-model")
+
+    assert [item.status for item in captured] == ["failed", "succeeded"]
+    assert [item.attempt_number for item in captured] == [1, 2]
+    assert len({item.logical_call_id for item in captured}) == 1
+    assert all(item.latency_ms is not None for item in captured)
+    assert captured[1].request_id == "req-retry"
+
+
+def test_capture_llm_calls_keeps_cached_and_reasoning_token_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provider 세부 Token에서 캐시 입력과 Reasoning 출력을 분리한다."""
+    fake = _FakeClient(
+        failures=0,
+        response=_FakeResponse(
+            "본문",
+            {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "input_token_details": {"cache_read": 60},
+                "output_token_details": {"reasoning": 5},
+            },
+        ),
+    )
+    _patch_boundary(monkeypatch, fake)
+
+    with llm_client.capture_llm_calls() as captured:
+        llm_client.complete_with_usage("system", "user")
+
+    assert captured[0].cached_input_tokens == 60
+    assert captured[0].reasoning_output_tokens == 5
+
+
+def test_nested_capture_llm_calls_fans_out_to_outer_buffer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """중첩 Capture 안의 호출을 바깥 실행 범위에서도 잃지 않는다."""
+    fake = _FakeClient(
+        failures=0,
+        response=_FakeResponse("본문", {"input_tokens": 1, "output_tokens": 1}),
+    )
+    _patch_boundary(monkeypatch, fake)
+
+    with llm_client.capture_llm_calls() as outer:
+        with llm_client.capture_llm_calls() as inner:
+            llm_client.complete_with_usage("system", "user")
+
+    assert len(inner) == 1
+    assert len(outer) == 1
+    assert outer[0] is inner[0]
 
 
 class _QuotaError(RuntimeError):

@@ -13,8 +13,10 @@ from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from time import monotonic
 from typing import TypeVar
+from uuid import uuid4
 
 from shared.retry import exponential_backoff_delay, parse_retry_after_seconds
 
@@ -47,30 +49,46 @@ class LlmCompletion:
 
 @dataclass(frozen=True, slots=True)
 class LlmCallObservation:
-    """Rate Governor와 사용량 기록에 전달할 LLM 호출 관찰값."""
+    """Rate Governor와 사용량 저장에 전달할 Provider 호출 시도 관찰값."""
 
     model: str
     input_tokens: int
     output_tokens: int
     request_id: str | None
     headers: dict[str, str] = field(default_factory=dict)
+    provider: str = "openai"
+    operation: str = "chat_completion"
+    status: str = "succeeded"
+    cached_input_tokens: int = 0
+    reasoning_output_tokens: int = 0
+    latency_ms: int | None = None
+    logical_call_id: str = field(default_factory=lambda: str(uuid4()))
+    attempt_number: int = 1
+    error_code: str | None = None
+    http_status: int | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
+    occurred_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
-_observations: ContextVar[list[LlmCallObservation] | None] = ContextVar(
+_observation_buffers: ContextVar[tuple[list[LlmCallObservation], ...]] = ContextVar(
     "llm_call_observations",
-    default=None,
+    default=(),
 )
 
 
 @contextmanager
 def capture_llm_calls() -> list[LlmCallObservation]:
-    """현재 Job 안의 LLM 호출 관찰값을 모아 반환하는 Context를 연다."""
+    """현재 실행 범위의 Provider 호출 관찰값을 모으는 Context를 연다.
+
+    중첩 Capture는 바깥 Capture를 가리지 않는다. 호출 하나를 모든 활성 버퍼에
+    fan-out해 Worker 전체와 기능별 세부 측정이 같은 호출을 함께 볼 수 있다.
+    """
     captured: list[LlmCallObservation] = []
-    token = _observations.set(captured)
+    token = _observation_buffers.set((*_observation_buffers.get(), captured))
     try:
         yield captured
     finally:
-        _observations.reset(token)
+        _observation_buffers.reset(token)
 
 
 def record_llm_call_observation(
@@ -79,21 +97,112 @@ def record_llm_call_observation(
     input_tokens: int,
     output_tokens: int,
     value: object,
+    operation: str = "chat_completion",
+    status: str = "succeeded",
+    cached_input_tokens: int = 0,
+    reasoning_output_tokens: int = 0,
+    latency_ms: int | None = None,
+    logical_call_id: str | None = None,
+    attempt_number: int = 1,
+    error_code: str | None = None,
+    http_status: int | None = None,
+    metadata: Mapping[str, object] | None = None,
 ) -> None:
-    """활성 Capture Context가 있으면 호출 사용량과 응답 헤더를 추가한다."""
-    captured = _observations.get()
-    if captured is None:
+    """활성 Capture Context 모두에 Provider 호출 시도 관찰값을 추가한다."""
+    buffers = _observation_buffers.get()
+    if not buffers:
         return
     headers = response_headers_from_value(value)
-    captured.append(
-        LlmCallObservation(
-            model=model,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            request_id=headers.get("x-request-id"),
-            headers=headers,
-        )
+    observation = LlmCallObservation(
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        request_id=headers.get("x-request-id"),
+        headers=headers,
+        operation=operation,
+        status=status,
+        cached_input_tokens=cached_input_tokens,
+        reasoning_output_tokens=reasoning_output_tokens,
+        latency_ms=latency_ms,
+        logical_call_id=logical_call_id or str(uuid4()),
+        attempt_number=attempt_number,
+        error_code=error_code,
+        http_status=http_status,
+        metadata=dict(metadata or {}),
     )
+    for captured in buffers:
+        captured.append(observation)
+
+
+def token_usage_from_value(value: object) -> tuple[int, int, int, int]:
+    """LangChain·OpenAI 응답에서 입력·출력·캐시·Reasoning Token을 추출한다."""
+    usage = getattr(value, "usage_metadata", None)
+    if not isinstance(usage, Mapping):
+        response_metadata = getattr(value, "response_metadata", None)
+        usage = (
+            response_metadata.get("token_usage")
+            if isinstance(response_metadata, Mapping)
+            else None
+        )
+    if not isinstance(usage, Mapping):
+        usage = {}
+    input_tokens = int(
+        usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+    )
+    output_tokens = int(
+        usage.get("output_tokens") or usage.get("completion_tokens") or 0
+    )
+    input_details = usage.get("input_token_details")
+    if not isinstance(input_details, Mapping):
+        input_details = usage.get("prompt_tokens_details")
+    output_details = usage.get("output_token_details")
+    if not isinstance(output_details, Mapping):
+        output_details = usage.get("completion_tokens_details")
+    cached_input_tokens = int(
+        (
+            input_details.get("cache_read")
+            or input_details.get("cached_tokens")
+            or 0
+        )
+        if isinstance(input_details, Mapping)
+        else 0
+    )
+    reasoning_output_tokens = int(
+        output_details.get("reasoning")
+        or output_details.get("reasoning_tokens")
+        or 0
+        if isinstance(output_details, Mapping)
+        else 0
+    )
+    return (
+        input_tokens,
+        output_tokens,
+        min(cached_input_tokens, input_tokens),
+        min(reasoning_output_tokens, output_tokens),
+    )
+
+
+def response_observation_metadata(value: object) -> dict[str, object]:
+    """응답에서 원문을 제외한 Finish Reason·모델 식별 정보를 추출한다."""
+    response_metadata = getattr(value, "response_metadata", None)
+    if not isinstance(response_metadata, Mapping):
+        return {}
+    allowed = ("finish_reason", "model_name", "system_fingerprint", "service_tier")
+    return {
+        key: response_metadata[key]
+        for key in allowed
+        if response_metadata.get(key) is not None
+    }
+
+
+def provider_http_status(value: object) -> int | None:
+    """Provider 응답 또는 오류에서 HTTP 상태 코드를 추출한다."""
+    direct = getattr(value, "status_code", None)
+    if isinstance(direct, int):
+        return direct
+    response = getattr(value, "response", None)
+    nested = getattr(response, "status_code", None)
+    return nested if isinstance(nested, int) else None
 
 
 def _transient_error_types() -> tuple[type[Exception], ...]:
@@ -202,20 +311,41 @@ def _call_with_retry(
     *,
     max_attempts: int,
     max_retry_seconds: float,
+    on_attempt: Callable[[int, int, object | None, Exception | None], None]
+    | None = None,
 ) -> ResultT:
     """SDK 재시도를 끈 단일 호출에 Retry-After 우선 Backoff를 적용한다."""
     transient = _transient_error_types()
     started = monotonic()
     for attempt in range(1, max_attempts + 1):
+        attempt_started = monotonic()
         try:
-            return operation()
-        except transient as error:
+            result = operation()
+        except Exception as error:
+            if on_attempt is not None:
+                on_attempt(
+                    attempt,
+                    max(0, round((monotonic() - attempt_started) * 1000)),
+                    None,
+                    error,
+                )
+            if not isinstance(error, transient):
+                raise
             if attempt >= max_attempts or not is_retryable_openai_error(error):
                 raise
             delay = _retry_delay_for_error(error, attempt)
             if monotonic() - started + delay > max_retry_seconds:
                 raise
             time.sleep(delay)
+            continue
+        if on_attempt is not None:
+            on_attempt(
+                attempt,
+                max(0, round((monotonic() - attempt_started) * 1000)),
+                result,
+                None,
+            )
+        return result
     raise RuntimeError("도달할 수 없는 Provider 재시도 분기입니다.")
 
 
@@ -228,6 +358,7 @@ def complete_with_usage(
     timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
     max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
     max_retry_seconds: float = _DEFAULT_MAX_RETRY_SECONDS,
+    operation: str = "chat_completion",
 ) -> LlmCompletion:
     """재시도·Timeout을 적용해 호출하고 텍스트와 토큰 사용량을 반환한다.
 
@@ -250,21 +381,52 @@ def complete_with_usage(
     if not user_prompt.strip():
         return LlmCompletion(text="", model=model, input_tokens=0, output_tokens=0)
     client = _get_client(model, temperature, timeout_seconds)
+    logical_call_id = str(uuid4())
+
+    def observe_attempt(
+        attempt: int,
+        latency_ms: int,
+        result: object | None,
+        error: Exception | None,
+    ) -> None:
+        """Chat Completion 한 시도의 성공·실패 관찰값을 수집한다."""
+        value = result if error is None else error
+        if value is None:
+            return
+        input_tokens, output_tokens, cached_tokens, reasoning_tokens = (
+            token_usage_from_value(value)
+        )
+        record_llm_call_observation(
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_input_tokens=cached_tokens,
+            reasoning_output_tokens=reasoning_tokens,
+            value=value,
+            operation=operation,
+            status="succeeded" if error is None else "failed",
+            latency_ms=latency_ms,
+            logical_call_id=logical_call_id,
+            attempt_number=attempt,
+            error_code=(
+                _provider_error_code(error) or None if error is not None else None
+            ),
+            http_status=provider_http_status(value),
+            metadata=(
+                response_observation_metadata(result)
+                if result is not None
+                else {}
+            ),
+        )
+
     response = _call_with_retry(
         lambda: client.invoke([("system", system_prompt), ("human", user_prompt)]),
         max_attempts=max_attempts,
         max_retry_seconds=max_retry_seconds,
+        on_attempt=observe_attempt,
     )
-    usage = getattr(response, "usage_metadata", None) or {}
     headers = response_headers_from_value(response)
-    input_tokens = int(usage.get("input_tokens") or 0)
-    output_tokens = int(usage.get("output_tokens") or 0)
-    record_llm_call_observation(
-        model=model,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        value=response,
-    )
+    input_tokens, output_tokens, _, _ = token_usage_from_value(response)
     return LlmCompletion(
         text=str(response.content).strip(),
         model=model,
