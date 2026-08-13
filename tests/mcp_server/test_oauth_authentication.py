@@ -47,6 +47,32 @@ def test_oauth_access_token_accepts_active_wiki_principal() -> None:
     assert token.token == "oauth:bmb_client_chatgpt"
 
 
+def test_oauth_access_token_preserves_write_scope() -> None:
+    """쓰기 권한이 발급된 token의 wiki:write Scope를 MCP 도구까지 전달한다."""
+    expires_at = int(datetime.now(UTC).timestamp()) + 300
+    verifier = McpOAuthTokenVerifier(
+        service_api_base_url="http://service-api:8080",
+        introspection_path="/internal/oauth/introspect",
+        internal_token="internal-token",
+        resource_url="https://bambi.example/mcp",
+        transport=_transport(
+            {
+                "active": True,
+                "sub": "42",
+                "client_id": "bmb_client_chatgpt",
+                "scope": "wiki:read wiki:write",
+                "exp": expires_at,
+                "aud": "https://bambi.example/mcp",
+            }
+        ),
+    )
+
+    token = asyncio.run(verifier.verify_token("bmb_oauth_access-token"))
+
+    assert token is not None
+    assert token.scopes == ["wiki:read", "wiki:write"]
+
+
 def test_oauth_access_token_rejects_wrong_audience_or_failed_introspection() -> None:
     """다른 MCP용 token과 Service API 오류는 인증 실패로 닫힌다."""
     expires_at = int(datetime.now(UTC).timestamp()) + 300

@@ -109,6 +109,18 @@ def test_mcp_http_requires_valid_bearer_key() -> None:
     assert invalid.status_code == 401
 
 
+def test_mcp_resource_metadata_advertises_read_and_write_scopes() -> None:
+    """OAuth Client가 읽기·쓰기 Scope를 함께 요청하도록 지원 Scope를 모두 광고한다."""
+    raw_key = "bmb_mcp_0123456789ab.test-secret"
+
+    with _client(raw_key) as client:
+        response = client.get("/.well-known/oauth-protected-resource/mcp")
+
+    assert response.status_code == 200
+    assert response.json()["resource"] == "http://testserver/mcp"
+    assert response.json()["scopes_supported"] == ["wiki:read", "wiki:write"]
+
+
 def test_mcp_http_discovers_and_calls_personal_wiki_search() -> None:
     """유효한 Key가 도구를 발견하고 Key 사용자 범위로 search를 호출한다."""
     raw_key = "bmb_mcp_0123456789ab.test-secret"
