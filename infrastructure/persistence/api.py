@@ -108,6 +108,7 @@ from .features.usage import (
     insert_usage_logs,
     load_model_pricing,
     price_and_insert_usage_logs,
+    usage_log_records_from_observations,
 )
 from .features.provider_rate_limits import (
     ProviderRateLimitDecision,
@@ -168,6 +169,7 @@ __all__ = [
     "insert_usage_logs",
     "load_model_pricing",
     "price_and_insert_usage_logs",
+    "usage_log_records_from_observations",
     "ProviderRateLimitDecision",
     "observe_provider_rate_limits",
     "parse_rate_limit_reset",

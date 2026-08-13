@@ -8,7 +8,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from app.logging_config import request_id_var
+from app.logging_config import request_id_var, trace_id_var
 
 REQUEST_ID_HEADER = "X-Request-ID"
 TRACE_ID_HEADER = "X-Trace-ID"
@@ -35,12 +35,14 @@ class RequestTracingMiddleware(BaseHTTPMiddleware):
         trace_id = _resolve_identifier(request.headers.get(TRACE_ID_HEADER))
         request.state.request_id = request_id
         request.state.trace_id = trace_id
-        # 요청 처리 중 발생하는 모든 로그 레코드에 request_id가 실리도록 한다.
-        token = request_id_var.set(request_id)
+        # 요청 처리 중 발생하는 모든 로그 레코드에 추적 ID가 실리도록 한다.
+        request_token = request_id_var.set(request_id)
+        trace_token = trace_id_var.set(trace_id)
         try:
             response = await call_next(request)
         finally:
-            request_id_var.reset(token)
+            trace_id_var.reset(trace_token)
+            request_id_var.reset(request_token)
         response.headers[REQUEST_ID_HEADER] = request_id
         response.headers[TRACE_ID_HEADER] = trace_id
         return response

@@ -16,6 +16,7 @@ from uuid import uuid4
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
+from agent.llm.api import LlmCallObservation, LlmUsageContext
 type DictRow = dict[str, Any]
 
 _MILLION = Decimal("1000000")
@@ -424,3 +425,41 @@ async def price_and_insert_usage_logs(
             )
         priced_records.append(apply_model_pricing(record, pricing_cache[key]))
     return await insert_usage_logs(connection, priced_records)
+
+
+def usage_log_records_from_observations(
+    observations: Sequence[LlmCallObservation],
+    *,
+    context: LlmUsageContext,
+) -> list[UsageLogRecord]:
+    """호출 관찰값에 실행 귀속 Context를 결합해 DB 저장 레코드로 변환한다."""
+    records: list[UsageLogRecord] = []
+    for observation in observations:
+        records.append(
+            UsageLogRecord(
+                feature_id=context.feature_id,
+                workload_type=context.workload_type,
+                provider=observation.provider,
+                model_name=observation.model,
+                operation=observation.operation,
+                status=observation.status,
+                input_tokens=observation.input_tokens,
+                output_tokens=observation.output_tokens,
+                cached_input_tokens=observation.cached_input_tokens,
+                reasoning_output_tokens=observation.reasoning_output_tokens,
+                latency_ms=observation.latency_ms,
+                job_id=context.job_id,
+                generation_run_id=context.generation_run_id,
+                user_id=context.user_id,
+                request_id=context.request_id,
+                trace_id=context.trace_id,
+                provider_request_id=observation.request_id,
+                logical_call_id=observation.logical_call_id,
+                attempt_number=observation.attempt_number,
+                error_code=observation.error_code,
+                http_status=observation.http_status,
+                metadata={**dict(context.metadata), **observation.metadata},
+                occurred_at=observation.occurred_at,
+            )
+        )
+    return records

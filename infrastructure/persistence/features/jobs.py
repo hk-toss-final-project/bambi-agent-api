@@ -104,6 +104,8 @@ class ClaimedAgentJob:
     job_type: str
     attempt_number: int
     max_attempts: int
+    request_id: str | None = None
+    trace_id: str | None = None
     payload: dict[str, Any] = field(default_factory=dict)
 
 
@@ -299,6 +301,8 @@ async def claim_runnable_agent_jobs(
             job.job_type,
             job.attempt_count,
             job.max_attempts,
+            job.request_id,
+            job.trace_id,
             job.payload
         """,
         (job_type, limit, worker_id, lease_seconds, claimed_progress),
@@ -314,6 +318,8 @@ async def claim_runnable_agent_jobs(
             job_type=row["job_type"],
             attempt_number=row["attempt_count"],
             max_attempts=row["max_attempts"],
+            request_id=str(row["request_id"]) if row.get("request_id") else None,
+            trace_id=str(row["trace_id"]) if row.get("trace_id") else None,
             payload=dict(row["payload"] or {}),
         )
         jobs.append(job)

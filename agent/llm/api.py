@@ -29,6 +29,13 @@ from .features.tool_loop import (
     ToolSpec,
     run_tool_loop,
 )
+from .features.usage import (
+    LlmUsageContext,
+    classify_llm_workload,
+    current_llm_usage_context,
+    llm_usage_context,
+    llm_usage_metadata_from_job,
+)
 
 __all__ = [
     "LlmCompletion",
@@ -52,4 +59,9 @@ __all__ = [
     "ToolLoopResult",
     "ToolSpec",
     "run_tool_loop",
+    "LlmUsageContext",
+    "classify_llm_workload",
+    "current_llm_usage_context",
+    "llm_usage_context",
+    "llm_usage_metadata_from_job",
 ]

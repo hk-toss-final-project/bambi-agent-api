@@ -6,12 +6,14 @@ import asyncio
 from decimal import Decimal
 from typing import Any
 
+from agent.llm.api import LlmCallObservation, LlmUsageContext
 from infrastructure.persistence.api import (
     ModelPricing,
     UsageLogRecord,
     apply_model_pricing,
     calculate_estimated_cost,
     price_and_insert_usage_logs,
+    usage_log_records_from_observations,
 )
 
 
@@ -183,3 +185,46 @@ def test_price_and_insert_usage_logs_reuses_model_lookup_and_batches_rows() -> N
     assert insert_payload[0]["pricing_snapshot"]["version"] == 1
     assert "prompt" not in insert_payload[0]["metadata"]
     assert "response" not in insert_payload[0]["metadata"]
+
+
+def test_usage_log_records_combine_observation_with_job_context() -> None:
+    """호출 관찰값에 Job 업무·사용자·추적 Context를 정확히 결합한다."""
+    observation = LlmCallObservation(
+        model="gpt-4o-mini",
+        input_tokens=120,
+        output_tokens=30,
+        cached_input_tokens=40,
+        reasoning_output_tokens=5,
+        request_id="provider-req",
+        operation="tool_completion",
+        status="succeeded",
+        latency_ms=250,
+        logical_call_id="00000000-0000-0000-0000-000000000021",
+        attempt_number=2,
+        metadata={"finish_reason": "stop"},
+    )
+    context = LlmUsageContext(
+        feature_id="SVC-008",
+        workload_type="report_morning",
+        user_id="user-1",
+        job_id="00000000-0000-0000-0000-000000000022",
+        request_id="internal-req",
+        trace_id="trace-1",
+        metadata={"report_type": "MORNING_BRIEFING"},
+    )
+
+    records = usage_log_records_from_observations([observation], context=context)
+
+    assert len(records) == 1
+    record = records[0]
+    assert record.feature_id == "SVC-008"
+    assert record.workload_type == "report_morning"
+    assert record.operation == "tool_completion"
+    assert record.provider_request_id == "provider-req"
+    assert record.request_id == "internal-req"
+    assert record.trace_id == "trace-1"
+    assert record.cached_input_tokens == 40
+    assert record.metadata == {
+        "report_type": "MORNING_BRIEFING",
+        "finish_reason": "stop",
+    }
