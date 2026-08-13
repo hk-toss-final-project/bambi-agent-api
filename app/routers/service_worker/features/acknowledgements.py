@@ -1,4 +1,4 @@
-"""Service Worker Publish Snapshot ACK 기능과 미구현 실패 전달 Scaffold."""
+"""Service Worker Publish Snapshot ACK 기능."""
 
 from typing import Protocol
 
@@ -8,7 +8,6 @@ from app.schemas.mvp import (
     PublishBatchAckRequest,
     PublishBatchAckResponse,
 )
-from shared.contracts import FeatureRequest, FeatureResult
 
 
 class PublishAcknowledgementService(Protocol):
@@ -40,11 +39,3 @@ async def sw_009(
     if isinstance(payload, PublishAckRequest):
         return await service.acknowledge_publish(target_id, payload)
     return await service.acknowledge_publish_snapshot_batch(target_id, payload)
-
-
-async def sw_010(request: FeatureRequest) -> FeatureResult:
-    """[SW-010] 발행 실패 전달.
-
-    발행 실패 사유를 Agent API에 전달한다.
-    """
-    raise NotImplementedError("[SW-010] 기능 구현이 필요합니다.")

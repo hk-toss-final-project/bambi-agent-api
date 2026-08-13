@@ -1,4 +1,4 @@
-"""전체 명세 기능과 생성된 함수 스캐폴드의 정합성을 검증한다."""
+"""구현 완료된 명세 기능과 공개 facade의 정합성을 검증한다."""
 
 import ast
 import re
@@ -46,6 +46,11 @@ def read_checked_mvp_feature_ids() -> set[str]:
         for line in MVP_SPEC.read_text(encoding="utf-8").splitlines()
         if (match := CHECKED_MVP_PATTERN.match(line))
     }
+
+
+def read_completed_runtime_feature_ids() -> set[str]:
+    """현재 런타임에서 구현 완료로 관리하는 기능 ID를 반환한다."""
+    return read_checked_mvp_feature_ids() | {"SCH-009"}
 
 
 def discover_feature_functions() -> dict[
@@ -157,27 +162,17 @@ def is_not_implemented_stub(node: ast.AsyncFunctionDef) -> bool:
     )
 
 
-def test_every_runtime_feature_has_exactly_one_scaffold() -> None:
-    """1~43절의 모든 기능 ID가 정확히 하나의 함수로 존재하는지 검증한다."""
-    expected = read_runtime_feature_ids()
+def test_every_completed_feature_has_exactly_one_implementation() -> None:
+    """구현 완료 기능만 정확히 하나의 실행 함수로 존재하는지 검증한다."""
+    expected = read_completed_runtime_feature_ids()
     actual = set(discover_feature_functions())
     assert actual == expected
+    assert actual <= read_runtime_feature_ids()
 
 
-# 명세 1~43절 기능 영역 facade 43개에, 별도 facade를 갖는 기능 영역을 더한 수.
-#   +1 agent/change_history — 18-1절 변경점 추적(CHG-001~006). 기능 ID 체계 안에
-#      있지만 report_builder와 실행 경로·변경 이유가 달라 별도 영역으로 둔다.
-#   +1 domain/personal_wiki/navigation — 7-1절 WNAV-001~006 표준 Read Interface
-#   +1 agent/assistant  — 리포트 기능을 한 화면에서 돌려보는 통합 실행/뷰어 경로
-#   +1 agent/selection  — 브리핑과 리포트가 공유하는 선별 공용 라이브러리
-# 뒤의 둘은 기능 ID를 부여하지 않지만 "구현은 features/, 공개는 api.py" 규칙은 동일하다.
-EXPECTED_API_FACADES = 47
-
-
-def test_api_facades_export_every_runtime_feature() -> None:
-    """모든 기능 함수가 정확히 하나의 api.py facade에서 공개되는지 검증한다."""
-    expected = read_runtime_feature_ids()
-    assert len(discover_api_facades()) == EXPECTED_API_FACADES
+def test_api_facades_export_every_completed_feature() -> None:
+    """구현 완료 기능이 정확히 하나의 api.py facade에서 공개되는지 검증한다."""
+    expected = read_completed_runtime_feature_ids()
     assert set(discover_facade_exports()) == expected
     assert discover_facade_all_names() == {
         feature_id.lower().replace("-", "_") for feature_id in expected
@@ -256,13 +251,13 @@ def test_external_modules_do_not_import_feature_implementation_modules() -> None
 
 
 def test_mvp_comments_match_dedicated_scope() -> None:
-    """MVP 주석이 전용 MVP 범위 문서의 기능 ID와 정확히 일치하는지 검증한다."""
+    """MVP 주석이 전용 범위 문서의 구현 완료 기능과 정확히 일치하는지 검증한다."""
     marked: set[str] = set()
     for feature_id, (_, node, lines) in discover_feature_functions().items():
         previous_line = lines[node.lineno - 2] if node.lineno >= 2 else ""
         if previous_line.startswith("# MVP:"):
             marked.add(feature_id)
-    assert marked == read_mvp_feature_ids()
+    assert marked == read_mvp_feature_ids() & read_completed_runtime_feature_ids()
 
 
 def test_feature_functions_have_korean_docstrings() -> None:
@@ -274,21 +269,17 @@ def test_feature_functions_have_korean_docstrings() -> None:
         )
 
 
-def test_feature_implementation_status_matches_mvp_checklist() -> None:
-    """완료 체크 기능만 실행 가능하고 나머지는 명시적 스텁인지 검증한다."""
-    implemented = read_checked_mvp_feature_ids() | {"SCH-009"}
+def test_feature_functions_contain_no_not_implemented_scaffolds() -> None:
+    """공개 기능 함수에 명시적 미구현 스캐폴드가 남아 있지 않은지 검증한다."""
     for feature_id, (path, node, _) in discover_feature_functions().items():
-        if feature_id in implemented:
-            assert not is_not_implemented_stub(node), (
-                f"구현이 필요한 함수: {feature_id} ({path})"
-            )
-        else:
-            assert is_not_implemented_stub(node), f"스텁이 아닌 함수: {feature_id} ({path})"
+        assert not is_not_implemented_stub(node), (
+            f"미구현 스캐폴드가 남아 있음: {feature_id} ({path})"
+        )
 
 
 def test_completed_non_excluded_features_use_typed_inputs() -> None:
     """제외 영역 밖 완료 기능이 범용 FeatureRequest 입력으로 회귀하지 않는지 검증한다."""
-    implemented = read_checked_mvp_feature_ids() | {"SCH-009"}
+    implemented = read_completed_runtime_feature_ids()
     excluded_roots = {("agent", "report_builder"), ("agent", "assistant")}
     for feature_id, (path, node, _) in discover_feature_functions().items():
         relative = path.relative_to(ROOT)

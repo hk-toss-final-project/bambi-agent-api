@@ -37,7 +37,6 @@ from .collection import (
     collect_schedule_keywords,
     next_collection_run_at,
 )
-from shared.contracts import FeatureRequest, FeatureResult
 
 type DictRow = dict[str, Any]
 
@@ -337,11 +336,3 @@ async def sch_022(
         connection, source_key=source_key, limit=history_limit
     )
     return [_to_view(schedule) for schedule in schedules], runs
-
-
-async def sch_023(request: FeatureRequest) -> FeatureResult:
-    """[SCH-023] 실패 스케줄 재실행.
-
-    실패한 정기 작업을 다시 실행한다.
-    """
-    raise NotImplementedError("[SCH-023] 기능 구현이 필요합니다.")

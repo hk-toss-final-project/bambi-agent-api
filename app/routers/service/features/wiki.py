@@ -1,4 +1,4 @@
-"""Service 개인 Wiki 원천 접수 기능 구현과 미구현 기능 Scaffold."""
+"""Service 개인 Wiki 원천 접수 기능."""
 
 from typing import Protocol
 
@@ -11,7 +11,6 @@ from app.schemas.mvp import (
     UrlWikiSourceRequest,
     WebClippingRequest,
 )
-from shared.contracts import FeatureRequest, FeatureResult
 
 
 class WikiSourceSubmissionService(Protocol):
@@ -113,14 +112,6 @@ async def svc_004_delete(
     )
 
 
-async def svc_005(request: FeatureRequest) -> FeatureResult:
-    """[SVC-005] 콘텐츠 상호작용 전달.
-
-    콘텐츠와의 대화와 수정 결과를 전달한다.
-    """
-    raise NotImplementedError("[SVC-005] 기능 구현이 필요합니다.")
-
-
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def svc_006(
     service: WikiSourceSubmissionService,
@@ -136,11 +127,3 @@ async def svc_006(
     return await service.submit_feedback_signals(
         user_id=user_id, payload=payload, request_id=request_id
     )
-
-
-async def svc_007(request: FeatureRequest) -> FeatureResult:
-    """[SVC-007] 개인 Wiki 재구성 요청.
-
-    특정 사용자의 Wiki 재구성을 요청한다.
-    """
-    raise NotImplementedError("[SVC-007] 기능 구현이 필요합니다.")

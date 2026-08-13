@@ -15,11 +15,13 @@
 
 ## MVP 구현 현황 체크리스트
 
-> 기준: 2026-08-07. 기능 ID 스캐폴드 함수가 아니라 **실제 런타임 경로**(라우터·서비스·Worker·저장소·Agent)가
+> 기준: 2026-08-13. 기능 ID 함수의 존재가 아니라 **실제 런타임 경로**(라우터·서비스·Worker·저장소·Agent)가
 > 동작하는지 기준으로 판정했다. 표기: `[x]` 구현 완료, `[x] ⚠️` 핵심 동작은 되지만 제약 있음,
 > `[ ] ❌` 미구현, `[ ] ➖` Agent API 범위 아님(service-worker 책임).
+> 미구현·범위 외 기능은 명세 ID로만 유지하며 `NotImplementedError` 함수나 501
+> 엔드포인트로 런타임에 노출하지 않는다.
 >
-> **집계: 완료 109 · 부분 6 · 미구현 4 · 범위 외 3 (총 122)**
+> **집계: 완료 122 · 부분 4 · 미구현 4 · 범위 외 3 (총 133)**
 
 ### 내부 API 인증
 
@@ -61,7 +63,7 @@
 - [x] `WSE-014` 온보딩 관심사 시드 수신 — 온보딩 컨텍스트 수신 시 선택 Category·Topic을 시드 Markdown으로 합성해 `onboarding_seed` 원본·Wiki Build Job으로 접수한다. 정식 Topic은 Agent DB의 44개 버전 컨텍스트를 사용하며 `AI·머신러닝` 같은 정식 명칭을 쪼개지 않는다. 사용자 추가 키워드만 taxonomy 별칭→기존 Wiki→서명 캐시→LLM 일반론→결정론 폴백 순으로 해석한다. 선택 변경은 사용자별 단일 활성 Source Head의 다음 Version이며 두 번째 Version부터 Full Rebuild로 이전 시드 전용 노드를 제거한다. 이후 기존 Snapshot·INT-011 경로를 재사용한다. 접수는 컨텍스트 저장과 분리된 best-effort다.
 - [x] `PWIKI-006` 개인 Wiki 문서 버전 관리 — 원본 Version·Wiki Version·Build Snapshot 분리 보존
 - [x] `PWIKI-007` Wiki 문서 출처 추적 — `wiki_document_sources` 연결
-- [ ] `PWIKI-011` Wiki 문서 정규화 — ❌ 독립 정규화 기능 미구현. Frontmatter 저장은 `WSE-001/DB-002`, Wiki 구조 변환은 `WBA-003`이 담당하며 기존 항등 위임 함수는 스텁으로 복원
+- [ ] `PWIKI-011` Wiki 문서 정규화 — ❌ 독립 정규화 기능 미구현. Frontmatter 저장은 `WSE-001/DB-002`, Wiki 구조 변환은 `WBA-003`이 담당하며 독립 함수·facade는 노출하지 않음
 - [x] `DB-002` Wiki Source Event·원본 저장
 - [x] `DB-003` 개인 LLM Wiki 문서 저장
 
@@ -75,8 +77,8 @@
 - [x] `PWIKI-013` 개인 Wiki 초기화 — 사용자 원본·Version은 영구 삭제하고 기존 Source Event는 멱등 식별자만 남겨 개인정보 Payload를 비식별화하며 활성 Wiki 문서·관계·Chunk 검색·Build Snapshot·관심사 Profile을 비활성화한다. 대기·실행 중인 Wiki Build를 취소하고 취소 Job의 지연 저장도 DB Trigger로 차단한다. 공유 Global Source Cache는 유지한다. 계정별 동기·멱등 `DELETE /internal/v1/users/{user_id}/wiki`
 - [x] `PWE-001` 개인 Wiki 문서 Chunking
 - [x] `PWE-002` Chunk 저장 — `wiki_chunks` 멱등 Upsert
-- [ ] `PWE-004` Embedding 생성 — ❌ 독립 PWE Feature facade는 아직 스텁이다. 현재 Wiki Build는 `WBA-011` 내부 경로에서 변경 Entity·Concept Chunk의 1536차원 Vector를 생성한다.
-- [ ] `PWE-005` Embedding 저장 — ❌ 독립 PWE Feature facade는 아직 스텁이다. 현재 Wiki Build의 저장은 `WBA-011`이 `wiki_embeddings`에 멱등 반영하며, 대량 Chunk는 OpenAI Batch Item 단위 재시도를 사용한다.
+- [ ] `PWE-004` Embedding 생성 — ❌ 독립 PWE Feature 함수·facade는 노출하지 않는다. 현재 Wiki Build는 `WBA-011` 내부 경로에서 변경 Entity·Concept Chunk의 1536차원 Vector를 생성한다.
+- [ ] `PWE-005` Embedding 저장 — ❌ 독립 PWE Feature 함수·facade는 노출하지 않는다. 현재 Wiki Build의 저장은 `WBA-011`이 `wiki_embeddings`에 멱등 반영하며, 대량 Chunk는 OpenAI Batch Item 단위 재시도를 사용한다.
 - [x] `PRAG-001` Keyword Search — 개인 Wiki와 Global 저장 자료의 FTS·Trigram 후보 조회
 - [x] `PRAG-002` Vector Search — 기존 `wiki_embeddings`의 active config·동일 모델을 사용한 개인 Wiki Cosine top-k 조회
 - [x] `PRAG-003` Hybrid Search — 개인 Wiki Keyword·Vector 후보를 결정적 RRF로 결합하고 Global Keyword 결과를 유지한다. Embedding Provider·Vector 조회 실패는 Keyword로 폴백한다.
@@ -178,7 +180,7 @@
 - [x] `WC-006` Retry 정책 — retryable 실패 시 지연 후 queued 복귀
 - [x] `WC-007` Exponential Backoff — OpenAI `Retry-After`를 최소값으로 존중하고
   지수 Backoff+jitter를 적용한다. quota·billing 오류는 재시도하지 않는다
-- [ ] `WC-009` Idempotency 처리 — ❌ Worker 공통 멱등 처리 기능 미구현. 개별 DB·Job 경계의 Unique·Upsert는 유지하며 기존 항등 위임 함수는 스텁으로 복원
+- [ ] `WC-009` Idempotency 처리 — ❌ Worker 공통 멱등 처리 기능 미구현. 개별 DB·Job 경계의 Unique·Upsert는 유지하며 독립 함수·facade는 노출하지 않음
 - [x] `WC-013` Concurrency 제어 — Batch Claim 크기와 실제 Job 실행 동시성을
   별도 설정으로 제한하고 동시 Job마다 Pool의 독립 DB 연결을 사용한다
 - [x] `WC-014` 외부 API Rate Limit — PostgreSQL에서 모델별 예상 RPM·TPM을
@@ -337,8 +339,8 @@ Markdown 저장에 실패했는데 Job만 접수하거나, 인메모리에만 �
 다르다. 매핑하려면 관심사마다 LLM을 호출해야 하는데, **그렇게 얻은 Category를
 쓸 곳이 없다.**
 
-`domain/interests/features/classification.py`의 `int_002` 스텁은 향후 재도입에
-대비해 유지한다. 컨텍스트의 `selected_category_ids`·`selected_topic_ids`
+`INT-002`는 향후 재도입 가능성을 위해 명세 ID만 유지하고 코드 스캐폴드는 두지
+않는다. 컨텍스트의 `selected_category_ids`·`selected_topic_ids`
 (Migration 0009)는 온보딩 선택을 보존하는 별개 경로이므로 그대로 둔다.
 
 ## 4. 외부 데이터 자동 수집

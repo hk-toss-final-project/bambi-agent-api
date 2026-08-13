@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from shared.contracts import FeatureRequest, FeatureResult
 
 from .security import key_008, parse_api_key_prefix
 

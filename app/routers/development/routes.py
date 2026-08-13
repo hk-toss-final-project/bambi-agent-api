@@ -21,8 +21,6 @@ from app.exceptions import AgentApiError, ErrorDetail
 from app.schemas.development import (
     DevelopmentJobRunResponse,
     DevelopmentWorkerRunResponse,
-    InsightGenerationRequest,
-    InsightGenerationResponse,
     LatestNewsWorkerRunRequest,
     LatestNewsWorkerRunResponse,
     PendingWikiBuildRunRequest,
@@ -30,8 +28,6 @@ from app.schemas.development import (
     SourceToContentScenarioResponse,
     UrlCollectionWorkerRunRequest,
     WikiBuildRunRequest,
-    WikiKeywordLatestInformationRequest,
-    WikiKeywordLatestInformationResponse,
 )
 from app.schemas.interests import InterestProfileResponse, InterestRebuildRequest
 from app.schemas.latest_information import (
@@ -67,22 +63,6 @@ router = APIRouter(
 )
 JobId = Annotated[str, Path(min_length=1, max_length=128, description="Agent Job ID")]
 UserId = Annotated[str, Path(min_length=1, max_length=128, description="사용자 ID")]
-
-NOT_IMPLEMENTED_NOTE = (
-    "키워드 비서 웹 UI(app/assistant)에 구현된 동작을 Agent API로 옮기기 전까지 "
-    "`501 NOT_IMPLEMENTED`를 반환하는 계약 선점용 API입니다."
-)
-
-
-def _not_implemented(feature_name: str) -> AgentApiError:
-    """Swagger 계약만 공개된 미구현 개발 API의 공통 오류를 만든다."""
-    return AgentApiError(
-        status.HTTP_501_NOT_IMPLEMENTED,
-        ErrorDetail(
-            code="NOT_IMPLEMENTED",
-            message=f"{feature_name} API는 아직 구현되지 않았습니다.",
-        ),
-    )
 
 
 @router.post(
@@ -189,45 +169,6 @@ async def run_latest_news_worker(
             ),
         )
     return await service.run_news_worker(payload)
-
-
-@router.post(
-    "/users/{user_id}/wiki-keyword-latest-information",
-    response_model=WikiKeywordLatestInformationResponse,
-    tags=["dev-global"],
-    operation_id="dev_search_wiki_keyword_latest_information",
-    summary="[미구현] Wiki 상위 Node 키워드 최신 정보 검색·저장",
-    description=(
-        "사용자 LLM Wiki에서 연결이 많은 Node 순서로 키워드를 만들고, 그 "
-        "키워드로 최신 정보를 검색해 Global 문서로 저장하는 계약입니다. "
-        f"{NOT_IMPLEMENTED_NOTE}"
-    ),
-)
-async def search_wiki_keyword_latest_information(
-    user_id: UserId,
-    payload: WikiKeywordLatestInformationRequest,
-) -> WikiKeywordLatestInformationResponse:
-    """[미구현] 연결 상위 Node 키워드 최신 정보 검색 계약. 현재는 501을 반환한다."""
-    raise _not_implemented("Wiki 키워드 최신 정보 검색")
-
-
-@router.post(
-    "/users/{user_id}/insight-generations",
-    response_model=InsightGenerationResponse,
-    tags=["dev-reports"],
-    operation_id="dev_generate_insight_content",
-    summary="[미구현] Wiki·최신 정보 요약·인사이트 생성",
-    description=(
-        "사용자 LLM Wiki와 저장된 최신 정보를 함께 사용해 요약과 인사이트를 "
-        f"담은 콘텐츠를 생성하는 계약입니다. {NOT_IMPLEMENTED_NOTE}"
-    ),
-)
-async def generate_insight_content(
-    user_id: UserId,
-    payload: InsightGenerationRequest,
-) -> InsightGenerationResponse:
-    """[미구현] Wiki·최신 정보 요약·인사이트 생성 계약. 현재는 501을 반환한다."""
-    raise _not_implemented("요약·인사이트 콘텐츠 생성")
 
 
 @router.post(

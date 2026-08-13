@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from shared.contracts import FeatureRequest, FeatureResult
 
 from .security import GeneratedApiKey, key_008
 
@@ -95,22 +94,6 @@ async def key_002(
     return await repository.list_api_keys(principal_id)
 
 
-async def key_003(request: FeatureRequest) -> FeatureResult:
-    """[KEY-003] API Key 이름 변경.
-
-    관리 편의를 위해 Key 이름을 수정한다.
-    """
-    raise NotImplementedError("[KEY-003] 기능 구현이 필요합니다.")
-
-
-async def key_004(request: FeatureRequest) -> FeatureResult:
-    """[KEY-004] API Key 비활성화.
-
-    Key 사용을 일시 중지한다.
-    """
-    raise NotImplementedError("[KEY-004] 기능 구현이 필요합니다.")
-
-
 async def key_005(
     repository: ApiKeyLifecycleRepository,
     *,
@@ -127,19 +110,3 @@ async def key_005(
         key_id=key_id,
         request_id=request_id,
     )
-
-
-async def key_006(request: FeatureRequest) -> FeatureResult:
-    """[KEY-006] API Key Rotation.
-
-    새 Key를 발급하고 이전 Key를 교체한다.
-    """
-    raise NotImplementedError("[KEY-006] 기능 구현이 필요합니다.")
-
-
-async def key_007(request: FeatureRequest) -> FeatureResult:
-    """[KEY-007] API Key 만료 설정.
-
-    Key의 사용 가능 기간을 설정한다.
-    """
-    raise NotImplementedError("[KEY-007] 기능 구현이 필요합니다.")

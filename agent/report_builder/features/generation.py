@@ -402,14 +402,6 @@ def generate_report_content_with_quality(
     return content
 
 
-async def report_007(request: FeatureRequest) -> FeatureResult:
-    """[REPORT-007] 콘텐츠 제목 생성.
-
-    콘텐츠 목적에 맞는 제목을 생성한다.
-    """
-    raise NotImplementedError("[REPORT-007] 기능 구현이 필요합니다.")
-
-
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def report_008(request: FeatureRequest) -> FeatureResult:
     """[REPORT-008] 콘텐츠 요약 생성.

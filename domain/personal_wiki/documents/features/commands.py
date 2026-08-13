@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any
 
 from psycopg import AsyncConnection
 
-from shared.contracts import FeatureRequest, FeatureResult
 from shared.wiki_models import WikiBuildPlan
 
 if TYPE_CHECKING:
@@ -43,14 +42,6 @@ async def pwiki_002(
         plan=plan,
         job_id=job_id,
     )
-
-
-async def pwiki_004(request: FeatureRequest) -> FeatureResult:
-    """[PWIKI-004] 개인 Wiki 문서 수정.
-
-    사용자 메모와 수정 내용을 Wiki 문서에 반영한다.
-    """
-    raise NotImplementedError("[PWIKI-004] 기능 구현이 필요합니다.")
 
 
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.

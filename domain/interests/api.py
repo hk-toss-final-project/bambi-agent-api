@@ -4,7 +4,6 @@
 """
 
 from .features.extraction import int_001
-from .features.classification import int_002
 from .features.expansion import (
     DEFAULT_EXPANSION_LIMIT,
     REASON_DISABLED,
@@ -13,10 +12,7 @@ from .features.expansion import (
     QueryExpansion,
     expand_topic_queries,
 )
-from .features.graph import int_003, int_004
-from .features.scoring import int_005, int_006, int_008, int_009
-from .features.evidence import int_007
-from .features.versioning import int_010
+from .features.scoring import int_005
 from .features.recalculation import (
     ActiveWikiRequiredError,
     InterestProfileRepository,
@@ -36,15 +32,7 @@ __all__ = [
     "QueryExpansion",
     "expand_topic_queries",
     "int_001",
-    "int_002",
-    "int_003",
-    "int_004",
     "int_005",
-    "int_006",
-    "int_008",
-    "int_009",
-    "int_007",
-    "int_010",
     "int_011",
     "int_012",
     "int_013",

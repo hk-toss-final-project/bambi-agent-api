@@ -1,4 +1,4 @@
-"""Worker Job 재시도 적용 기능과 Backoff·DLQ Scaffold."""
+"""Worker Job 재시도와 Exponential Backoff 적용 기능."""
 
 from typing import Any
 
@@ -10,7 +10,6 @@ from infrastructure.persistence.api import (
     db_026,
 )
 from shared.retry import exponential_backoff_delay
-from shared.contracts import FeatureRequest, FeatureResult
 
 
 class JobInputError(ValueError):
@@ -67,11 +66,3 @@ async def wc_007(
         max_backoff_seconds=max_backoff_seconds,
         jitter_ratio=jitter_ratio,
     )
-
-
-async def wc_008(request: FeatureRequest) -> FeatureResult:
-    """[WC-008] Dead Letter Queue.
-
-    반복 실패 작업을 격리한다.
-    """
-    raise NotImplementedError("[WC-008] 기능 구현이 필요합니다.")

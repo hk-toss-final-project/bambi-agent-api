@@ -1,10 +1,9 @@
-"""Wiki Build 계획 정규화 기능과 미구현 문서 처리 Scaffold."""
+"""Wiki Build 계획 정규화 기능."""
 
 from collections.abc import Sequence
 
 from agent.wiki_builder.features.planning import build_wiki_plan
 from agent.wiki_builder.models import WikiClassification
-from shared.contracts import FeatureRequest, FeatureResult
 from shared.wiki_models import ExistingWikiEntry, WikiBuildPlan, WikiRelationPlan
 
 
@@ -40,19 +39,3 @@ async def wba_003(
         model=model,
         existing_relations=existing_relations,
     )
-
-
-async def wba_004(request: FeatureRequest) -> FeatureResult:
-    """[WBA-004] Wiki 문서 중복 제거.
-
-    동일하거나 유사한 사용자 지식을 제거한다.
-    """
-    raise NotImplementedError("[WBA-004] 기능 구현이 필요합니다.")
-
-
-async def wba_005(request: FeatureRequest) -> FeatureResult:
-    """[WBA-005] Wiki 문서 병합.
-
-    관련 문서와 메모를 하나의 지식으로 통합한다.
-    """
-    raise NotImplementedError("[WBA-005] 기능 구현이 필요합니다.")

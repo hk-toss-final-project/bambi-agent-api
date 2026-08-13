@@ -1,6 +1,10 @@
 # Agent API 기능 명세 목록
 
 > 상세 필드명, API Request/Response Schema, 데이터 플로우를 제외하고 기능 목록만 정리한 문서입니다.
+>
+> 이 목록은 구현 로드맵을 포함합니다. 구현 완료된 기능만 코드의 기능 함수와
+> `api.py` facade로 공개하며, 미구현 기능은 `NotImplementedError` 함수나 501
+> 엔드포인트를 미리 만들지 않고 이 문서의 기능 ID로만 관리합니다.
 
 ## 1. FastAPI 진입점
 

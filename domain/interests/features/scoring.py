@@ -19,7 +19,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from shared.contracts import FeatureRequest, FeatureResult
 from shared.wiki_models import InterestCandidate
 
 # 사용자가 원문에 직접 개입한 정도가 클수록 큰 가중치를 준다.
@@ -268,27 +267,3 @@ async def int_005(
         )
     )
     return scored[:limit]
-
-
-async def int_006(request: FeatureRequest) -> FeatureResult:
-    """[INT-006] 관심사 Confidence 계산.
-
-    추론된 관심사의 신뢰도를 계산한다.
-    """
-    raise NotImplementedError("[INT-006] 기능 구현이 필요합니다.")
-
-
-async def int_008(request: FeatureRequest) -> FeatureResult:
-    """[INT-008] 관심사 시간 감쇠.
-
-    오래된 관심사의 가중치를 점진적으로 낮춘다.
-    """
-    raise NotImplementedError("[INT-008] 기능 구현이 필요합니다.")
-
-
-async def int_009(request: FeatureRequest) -> FeatureResult:
-    """[INT-009] 비선호 관심사 반영.
-
-    숨김, 차단, 신고 등의 부정 신호를 반영한다.
-    """
-    raise NotImplementedError("[INT-009] 기능 구현이 필요합니다.")

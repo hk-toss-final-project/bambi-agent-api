@@ -1,11 +1,10 @@
-"""Agent Job 생성 명세와 조회 기능 및 미구현 Lifecycle Scaffold."""
+"""Agent Job 생성과 조회 기능."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
 from domain.jobs.features.idempotency import job_010
-from shared.contracts import FeatureRequest, FeatureResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,19 +62,3 @@ async def job_002[RecordT](reader: JobReader[RecordT], job_id: str) -> RecordT |
     if not job_id:
         raise ValueError("JOB-002에 job_id가 필요합니다.")
     return await reader.get_job(job_id)
-
-
-async def job_003(request: FeatureRequest) -> FeatureResult:
-    """[JOB-003] Agent Job 목록 조회.
-
-    유형, 사용자, 상태별 작업 목록을 조회한다.
-    """
-    raise NotImplementedError("[JOB-003] 기능 구현이 필요합니다.")
-
-
-async def job_004(request: FeatureRequest) -> FeatureResult:
-    """[JOB-004] Agent Job 취소.
-
-    취소 가능한 작업을 중단한다.
-    """
-    raise NotImplementedError("[JOB-004] 기능 구현이 필요합니다.")

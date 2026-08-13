@@ -14,11 +14,3 @@ async def report_018(request: FeatureRequest) -> FeatureResult:
     발행 전 콘텐츠를 agent-db에 저장한다.
     """
     return await execute_feature_implementation(request, feature_id="REPORT-018")
-
-
-async def report_019(request: FeatureRequest) -> FeatureResult:
-    """[REPORT-019] 발행 가능 상태 전환.
-
-    품질 기준을 통과한 콘텐츠를 발행 가능 상태로 변경한다.
-    """
-    raise NotImplementedError("[REPORT-019] 기능 구현이 필요합니다.")
