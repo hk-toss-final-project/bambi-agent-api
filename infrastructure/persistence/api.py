@@ -8,72 +8,8 @@ from .features.briefing_selections import (
     load_briefing_topic_selection,
     save_briefing_topic_selection,
 )
-from .features.users import db_001
-from .features.personal_wiki import (
-    UserSourceDocumentForAgent,
-    PersistedWikiBuild,
-    PersistedWikiDocument,
-    RelationSupportSyncResult,
-    RegisteredUrlSource,
-    RelatedWikiKeyword,
-    SavedUserSourceVersion,
-    WikiChunkForEmbedding,
-    WikiEmbeddingValue,
-    WikiGraphRelationSnapshot,
-    WikiNodeEmbedding,
-    chunk_wiki_markdown,
-    db_003,
-    db_004,
-    db_005,
-    db_006,
-    db_007,
-    get_user_source_document_version_for_agent,
-    get_wiki_chunks_for_embedding,
-    list_existing_wiki_entries,
-    list_existing_wiki_relations,
-    list_onboarding_wiki_anchor_keys,
-    list_related_wiki_keywords,
-    list_wiki_graph_relation_snapshot,
-    list_wiki_node_embeddings,
-    list_user_source_versions_for_rebuild,
-    mark_url_source_event,
-    persist_wiki_build,
-    persist_wiki_embeddings,
-    register_user_url_source,
-    retire_personal_wiki_without_sources,
-    save_user_url_document_version,
-    set_personal_wiki_scope,
-    sync_wiki_relation_supports,
-    supersede_personal_wiki_for_rebuild,
-    update_full_wiki_rebuild_summary,
-    update_wiki_maintenance_summary,
-)
-from .features.global_source import (
-    CollectionTargetPlan,
-    GlobalArticleToFetch,
-    GlobalCollectionRunRecord,
-    GlobalCollectionSchedule,
-    claim_global_articles_for_fetch,
-    db_008,
-    db_009,
-    db_010,
-    db_011,
-    db_012,
-    db_013,
-    db_014,
-    load_collection_runs,
-    load_collection_schedule,
-    load_collection_schedules,
-    mark_global_article_fetch_failed,
-    persist_collected_articles,
-    save_fetched_article_content,
-    set_collection_schedule_status,
-    update_collection_schedule,
-    upsert_collection_schedule,
-)
-from .features.generation import db_015, db_016, db_017, db_018, db_019, db_020
-from .features.recommendation import db_021
-from .features.configuration import db_022, db_023, db_024, db_025
+from .features.personal_wiki import UserSourceDocumentForAgent, PersistedWikiBuild, PersistedWikiDocument, RelationSupportSyncResult, RegisteredUrlSource, RelatedWikiKeyword, SavedUserSourceVersion, WikiChunkForEmbedding, WikiEmbeddingValue, WikiGraphRelationSnapshot, WikiNodeEmbedding, chunk_wiki_markdown, db_003, db_004, db_005, get_user_source_document_version_for_agent, get_wiki_chunks_for_embedding, list_existing_wiki_entries, list_existing_wiki_relations, list_onboarding_wiki_anchor_keys, list_related_wiki_keywords, list_wiki_graph_relation_snapshot, list_wiki_node_embeddings, list_user_source_versions_for_rebuild, mark_url_source_event, persist_wiki_build, persist_wiki_embeddings, register_user_url_source, retire_personal_wiki_without_sources, save_user_url_document_version, set_personal_wiki_scope, sync_wiki_relation_supports, supersede_personal_wiki_for_rebuild, update_full_wiki_rebuild_summary, update_wiki_maintenance_summary
+from .features.global_source import CollectionTargetPlan, GlobalArticleToFetch, GlobalCollectionRunRecord, GlobalCollectionSchedule, claim_global_articles_for_fetch, load_collection_runs, load_collection_schedule, load_collection_schedules, mark_global_article_fetch_failed, persist_collected_articles, save_fetched_article_content, set_collection_schedule_status, update_collection_schedule, upsert_collection_schedule
 from .features.jobs import (
     ClaimAgentJobsCommand,
     ClaimedAgentJob,
@@ -164,9 +100,6 @@ from .features.onboarding_contexts import (
     list_onboarding_topic_contexts,
     save_custom_topic_contexts,
 )
-from .features.events import db_027
-from .features.api_keys import db_028
-from .features.usage import db_029
 from .features.provider_rate_limits import (
     ProviderRateLimitDecision,
     observe_provider_rate_limits,
@@ -192,7 +125,6 @@ from .features.llm_batches import (
     release_failed_llm_batch_submission,
     update_llm_batch_snapshot,
 )
-from .features.audit import db_030
 from .features.interest_profiles import (
     ConnectionInterestProfileRepository,
     list_users_for_interest_recalculation,
@@ -215,36 +147,11 @@ from .features.briefing_preparations import (
 )
 
 __all__ = [
-    "db_001",
     "db_002",
     "db_003",
     "db_004",
     "db_005",
-    "db_006",
-    "db_007",
-    "db_008",
-    "db_009",
-    "db_010",
-    "db_011",
-    "db_012",
-    "db_013",
-    "db_014",
-    "db_015",
-    "db_016",
-    "db_017",
-    "db_018",
-    "db_019",
-    "db_020",
-    "db_021",
-    "db_022",
-    "db_023",
-    "db_024",
-    "db_025",
     "db_026",
-    "db_027",
-    "db_028",
-    "db_029",
-    "db_030",
     "ProviderRateLimitDecision",
     "observe_provider_rate_limits",
     "parse_rate_limit_reset",

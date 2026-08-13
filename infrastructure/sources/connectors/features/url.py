@@ -12,7 +12,6 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from shared.contracts import FeatureRequest, FeatureResult
 
 # Jina Reader 기본 URL과 조회 타임아웃(초).
 _JINA_READER_BASE_URL = "https://r.jina.ai"
@@ -303,11 +302,3 @@ def fetch_url_via_jina(
         url, timeout=timeout, api_key=api_key, transport=transport
     )
     return parse_jina_reader_response(raw, requested_url=url)
-
-
-async def col_011(request: FeatureRequest) -> FeatureResult:
-    """[COL-011] 직접 URL 수집.
-
-    관리자가 지정한 URL의 데이터를 수집한다.
-    """
-    raise NotImplementedError("[COL-011] 기능 구현이 필요합니다.")

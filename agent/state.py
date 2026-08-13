@@ -167,17 +167,3 @@ class ChangeHistoryState(TypedDict):
     # 워커 3개가 쓴 토큰 누적. 벤치마크 비용 기록과 재작업 비용 추적에 쓴다.
     input_tokens: NotRequired[int]
     output_tokens: NotRequired[int]
-
-
-class AgentState(TypedDict):
-    """Wiki Builder와 콘텐츠 생성 그래프가 단계별로 갱신하는 상태."""
-
-    request_id: str
-    user_id: str
-    job_id: NotRequired[str]
-    input: NotRequired[dict[str, object]]
-    context: NotRequired[dict[str, object]]
-    documents: NotRequired[list[dict[str, object]]]
-    citations: NotRequired[list[dict[str, object]]]
-    result: NotRequired[dict[str, object]]
-    errors: NotRequired[list[str]]

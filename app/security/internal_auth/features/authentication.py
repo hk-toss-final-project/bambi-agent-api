@@ -9,7 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import SecretStr
 
 from app.exceptions import AgentApiError, ErrorDetail
-from shared.contracts import FeatureRequest, FeatureResult
+from shared.contracts import FeatureResult
 
 _INTERNAL_BEARER = HTTPBearer(
     auto_error=False,
@@ -74,14 +74,6 @@ async def auth_002(request: InternalAuthRequest) -> FeatureResult:
     service-worker의 내부 호출 권한을 검증한다.
     """
     return _authenticate(request, feature_id="AUTH-002", principal="service-worker")
-
-
-async def auth_003(request: FeatureRequest) -> FeatureResult:
-    """[AUTH-003] Scheduler 인증.
-
-    scheduler의 작업 등록 권한을 검증한다.
-    """
-    raise NotImplementedError("[AUTH-003] 기능 구현이 필요합니다.")
 
 
 def _auth_request(

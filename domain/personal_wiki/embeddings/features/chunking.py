@@ -1,9 +1,7 @@
-"""개인 Wiki Markdown Chunk 생성·저장 기능과 관련 Scaffold."""
+"""개인 Wiki Markdown Chunk 생성·저장 기능."""
 
 from collections.abc import Sequence
 from typing import Protocol
-
-from shared.contracts import FeatureRequest, FeatureResult
 
 
 class WikiChunkRepository(Protocol):
@@ -74,19 +72,3 @@ async def pwe_002(
         namespace_key=namespace_key,
         chunks=chunks,
     )
-
-
-async def pwe_003(request: FeatureRequest) -> FeatureResult:
-    """[PWE-003] Chunk Metadata 관리.
-
-    관심사, 출처, 문서 버전 등의 정보를 관리한다.
-    """
-    raise NotImplementedError("[PWE-003] 기능 구현이 필요합니다.")
-
-
-async def pwe_009(request: FeatureRequest) -> FeatureResult:
-    """[PWE-009] 불필요 Chunk 제거.
-
-    광고, 메뉴, 반복 문구 등 검색에 불필요한 Chunk를 제거한다.
-    """
-    raise NotImplementedError("[PWE-009] 기능 구현이 필요합니다.")

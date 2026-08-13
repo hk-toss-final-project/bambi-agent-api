@@ -41,7 +41,6 @@ from infrastructure.persistence.api import (
     GlobalCollectionSchedule,
     load_collection_schedules,
 )
-from shared.contracts import FeatureRequest, FeatureResult
 from workers.api import worker_001
 
 type DictRow = dict[str, Any]
@@ -620,35 +619,3 @@ async def sch_004(
         now=now,
         force=force,
     )
-
-
-async def sch_005(request: FeatureRequest) -> FeatureResult:
-    """[SCH-005] DART 수집 스케줄.
-
-    DART 수집 작업을 정기 등록한다.
-    """
-    raise NotImplementedError("[SCH-005] 기능 구현이 필요합니다.")
-
-
-async def sch_006(request: FeatureRequest) -> FeatureResult:
-    """[SCH-006] KRX 수집 스케줄.
-
-    KRX 수집 작업을 정기 등록한다.
-    """
-    raise NotImplementedError("[SCH-006] 기능 구현이 필요합니다.")
-
-
-async def sch_007(request: FeatureRequest) -> FeatureResult:
-    """[SCH-007] GitHub 수집 스케줄.
-
-    GitHub 수집 작업을 정기 등록한다.
-    """
-    raise NotImplementedError("[SCH-007] 기능 구현이 필요합니다.")
-
-
-async def sch_008(request: FeatureRequest) -> FeatureResult:
-    """[SCH-008] arXiv 수집 스케줄.
-
-    arXiv 수집 작업을 정기 등록한다.
-    """
-    raise NotImplementedError("[SCH-008] 기능 구현이 필요합니다.")

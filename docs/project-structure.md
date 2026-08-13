@@ -1,16 +1,16 @@
 # Report Builder Agent API 프로젝트 구조
 
-이 문서는 `agent-api-feature-spec.md`의 실제 기능 영역 1~43절을 코드 구조에 매핑한 결과입니다. MVP의 웹 클리핑 Payload, PostgreSQL 저장과 Worker 데이터 플로우는 `fastapi-mvp-api.md`를 구현 계약으로 사용하고, 그 밖의 상세 계약은 확정 전까지 공통 경계만 유지합니다.
+이 문서는 `agent-api-feature-spec.md`의 구현 완료 기능을 코드 구조에 매핑한 결과입니다. MVP의 웹 클리핑 Payload, PostgreSQL 저장과 Worker 데이터 플로우는 `fastapi-mvp-api.md`를 구현 계약으로 사용합니다.
 
-## 스캐폴드 원칙
+## 기능 노출 원칙
 
-- 전체 기능 631개는 기능 ID를 소문자로 바꾼 비동기 함수와 1:1로 연결됩니다. 예: `REPORT-009` → `report_009(...)`.
-- 미구현 스캐폴드 함수는 공통 `FeatureRequest → FeatureResult` 계약과 명시적인 `NotImplementedError`를 유지합니다. 구현된 함수는 기능에 맞는 typed 시그니처·반환값과 `Protocol` 기반 의존성을 사용합니다.
-- MVP 체크리스트 완료 58개와 별도 구현된 `SCH-009`는 실행 가능하며, 나머지 566개는 명시적인 미구현 스텁입니다.
-- 각 기능 영역의 `api.py`는 구현을 포함하지 않는 공개 facade이며, `features/` 아래 응집도 기준으로 분리된 구현 모듈의 함수를 import하고 `__all__`로 노출합니다.
-- 전용 MVP 범위 문서가 구현 우선순위의 기준입니다. 해당 71개 함수 바로 위에 `# MVP:` 주석을 붙였습니다.
+- 구현 완료 기능만 기능 ID를 소문자로 바꾼 비동기 함수와 1:1로 연결합니다. 예: `REPORT-009` → `report_009(...)`.
+- 미구현 기능은 전체 기능 명세의 ID로만 관리하며 `NotImplementedError` 함수, 빈 facade, 501 Placeholder 엔드포인트를 만들지 않습니다.
+- 2026-08-13 기준 구현 완료 기능 함수는 MVP 체크리스트 126개와 별도 구현된 `SCH-009`를 합친 127개입니다.
+- 구현된 각 기능 영역의 `api.py`는 구현을 포함하지 않는 공개 facade이며, `features/` 아래 응집도 기준으로 분리된 구현 모듈의 함수를 import하고 `__all__`로 노출합니다.
+- 전용 MVP 범위 문서가 구현 우선순위의 기준입니다. MVP 대상이면서 구현 완료된 함수 바로 위에 `# MVP:` 주석을 붙입니다.
 - 전체 명세 44~46절의 MVP·2차·3차 항목은 기존 기능을 묶은 로드맵이므로 실행 함수를 중복 생성하지 않았습니다.
-- API Request/Response 상세 필드가 확정되면 `app/schemas/`에 도메인별 Pydantic 모델을 추가하고, `app/routers/`의 라우터에서 기능 함수를 호출합니다.
+- API Request/Response 상세 필드와 실제 처리 경로가 확정되면 `app/schemas/`에 도메인별 Pydantic 모델을 추가하고 `app/routers/`에 라우터를 등록합니다.
 - Agent DB의 물리 스키마와 운영 기준은 `docs/agent-db-design.md`, 실행 가능한 SQL은 `database/`에서 관리합니다.
 
 ## 최상위 구조
@@ -26,7 +26,7 @@ report-builder-agent-api/
 ├── scheduler/              # 정기 작업 등록과 실행 진입점
 ├── mcp_server/             # MVP 이후 MCP Server와 Tool 경계
 ├── shared/                 # 공통 함수 계약과 비기능 정책
-├── tests/                  # 명세-스캐폴드 정합성과 앱 조립 테스트
+├── tests/                  # 구현 기능-facade 정합성과 앱 조립 테스트
 ├── docs/                   # 전체 기능 명세, MVP 범위, 구조·DB 설계 문서
 └── compose.yaml            # 로컬 PostgreSQL 17 + pgvector 실행 구성
 ```
@@ -55,10 +55,10 @@ report-builder-agent-api/
 domain/personal_wiki/documents/
 ├── api.py                       # 외부 계층이 사용하는 공개 facade
 └── features/                    # 실제 기능 구현 전용 패키지
-    ├── commands.py              # PWIKI-002, PWIKI-004, PWIKI-005
+    ├── commands.py              # PWIKI-002, PWIKI-005
     ├── queries.py               # PWIKI-003
     ├── deduplication.py         # PWIKI-008
-    └── normalization.py         # PWIKI-011
+    └── versions.py              # PWIKI-006
 ```
 
 - Router, Worker, Agent 등 외부 호출자는 `api.py`에서 기능을 import합니다.
@@ -75,9 +75,9 @@ domain/personal_wiki/documents/
 
 | 절 | 기능 영역 | ID Prefix | 공개 facade |
 |---:|---|---|---|
-| 1 | FastAPI 진입점 | `SYS` | `app/core/api.py` |
+| 1 | FastAPI 진입점 | `SYS` | `app/main.py`, `app/routers/system.py` |
 | 2 | 내부 API 인증 | `AUTH` | `app/security/internal_auth/api.py` |
-| 3 | 사용자 컨텍스트 관리 | `CTX` | `domain/user_context/api.py` |
+| 3 | 사용자 컨텍스트 관리 | `CTX` | — (명세만 유지) |
 | 4 | 사용자 Wiki Source Event | `WSE` | `domain/personal_wiki/source_events/api.py` |
 | 5 | User Personal LLM Wiki | `PWIKI` | `domain/personal_wiki/documents/api.py` |
 | 6 | 개인 Wiki Chunk 및 Embedding | `PWE` | `domain/personal_wiki/embeddings/api.py` |
@@ -85,40 +85,40 @@ domain/personal_wiki/documents/
 | 7-1 | LLM Wiki Navigator | `WNAV` | `domain/personal_wiki/navigation/api.py` |
 | 8 | 사용자 관심사 분류 | `INT` | `domain/interests/api.py` |
 | 9 | Personal Wiki Builder Agent | `WBA` | `agent/wiki_builder/api.py` |
-| 10 | Global Source 관리 | `GS` | `infrastructure/sources/management/api.py` |
+| 10 | Global Source 관리 | `GS` | — (명세만 유지) |
 | 11 | Global Source Collector | `COL` | `infrastructure/sources/connectors/api.py` |
 | 12 | Global Source 정제 및 저장 | `GSP` | `infrastructure/sources/processing/api.py` |
-| 13 | Global Discovery 및 Trend | `DISC` | `agent/discovery/api.py` |
-| 14 | LLM 공통 기능 | `LLM` | `agent/llm/api.py` |
-| 15 | Prompt 관리 | `PROMPT` | `agent/prompts/api.py` |
-| 16 | Model Config 관리 | `MODEL` | `agent/llm/model_config/api.py` |
-| 17 | Retrieval 설정 관리 | `RET` | `agent/retrieval/api.py` |
+| 13 | Global Discovery 및 Trend | `DISC` | — (명세만 유지) |
+| 14 | LLM 공통 기능 | `LLM` | — (`agent/llm/api.py`는 공통 helper facade) |
+| 15 | Prompt 관리 | `PROMPT` | — (`agent/prompts/templates/`만 사용) |
+| 16 | Model Config 관리 | `MODEL` | — (명세만 유지) |
+| 17 | Retrieval 설정 관리 | `RET` | — (명세만 유지) |
 | 18 | 리포트 생성기 (Report Builder) | `REPORT` | `agent/report_builder/api.py` |
-| 19 | 생성 콘텐츠 유형 | `CTYPE` | `domain/content/types/api.py` |
-| 20 | 플랜별 콘텐츠 차등화 | `PLAN` | `domain/content/plans/api.py` |
-| 21 | 콘텐츠 품질 관리 | `QUALITY` | `agent/evaluation/quality/api.py` |
-| 22 | 요약 기능 | `SUM` | `agent/summarization/api.py` |
-| 23 | 번역 기능 | `TR` | `agent/translation/api.py` |
+| 19 | 생성 콘텐츠 유형 | `CTYPE` | — (명세만 유지) |
+| 20 | 플랜별 콘텐츠 차등화 | `PLAN` | — (명세만 유지) |
+| 21 | 콘텐츠 품질 관리 | `QUALITY` | — (명세만 유지) |
+| 22 | 요약 기능 | `SUM` | — (명세만 유지) |
+| 23 | 번역 기능 | `TR` | — (명세만 유지) |
 | 24 | 이미지 자료 생성 | `IMG` | `agent/images/api.py` |
-| 25 | 추천 기능 | `REC` | `agent/recommendation/api.py` |
+| 25 | 추천 기능 | `REC` | — (명세만 유지) |
 | 26 | Agent Job 관리 | `JOB` | `domain/jobs/api.py` |
 | 27 | Agent Worker | `WORKER` | `workers/api.py` |
 | 28 | Worker 공통 기능 | `WC` | `workers/runtime/api.py` |
 | 29 | Scheduler | `SCH` | `scheduler/api.py` |
-| 30 | Queue 및 Integration Event | `QUEUE/EVT` | `infrastructure/messaging/api.py` |
+| 30 | Queue 및 Integration Event | `QUEUE/EVT` | — (명세만 유지) |
 | 31 | Service API 연동 | `SVC` | `app/routers/service/api.py` |
 | 32 | Service Worker 연동 | `SW` | `app/routers/service_worker/api.py` |
-| 33 | 발행 콘텐츠 관리 | `PUB` | `domain/publishing/api.py` |
-| 34 | 관리자 기능 | `ADMIN` | `app/routers/admin/api.py` |
+| 33 | 발행 콘텐츠 관리 | `PUB` | — (명세만 유지) |
+| 34 | 관리자 기능 | `ADMIN` | — (명세만 유지) |
 | 35 | 자체 API Key | `KEY` | `app/security/api_keys/api.py` |
-| 36 | External Agent API | `EXT` | `app/routers/external/api.py` |
+| 36 | External Agent API | `EXT` | — (명세만 유지) |
 | 37 | MCP Server | `MCP` | `mcp_server/server/api.py` |
 | 38 | MCP Tool | `MCPTOOL` | `mcp_server/tools/api.py` |
 | 39 | Agent DB | `DB` | `infrastructure/persistence/api.py` |
-| 40 | Object Storage | `OBJ` | `infrastructure/storage/api.py` |
-| 41 | 로그 및 모니터링 | `OBS` | `infrastructure/observability/api.py` |
-| 42 | 보안 및 개인정보 | `SEC` | `app/security/privacy/api.py` |
-| 43 | 비기능 요구사항 | `NFR` | `shared/resilience/api.py` |
+| 40 | Object Storage | `OBJ` | — (명세만 유지) |
+| 41 | 로그 및 모니터링 | `OBS` | — (명세만 유지) |
+| 42 | 보안 및 개인정보 | `SEC` | — (명세만 유지) |
+| 43 | 비기능 요구사항 | `NFR` | — (명세만 유지) |
 
 ## MVP 구현 흐름
 
@@ -131,7 +131,7 @@ domain/personal_wiki/documents/
 7. Service Worker가 Lease 기반 Publish Snapshot Batch를 Claim해 service-db에 항목별 멱등 Upsert합니다.
 8. Service Worker가 성공·재시도·최종 실패를 부분 성공 Batch ACK로 전달하고, Agent API가 항목별 상태와 이력을 갱신합니다.
 
-## 스캐폴드 검증
+## 구현 정합성 검증
 
 ```bash
 uv run pytest

@@ -16,6 +16,7 @@
 - Agent Worker는 Job을 Batch로 Claim하되 각 Job을 독립 실행하며, Claim 크기와 실제 LLM 호출 동시성을 분리합니다.
 - Service Worker는 준비된 Publish Snapshot을 Lease가 있는 Batch로 Claim하고 항목별 반영 결과를 부분 성공 ACK로 전달합니다.
 - 모든 오류는 `code`, `message`, `request_id`, `retryable`, `details` 필드를 가진 공통 구조로 반환합니다.
+- 구현되지 않은 계약은 501 Placeholder 엔드포인트로 OpenAPI에 선점 등록하지 않습니다. 실제 요청 처리 경로와 테스트가 준비된 API만 라우터에 포함합니다.
 
 ## 시스템 API
 

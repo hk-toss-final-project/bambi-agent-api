@@ -124,7 +124,7 @@ class DevelopmentWorkerRunResponse(DevelopmentSchema):
 
 
 class LatestNewsWorkerRunRequest(DevelopmentSchema):
-    """[미구현] 최신 뉴스 수집 Worker 실행 요청."""
+    """최신 뉴스 수집 Worker 실행 요청."""
 
     providers: list[LatestProviderName] = Field(
         default_factory=lambda: ["gdelt"],
@@ -143,7 +143,7 @@ class LatestNewsWorkerRunRequest(DevelopmentSchema):
 
 
 class LatestNewsWorkerRunResponse(DevelopmentSchema):
-    """[미구현] 최신 뉴스 수집 Worker 실행 결과 계약."""
+    """최신 뉴스 수집 Worker 실행 결과 계약."""
 
     run_id: str = Field(description="Worker 실행 추적 ID")
     status: Literal["completed", "failed"] = Field(description="Worker 실행 상태")
@@ -155,75 +155,6 @@ class LatestNewsWorkerRunResponse(DevelopmentSchema):
     )
     provider_failures: list[LatestProviderFailure] = Field(
         default_factory=list, description="부분 실패 Provider 목록"
-    )
-
-
-class WikiKeywordLatestInformationRequest(DevelopmentSchema):
-    """[미구현] Wiki 연결 상위 Node 키워드로 최신 정보를 검색하는 요청."""
-
-    node_limit: int = Field(
-        default=5, ge=1, le=20, description="키워드로 사용할 연결 상위 Node 수"
-    )
-    providers: list[LatestProviderName] = Field(
-        default_factory=lambda: ["gdelt"],
-        min_length=1,
-        max_length=4,
-        description="검색할 외부 Provider 목록",
-    )
-    language: str | None = Field(
-        default=None, min_length=2, max_length=16, description="검색 언어"
-    )
-    limit_per_provider: int = Field(
-        default=10, ge=1, le=50, description="Provider별 최대 결과 수"
-    )
-
-
-class WikiKeywordLatestInformationResponse(DevelopmentSchema):
-    """[미구현] Wiki 상위 Node 키워드 최신 정보 검색·저장 결과 계약."""
-
-    run_id: str = Field(description="검색 실행 추적 ID")
-    user_id: str = Field(description="검색 기준 사용자 ID")
-    keywords: list[str] = Field(description="연결 상위 Node에서 만든 검색 키워드")
-    items: list[LatestInformationItem] = Field(
-        default_factory=list, description="저장된 최신 Global 문서"
-    )
-    provider_failures: list[LatestProviderFailure] = Field(
-        default_factory=list, description="부분 실패 Provider 목록"
-    )
-
-
-class InsightGenerationRequest(DevelopmentSchema):
-    """[미구현] 개인 Wiki와 최신 정보로 요약·인사이트 콘텐츠를 생성하는 요청."""
-
-    idempotency_key: str = Field(
-        min_length=1, max_length=128, description="중복 생성을 막는 요청 멱등성 키"
-    )
-    topic: str | None = Field(
-        default=None,
-        max_length=500,
-        description="생성 주제. 비어 있으면 연결 상위 Node 키워드로 구성",
-    )
-    language: str = Field(
-        default="ko", min_length=2, max_length=16, description="생성 언어"
-    )
-    latest_limit: int = Field(
-        default=10, ge=1, le=50, description="참고할 최신 Global 문서 수"
-    )
-
-
-class InsightGenerationResponse(DevelopmentSchema):
-    """[미구현] 요약·인사이트 콘텐츠 생성 결과 계약."""
-
-    run_id: str = Field(description="생성 실행 추적 ID")
-    content_candidate_id: str = Field(description="저장된 생성 후보 UUID")
-    title: str = Field(description="생성 콘텐츠 제목")
-    summary: str = Field(description="핵심 요약")
-    body: str = Field(description="요약과 인사이트 본문 Markdown")
-    used_wiki_document_ids: list[str] = Field(
-        default_factory=list, description="참고한 개인 Wiki 문서 ID"
-    )
-    used_latest_document_ids: list[str] = Field(
-        default_factory=list, description="참고한 최신 Global 문서 ID"
     )
 
 

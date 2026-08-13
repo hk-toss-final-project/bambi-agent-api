@@ -13,11 +13,10 @@ from typing import Any
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
-# 하위 호환 재노출: 기존 persistence.api의 Chunk 유틸 import 경로를 유지한다.
+# 하위 호환 재노출: 기존 persistence feature의 Chunk 유틸 import 경로를 유지한다.
 from domain.personal_wiki.embeddings.api import chunk_wiki_markdown, pwe_001, pwe_002
 from domain.personal_wiki.documents.api import pwiki_007, pwiki_008
 from domain.personal_wiki.source_events.api import wse_013
-from shared.contracts import FeatureRequest, FeatureResult
 from shared.hashing import compute_content_hash
 from shared.wiki_models import (
     ExistingWikiEntry,
@@ -100,22 +99,6 @@ async def db_005(
         model_name=model_name,
         values=values,
     )
-
-
-async def db_006(request: FeatureRequest) -> FeatureResult:
-    """[DB-006] 개인 Wiki Version 저장.
-
-    개인 Wiki 재구성 버전을 저장한다.
-    """
-    raise NotImplementedError("[DB-006] 기능 구현이 필요합니다.")
-
-
-async def db_007(request: FeatureRequest) -> FeatureResult:
-    """[DB-007] 사용자 관심사 저장.
-
-    관심사 프로필, 계층, 관계를 저장한다.
-    """
-    raise NotImplementedError("[DB-007] 기능 구현이 필요합니다.")
 
 
 @dataclass(frozen=True, slots=True)

@@ -163,8 +163,8 @@ def test_development_url_worker_route_runs_pending_url_jobs() -> None:
     assert workflow.batch_called == ("personal_wiki_url", "user-9", 3)
 
 
-def test_development_planned_routes_return_not_implemented() -> None:
-    """미구현 계약 경로가 Swagger에 노출되고 501을 반환하는지 검증한다."""
+def test_development_openapi_excludes_removed_placeholder_routes() -> None:
+    """구현 없는 계약 선점 경로가 Route와 OpenAPI에 노출되지 않는지 검증한다."""
     client, _, _ = _development_client()
     with client:
         keyword = client.post(
@@ -178,12 +178,11 @@ def test_development_planned_routes_return_not_implemented() -> None:
         paths = set(client.get("/openapi.json").json()["paths"])
 
     for response in (keyword, insight):
-        assert response.status_code == 501
-        assert response.json()["code"] == "NOT_IMPLEMENTED"
+        assert response.status_code == 404
     assert (
-        "/internal/v1/dev/users/{user_id}/wiki-keyword-latest-information" in paths
+        "/internal/v1/dev/users/{user_id}/wiki-keyword-latest-information" not in paths
     )
-    assert "/internal/v1/dev/users/{user_id}/insight-generations" in paths
+    assert "/internal/v1/dev/users/{user_id}/insight-generations" not in paths
 
 
 class _FakeLatestInformationService:

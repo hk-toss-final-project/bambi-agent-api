@@ -16,14 +16,6 @@ async def report_001(request: FeatureRequest) -> FeatureResult:
     return await execute_feature_implementation(request, feature_id="REPORT-001")
 
 
-async def report_002(request: FeatureRequest) -> FeatureResult:
-    """[REPORT-002] 콘텐츠 생성 계획.
-
-    검색 범위, 콘텐츠 구조, 모델을 결정한다.
-    """
-    raise NotImplementedError("[REPORT-002] 기능 구현이 필요합니다.")
-
-
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def report_022(request: FeatureRequest) -> FeatureResult:
     """[REPORT-022] 아침 브리핑 사전 준비.

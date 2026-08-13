@@ -7,14 +7,6 @@ from shared.contracts import FeatureRequest, FeatureResult
 from shared.feature_runtime import execute_feature_implementation
 
 
-async def report_003(request: FeatureRequest) -> FeatureResult:
-    """[REPORT-003] 사용자 컨텍스트 조회.
-
-    생성에 필요한 사용자 설정과 플랜을 조회한다.
-    """
-    raise NotImplementedError("[REPORT-003] 기능 구현이 필요합니다.")
-
-
 # MVP: agent-api-mvp-scope.md에서 구현 대상으로 지정된 기능입니다.
 async def report_012(request: FeatureRequest) -> FeatureResult:
     """[REPORT-012] 사용자 개인화 적용.

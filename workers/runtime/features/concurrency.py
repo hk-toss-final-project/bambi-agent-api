@@ -1,4 +1,4 @@
-"""Worker Job 동시 실행 제어 기능과 외부 API Rate Limit Scaffold."""
+"""Worker Job 동시 실행 제어와 외부 API Rate Limit 기능."""
 
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence

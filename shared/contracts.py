@@ -1,6 +1,6 @@
-"""기능 스캐폴드가 공통으로 사용하는 요청과 결과 계약.
+"""호환 기능 adapter가 공통으로 사용하는 요청과 결과 계약.
 
-상세 API 스키마가 확정되기 전까지 계층 간 함수 시그니처를 일관되게 유지한다.
+Report Builder의 기존 실행 경계를 기능 facade와 연결할 때 시그니처를 일관되게 유지한다.
 """
 
 from dataclasses import dataclass, field
