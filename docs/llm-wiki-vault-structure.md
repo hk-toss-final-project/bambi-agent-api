@@ -234,6 +234,11 @@ Head이고 `wiki_relation_supports`는 원본 Version·Build별 근거 이력이
 남아 있는 Head는 유지한다. Ontology와 P0~P3의 연결·미연결 범위는
 [LLM Wiki Builder P0~P3 개선 설계](wiki-builder-p0-p3-improvement.md)를 따른다.
 
+검증된 Edge는 방향과 무관하게 이번 Build에서 생성·갱신하는 양쪽 노드의
+`Related Entities`·`Related Concepts`에 반영한다. Relation Linker의 evidence가
+원문과 exact substring으로 일치하면 해당 신규·갱신 노드의 `Mentions in Source`에도
+같은 출처 인용으로 보존한다.
+
 DB MVP 계약에서 `schema/schema.md`는 Graph Snapshot으로 자동 생성하고,
 DB 무결성 Hash는 SHA-256 64자를 유지한다. source/index/log는 현재
 Build Artifact로 반환하며 실제 Vault 파일 Export는 별도 Adapter 범위다.

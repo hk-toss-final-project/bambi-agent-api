@@ -121,6 +121,51 @@ def test_linker_connects_heatwave_to_onboarding_weather_semantically() -> None:
     assert relation.provenance_kind == "semantic_inference"
     assert relation.confidence == 0.86
     assert result.node_dispositions[0].disposition == "connect"
+    assert result.concepts[0].mentions == [source]
+
+
+def test_linker_does_not_promote_normalized_evidence_to_verbatim_mention() -> None:
+    """공백 정규화로만 일치한 관계 근거는 verbatim 인용으로 승격하지 않는다."""
+    source = "Obsidian Web Clipper는\nObsidian에 저장한다."
+    classification = WikiClassification(
+        entities=[
+            EntityClassification(name="Obsidian Web Clipper"),
+            EntityClassification(name="Obsidian"),
+        ]
+    )
+
+    def completion(_system: str, _user: str, *, model: str) -> str:
+        """줄바꿈을 공백으로 정규화한 관계 근거를 반환한다."""
+        assert model == "test-model"
+        return json.dumps(
+            {
+                "relations": [
+                    {
+                        "source_ref": "N1",
+                        "target_ref": "N2",
+                        "relation_type": "entity_relation",
+                        "evidence": "Obsidian Web Clipper는 Obsidian에 저장한다.",
+                        "provenance_kind": "source_explicit",
+                        "confidence": 0.95,
+                        "review_status": "accepted",
+                    }
+                ],
+                "dispositions": [],
+            },
+            ensure_ascii=False,
+        )
+
+    result = link_wiki_relations(
+        source_title="Obsidian 저장",
+        source_content=source,
+        classification=classification,
+        candidates_by_node={},
+        model="test-model",
+        completion=completion,
+    )
+
+    assert len(result.relations) == 1
+    assert all(not entity.mentions for entity in result.entities)
 
 
 def test_linker_keeps_relations_between_matched_incoming_candidate_duplicates() -> None:

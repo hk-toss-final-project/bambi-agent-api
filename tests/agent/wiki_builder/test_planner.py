@@ -179,6 +179,59 @@ def test_entity_to_concept_relation_uses_resolved_keys() -> None:
     assert relation.metadata["prompt_key"] == "personal_wiki_relation_linker"
     assert plan.extracted_relation_count == 1
     assert plan.isolated_node_count == 0
+    assert plan.entities[0].metadata["related_concepts"] == ["연결 노트"]
+    assert plan.concepts[0].metadata["related_entities"] == ["Obsidian"]
+    assert "[[concepts/연결-노트|연결 노트]]" in plan.entities[0].normalized_content
+    assert "[[entities/obsidian|Obsidian]]" in plan.concepts[0].normalized_content
+
+
+def test_existing_relation_populates_related_section_when_node_is_updated() -> None:
+    """기존 Edge를 가진 빈 Metadata 노드도 갱신 시 Related 섹션을 복구한다."""
+    existing_entities = [
+        ExistingWikiEntry(
+            "entity",
+            "obsidian",
+            "Obsidian",
+            "product",
+            "기존 설명",
+            {"description": "기존 설명"},
+        )
+    ]
+    existing_concepts = [
+        ExistingWikiEntry(
+            "concept",
+            "연결-노트",
+            "연결 노트",
+            "method",
+            "노트 연결 방법",
+        )
+    ]
+    existing_relation = WikiRelationPlan(
+        source_document_key="obsidian",
+        source_document_kind="entity",
+        target_document_key="연결-노트",
+        target_document_kind="concept",
+        relation_type="applies_concept",
+    )
+    classification = WikiClassification(
+        entities=[
+            EntityClassification(
+                name="Obsidian",
+                matched_existing_key="obsidian",
+                description="새 설명",
+            )
+        ]
+    )
+
+    plan = _plan(
+        classification,
+        existing_entities=existing_entities,
+        existing_concepts=existing_concepts,
+        existing_relations=[existing_relation],
+    )
+
+    assert plan.entities[0].metadata["related_concepts"] == ["연결 노트"]
+    assert "[[concepts/연결-노트|연결 노트]]" in plan.entities[0].normalized_content
 
 
 def test_entity_relation_is_created_when_both_entities_exist() -> None:
