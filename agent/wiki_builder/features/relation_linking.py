@@ -25,6 +25,8 @@ from agent.wiki_builder.features.relation_candidates import (
 )
 from agent.wiki_builder.features.relations import parse_relation_candidates
 from shared.wiki_models import (
+    ConceptClassification,
+    EntityClassification,
     WikiClassification,
     ExistingWikiEntry,
     WikiNodeDisposition,
@@ -49,6 +51,19 @@ _MIN_CONFIDENCE = {
     "user_declared": 0.90,
     "system_rule": 0.90,
 }
+
+
+def _unique_strings(values: Sequence[str]) -> list[str]:
+    """문자열 순서를 유지하며 빈 값과 대소문자 중복을 제거한다."""
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = value.strip()
+        marker = normalized.casefold()
+        if normalized and marker not in seen:
+            seen.add(marker)
+            result.append(normalized)
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -398,6 +413,62 @@ def _accepted_relations(
     return _deduplicate_relations(accepted), warnings
 
 
+def _append_exact_relation_mentions(
+    *,
+    classification: WikiClassification,
+    relations: Sequence[WikiRelationClassification],
+    source_content: str,
+) -> tuple[list[EntityClassification], list[ConceptClassification]]:
+    """원문과 정확히 일치하는 관계 evidence를 해당 신규 노드 인용에 추가한다."""
+    entities = list(classification.entities)
+    concepts = list(classification.concepts)
+    indexes: dict[RelationIdentity, tuple[str, int]] = {}
+    for index, entity in enumerate(entities):
+        reference = ("entity", index)
+        indexes[("entity", entity.name.casefold())] = reference
+        if entity.matched_existing_key:
+            indexes[("entity", entity.matched_existing_key.casefold())] = reference
+    for index, concept in enumerate(concepts):
+        reference = ("concept", index)
+        indexes[("concept", concept.title.casefold())] = reference
+        if concept.matched_existing_key:
+            indexes[("concept", concept.matched_existing_key.casefold())] = reference
+
+    for relation in relations:
+        if relation.evidence not in source_content:
+            continue
+        endpoint_identities = (
+            _relation_identity(
+                relation.source_kind,
+                relation.source_name,
+                relation.source_matched_key,
+            ),
+            _relation_identity(
+                relation.target_kind,
+                relation.target_name,
+                relation.target_matched_key,
+            ),
+        )
+        for identity in endpoint_identities:
+            reference = indexes.get(identity)
+            if reference is None:
+                continue
+            node_kind, index = reference
+            if node_kind == "entity":
+                node = entities[index]
+                entities[index] = replace(
+                    node,
+                    mentions=_unique_strings([*node.mentions, relation.evidence]),
+                )
+            else:
+                node = concepts[index]
+                concepts[index] = replace(
+                    node,
+                    mentions=_unique_strings([*node.mentions, relation.evidence]),
+                )
+    return entities, concepts
+
+
 def _parse_dispositions(
     raw: object,
     *,
@@ -532,8 +603,15 @@ def link_wiki_relations(
         incoming_refs=incoming,
         relations=accepted,
     )
+    entities, concepts = _append_exact_relation_mentions(
+        classification=classification,
+        relations=accepted,
+        source_content=source_content,
+    )
     return replace(
         classification,
+        entities=entities,
+        concepts=concepts,
         relations=accepted,
         node_dispositions=dispositions,
         relation_warnings=list(

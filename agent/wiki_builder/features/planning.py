@@ -8,6 +8,7 @@ append-only 원칙으로 합친다. LLM이 만든 값을 DB에 바로 쓰지 않
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from dataclasses import replace
 
 from agent.wiki_builder.models import (
     ExistingWikiEntry,
@@ -118,6 +119,177 @@ def _merge_entries(
             metadata=plan.metadata,
         )
     return list(merged.values())
+
+
+def _enrich_classification_relations(
+    *,
+    classification: WikiClassification,
+    existing_entities: Sequence[ExistingWikiEntry],
+    existing_concepts: Sequence[ExistingWikiEntry],
+    existing_relations: Sequence[WikiRelationPlan],
+) -> WikiClassification:
+    """검증된 현재·기존 Edge를 갱신 대상 노드의 Related 목록에 반영한다."""
+    entities = list(classification.entities)
+    concepts = list(classification.concepts)
+    incoming_by_identity: dict[tuple[str, str], tuple[str, int]] = {}
+    incoming_by_key: dict[tuple[str, str], tuple[str, int]] = {}
+    titles_by_key = {
+        (entry.document_kind, entry.document_key.casefold()): entry.title
+        for entry in [*existing_entities, *existing_concepts]
+    }
+    existing_entity_keys = {entry.document_key for entry in existing_entities}
+    existing_concept_keys = {entry.document_key for entry in existing_concepts}
+
+    for index, entity in enumerate(entities):
+        if not entity.name.strip():
+            continue
+        resolved_key = (
+            entity.matched_existing_key
+            if entity.matched_existing_key in existing_entity_keys
+            else slugify(entity.name)
+        )
+        reference = ("entity", index)
+        incoming_by_identity[("entity", entity.name.casefold())] = reference
+        if entity.matched_existing_key:
+            incoming_by_identity[
+                ("entity", entity.matched_existing_key.casefold())
+            ] = reference
+        incoming_by_key[("entity", resolved_key.casefold())] = reference
+        titles_by_key[("entity", resolved_key.casefold())] = (
+            next(
+                (
+                    entry.title
+                    for entry in existing_entities
+                    if entry.document_key == resolved_key
+                ),
+                entity.name,
+            )
+        )
+
+    for index, concept in enumerate(concepts):
+        if not concept.title.strip():
+            continue
+        resolved_key = (
+            concept.matched_existing_key
+            if concept.matched_existing_key in existing_concept_keys
+            else slugify(concept.title)
+        )
+        reference = ("concept", index)
+        incoming_by_identity[("concept", concept.title.casefold())] = reference
+        if concept.matched_existing_key:
+            incoming_by_identity[
+                ("concept", concept.matched_existing_key.casefold())
+            ] = reference
+        incoming_by_key[("concept", resolved_key.casefold())] = reference
+        titles_by_key[("concept", resolved_key.casefold())] = (
+            next(
+                (
+                    entry.title
+                    for entry in existing_concepts
+                    if entry.document_key == resolved_key
+                ),
+                concept.title,
+            )
+        )
+
+    def append_related(
+        reference: tuple[str, int] | None,
+        *,
+        related_kind: str,
+        related_title: str,
+    ) -> None:
+        """노드 종류에 맞는 Related 목록에 상대 노드 제목을 중복 없이 추가한다."""
+        if reference is None or not related_title.strip():
+            return
+        node_kind, index = reference
+        if node_kind == "entity":
+            node = entities[index]
+            if related_kind == "entity":
+                entities[index] = replace(
+                    node,
+                    related_entity_names=_unique(
+                        [*node.related_entity_names, related_title]
+                    ),
+                )
+            else:
+                entities[index] = replace(
+                    node,
+                    related_concepts=_unique(
+                        [*node.related_concepts, related_title]
+                    ),
+                )
+            return
+        node = concepts[index]
+        if related_kind == "entity":
+            concepts[index] = replace(
+                node,
+                related_entity_names=_unique(
+                    [*node.related_entity_names, related_title]
+                ),
+            )
+        else:
+            concepts[index] = replace(
+                node,
+                related_concepts=_unique([*node.related_concepts, related_title]),
+            )
+
+    def identity_reference(
+        kind: str, name: str, matched_key: str | None
+    ) -> tuple[str, int] | None:
+        """관계 endpoint를 이번 Build의 갱신 대상 노드로 해석한다."""
+        if matched_key:
+            reference = incoming_by_identity.get((kind, matched_key.casefold()))
+            if reference is not None:
+                return reference
+        return incoming_by_identity.get((kind, name.casefold()))
+
+    for relation in classification.relations:
+        source_reference = identity_reference(
+            relation.source_kind,
+            relation.source_name,
+            relation.source_matched_key,
+        )
+        target_reference = identity_reference(
+            relation.target_kind,
+            relation.target_name,
+            relation.target_matched_key,
+        )
+        append_related(
+            source_reference,
+            related_kind=relation.target_kind,
+            related_title=relation.target_name,
+        )
+        append_related(
+            target_reference,
+            related_kind=relation.source_kind,
+            related_title=relation.source_name,
+        )
+
+    for relation in existing_relations:
+        source_key = (
+            relation.source_document_kind,
+            relation.source_document_key.casefold(),
+        )
+        target_key = (
+            relation.target_document_kind,
+            relation.target_document_key.casefold(),
+        )
+        append_related(
+            incoming_by_key.get(source_key),
+            related_kind=relation.target_document_kind,
+            related_title=titles_by_key.get(
+                target_key, relation.target_document_key
+            ),
+        )
+        append_related(
+            incoming_by_key.get(target_key),
+            related_kind=relation.source_document_kind,
+            related_title=titles_by_key.get(
+                source_key, relation.source_document_key
+            ),
+        )
+
+    return replace(classification, entities=entities, concepts=concepts)
 
 
 def _plan_entities(
@@ -526,6 +698,12 @@ def build_wiki_plan(
     existing_relations: Sequence[WikiRelationPlan] = (),
 ) -> WikiBuildPlan:
     """LLM 분류 결과와 기존 Wiki 상태로 증분 Build 산출물을 만든다."""
+    classification = _enrich_classification_relations(
+        classification=classification,
+        existing_entities=existing_entities,
+        existing_concepts=existing_concepts,
+        existing_relations=existing_relations,
+    )
     generated_date = generated_at[:10]
     source_path = source_file_path(source_title, source_content_hash)
     source_wiki_link = _source_link(source_path, source_title)
